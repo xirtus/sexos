@@ -1352,6 +1352,7 @@ pub mod fs;
 pub mod home_lock;
 pub mod disks;
 pub mod web;
+pub mod mail_broker;
 pub mod accounts;
 pub mod autofill;
 pub mod organs;

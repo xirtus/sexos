@@ -22,6 +22,12 @@ static mut PLACE: (*mut [u8; BLOCK], *mut Slot, usize, usize, *mut u64, *mut u64
 static mut SCRATCH: [u8; BLOCK] = [0; BLOCK];
 /// Files' own copy of one request's data.
 static mut OWN: [u8; w::DATA_MAX] = [0; w::DATA_MAX];
+/// Files' single-threaded service owns this copy until the staged request
+/// returns. Both the disk write and its digest read from this exact snapshot.
+pub(crate) fn staged_private_chunk(shared: &[u8]) -> Option<&'static [u8]> {
+    let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+    w::snapshot_stage_chunk(shared, own)
+}
 static mut STATE: State = State::Untried;
 /// Writes are not committed one request at a time (each commit costs two device
 /// flushes). They are committed on SYNC, before any other change, once this many bytes
@@ -269,11 +275,12 @@ fn bring_up() -> State {
     // Another system's disk (Windows on the laptop's SSD): never mounted or formatted
     // as SexOS's; sexdrive serves it for reading only.
     let foreign = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_FOREIGN;
-    let state = if foreign {
+    let mut state = if foreign {
         sex_pdx::serial_record!("[files.fs.foreign] sectors={} read_only=1", sectors);
         State::Absent
     } else { bring_up_on(sectors) };
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
+    if let State::Ready(fs) = &mut state { crate::staged_export::recover(fs, crate::staged_export::Volume::Primary); }
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
     if matches!(state, State::Ready(_)) { crate::organize::mounted(); } else { crate::organize::unmounted(); }
     state
@@ -1025,15 +1032,51 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let path = &path[..path_len];
         if r.kind == w::REPLACE_IF_SHA256 { return w::reply(r.seq, w::UNSUPPORTED, 0); }
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
-        if r.kind == w::REMOVE_IF_ID { return w::reply(r.seq, w::UNSUPPORTED, 0); }
+        if matches!(r.kind, w::CREATE_WITH_ID | w::WRITE_IF_ID | w::REMOVE_IF_ID
+            | w::STAGE_BEGIN | w::STAGE_CHUNK | w::STAGE_PUBLISH | w::STAGE_ABORT) {
+            return w::reply(r.seq, w::UNSUPPORTED, 0);
+        }
         if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
+    let path = &path[..path_len];
+    let staged = matches!(r.kind, w::STAGE_BEGIN | w::STAGE_CHUNK | w::STAGE_PUBLISH | w::STAGE_ABORT);
+    let sealed_image = crate::staged_export::sealed_image_alias(path);
+    if sealed_image && staged { return w::reply(r.seq, w::DENIED, 0); }
+    if crate::staged_export::reserved(path)
+        || matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE)
+            && path.split(|b| *b == 0).any(crate::staged_export::reserved)
+    { return w::reply(r.seq, w::DENIED, 0); }
+    if staged {
+        let Some(k) = program else { return w::reply(r.seq, w::DENIED, 0); };
+        if crate::volumes::owns(path) { return w::reply(r.seq, w::UNSUPPORTED, 0); }
+        if writes_pending() {
+            commit_writes(fs);
+            if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
+        }
+        let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
+        if crate::home::owns(path) {
+            let result = crate::home::staged(fs, k, caller, binding.task, r, path, data);
+            if result.is_ok() { forget_stats(None); }
+            return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(status) => w::reply(r.seq, status, 0) };
+        }
+        return match crate::staged_export::request(fs, crate::staged_export::Volume::Primary, k, caller, binding.task, r, path, data) {
+            Ok(n) => {
+                forget_stats(None);
+                if r.kind == w::STAGE_PUBLISH { crate::organize::after(fs, w::CREATE, path); }
+                w::reply(r.seq, w::OK, n)
+            }
+            Err(status) => {
+                if !matches!(status, w::IO | w::CORRUPT) { let _ = fs.rollback(); }
+                w::reply(r.seq, status, 0)
+            }
+        };
+    }
     // Reads change nothing; a write fails before it changes anything (sexfs checks
     // first, and a device error poisons the filesystem). Every other change commits
     // waiting writes first, so its own rollback can only undo itself.
     let read_only = matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS);
-    let batched = r.kind == w::WRITE;
+    let batched = matches!(r.kind, w::WRITE | w::WRITE_IF_ID);
     if !read_only && !batched && writes_pending() {
         commit_writes(fs);
         if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
@@ -1047,7 +1090,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     match r.kind {
         w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC | w::PREPARE => {}
         // By file id, so every spelling of the path (`a//b`, `a/b/`) is cleared.
-        w::WRITE | w::TRUNCATE | w::CREATE | w::CREATE_WITH_DATA | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
+        w::WRITE | w::WRITE_IF_ID | w::TRUNCATE | w::CREATE | w::CREATE_WITH_ID | w::CREATE_WITH_DATA | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
@@ -1077,6 +1120,11 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         if crate::volumes::owns(path) || crate::home::owns(path) { return w::reply(r.seq, w::OTHER_DISK, 0); }
         return match crate::organize::request(fs, r, path, data) { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
     }
+    // Removable backends do not expose stable object IDs. Refuse before CREATE,
+    // including when the primary SexFS is absent, rather than offer a false guarantee.
+    if crate::volumes::owns(path) && matches!(r.kind, w::CREATE_WITH_ID | w::WRITE_IF_ID | w::REMOVE_IF_ID) {
+        return w::reply(r.seq, w::UNSUPPORTED, 0);
+    }
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
         (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
@@ -1104,7 +1152,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     // Its sealed file changes only through it.
     if !read_only && (path == sex_pdx::home_lock::IMAGE || rename_halves.is_some_and(|(_, b)| b == sex_pdx::home_lock::IMAGE)) { return w::reply(r.seq, w::DENIED, 0); }
     // A mounted image changes only through its volume.
-    if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE | w::REMOVE_IF_ID) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
+    if matches!(r.kind, w::WRITE | w::WRITE_IF_ID | w::TRUNCATE | w::REMOVE | w::REMOVE_IF_ID) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
         return w::reply(r.seq, w::DENIED, 0);
     }
     let media_sync_error = if r.kind == w::SYNC { crate::volumes::sync_all(fs).err() } else { None };
@@ -1276,9 +1324,11 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         }
         w::LIST => {
             let id = fs.open(path)?.id;
+            let at_volume_root = id == fs.open(b"/")?.id;
             let (mut cursor, mut used, mut name) = (r.offset, w::LIST_HEAD, [0u8; sexfs::NAME_MAX]);
             let mut next = 0;
             while let Some((len, kind, child, after)) = fs.read_dir(id, cursor, &mut name)? {
+                if !crate::staged_export::visible_entry(at_volume_root, &name[..len]) { cursor = after; continue; }
                 if used + w::ENTRY_HEAD + len > 4000 { next = cursor; break; }
                 let size = if kind == Kind::File { fs.stat(child)?.size } else { 0 };
                 data[used] = (kind == Kind::Dir) as u8;
@@ -1293,6 +1343,13 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         }
         w::MKDIR => { fs.mkdir(path, now)?; fs.commit()?; Ok(0) }
         w::CREATE => { fs.create(path, now)?; fs.commit()?; Ok(0) }
+        w::CREATE_WITH_ID => {
+            if r.offset != 0 || r.length != 0 { return Err(Error::Name); }
+            let id = fs.create(path, now)?;
+            fs.commit()?;
+            data[..8].copy_from_slice(&id.to_le_bytes());
+            Ok(8)
+        }
         w::CREATE_WITH_DATA => {
             let len = r.length as usize;
             if r.offset != 0 || len == 0 || len > data.len() { return Err(Error::Name); }
@@ -1342,15 +1399,23 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             data[..n].copy_from_slice(&own[..n]);
             Ok(n as u32)
         }
-        w::WRITE => {
+        w::WRITE | w::WRITE_IF_ID => {
+            let checked = r.kind == w::WRITE_IF_ID;
             let total = r.length as usize;
             let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
-            if total > data.len() || total > own.len() { return Err(Error::TooBig); }
-            let st = fs.open(path)?;
-            own[..total].copy_from_slice(&data[..total]);
+            if total > data.len() || total > own.len() || (checked && total < 8) { return Err(Error::TooBig); }
+            let payload = if checked { &data[8..total] } else { &data[..total] };
+            own[..payload.len()].copy_from_slice(payload);
             // sexfs ends the write short after progress, as Linux does, so the counted
             // prefix commits with the rest.
-            Ok(fs.write(st.id, r.offset, &own[..total], now)? as u32)
+            let wrote = if checked {
+                let id = u64::from_le_bytes(data[..8].try_into().unwrap());
+                fs.write_path_if_id(path, id, r.offset, &own[..payload.len()], now)?
+            } else {
+                let st = fs.open(path)?;
+                fs.write(st.id, r.offset, &own[..payload.len()], now)?
+            };
+            Ok(wrote as u32)
         }
         w::TRUNCATE => { let st = fs.open(path)?; fs.truncate(st.id, r.offset, now)?; fs.commit()?; Ok(0) }
         w::SYNC => { fs.commit()?; Ok(0) }

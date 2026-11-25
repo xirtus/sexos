@@ -6,6 +6,7 @@ use crate::{Auth, Conn, Error, Lines, Result};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use zeroize::Zeroizing;
 
 pub struct Reply { pub code: u16, pub lines: Vec<String> }
 
@@ -19,6 +20,12 @@ impl<C: Conn> Client<C> {
         let r = c.command(&format!("EHLO {client_name}"), 250)?;
         c.extensions = r.lines.iter().skip(1).map(|l| l.to_ascii_uppercase()).collect();
         Ok(c)
+    }
+
+    /// Resume an authenticated submission stream handed over by Multipass.
+    /// Greeting, EHLO and SASL already happened on this same TLS flow.
+    pub fn resume_authenticated(conn: C) -> Self {
+        Self { io: Lines::new(conn), extensions: Vec::new() }
     }
 
     pub fn into_conn(self) -> C { self.io.conn }
@@ -41,14 +48,16 @@ impl<C: Conn> Client<C> {
     }
 
     pub fn command(&mut self, cmd: &str, code: u16) -> Result<Reply> {
-        self.io.send(format!("{cmd}\r\n").as_bytes())?;
+        let wire = Zeroizing::new(format!("{cmd}\r\n"));
+        self.io.send(wire.as_bytes())?;
         self.expect(code)
     }
 
     /// Run by Multipass with the secret from Shibari.
     pub fn authenticate(&mut self, auth: &Auth) -> Result<()> {
         let (mech, ir) = auth.sasl();
-        self.command(&format!("AUTH {mech} {ir}"), 235).map(|_| ())
+        let command = Zeroizing::new(format!("AUTH {mech} {}", ir.as_str()));
+        self.command(&command, 235).map(|_| ())
     }
 
     /// Send one message. Recipients come from the caller (To, Cc and Bcc), not the headers.

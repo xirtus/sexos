@@ -7720,6 +7720,9 @@ dependencies = [
 [[package]]
 name = "sex-mail"
 version = "0.1.0"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "sex-map"
@@ -7756,6 +7759,7 @@ dependencies = [
  "p256",
  "serde",
  "serde_json",
+ "sex-mail",
  "sha2 0.10.9",
  "shibari",
 ]
@@ -9985,6 +9989,18 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "valentine"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-font",
+ "sex-mail",
+ "sex-pdx",
+ "sex-theme",
+ "sha2 0.10.9",
 ]
 
 [[package]]

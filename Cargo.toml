@@ -170,6 +170,7 @@ members = [
     "apps/aftercare",
     "crates/sex-vcard",
     "apps/crush",
+    "apps/valentine",
     "apps/lua",
     "apps/whisper-voice",
     "apps/steamy",

@@ -108,6 +108,7 @@ impl Linker {
         let st = state(&rand::<18>(env));
         let (url, kind) = match provider {
             Provider::Dav => return Err(ApiError::new("unsupported_provider", "DAV servers sign in with an app password: add them as a server account.")),
+            Provider::Mail => return Err(ApiError::new("unsupported_provider", "Mail accounts use verified IMAP and SMTP servers: add them in Multipass.")),
             Provider::Fediverse => return Err(ApiError::new("unsupported_provider", "Save this profile as a reference, or verify it with a profile code. Signed-in stamps support Bluesky, Mastodon-compatible servers and Matrix SSO.")),
             Provider::Mastodon => self.mastodon_start(env, &account, keep, &st)?,
             Provider::Matrix => matrix_start(env, &account, &st)?,

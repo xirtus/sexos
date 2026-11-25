@@ -1,0 +1,17 @@
+[package]
+name = "valentine"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "valentine"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-font = { path = "../../crates/sex-font" }
+sex-mail = { path = "../../crates/sex-mail" }
+sex-theme = { path = "../../crates/sex-theme" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }

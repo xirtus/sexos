@@ -773,6 +773,14 @@ impl<'a, D: Device> Fs<'a, D> {
     pub fn write(&mut self, id: u64, offset: u64, data: &[u8], now: u64) -> Result<usize> {
         self.guarded(|f| f.write_inner(id, offset, data, now))
     }
+    /// Resolve the path and write only the object the caller created. Files runs
+    /// one request at a time, so no other request can replace it between these steps.
+    pub fn write_path_if_id(&mut self, path: &[u8], expected_id: u64, offset: u64, data: &[u8], now: u64) -> Result<usize> {
+        if expected_id == 0 { return Err(Error::Name); }
+        let st = self.open(path)?;
+        if st.id != expected_id { return Err(Error::Stale); }
+        self.write(st.id, offset, data, now)
+    }
     fn write_inner(&mut self, id: u64, offset: u64, data: &[u8], now: u64) -> Result<usize> {
         let (kind, size, _) = self.inode(id)?;
         if kind != Kind::File { return Err(Error::IsDir); }
@@ -960,7 +968,7 @@ impl<'a, D: Device> Fs<'a, D> {
             f.remove(Key { id, kind: K_INODE, off: 0 })
         })
     }
-    /// Refuse to remove a replacement that took this path after it was created.
+    /// Remove only while the name still denotes `expected_id`.
     pub fn remove_path_if_id(&mut self, path: &[u8], expected_id: u64) -> Result<()> {
         if expected_id == 0 { return Err(Error::Name); }
         if self.open(path)?.id != expected_id { return Err(Error::Stale); }

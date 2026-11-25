@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Multipass service state: the stamp book, the linker, kept sessions (tokens in
-//! Shibari) and act-for-account grants. `servers/multipass` wraps this in the PDX protocol
-//! of `sex_pdx::accounts`.
+//! Shibari) and act-for-account grants. A future `servers/multipass` will wrap this
+//! in the PDX protocol of `sex_pdx::accounts`.
 //!
 //! The SDK's promise ("open the trusted passport; the app receives no credentials")
 //! becomes this rule: an app holding a grant for a stamp may ask Multipass to send a request
 //! *to that account's own server*; Multipass adds the token inside Shibari's closure and
 //! returns the response. There is no call that returns a token.
-use crate::address::{network_account, server_account, Provider};
+use crate::address::{network_account, server_account, NetworkAccount, Provider};
 use crate::dpop::DpopKey;
 use crate::flows::{Challenge, Env, HttpSigner, Keep, Linker, Proven};
 use crate::http::{checked, Request, Response};
+use crate::mail::{MailDialer, MailPurpose, MailSasl, MailServer, user_name};
 use crate::net::public_url;
 use crate::stamps::{Event, StampBook};
 use crate::{b64, ApiError, Result};
@@ -19,6 +20,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use shibari::{Keeper, Knot, Owner};
+use sex_mail::{imap, smtp};
 
 /// The domain an app runs in. Filled in by the service from the PDX call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,6 +30,7 @@ pub struct App(pub u32);
 pub enum Scope { Read, Write }
 
 struct Kept { knot: Knot, api_base: String, dpop: Option<(DpopKey, Option<String>)>, basic: bool }
+struct MailKept { knot: Knot, user: String, imap: MailServer, smtp: MailServer }
 
 pub struct Multipass {
     pub book: StampBook,
@@ -35,6 +38,7 @@ pub struct Multipass {
     keeper: Keeper,
     me: Owner,
     sessions: BTreeMap<u64, Kept>,
+    mail: BTreeMap<u64, MailKept>,
     grants: BTreeSet<(App, u64, Scope)>,
     pub audit: Vec<(u64, String, &'static str, String)>,
 }
@@ -49,6 +53,14 @@ pub struct Act<'a> {
     pub headers: &'a [(&'a str, &'a str)],
 }
 
+/// A bounded inbox page returned by Multipass without moving its TLS flow to
+/// Valentine. The message bodies stay on the account server until requested.
+pub struct MailInbox {
+    pub exists: u32,
+    pub uid_validity: u32,
+    pub uids: Vec<u32>,
+}
+
 /// Headers an app may set on an act-for request. Nothing that carries credentials or
 /// redirects the request elsewhere (no `authorization`, `cookie`, `destination`, `host`).
 pub const ACT_HEADERS: [&str; 6] = ["accept", "depth", "if-match", "if-none-match", "prefer", "idempotency-key"];
@@ -56,7 +68,7 @@ pub const ACT_HEADERS: [&str; 6] = ["accept", "depth", "if-match", "if-none-matc
 impl Multipass {
     /// `me` is Multipass's own domain as Shibari sees it.
     pub fn new(me: Owner, keeper: Keeper) -> Self {
-        Self { book: StampBook::new(), linker: Linker::new(), keeper, me, sessions: BTreeMap::new(), grants: BTreeSet::new(), audit: Vec::new() }
+        Self { book: StampBook::new(), linker: Linker::new(), keeper, me, sessions: BTreeMap::new(), mail: BTreeMap::new(), grants: BTreeSet::new(), audit: Vec::new() }
     }
 
     fn log(&mut self, now: u64, principal: &str, action: &'static str, target: &str) {
@@ -138,11 +150,12 @@ impl Multipass {
     }
 
     /// Whether apps can act for this stamp (a session is kept in Shibari).
-    pub fn signed_in(&self, id: u64) -> bool { self.sessions.contains_key(&id) }
+    pub fn signed_in(&self, id: u64) -> bool { self.sessions.contains_key(&id) || self.mail.contains_key(&id) }
 
     pub fn disconnect(&mut self, env: &dyn Env, principal: &str, id: u64) -> bool {
         if !self.book.remove(principal, id) { return false; }
         if let Some(k) = self.sessions.remove(&id) { let _ = self.keeper.untie(self.me, k.knot); }
+        if let Some(k) = self.mail.remove(&id) { let _ = self.keeper.untie(self.me, k.knot); }
         self.grants.retain(|(_, s, _)| *s != id);
         self.log(env.now(), principal, "network.disconnected", "");
         true
@@ -156,6 +169,119 @@ impl Multipass {
         }
     }
     pub fn revoke(&mut self, app: App, id: u64) { self.grants.retain(|(a, s, _)| !(*a == app && *s == id)); }
+
+    /// Multipass account setup checks both configured TLS servers and SASL
+    /// credentials before creating a mail stamp. The input buffer is erased on
+    /// every return path; the retained copy lives only in Shibari.
+    pub fn add_mail_account<D: MailDialer>(&mut self, now: u64, principal: &str, user: &str,
+        imap_host: &str, imap_port: u16, smtp_host: &str, smtp_port: u16,
+        password: &mut [u8], dialer: &mut D) -> Result<u64> {
+        let result = self.add_mail_account_inner(now, principal, user, imap_host, imap_port, smtp_host, smtp_port, password, dialer);
+        for byte in password { unsafe { core::ptr::write_volatile(byte, 0); } }
+        result
+    }
+
+    fn add_mail_account_inner<D: MailDialer>(&mut self, now: u64, principal: &str, user: &str,
+        imap_host: &str, imap_port: u16, smtp_host: &str, smtp_port: u16,
+        password: &[u8], dialer: &mut D) -> Result<u64> {
+        let user = user_name(user)?;
+        let imap = MailServer::new(imap_host, imap_port)?;
+        let smtp = MailServer::new(smtp_host, smtp_port)?;
+        if password.is_empty() || password.len() > 1024 { return Err(ApiError::new("mail_password", "Enter an app password of at most 1024 bytes.")); }
+        let knot = self.keeper.tie(self.me, "mail account", password).map_err(|_| shibari_err())?;
+        let checked = (|| {
+            let sasl = MailSasl::new(&self.keeper, self.me);
+            let _ = sasl.imap(knot, &user, dialer.open(&imap)?)?;
+            let _ = sasl.smtp(knot, &user, dialer.open(&smtp)?)?;
+            Ok(())
+        })();
+        if let Err(e) = checked { let _ = self.keeper.untie(self.me, knot); return Err(e); }
+        let account = NetworkAccount { provider: Provider::Mail,
+            address: format!("{}@{}", user, imap.host),
+            network: format!("imaps://{}:{}", imap.host, imap.port),
+            profile_url: format!("imaps://{}:{}", imap.host, imap.port) };
+        let id = match self.book.save(principal, account, None, now) {
+            Ok((id, _)) => id,
+            Err(e) => { let _ = self.keeper.untie(self.me, knot); return Err(e); }
+        };
+        if let Some(old) = self.mail.insert(id, MailKept { knot, user, imap, smtp }) {
+            let _ = self.keeper.untie(self.me, old.knot);
+        }
+        self.log(now, principal, "mail.added", "mail");
+        Ok(id)
+    }
+
+    /// Open only the configured host for the requested purpose, after an
+    /// authenticated app grant. The returned stream has completed TLS and
+    /// SASL; a later network-service operation must transfer its flow to the
+    /// requesting app without exposing the secret.
+    pub fn open_mail_flow<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        purpose: MailPurpose, dialer: &mut D) -> Result<D::Flow> {
+        let scope = match purpose { MailPurpose::Imap => Scope::Read, MailPurpose::Smtp => Scope::Write };
+        if !self.grants.contains(&(app, id, scope)) && !(scope == Scope::Read && self.grants.contains(&(app, id, Scope::Write))) {
+            return Err(ApiError::new("no_grant", "This app has no permission to use that mail account."));
+        }
+        let kept = self.mail.get(&id).ok_or_else(|| ApiError::new("not_signed_in", "That mail account is not signed in."))?;
+        let server = match purpose { MailPurpose::Imap => &kept.imap, MailPurpose::Smtp => &kept.smtp };
+        let flow = dialer.open(server)?;
+        let sasl = MailSasl::new(&self.keeper, self.me);
+        let flow = match purpose {
+            MailPurpose::Imap => sasl.imap(kept.knot, &kept.user, flow)?,
+            MailPurpose::Smtp => sasl.smtp(kept.knot, &kept.user, flow)?,
+        };
+        self.log(now, "app", "mail.open", if purpose == MailPurpose::Imap { "imap" } else { "smtp" });
+        Ok(flow)
+    }
+
+    /// Read the latest UIDs through a Multipass-owned, authenticated flow.
+    /// This avoids a cross-domain TLS flow transfer. The caller chooses only
+    /// an IMAP mailbox, never a server or a credential.
+    pub fn mail_inbox<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        mailbox: &str, limit: usize, dialer: &mut D) -> Result<MailInbox> {
+        if mailbox.is_empty() || mailbox.len() > 255 || mailbox.chars().any(char::is_control) || limit == 0 || limit > 50 {
+            return Err(ApiError::new("mail_request", "Choose a mailbox and a page size from 1 to 50."));
+        }
+        let flow = self.open_mail_flow(now, app, id, MailPurpose::Imap, dialer)?;
+        let mut client = imap::Client::resume_authenticated(flow);
+        let selected = client.select(mailbox).map_err(mail_protocol_error)?;
+        let uids = client.uid_search("ALL").map_err(mail_protocol_error)?;
+        let start = uids.len().saturating_sub(limit);
+        Ok(MailInbox { exists: selected.exists, uid_validity: selected.uid_validity, uids: uids[start..].to_vec() })
+    }
+
+    /// Fetch one exact UID from a selected mailbox through a grant-checked
+    /// Multipass flow. Numeric UIDs keep caller text out of IMAP commands.
+    pub fn mail_fetch<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        mailbox: &str, uid: u32, dialer: &mut D) -> Result<Option<Vec<u8>>> {
+        if mailbox.is_empty() || mailbox.len() > 255 || mailbox.chars().any(char::is_control) || uid == 0 {
+            return Err(ApiError::new("mail_request", "Choose a mailbox and a message UID."));
+        }
+        let flow = self.open_mail_flow(now, app, id, MailPurpose::Imap, dialer)?;
+        let mut client = imap::Client::resume_authenticated(flow);
+        client.select(mailbox).map_err(mail_protocol_error)?;
+        let fetched = client.uid_fetch(&format!("{uid}")).map_err(mail_protocol_error)?;
+        Ok(fetched.into_iter().find(|m| m.uid == uid).map(|m| m.body))
+    }
+
+    /// Submit a composed plain-text message from the configured account.
+    /// Multipass owns the SMTP flow and fixes the envelope sender to the
+    /// account user. Header fields are checked before composing any bytes.
+    pub fn mail_send<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        to: &[&str], subject: &str, body: &str, date: &str, message_id: &str,
+        dialer: &mut D) -> Result<()> {
+        let safe_header = |s: &str, max: usize| s.len() <= max && !s.chars().any(char::is_control);
+        if to.is_empty() || to.len() > 50 || to.iter().any(|s| !safe_header(s, 254) || !s.contains('@') || s.chars().any(|c| matches!(c, '<' | '>' | ' ')))
+            || !safe_header(subject, 998) || !safe_header(date, 128) || !safe_header(message_id, 254)
+            || message_id.is_empty() || body.len() > 1024 * 1024 {
+            return Err(ApiError::new("mail_request", "The message contains an invalid address or header, or is too large."));
+        }
+        let from = self.mail.get(&id).ok_or_else(|| ApiError::new("not_signed_in", "That mail account is not signed in."))?.user.clone();
+        let flow = self.open_mail_flow(now, app, id, MailPurpose::Smtp, dialer)?;
+        let message = sex_mail::message::compose(&sex_mail::message::Draft {
+            from: &from, to, subject, body, date, message_id, in_reply_to: None, references: &[],
+        });
+        smtp::Client::resume_authenticated(flow).send(&from, to, &message).map_err(mail_protocol_error)
+    }
 
     /// Always refused: tokens never leave Multipass and Shibari.
     pub fn token(&self, _app: App, _id: u64) -> Result<Vec<u8>> {
@@ -212,3 +338,126 @@ impl Multipass {
 fn pad4(mut s: String) -> String { while (s.len() - 6) % 4 != 0 { s.push('='); } s }
 
 fn shibari_err() -> ApiError { ApiError::new("shibari", "Shibari could not keep the account's session.") }
+fn mail_protocol_error(_: sex_mail::Error) -> ApiError { ApiError::new("mail_protocol", "The mail server could not complete that request.") }
+
+#[cfg(test)]
+mod mail_broker_tests {
+    use super::*;
+    use crate::mail::VerifiedMailTls;
+    use sex_mail::{Conn, fixture::{FixtureConn, Shared, Store}, imap, smtp};
+
+    struct TlsFixture(FixtureConn);
+    impl Conn for TlsFixture {
+        fn write_all(&mut self, data: &[u8]) -> sex_mail::Result<()> { self.0.write_all(data) }
+        fn read(&mut self, buf: &mut [u8]) -> sex_mail::Result<usize> { self.0.read(buf) }
+    }
+    impl VerifiedMailTls for TlsFixture {}
+
+    struct Dialer { store: Shared, opened: Vec<MailServer> }
+    impl MailDialer for Dialer {
+        type Flow = TlsFixture;
+        fn open(&mut self, server: &MailServer) -> Result<Self::Flow> {
+            self.opened.push(server.clone());
+            match (server.host.as_str(), server.port) {
+                ("imap.example.org", 993) => Ok(TlsFixture(FixtureConn::imap(&self.store))),
+                ("smtp.example.org", 465) => Ok(TlsFixture(FixtureConn::smtp(&self.store))),
+                _ => Err(ApiError::new("wrong_endpoint", "The configured mail server is unavailable.")),
+            }
+        }
+    }
+
+    fn setup() -> (Multipass, Dialer) {
+        let store = Store::shared();
+        store.borrow_mut().add_user("alice@example.org", "app-password");
+        (Multipass::new(Owner(7), Keeper::new(5, 8)), Dialer { store, opened: Vec::new() })
+    }
+
+    #[test]
+    fn account_setup_and_granted_mail_flow_send_then_receive() {
+        let (mut broker, mut dialer) = setup();
+        let mut secret = b"app-password".to_vec();
+        let id = broker.add_mail_account(10, "person", "alice@example.org", "IMAP.EXAMPLE.ORG", 993,
+            "SMTP.EXAMPLE.ORG", 465, &mut secret, &mut dialer).unwrap();
+        assert!(secret.iter().all(|b| *b == 0));
+        assert!(broker.signed_in(id));
+        assert_eq!(broker.book.get(id).unwrap().account.provider, Provider::Mail);
+        assert!(!broker.book.to_text().contains("app-password"));
+        assert_eq!(StampBook::from_text(&broker.book.to_text()).unwrap().get(id).unwrap().account.provider, Provider::Mail);
+        assert_eq!(dialer.opened.iter().map(|s| s.host.as_str()).collect::<Vec<_>>(), ["imap.example.org", "smtp.example.org"]);
+
+        let app = App(22);
+        let before = dialer.opened.len();
+        assert_eq!(broker.open_mail_flow(11, app, id, MailPurpose::Imap, &mut dialer).err().unwrap().code, "no_grant");
+        assert_eq!(dialer.opened.len(), before, "a denied app must not open a network flow");
+        broker.grant("person", app, id, Scope::Read).unwrap();
+        assert_eq!(broker.open_mail_flow(11, app, id, MailPurpose::Smtp, &mut dialer).err().unwrap().code, "no_grant");
+        broker.grant("person", app, id, Scope::Write).unwrap();
+
+        let send = broker.open_mail_flow(12, app, id, MailPurpose::Smtp, &mut dialer).unwrap();
+        let mut sender = smtp::Client::resume_authenticated(send);
+        sender.send("alice@example.org", &["alice@example.org"], b"From: alice@example.org\r\nTo: alice@example.org\r\nSubject: Broker\r\n\r\nHello\r\n").unwrap();
+        let recv = broker.open_mail_flow(13, app, id, MailPurpose::Imap, &mut dialer).unwrap();
+        let mut inbox = imap::Client::resume_authenticated(recv);
+        assert_eq!(inbox.select("INBOX").unwrap().exists, 1);
+        assert_eq!(inbox.uid_search("ALL").unwrap(), [1]);
+        assert_eq!(dialer.opened[2..].iter().map(|s| s.host.as_str()).collect::<Vec<_>>(), ["smtp.example.org", "imap.example.org"]);
+        assert!(broker.token(app, id).is_err());
+        broker.revoke(app, id);
+        assert_eq!(broker.open_mail_flow(14, app, id, MailPurpose::Imap, &mut dialer).err().unwrap().code, "no_grant");
+    }
+
+    #[test]
+    fn bad_secret_or_endpoint_never_creates_a_mail_stamp() {
+        let (mut broker, mut dialer) = setup();
+        let mut wrong = b"wrong".to_vec();
+        assert_eq!(broker.add_mail_account(10, "person", "alice@example.org", "imap.example.org", 993,
+            "smtp.example.org", 465, &mut wrong, &mut dialer).err().unwrap().code, "mail_auth");
+        assert_eq!(wrong, [0; 5]);
+        assert_eq!(broker.book.list("person").count(), 0);
+        let mut valid = b"app-password".to_vec();
+        assert_eq!(broker.add_mail_account(10, "person", "alice@example.org", "127.0.0.1", 993,
+            "smtp.example.org", 465, &mut valid, &mut dialer).err().unwrap().code, "mail_server");
+        assert!(valid.iter().all(|b| *b == 0));
+        assert_eq!(broker.book.list("person").count(), 0);
+    }
+
+    #[test]
+    fn broker_owned_mail_operations_send_then_read_without_flow_handoff() {
+        let (mut broker, mut dialer) = setup();
+        let id = broker.add_mail_account(10, "person", "alice@example.org", "imap.example.org", 993,
+            "smtp.example.org", 465, &mut b"app-password".to_vec(), &mut dialer).unwrap();
+        let app = App(22);
+        let opened = dialer.opened.len();
+        assert_eq!(broker.mail_inbox(11, app, id, "INBOX", 20, &mut dialer).err().unwrap().code, "no_grant");
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org"], "Hello", "Body", "24 Nov 2026", "one@example.org", &mut dialer).err().unwrap().code, "no_grant");
+        assert_eq!(dialer.opened.len(), opened);
+        broker.grant("person", app, id, Scope::Read).unwrap();
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org"], "Hello", "Body", "24 Nov 2026", "one@example.org", &mut dialer).err().unwrap().code, "no_grant");
+        broker.grant("person", app, id, Scope::Write).unwrap();
+        broker.mail_send(12, app, id, &["alice@example.org"], "Hello", "Body", "24 Nov 2026", "one@example.org", &mut dialer).unwrap();
+        let page = broker.mail_inbox(13, app, id, "INBOX", 20, &mut dialer).unwrap();
+        assert_eq!(page.exists, 1);
+        assert_eq!(page.uids, [1]);
+        let raw = broker.mail_fetch(14, app, id, "INBOX", 1, &mut dialer).unwrap().unwrap();
+        assert!(core::str::from_utf8(&raw).unwrap().contains("From: alice@example.org"));
+        assert!(core::str::from_utf8(&raw).unwrap().contains("Subject: Hello"));
+        assert!(core::str::from_utf8(&raw).unwrap().contains("Body"));
+        broker.revoke(app, id);
+        assert_eq!(broker.mail_fetch(15, app, id, "INBOX", 1, &mut dialer).err().unwrap().code, "no_grant");
+    }
+
+    #[test]
+    fn malformed_mail_requests_do_not_open_network_flows() {
+        let (mut broker, mut dialer) = setup();
+        let id = broker.add_mail_account(10, "person", "alice@example.org", "imap.example.org", 993,
+            "smtp.example.org", 465, &mut b"app-password".to_vec(), &mut dialer).unwrap();
+        let app = App(22);
+        broker.grant("person", app, id, Scope::Write).unwrap();
+        let opened = dialer.opened.len();
+        assert_eq!(broker.mail_inbox(11, app, id, "INBOX\r\nDELETE", 20, &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(broker.mail_fetch(11, app, id, "INBOX", 0, &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org\r\nRCPT TO:<thief@example.org>"], "Hello", "Body", "date", "id", &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org"], "Hello\r\nBcc: thief@example.org", "Body", "date", "id", &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(dialer.opened.len(), opened);
+    }
+}

@@ -69,6 +69,11 @@ def main():
   typed(surface,PASSWORD);time.sleep(.5);typed(surface,PASSWORD)
   m=g['wait'](r'\[files.home.setup\] mib=(\d+) kdf_ms=(\d+) ',s,300);result['setup_kdf_ms']=int(m[2])
   g['wait'](r'\[files.app.home.setup\] ',s,60)
+  # The encrypted volume's private staging name is never browseable.
+  expect('cat /home/.__sexfiles_staged',r'\[spindle.fs.result\] kind=7 status=11 ')
+  g['focus'](surface);time.sleep(.5)
+  picture=a.out/'home-staging-protected.ppm';q.cmd('screendump',{'filename':str(picture)})
+  assert picture.read_bytes().startswith(b'P6\n')
   m=expect(f'fetch http://10.0.2.2:{PORT}/secret /home/secret.txt',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
   s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k');g['wait'](r'\[files.home.locked\]',s,60)
@@ -89,6 +94,7 @@ def main():
   s=len(t());typed(surface,PASSWORD)
   m=g['wait'](r'\[files.home.unlocked\] ms=(\d+) ',s,300);result['unlock_ms']=int(m[1])
   g['wait'](r'\[files.app.home.unlocked\]',s,30)
+  expect('cat /home/.__sexfiles_staged',r'\[spindle.fs.result\] kind=7 status=11 ')
   expect('cat /home/secret.txt',r'\[spindle.fs.cat\] '+MARKER.decode())
   s=len(t());g['focus'](surface);time.sleep(.5);ctrl('k',True);g['wait'](r'\[display.text.committed\] ',s,30);time.sleep(.5)
   typed(surface,PASSWORD);time.sleep(.5);typed(surface,NEWPASS);time.sleep(.5);typed(surface,NEWPASS)

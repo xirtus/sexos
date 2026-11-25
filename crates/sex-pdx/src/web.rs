@@ -97,6 +97,19 @@ pub const ADDRESSES: u8 = 18;
 /// `CLOSE` after this lets the connection finish on its own instead of resetting it.
 pub const SHUTDOWN: u8 = 19;
 
+/// Mail broker operations share the existing, Shell-bound program route. The
+/// network service owns account credentials and TLS; callers never send SASL
+/// secrets in this region. Until an account is configured these fail closed.
+pub const MAIL_STATUS: u8 = 20;
+pub const MAIL_INBOX: u8 = 21;
+pub const MAIL_FETCH: u8 = 22;
+pub const MAIL_SUBMIT: u8 = 23;
+pub const NO_MAIL_ACCOUNT: u8 = 9;
+
+pub const fn is_mail_kind(kind: u8) -> bool {
+    matches!(kind, MAIL_STATUS | MAIL_INBOX | MAIL_FETCH | MAIL_SUBMIT)
+}
+
 /// The port is held by another flow, or is one the service keeps for itself.
 pub const IN_USE: u8 = 8;
 

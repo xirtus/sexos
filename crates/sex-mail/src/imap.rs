@@ -5,6 +5,16 @@ use crate::{Auth, Conn, Error, Lines, Result};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use zeroize::Zeroizing;
+
+/// Bound both copied response text and all announced literals before reading
+/// them. A single FETCH body can be large, but a server cannot grow this parser
+/// without limit through continuations or multiple literals.
+const MAX_RESPONSE_TEXT: usize = 2 << 20;
+const MAX_RESPONSE_TOTAL: usize = 64 << 20;
+/// Untagged responses kept for one command. Each response is bounded above,
+/// but a server could otherwise stream them without end before its tagged reply.
+pub const MAX_COMMAND_TOTAL: usize = 128 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token { Atom(String), Str(Vec<u8>), List(Vec<Token>), Nil }
@@ -40,7 +50,7 @@ pub struct Fetched { pub uid: u32, pub flags: Vec<String>, pub size: u32, pub bo
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event { Exists(u32), Expunge(u32), Flags(u32) }
 
-pub struct Client<C: Conn> { io: Lines<C>, tag: u32, pub capabilities: Vec<String>, pub authenticated: bool }
+pub struct Client<C: Conn> { io: Lines<C>, tag: u32, tag_prefix: &'static str, pub capabilities: Vec<String>, pub authenticated: bool }
 
 /// Quote a string as an IMAP quoted string.
 pub fn quote(s: &str) -> String {
@@ -53,7 +63,7 @@ pub fn quote(s: &str) -> String {
 impl<C: Conn> Client<C> {
     /// Read the greeting.
     pub fn connect(conn: C) -> Result<Self> {
-        let mut c = Self { io: Lines::new(conn), tag: 0, capabilities: Vec::new(), authenticated: false };
+        let mut c = Self { io: Lines::new(conn), tag: 0, tag_prefix: "v", capabilities: Vec::new(), authenticated: false };
         let g = c.read_response()?;
         match g.word(0).as_deref() {
             Some("OK") => {}
@@ -63,15 +73,34 @@ impl<C: Conn> Client<C> {
         Ok(c)
     }
 
+    /// Resume the IMAP stream after a trusted account service completed SASL.
+    /// There is no second greeting: Multipass keeps the TLS flow and hands it to
+    /// Valentine only after authentication. The flow must already be selected
+    /// for this person's mail account; no password crosses this constructor.
+    pub fn resume_authenticated(conn: C) -> Self {
+        Self { io: Lines::new(conn), tag: 0, tag_prefix: "r", capabilities: Vec::new(), authenticated: true }
+    }
+
     pub fn into_conn(self) -> C { self.io.conn }
 
     /// Parse one response (line plus literals) into tokens.
-    pub fn read_response(&mut self) -> Result<Response> {
+    pub fn read_response(&mut self) -> Result<Response> { self.read_sized().map(|(r, _)| r) }
+
+    /// One response and the wire bytes it took (lines plus literals).
+    fn read_sized(&mut self) -> Result<(Response, usize)> {
         let mut data = Vec::new();
         let mut literals: Vec<Vec<u8>> = Vec::new();
+        let mut total = 0usize;
         loop {
             let line = self.io.line()?;
             let lit = literal_len(&line);
+            let text_len = data.len().checked_add(line.len()).and_then(|n| n.checked_add(usize::from(lit.is_some())))
+                .ok_or_else(|| Error::Protocol("IMAP response too large".into()))?;
+            total = total.checked_add(line.len()).and_then(|n| n.checked_add(lit.unwrap_or(0)))
+                .ok_or_else(|| Error::Protocol("IMAP response too large".into()))?;
+            if text_len > MAX_RESPONSE_TEXT || total > MAX_RESPONSE_TOTAL {
+                return Err(Error::Protocol("IMAP response too large".into()));
+            }
             data.extend_from_slice(&line);
             match lit {
                 Some(n) => {
@@ -85,27 +114,31 @@ impl<C: Conn> Client<C> {
         let (tag, rest) = match data.iter().position(|&b| b == b' ') { Some(i) => (&data[..i], &data[i + 1..]), None => (&data[..], &[][..]) };
         let mut p = Parser { s: rest, i: 0 };
         let tokens = p.list_until(None, &mut lits);
-        Ok(Response { tag: String::from_utf8_lossy(tag).into_owned(), tokens })
+        Ok((Response { tag: String::from_utf8_lossy(tag).into_owned(), tokens }, total))
     }
 
-    fn next_tag(&mut self) -> String { self.tag += 1; format!("v{}", self.tag) }
+    fn next_tag(&mut self) -> String { self.tag += 1; format!("{}{}", self.tag_prefix, self.tag) }
 
     /// Send a command; collect untagged responses until its tagged reply.
     pub fn command(&mut self, cmd: &str) -> Result<Vec<Response>> {
         let tag = self.next_tag();
-        self.io.send(format!("{tag} {cmd}\r\n").as_bytes())?;
+        let wire = Zeroizing::new(format!("{tag} {cmd}\r\n"));
+        self.io.send(wire.as_bytes())?;
         self.finish(&tag)
     }
 
     fn finish(&mut self, tag: &str) -> Result<Vec<Response>> {
         let mut untagged = Vec::new();
+        let mut kept = 0usize;
         loop {
-            let r = self.read_response()?;
+            let (r, size) = self.read_sized()?;
             if r.tag == tag {
                 return match r.word(0).as_deref() { Some("OK") => Ok(untagged), _ => Err(Error::Refused(r.rest())) };
             }
             if r.tag == "*" {
                 if r.word(0).as_deref() == Some("CAPABILITY") { self.capabilities = caps(&r); }
+                kept = kept.saturating_add(size);
+                if kept > MAX_COMMAND_TOTAL { return Err(Error::Protocol("IMAP command response too large".into())); }
                 untagged.push(r);
             }
         }
@@ -119,7 +152,8 @@ impl<C: Conn> Client<C> {
     /// Run by Multipass with the secret from Shibari, before Valentine gets the flow.
     pub fn authenticate(&mut self, auth: &Auth) -> Result<()> {
         let (mech, ir) = auth.sasl();
-        self.command(&format!("AUTHENTICATE {mech} {ir}"))?;
+        let command = Zeroizing::new(format!("AUTHENTICATE {mech} {}", ir.as_str()));
+        self.command(&command)?;
         self.authenticated = true;
         Ok(())
     }
