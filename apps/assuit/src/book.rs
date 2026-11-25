@@ -310,8 +310,20 @@ impl Book {
     /// Edit dynamic page numbers in the section at the caret. The engine owns
     /// the field, numbering, layout and DOCX/ODT serialization.
     pub fn insert_page_numbers(&mut self, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; remove top/bottom; start 1–32767; or continue";
+        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; remove top/bottom; start 1–32767; continue; or format decimal/lower roman/upper roman/lower letter/upper letter";
         let words: Vec<_> = input.split_whitespace().collect();
+        if words.first().is_some_and(|w| w.eq_ignore_ascii_case("format")) {
+            let choice = words[1..].join(" ").to_ascii_lowercase();
+            let format = match choice.as_str() {
+                "decimal" => "decimal",
+                "lower roman" => "lowerRoman",
+                "upper roman" => "upperRoman",
+                "lower letter" => "lowerLetter",
+                "upper letter" => "upperLetter",
+                _ => return Err(HELP.into()),
+            };
+            return self.run("layout.pageNumberFormat", json!({ "format": format })).map(|_| ());
+        }
         if words.len() == 1 && words[0].eq_ignore_ascii_case("continue") {
             return self.run("layout.pageNumberFormat", json!({ "start": null })).map(|_| ());
         }
@@ -1208,6 +1220,38 @@ mod tests {
             assert_eq!(starts(&reopened), [None, None]);
             reopened.save().unwrap();
             assert_eq!(starts(&Book::open(&path).unwrap()), [None, None], "{ext} lost continuation");
+        }
+    }
+
+    #[test]
+    fn page_number_format_is_visible_section_scoped_and_round_trips() {
+        use wordcraft_engine::doc::section::NumFormat;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("page-number-format.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First section").unwrap();
+            book.insert_page_numbers("bottom center").unwrap();
+            for bad in ["format", "format binary", "format decimal extra"] {
+                assert!(book.insert_page_numbers(bad).is_err(), "{bad}");
+            }
+            let decimal = book.draw(0, 2.0).unwrap().pixels;
+            book.insert_page_numbers("format lower roman").unwrap();
+            assert_eq!(book.session.doc.last_section.page_num_format, NumFormat::LowerRoman);
+            assert_ne!(book.draw(0, 2.0).unwrap().pixels, decimal,
+                "Roman page number must change the rendered page");
+            book.insert_page_numbers("format decimal").unwrap();
+            book.run("layout.break", json!({ "kind": "nextPage" })).unwrap();
+            book.type_text("Second section").unwrap();
+            book.insert_page_numbers("format upper letter").unwrap();
+            let formats = |b: &Book| b.session.doc.sections().into_iter()
+                .map(|(_, sec)| sec.page_num_format).collect::<Vec<_>>();
+            assert_eq!(formats(&book), [NumFormat::Decimal, NumFormat::UpperLetter]);
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert_eq!(formats(&reopened), formats(&book), "{ext} lost section number formats");
+            reopened.key(&Chord { name: "End", ctrl: true, shift: false });
+            reopened.insert_page_numbers("format upper roman").unwrap();
+            assert_eq!(formats(&reopened), [NumFormat::Decimal, NumFormat::UpperRoman]);
         }
     }
 
