@@ -82,6 +82,16 @@ pub const CREATE_WITH_ID: u8 = 52;
 pub const WRITE_IF_ID: u8 = 53;
 /// Remove only while path still names the object ID in `offset`.
 pub const REMOVE_IF_ID: u8 = 54;
+/// Files-owned, primary-SexFS-only staged save. The path is the exact destination
+/// granted to this run. BEGIN receives expected size in `offset` and SHA-256
+/// in data[0..32], returning a ticket in data[0..8]. CHUNK carries the ticket
+/// in data[0..8] and bytes thereafter, with the sequential byte offset in `offset`.
+/// PUBLISH and ABORT carry the ticket in `offset` and no data. No stage path is
+/// granted to the client. Home and removable volumes answer UNSUPPORTED.
+pub const STAGE_BEGIN: u8 = 55;
+pub const STAGE_CHUNK: u8 = 56;
+pub const STAGE_PUBLISH: u8 = 57;
+pub const STAGE_ABORT: u8 = 58;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;
