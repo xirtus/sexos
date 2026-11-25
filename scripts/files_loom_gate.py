@@ -290,12 +290,15 @@ def main():
   step(lambda:ctrl('c'),r'\[files.app.copy.batch\] count=2')
   copy_started=len(t())
   step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=0',120)
+  g['wait'](r'\[files.app.job.final-sync.ok\] kind=Copy',copy_started,10)
   g['wait'](r'\[files.app.job.verified\] path=/media/LOOM/ren/pic_01 \(copy\).txt bytes=\d+',copy_started,10)
   g['wait'](r'\[files.app.job.verified\] path=/media/LOOM/ren/pic_02 \(copy\).txt bytes=\d+',copy_started,10)
   g['wait'](r'\[files.app.meta.copied\] from=ren/pic_01.txt to=ren/pic_01 \(copy\).txt',0,10)
   g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=5\b',0,10)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-batch-copy.ppm')})
   q.cmd('screendump',{'filename':str(a.out/'loom-verified-copy.ppm')})
+  q.cmd('screendump',{'filename':str(a.out/'loom-sync-confirmed.ppm')})
+  assert (a.out/'loom-sync-confirmed.ppm').stat().st_size>10000
   assert (a.out/'loom-verified-copy.ppm').stat().st_size>10000
   assert (a.out/'loom-batch-copy.ppm').stat().st_size>10000
   step(lambda:ctrl('z'),r'\[files.app.undone\]')

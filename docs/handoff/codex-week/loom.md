@@ -37,7 +37,10 @@ Remaining gaps:
   one background job, with reserved collision-safe names, cleanup on failure,
   copied Loom metadata, and one-step undo.
   Background copies now verify staged size and hash by reading each `.part`
-  file back before promotion, cleaning up a mismatch or read failure.
+  file back before promotion, cleaning up a mismatch or read failure. The
+  final post-promotion sync must also succeed before the job reports success.
+  A failed sync attempts copy rollback and reports unconfirmed storage state
+  when cleanup or durability cannot be established.
   Ctrl-click toggles a grid tile in both single and split layouts; Ctrl+Space
   and Ctrl+arrows provide a keyboard path. Selected tiles use the accent fill,
   while a separate focus ring tracks keyboard focus. The same batch operations
