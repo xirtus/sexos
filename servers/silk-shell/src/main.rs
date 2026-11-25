@@ -10833,9 +10833,11 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     let wants=program_keys(destination.subject);
                     let keypad=KEY_KEYPAD&&wants&sex_pdx::app_key::KEYPAD!=0;
-                    // F11 always stays Shell's way out of a program that takes the rest.
+                    // F11 always stays Shell's way out of a program that takes the rest,
+                    // and Scroll Lock always reaches Spindle (a program asking for F3
+                    // must not trap the person away from their terminal).
                     let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59)
-                        &&(code==0x57||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
+                        &&(code==0x57||code==0x46||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
                     // A key going up, a modifier's too, reaches the program as the press's
                     // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
                     if value==0 && !desktop_key{
