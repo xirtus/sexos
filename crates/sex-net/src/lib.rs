@@ -142,7 +142,10 @@ fn let_go(s:&mut tcp::Socket){
 struct Open{tcp:alloc::vec::Vec<SocketHandle>,udp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,next_udp_port:u16,query:Question,
     /// Each TCP flow's listening group (port and the group's own number), so several flows
     /// can wait on one port as its backlog.
-    groups:alloc::vec::Vec<Option<(u16,usize)>>,six:Six,cache:alloc::vec::Vec<Cached>}
+    groups:alloc::vec::Vec<Option<(u16,usize)>>,six:Six,cache:alloc::vec::Vec<Cached>,
+    dns_mode:dns_secure::Mode,cache_hits:u64,cache_misses:u64}
+/// Cache hit/miss counters and current entry count for the open-side DNS cache.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct DnsCacheStats{pub hits:u64,pub misses:u64,pub entries:usize}
 /// What the IPv6 network said about resolvers: RDNSS entries from router advertisements
 /// with when each runs out, and stateless DHCPv6's answer.
 struct Six{rdnss:[Option<([u8;16],u64)>;v6config::MAX_RESOLVERS],dhcp6:SocketHandle,ask:bool,xid:u32,started:u64,next_at:u64,timeout:u64,
@@ -162,6 +165,15 @@ pub const CACHE_ENTRIES:usize=512;
 pub const CACHE_MIN_TTL:u32=5;
 pub const CACHE_MAX_TTL:u32=86400;
 pub const CACHE_NEGATIVE_TTL:u32=30;
+fn insert_cache_entry(cache:&mut alloc::vec::Vec<Cached>,name:[u8;255],len:usize,six:bool,v4:Option<[u8;4]>,v6:Option<[u8;16]>,ttl:u32,now:u64){
+    let seconds=if v4.is_none()&&v6.is_none(){CACHE_NEGATIVE_TTL}else{ttl.clamp(CACHE_MIN_TTL,CACHE_MAX_TTL)};
+    let entry=Cached{name,len,six,v4,v6,until:now.saturating_add(seconds as u64*1000)};
+    cache.retain(|c|!(c.len==entry.len&&c.name[..c.len]==entry.name[..entry.len]));
+    if cache.len()>=CACHE_ENTRIES{
+        if let Some(i)=cache.iter().enumerate().min_by_key(|(_,c)|c.until).map(|(i,_)|i){cache.swap_remove(i);}
+    }
+    if cache.try_reserve(1).is_ok(){cache.push(entry);}
+}
 impl Six{
     fn start(&mut self,now:u64,seed:u64){
         self.ask=true;self.started=now;self.next_at=now;self.timeout=0;
@@ -267,7 +279,7 @@ impl<'a> Engine<'a>{
         self.iface=iface;
         let query=Question{id:1,name:[0;255],len:0,resolver:Address::V4([0;4]),six:false,v4:None,v6:None,done4:true,done6:true,first_at:0,ttl:u32::MAX,kept:true};
         let six=Six{rdnss:[None;v6config::MAX_RESOLVERS],dhcp6,ask:false,xid:0,started:0,next_at:0,timeout:0,dhcp_resolvers:[None;v6config::MAX_RESOLVERS],refresh_at:None};
-        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query,groups:alloc::vec::Vec::new(),six,cache:alloc::vec::Vec::new()});
+        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query,groups:alloc::vec::Vec::new(),six,cache:alloc::vec::Vec::new(),dns_mode:dns_secure::Mode::Plain,cache_hits:0,cache_misses:0});
         Ok(())
     }
     /// The global IPv6 address SLAAC gave, if any.
@@ -348,22 +360,60 @@ impl<'a> Engine<'a>{
     }
     /// Names in the cache now.
     pub fn open_cache_len(&self)->usize{self.open.as_ref().map_or(0,|o|o.cache.len())}
+    /// Cache hit/miss counters and current entry count.
+    pub fn open_cache_stats(&self)->DnsCacheStats{
+        match self.open.as_ref(){
+            Some(o)=>DnsCacheStats{hits:o.cache_hits,misses:o.cache_misses,entries:o.cache.len()},
+            None=>DnsCacheStats{hits:0,misses:0,entries:0},
+        }
+    }
+    /// Current open-side DNS resolution mode (plain by default, or DoT/DoH).
+    pub fn open_dns_mode(&self)->dns_secure::Mode{self.open.as_ref().map_or(dns_secure::Mode::Plain,|o|o.dns_mode)}
+    /// Sets the open-side DNS resolution mode. Cached entries remain shared across modes.
+    pub fn set_open_dns_mode(&mut self,mode:dns_secure::Mode){if let Some(o)=self.open.as_mut(){o.dns_mode=mode;}}
     /// Forgets every remembered lookup (the network changed).
     pub fn open_cache_flush(&mut self){if let Some(o)=self.open.as_mut(){o.cache.clear();}}
+    /// Checks the DNS cache for `host` (with `six` requiring an AAAA-capable entry).
+    /// Serves both plain and secure (DoT/DoH) lookups and tracks hit/miss counters.
+    pub fn open_cache_lookup(&mut self,host:&[u8],six:bool)->Result<Option<Answers>,Error>{
+        let now=self.last;
+        let mut name=[0u8;255];
+        let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        open.cache.retain(|c|c.until>now);
+        if let Some(c)=open.cache.iter().find(|c|c.len==len&&c.name[..len]==name[..len]&&(c.six||!six)){
+            open.cache_hits=open.cache_hits.saturating_add(1);
+            return Ok(Some(Answers{v4:c.v4,v6:if six{c.v6}else{None}}));
+        }
+        open.cache_misses=open.cache_misses.saturating_add(1);
+        Ok(None)
+    }
+    /// Populates the shared DNS cache with `answers` and `ttl` (seconds, clamped to
+    /// `[CACHE_MIN_TTL, CACHE_MAX_TTL]`, or `CACHE_NEGATIVE_TTL` when both are `None`).
+    pub fn open_cache_store(&mut self,host:&[u8],six:bool,answers:Answers,ttl:u32)->Result<(),Error>{
+        let now=self.last;
+        let mut name=[0u8;255];
+        let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        insert_cache_entry(&mut open.cache,name,len,six,answers.v4,answers.v6,ttl,now);
+        Ok(())
+    }
+    /// Populates the shared DNS cache directly from a completed `dns_secure::Lookup`
+    /// using its minimum answer TTL (`lookup.ttl()`).
+    pub fn open_cache_store_secure(&mut self,host:&[u8],lookup:&dns_secure::Lookup,answers:Answers)->Result<(),Error>{
+        self.open_cache_store(host,lookup.six(),answers,lookup.ttl())
+    }
     fn open_ask(&mut self,host:&[u8],six:bool)->Result<(),Error>{
         let local=self.network.local;
         let now=self.last;
         let mut name=[0u8;255];
         let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
-        {
+        if let Some(c)=self.open_cache_lookup(host,six)?{
+            // Answered from memory: nothing goes on the wire.
             let open=self.open.as_mut().ok_or(Error::Config)?;
-            open.cache.retain(|c|c.until>now);
-            if let Some(c)=open.cache.iter().find(|c|c.len==len&&c.name[..len]==name[..len]&&(c.six||!six)){
-                // Answered from memory: nothing goes on the wire.
-                let q=&mut open.query;
-                q.name=name;q.len=len;q.six=six;q.v4=c.v4;q.v6=if six{c.v6}else{None};q.done4=true;q.done6=true;q.first_at=now.max(1);q.kept=true;
-                return Ok(());
-            }
+            let q=&mut open.query;
+            q.name=name;q.len=len;q.six=six;q.v4=c.v4;q.v6=if six{c.v6}else{None};q.done4=true;q.done6=true;q.first_at=now.max(1);q.kept=true;
+            return Ok(());
         }
         let resolver=self.open_resolver().ok_or(Error::Config)?;
         let open=self.open.as_mut().ok_or(Error::Config)?;
@@ -409,14 +459,7 @@ impl<'a> Engine<'a>{
         q.ttl=ttl;
         if q.done4&&q.done6&&!q.kept{
             q.kept=true;
-            let seconds=if q.v4.is_none()&&q.v6.is_none(){CACHE_NEGATIVE_TTL}else{q.ttl.clamp(CACHE_MIN_TTL,CACHE_MAX_TTL)};
-            let entry=Cached{name:q.name,len:q.len,six:q.six,v4:q.v4,v6:q.v6,until:now.saturating_add(seconds as u64*1000)};
-            let cache=&mut open.cache;
-            cache.retain(|c|!(c.len==entry.len&&c.name[..c.len]==entry.name[..entry.len]));
-            if cache.len()>=CACHE_ENTRIES{
-                if let Some(i)=cache.iter().enumerate().min_by_key(|(_,c)|c.until).map(|(i,_)|i){cache.swap_remove(i);}
-            }
-            if cache.try_reserve(1).is_ok(){cache.push(entry);}
+            insert_cache_entry(&mut open.cache,q.name,q.len,q.six,q.v4,q.v6,q.ttl,now);
         }
     }
     /// The IPv4 answer to the current question, if it arrived. Err for a final failure.

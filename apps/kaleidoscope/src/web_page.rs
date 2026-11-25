@@ -13,7 +13,7 @@ static mut SOURCE: [u8; SOURCE_BYTES] = [0; SOURCE_BYTES];
 static mut TEXT: [u8; TEXT_BYTES] = [0; TEXT_BYTES];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Phase { Idle, Up, ResolveAsk, ResolveWait, Connect, Opening, TlsStart, TlsWait, Send, FinishRequest, Receive, CheckPeer, Close, Convert }
+enum Phase { Idle, Up, ResolveAsk, ResolveWait, Connect, Opening, TlsStart, TlsWait, TlsAlpn, Send, FinishRequest, Receive, CheckPeer, Close, Convert }
 
 #[derive(Clone, Copy)]
 struct Url { bytes: [u8; URL_MAX], len: usize }
@@ -118,14 +118,19 @@ pub struct Web {
     url: Url, typed: Url, number: u32, history: [Url; HISTORY], depth: usize, redirects: u8, address: [u8; 4],
     request_sent: usize, request_len: usize, source_len: usize, header_end: usize, text_len: usize, pub dirty: bool, status: u32,
     message: [u8; 96], message_len: usize, pub links: Links, truncated: bool, logged: Phase, peer_done: bool,
+    h2: Option<sex_http::h2::Client>, h2_out: alloc::vec::Vec<u8>, h2_is_html: bool, h2_headers_done: bool, h2_done: bool,
+    h3_alt_port: Option<u16>,
 }
 impl Web {
     pub const fn new() -> Self {
         Self { shown: false, editing: false, phase: Phase::Idle, seq: 0, sent: false, next_at: 0, deadline: 0, url: Url::EMPTY, typed: Url::EMPTY, number: 0,
             history: [Url::EMPTY; HISTORY], depth: 0, redirects: 0, address: [0; 4], request_sent: 0, request_len: 0, source_len: 0, header_end: 0, text_len: 0,
-            dirty: false, status: 0, message: [0; 96], message_len: 0, links: Links { targets: [(0, 0); crate::html_text::MAX_LINKS], count: 0 }, truncated: false, logged: Phase::Idle, peer_done: false }
+            dirty: false, status: 0, message: [0; 96], message_len: 0, links: Links { targets: [(0, 0); crate::html_text::MAX_LINKS], count: 0 }, truncated: false, logged: Phase::Idle, peer_done: false,
+            h2: None, h2_out: alloc::vec::Vec::new(), h2_is_html: false, h2_headers_done: false, h2_done: false, h3_alt_port: None }
     }
     pub fn busy(&self) -> bool { self.phase != Phase::Idle }
+    pub fn using_h2(&self) -> bool { self.h2.is_some() }
+    pub fn h3_alt_port(&self) -> Option<u16> { self.h3_alt_port }
     pub fn text(&self) -> &[u8] { unsafe { &(&*core::ptr::addr_of!(TEXT))[..self.text_len] } }
     pub fn url(&self) -> &[u8] { self.url.get() }
     pub fn typed(&self) -> &[u8] { self.typed.get() }
@@ -222,6 +227,7 @@ impl Web {
         self.address = numeric(host).unwrap_or([0; 4]);
         let _ = (host, path);
         self.source_len = 0; self.header_end = 0; self.request_sent = 0; self.status = 0; self.peer_done = false; self.truncated = false;
+        self.h2 = None; self.h2_out.clear(); self.h2_is_html = false; self.h2_headers_done = false; self.h2_done = false; self.h3_alt_port = None;
         self.phase = Phase::Up; self.sent = false; self.next_at = 0; self.deadline = now + 60_000;
         self.say(b"Loading...");
     }
@@ -248,13 +254,30 @@ impl Web {
             Phase::ResolveWait => self.call(w::RESOLVE, 0),
             Phase::Connect => self.call(w::CONNECT, w::address_port(self.address, p.port)),
             Phase::Opening => self.call(w::STATE, 0),
-            Phase::TlsStart => { region[..p.host.len()].copy_from_slice(p.host); self.call(w::TLS_START, p.host.len() as u64); }
+            Phase::TlsStart => {
+                region[..p.host.len()].copy_from_slice(p.host);
+                self.call(w::TLS_START, (p.host.len() as u64) | w::TLS_ALPN_H2_FLAG);
+            }
             Phase::TlsWait => self.call(w::TLS_STAGE, 0),
+            Phase::TlsAlpn => self.call(w::TLS_ALPN, 0),
             Phase::Send => {
-                let len = self.build_request(region);
-                self.request_len = len;
-                region.copy_within(self.request_sent..len, 0);
-                self.call(w::SEND, (len - self.request_sent) as u64);
+                if let Some(h2) = self.h2.as_mut() {
+                    if self.h2_out.is_empty() && h2.has_output() {
+                        self.h2_out = h2.output();
+                    }
+                    if self.h2_out.is_empty() {
+                        self.phase = Phase::Receive;
+                        return;
+                    }
+                    let take = self.h2_out.len().min(w::REGION_BYTES);
+                    region[..take].copy_from_slice(&self.h2_out[..take]);
+                    self.call(w::SEND, take as u64);
+                } else {
+                    let len = self.build_request(region);
+                    self.request_len = len;
+                    region.copy_within(self.request_sent..len, 0);
+                    self.call(w::SEND, (len - self.request_sent) as u64);
+                }
             }
             Phase::FinishRequest => self.call(w::FINISH_REQUEST, 0),
             Phase::Receive => self.call(w::RECEIVE, 32 * 1024),
@@ -266,8 +289,12 @@ impl Web {
     fn finish(&mut self, convert: impl FnOnce(&[u8], &mut [u8]) -> crate::html_text::Converted) {
         let source = unsafe { &(&*core::ptr::addr_of!(SOURCE))[self.header_end..self.source_len] };
         let text = unsafe { &mut *core::ptr::addr_of_mut!(TEXT) };
-        let head = unsafe { &(&*core::ptr::addr_of!(SOURCE))[..self.header_end] };
-        let is_html = find(head, b"text/html").is_some() || crate::html_text::looks_like_html(source);
+        let is_html = if self.h2.is_some() {
+            self.h2_is_html || crate::html_text::looks_like_html(source)
+        } else {
+            let head = unsafe { &(&*core::ptr::addr_of!(SOURCE))[..self.header_end] };
+            find(head, b"text/html").is_some() || crate::html_text::looks_like_html(source)
+        };
         if is_html {
             let converted = convert(source, &mut text[..]);
             self.text_len = converted.len.min(TEXT_BYTES);
@@ -279,10 +306,17 @@ impl Web {
             self.text_len = n;
             self.links.count = 0;
         }
-        sex_pdx::serial_record!("[browser.web.page] source={} text={} links={} html={} truncated={}", source.len(), self.text_len, self.links.count, is_html as u8, self.truncated as u8);
+        sex_pdx::serial_record!("[browser.web.page] source={} text={} links={} html={} truncated={} h2={} h3_alt={}",
+            source.len(), self.text_len, self.links.count, is_html as u8, self.truncated as u8, self.h2.is_some() as u8, self.h3_alt_port.unwrap_or(0));
         self.message_len = 0;
         self.phase = Phase::Idle;
         self.dirty = true;
+    }
+    fn record_alt_svc(&mut self, value: &[u8]) {
+        if let Some(hint) = sex_http::h3::parse_alt_svc(value) {
+            self.h3_alt_port = Some(hint.port);
+            sex_pdx::serial_record!("[browser.web.alt_svc] h3 port={} ma={}", hint.port, hint.max_age.unwrap_or(0));
+        }
     }
     fn headers_done(&mut self, now: u64) -> bool {
         let source = unsafe { &(&*core::ptr::addr_of!(SOURCE))[..self.source_len] };
@@ -293,6 +327,11 @@ impl Web {
         let code = head[..line_end].split(|b| *b == b' ').nth(1).map_or(0, |c| c.iter().fold(0u32, |v, b| v.wrapping_mul(10).wrapping_add((*b as u32).wrapping_sub(48))));
         self.status = code;
         sex_pdx::serial_record!("[browser.web.status.code] {}", code);
+        if let Some(at) = find(head, b"\r\nAlt-Svc:") {
+            let v = &head[at + 10..];
+            let v = &v[..find(v, b"\r\n").unwrap_or(v.len())];
+            self.record_alt_svc(v);
+        }
         if (300..400).contains(&code) {
             if let Some(at) = find(head, b"\r\nLocation:") {
                 let v = &head[at + 11..];
@@ -314,6 +353,18 @@ impl Web {
         }
         true
     }
+    fn start_h2_request(&mut self) -> bool {
+        let copy = self.url;
+        let Some(p) = parse(copy.get()) else { return false };
+        let mut h2 = sex_http::h2::Client::new();
+        let headers: [(&[u8], &[u8]); 2] = [(b"user-agent", b"SexOS Browser"), (b"accept", b"text/html, text/plain")];
+        if h2.request(b"GET", b"https", p.host, p.path, &headers, None).is_err() {
+            return false;
+        }
+        self.h2_out = h2.output();
+        self.h2 = Some(h2);
+        true
+    }
     /// True if `word` answered the request in flight.
     pub fn receive(&mut self, word: u64, now: u64) -> bool {
         let Some((seq, status, value)) = w::decode_reply(word) else { return false };
@@ -322,7 +373,8 @@ impl Web {
         if self.phase != self.logged { self.logged = self.phase; sex_pdx::serial_record!("[browser.web.phase] {:?} status={} value={}", self.phase, status, value); }
         if self.phase == Phase::Close {
             if self.status == 1 { self.open(now); return true; }
-            if self.source_len > 0 && self.status != 0 && self.header_end > 0 { self.phase = Phase::Convert; }
+            let ready = if self.h2.is_some() { self.h2_headers_done && self.status != 0 } else { self.source_len > 0 && self.status != 0 && self.header_end > 0 };
+            if ready { self.phase = Phase::Convert; }
             else { self.phase = Phase::Idle; if self.message_len == 0 || self.message.starts_with(b"Loading") { self.say(b"The site closed without answering."); } }
             return true;
         }
@@ -355,36 +407,131 @@ impl Web {
             },
             Phase::TlsStart => { self.phase = Phase::TlsWait; self.next_at = now + POLL; }
             Phase::TlsWait => match value {
-                w::TLS_READY => self.phase = Phase::Send,
+                w::TLS_READY => self.phase = Phase::TlsAlpn,
                 w::TLS_HANDSHAKE => self.next_at = now + POLL,
                 w::TLS_FAILED_CERTIFICATE => self.fail(b"This site's certificate isn't trusted."),
                 w::TLS_FAILED_SIGNATURE => self.fail(b"This site's signature isn't valid."),
                 _ => self.fail(b"Secure connection failed."),
             },
+            Phase::TlsAlpn => {
+                let proto = value & 0xFF;
+                let resumed = (value & w::TLS_RESUMED_BIT) != 0;
+                sex_pdx::serial_record!("[browser.web.alpn] proto={} resumed={}", proto, resumed as u8);
+                if proto == w::ALPN_H2 {
+                    if !self.start_h2_request() {
+                        self.fail(b"HTTP/2 setup failed.");
+                        return true;
+                    }
+                }
+                self.phase = Phase::Send;
+            }
             Phase::Send => {
-                self.request_sent += value as usize;
-                if self.request_sent < self.request_len { self.next_at = now + POLL; }
-                else {
-                    let copy = self.url;
-                    self.phase = if parse(copy.get()).is_some_and(|p| p.tls) { Phase::FinishRequest } else { Phase::Receive };
+                if self.h2.is_some() {
+                    let sent = (value as usize).min(self.h2_out.len());
+                    self.h2_out.drain(..sent);
+                    if !self.h2_out.is_empty() {
+                        self.next_at = now + POLL;
+                    } else {
+                        self.phase = Phase::FinishRequest;
+                    }
+                } else {
+                    self.request_sent += value as usize;
+                    if self.request_sent < self.request_len { self.next_at = now + POLL; }
+                    else {
+                        let copy = self.url;
+                        self.phase = if parse(copy.get()).is_some_and(|p| p.tls) { Phase::FinishRequest } else { Phase::Receive };
+                    }
                 }
             }
             Phase::FinishRequest => self.phase = Phase::Receive,
             Phase::Receive => {
                 if value == 0 {
                     // Bytes can land between two calls, so a closed peer gets one last read.
-                    self.phase = if self.peer_done { Phase::Close } else { Phase::CheckPeer };
+                    self.phase = if self.peer_done || self.h2_done { Phase::Close } else { Phase::CheckPeer };
                     return true;
                 }
                 let n = value as usize;
-                let source = unsafe { &mut *core::ptr::addr_of_mut!(SOURCE) };
-                let take = n.min(SOURCE_BYTES - self.source_len);
-                source[self.source_len..self.source_len + take].copy_from_slice(&region[..take]);
-                self.source_len += take;
-                if take < n { self.truncated = true; }
                 self.deadline = now + 60_000;
-                if self.header_end == 0 { self.headers_done(now); }
-                if self.source_len == SOURCE_BYTES { self.phase = Phase::Close; }
+                if self.h2.is_some() {
+                    let mut redirect_loc: Option<alloc::vec::Vec<u8>> = None;
+                    let mut alt_svc_val: Option<alloc::vec::Vec<u8>> = None;
+                    let mut failed = false;
+                    let mut need_flush = false;
+                    {
+                        let h2 = self.h2.as_mut().unwrap();
+                        if h2.receive(&region[..n]).is_err() {
+                            failed = true;
+                        } else {
+                            let source = unsafe { &mut *core::ptr::addr_of_mut!(SOURCE) };
+                            while let Some(ev) = h2.event() {
+                                match ev {
+                                    sex_http::h2::Event::Headers { status: code, headers, trailers: false, .. } => {
+                                        self.status = code as u32;
+                                        self.h2_headers_done = true;
+                                        sex_pdx::serial_record!("[browser.web.status.code] {}", code);
+                                        for (hn, hv) in &headers {
+                                            if hn.eq_ignore_ascii_case(b"content-type") && find(hv, b"text/html").is_some() {
+                                                self.h2_is_html = true;
+                                            }
+                                            if hn.eq_ignore_ascii_case(b"location") && (300..400).contains(&code) {
+                                                redirect_loc = Some(hv.clone());
+                                            }
+                                            if hn.eq_ignore_ascii_case(b"alt-svc") {
+                                                alt_svc_val = Some(hv.clone());
+                                            }
+                                        }
+                                    }
+                                    sex_http::h2::Event::Data { bytes, .. } => {
+                                        let take = bytes.len().min(SOURCE_BYTES - self.source_len);
+                                        source[self.source_len..self.source_len + take].copy_from_slice(&bytes[..take]);
+                                        self.source_len += take;
+                                        if take < bytes.len() { self.truncated = true; }
+                                    }
+                                    sex_http::h2::Event::End { .. } => { self.h2_done = true; }
+                                    sex_http::h2::Event::Reset { .. } | sex_http::h2::Event::GoAway { .. } => { self.h2_done = true; }
+                                    sex_http::h2::Event::Headers { trailers: true, .. } => {}
+                                }
+                            }
+                            if h2.has_output() {
+                                self.h2_out.extend_from_slice(&h2.output());
+                                need_flush = true;
+                            }
+                        }
+                    }
+                    if let Some(v) = alt_svc_val { self.record_alt_svc(&v); }
+                    if failed {
+                        self.fail(b"HTTP/2 protocol error.");
+                        return true;
+                    }
+                    if let Some(loc) = redirect_loc {
+                        let mut out = [0u8; URL_MAX];
+                        if self.redirects < MAX_REDIRECTS {
+                            if let Some(len) = resolve(self.url.get(), &loc, &mut out) {
+                                self.redirects += 1;
+                                self.url.set(&out[..len]);
+                                self.phase = Phase::Close;
+                                self.status = 1;
+                                self.next_at = now;
+                                return true;
+                            }
+                        }
+                        self.fail(b"Too many redirects.");
+                        return true;
+                    }
+                    if self.h2_done || self.source_len == SOURCE_BYTES {
+                        self.phase = Phase::Close;
+                    } else if need_flush {
+                        self.phase = Phase::Send;
+                    }
+                } else {
+                    let source = unsafe { &mut *core::ptr::addr_of_mut!(SOURCE) };
+                    let take = n.min(SOURCE_BYTES - self.source_len);
+                    source[self.source_len..self.source_len + take].copy_from_slice(&region[..take]);
+                    self.source_len += take;
+                    if take < n { self.truncated = true; }
+                    if self.header_end == 0 { self.headers_done(now); }
+                    if self.source_len == SOURCE_BYTES { self.phase = Phase::Close; }
+                }
             }
             Phase::CheckPeer => {
                 self.peer_done = matches!(value, w::STATE_PEER_CLOSED | w::STATE_CLOSED);

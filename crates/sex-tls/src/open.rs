@@ -140,21 +140,237 @@ static TEST_ROOTS: std::sync::Mutex<Vec<rustls_pki_types::TrustAnchor<'static>>>
 fn roots() -> &'static [rustls_pki_types::TrustAnchor<'static>] { std::boxed::Box::leak(TEST_ROOTS.lock().unwrap().clone().into_boxed_slice()) }
 
 /// Certificates are checked at the time the service read when the session started.
+/// Backed by an `AtomicU32` so `Arc<ClientConfig>` can be shared and reused across
+/// connections at different timestamps without rebuilding `ClientConfig` or `RootCertStore`.
 #[derive(Debug)]
-struct Clock(u32);
-impl rustls::time_provider::TimeProvider for Clock {
-    fn current_time(&self) -> Option<UnixTime> { Some(UnixTime::since_unix_epoch(core::time::Duration::from_secs(self.0 as u64))) }
+struct SharedClock(Arc<core::sync::atomic::AtomicU32>);
+impl rustls::time_provider::TimeProvider for SharedClock {
+    fn current_time(&self) -> Option<UnixTime> {
+        let secs = self.0.load(core::sync::atomic::Ordering::Acquire);
+        Some(UnixTime::since_unix_epoch(core::time::Duration::from_secs(secs as u64)))
+    }
 }
-fn config(seconds: u32, alpn: &[&[u8]]) -> Result<ClientConfig, rustls::Error> {
+
+struct SpinLock<T> {
+    busy: core::sync::atomic::AtomicBool,
+    value: core::cell::UnsafeCell<T>,
+}
+unsafe impl<T: Send> Sync for SpinLock<T> {}
+unsafe impl<T: Send> Send for SpinLock<T> {}
+impl<T> SpinLock<T> {
+    const fn new(value: T) -> Self {
+        Self { busy: core::sync::atomic::AtomicBool::new(false), value: core::cell::UnsafeCell::new(value) }
+    }
+    fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        use core::sync::atomic::Ordering;
+        while self.busy.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            core::hint::spin_loop();
+        }
+        let out = f(unsafe { &mut *self.value.get() });
+        self.busy.store(false, Ordering::Release);
+        out
+    }
+}
+
+/// Default maximum number of origins tracked in a `ResumptionStore`.
+pub const RESUMPTION_CAPACITY: usize = 64;
+/// Maximum TLS 1.3 NewSessionTickets retained per origin (single-use per RFC 8446).
+const MAX_TICKETS_PER_HOST: usize = 4;
+
+struct ResumptionInner {
+    capacity: usize,
+    kx_hints: Vec<(ServerName<'static>, rustls::NamedGroup)>,
+    tls12: Vec<(ServerName<'static>, rustls::client::Tls12ClientSessionValue)>,
+    tls13: Vec<(ServerName<'static>, alloc::collections::VecDeque<rustls::client::Tls13ClientSessionValue>)>,
+}
+
+/// Bounded, `no_std`-compatible LRU `ClientSessionStore` holding TLS 1.3 tickets,
+/// TLS 1.2 sessions, and key-exchange group hints keyed by server name.
+pub struct ResumptionStore {
+    inner: SpinLock<ResumptionInner>,
+}
+
+impl core::fmt::Debug for ResumptionStore {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.inner.with(|s| {
+            f.debug_struct("ResumptionStore")
+                .field("capacity", &s.capacity)
+                .field("kx_hints", &s.kx_hints.len())
+                .field("tls12", &s.tls12.len())
+                .field("tls13_hosts", &s.tls13.len())
+                .finish()
+        })
+    }
+}
+
+impl Default for ResumptionStore {
+    fn default() -> Self { Self::new(RESUMPTION_CAPACITY) }
+}
+
+impl ResumptionStore {
+    pub fn new(capacity: usize) -> Self {
+        let cap = capacity.max(1);
+        Self { inner: SpinLock::new(ResumptionInner { capacity: cap, kx_hints: Vec::new(), tls12: Vec::new(), tls13: Vec::new() }) }
+    }
+    pub fn clear(&self) {
+        self.inner.with(|s| { s.kx_hints.clear(); s.tls12.clear(); s.tls13.clear(); });
+    }
+    pub fn tls13_ticket_count(&self) -> usize {
+        self.inner.with(|s| s.tls13.iter().map(|(_, q)| q.len()).sum())
+    }
+    pub fn tls12_session_count(&self) -> usize {
+        self.inner.with(|s| s.tls12.len())
+    }
+}
+
+impl rustls::client::ClientSessionStore for ResumptionStore {
+    fn set_kx_hint(&self, server_name: ServerName<'static>, group: rustls::NamedGroup) {
+        self.inner.with(|s| {
+            if let Some(pos) = s.kx_hints.iter().position(|(n, _)| *n == server_name) {
+                s.kx_hints.remove(pos);
+            } else if s.kx_hints.len() >= s.capacity {
+                s.kx_hints.remove(0);
+            }
+            s.kx_hints.push((server_name, group));
+        });
+    }
+
+    fn kx_hint(&self, server_name: &ServerName<'_>) -> Option<rustls::NamedGroup> {
+        self.inner.with(|s| {
+            let pos = s.kx_hints.iter().position(|(n, _)| n == server_name)?;
+            let entry = s.kx_hints.remove(pos);
+            let group = entry.1;
+            s.kx_hints.push(entry);
+            Some(group)
+        })
+    }
+
+    fn set_tls12_session(&self, server_name: ServerName<'static>, value: rustls::client::Tls12ClientSessionValue) {
+        self.inner.with(|s| {
+            if let Some(pos) = s.tls12.iter().position(|(n, _)| *n == server_name) {
+                s.tls12.remove(pos);
+            } else if s.tls12.len() >= s.capacity {
+                s.tls12.remove(0);
+            }
+            s.tls12.push((server_name, value));
+        });
+    }
+
+    fn tls12_session(&self, server_name: &ServerName<'_>) -> Option<rustls::client::Tls12ClientSessionValue> {
+        self.inner.with(|s| {
+            let pos = s.tls12.iter().position(|(n, _)| n == server_name)?;
+            let entry = s.tls12.remove(pos);
+            let val = entry.1.clone();
+            s.tls12.push(entry);
+            Some(val)
+        })
+    }
+
+    fn remove_tls12_session(&self, server_name: &ServerName<'static>) {
+        self.inner.with(|s| {
+            if let Some(pos) = s.tls12.iter().position(|(n, _)| n == server_name) {
+                s.tls12.remove(pos);
+            }
+        });
+    }
+
+    fn insert_tls13_ticket(&self, server_name: ServerName<'static>, value: rustls::client::Tls13ClientSessionValue) {
+        self.inner.with(|s| {
+            if let Some(pos) = s.tls13.iter().position(|(n, _)| *n == server_name) {
+                let mut entry = s.tls13.remove(pos);
+                if entry.1.len() >= MAX_TICKETS_PER_HOST { entry.1.pop_front(); }
+                entry.1.push_back(value);
+                s.tls13.push(entry);
+            } else {
+                if s.tls13.len() >= s.capacity { s.tls13.remove(0); }
+                let mut q = alloc::collections::VecDeque::new();
+                q.push_back(value);
+                s.tls13.push((server_name, q));
+            }
+        });
+    }
+
+    fn take_tls13_ticket(&self, server_name: &ServerName<'static>) -> Option<rustls::client::Tls13ClientSessionValue> {
+        self.inner.with(|s| {
+            let pos = s.tls13.iter().position(|(n, _)| n == server_name)?;
+            let mut entry = s.tls13.remove(pos);
+            let ticket = entry.1.pop_back();
+            if !entry.1.is_empty() { s.tls13.push(entry); }
+            ticket
+        })
+    }
+}
+
+struct CachedConfigs {
+    #[cfg(test)]
+    root_count: usize,
+    entries: Vec<(Vec<Vec<u8>>, Arc<ClientConfig>)>,
+}
+
+/// Shared TLS client cache: reuses `Arc<ClientConfig>` per ALPN profile and
+/// shares a bounded `ResumptionStore` across connections for 1-RTT resumption.
+pub struct ClientCache {
+    store: Arc<ResumptionStore>,
+    clock: Arc<core::sync::atomic::AtomicU32>,
+    configs: SpinLock<CachedConfigs>,
+}
+
+impl Default for ClientCache {
+    fn default() -> Self { Self::new() }
+}
+
+impl ClientCache {
+    pub fn new() -> Self { Self::with_store(Arc::new(ResumptionStore::default())) }
+    pub fn with_store(store: Arc<ResumptionStore>) -> Self {
+        Self {
+            store,
+            clock: Arc::new(core::sync::atomic::AtomicU32::new(0)),
+            configs: SpinLock::new(CachedConfigs {
+                #[cfg(test)]
+                root_count: 0,
+                entries: Vec::new(),
+            }),
+        }
+    }
+    pub fn store(&self) -> &Arc<ResumptionStore> { &self.store }
+    pub fn clear(&self) { self.store.clear(); }
+    pub fn config_count(&self) -> usize { self.configs.with(|c| c.entries.len()) }
+
+    pub fn config_for(&self, seconds: u32, alpn: &[&[u8]]) -> Result<Arc<ClientConfig>, rustls::Error> {
+        self.clock.store(seconds, core::sync::atomic::Ordering::Release);
+        #[cfg(test)]
+        let cur_roots = TEST_ROOTS.lock().unwrap().len();
+        self.configs.with(|cache| {
+            #[cfg(test)]
+            if cache.root_count != cur_roots {
+                cache.entries.clear();
+                cache.root_count = cur_roots;
+            }
+            if let Some((_, cfg)) = cache.entries.iter().find(|(a, _)| {
+                a.len() == alpn.len() && a.iter().zip(alpn.iter()).all(|(x, y)| x.as_slice() == *y)
+            }) {
+                return Ok(cfg.clone());
+            }
+            let built = Arc::new(build_config(self.clock.clone(), self.store.clone(), alpn)?);
+            if cache.entries.len() >= 8 { cache.entries.remove(0); }
+            let key: Vec<Vec<u8>> = alpn.iter().map(|p| p.to_vec()).collect();
+            cache.entries.push((key, built.clone()));
+            Ok(built)
+        })
+    }
+}
+
+fn build_config(clock: Arc<core::sync::atomic::AtomicU32>, store: Arc<ResumptionStore>, alpn: &[&[u8]]) -> Result<ClientConfig, rustls::Error> {
     let provider = Arc::new(provider::provider(SUPPORTED));
-    let mut store = RootCertStore::empty();
-    store.extend(roots().iter().cloned());
-    let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider.clone()).build()
+    let mut roots_store = RootCertStore::empty();
+    roots_store.extend(roots().iter().cloned());
+    let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(roots_store), provider.clone()).build()
         .map_err(|_| rustls::Error::General("no roots".into()))?;
-    let mut config = ClientConfig::builder_with_details(provider, Arc::new(Clock(seconds)))
+    let mut config = ClientConfig::builder_with_details(provider, Arc::new(SharedClock(clock)))
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])?
         .dangerous().with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
+    config.resumption = rustls::client::Resumption::store(store);
     config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
     Ok(config)
 }
@@ -175,7 +391,7 @@ impl Failure {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage { Handshake, Ready, Finished, Failed(Option<Failure>) }
-pub struct Session { conn: Option<UnbufferedClientConnection>, wire_in: Vec<u8>, wire_out: Vec<u8>, plain_out: Vec<u8>, plain_in: Vec<u8>, peer_closed: bool, stage: Stage }
+pub struct Session { conn: Option<UnbufferedClientConnection>, wire_in: Vec<u8>, wire_out: Vec<u8>, plain_out: Vec<u8>, plain_in: Vec<u8>, peer_closed: bool, stage: Stage, resumed: bool, negotiated_alpn: Option<Vec<u8>> }
 impl Session {
     /// Starts the handshake with `host`. The kernel-seeded `seed` is mixed into the
     /// service's generator and wiped; `seconds` is the time certificates are checked
@@ -184,13 +400,19 @@ impl Session {
     /// As `start`, offering the application protocols `alpn` (most wanted first), such
     /// as `[b"h2", b"http/1.1"]`; `alpn()` says which the server chose.
     pub fn start_offering(host: &str, seed: &mut [u8; 32], seconds: u32, alpn: &[&[u8]]) -> Result<Self, crate::Error> {
+        let cache = ClientCache::new();
+        Self::start_with_cache(host, seed, seconds, alpn, &cache)
+    }
+    /// Starts a handshake reusing `cache`'s `Arc<ClientConfig>` (per ALPN profile)
+    /// and `ResumptionStore` so repeat connections to the same origin resume in 1-RTT.
+    pub fn start_with_cache(host: &str, seed: &mut [u8; 32], seconds: u32, alpn: &[&[u8]], cache: &ClientCache) -> Result<Self, crate::Error> {
         provider::reseed(seed);
         crate::erase(seed);
         if !(1_577_836_800..=4_102_444_799).contains(&seconds) { return Err(crate::Error::Clock); }
         let name = ServerName::try_from(host).map_err(|_| crate::Error::Policy)?.to_owned();
-        let config = config(seconds, alpn).map_err(|_| crate::Error::Policy)?;
-        let conn = UnbufferedClientConnection::new(Arc::new(config), name).map_err(|_| crate::Error::Policy)?;
-        let mut session = Self { conn: Some(conn), wire_in: Vec::new(), wire_out: Vec::new(), plain_out: Vec::new(), plain_in: Vec::new(), peer_closed: false, stage: Stage::Handshake };
+        let config = cache.config_for(seconds, alpn).map_err(|_| crate::Error::Policy)?;
+        let conn = UnbufferedClientConnection::new(config, name).map_err(|_| crate::Error::Policy)?;
+        let mut session = Self { conn: Some(conn), wire_in: Vec::new(), wire_out: Vec::new(), plain_out: Vec::new(), plain_in: Vec::new(), peer_closed: false, stage: Stage::Handshake, resumed: false, negotiated_alpn: None };
         session.wire_in.try_reserve_exact(WIRE_IN).map_err(|_| crate::Error::Memory)?;
         Ok(session)
     }
@@ -262,12 +484,22 @@ impl Session {
                 Ok(ConnectionState::PeerClosed | ConnectionState::Closed) => { more = false; self.conn = None; self.stage = Stage::Finished; }
                 Ok(_) => { more = false; }
             }
+            if let Some(conn) = self.conn.as_ref() {
+                if matches!(conn.handshake_kind(), Some(rustls::HandshakeKind::Resumed)) { self.resumed = true; }
+                if self.negotiated_alpn.is_none() {
+                    if let Some(proto) = conn.alpn_protocol() { self.negotiated_alpn = Some(proto.to_vec()); }
+                }
+            }
             self.wire_in.drain(..discard);
             if !more && discard == 0 { break; }
         }
         self.stage
     }
     pub fn stage(&self) -> Stage { self.stage }
+    /// True when the handshake resumed a previously cached TLS session (1-RTT).
+    pub fn resumed(&self) -> bool {
+        self.resumed || matches!(self.conn.as_ref().and_then(|c| c.handshake_kind()), Some(rustls::HandshakeKind::Resumed))
+    }
     /// Room for encrypted bytes from the site. None while the reader has a full
     /// queue of plaintext still to take: that holds the site back.
     pub fn wire_room(&self) -> usize { if self.plain_in.len() >= QUEUE { 0 } else { WIRE_IN.saturating_sub(self.wire_in.len()) } }
@@ -299,7 +531,9 @@ impl Session {
         n
     }
     /// The application protocol the server chose by ALPN, once the handshake is done.
-    pub fn alpn(&self) -> Option<&[u8]> { self.conn.as_ref()?.alpn_protocol() }
+    pub fn alpn(&self) -> Option<&[u8]> {
+        self.conn.as_ref().and_then(|c| c.alpn_protocol()).or(self.negotiated_alpn.as_deref())
+    }
     pub fn drained(&self) -> bool { self.plain_in.is_empty() && matches!(self.stage, Stage::Finished | Stage::Failed(_)) }
     /// The protocol version and suite agreed, once the handshake is done.
     pub fn agreed(&self) -> Option<(rustls::ProtocolVersion, rustls::CipherSuite, Option<rustls::NamedGroup>)> {
@@ -622,6 +856,104 @@ print('served=%d alpn=%s'%(served,alpn),flush=True)
         let mut summary = String::new();
         out.read_line(&mut summary).unwrap();
         assert_eq!(summary.trim(), "connections=1 requests=3 alpn=http/1.1");
+        let _ = peer.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resumption_store_lru_evicts_oldest_entries() {
+        use rustls::client::ClientSessionStore;
+        let store = ResumptionStore::new(2);
+        let a = ServerName::try_from("a.sexos.test").unwrap().to_owned();
+        let b = ServerName::try_from("b.sexos.test").unwrap().to_owned();
+        let c = ServerName::try_from("c.sexos.test").unwrap().to_owned();
+        store.set_kx_hint(a.clone(), rustls::NamedGroup::X25519);
+        store.set_kx_hint(b.clone(), rustls::NamedGroup::secp256r1);
+        // Touch `a` so `b` becomes the LRU entry.
+        assert_eq!(store.kx_hint(&a), Some(rustls::NamedGroup::X25519));
+        store.set_kx_hint(c.clone(), rustls::NamedGroup::secp384r1);
+        assert_eq!(store.kx_hint(&b), None);
+        assert_eq!(store.kx_hint(&a), Some(rustls::NamedGroup::X25519));
+        assert_eq!(store.kx_hint(&c), Some(rustls::NamedGroup::secp384r1));
+        store.clear();
+        assert_eq!(store.kx_hint(&a), None);
+    }
+
+    /// Two sequential TLS 1.3 connections to the same host sharing a `ClientCache`:
+    /// the first performs a full handshake and stores NewSessionTicket(s), the second
+    /// resumes in 1-RTT (`resumed() == true`) while reusing the cached `Arc<ClientConfig>`.
+    #[test]
+    fn second_connection_to_same_host_resumes_tls_session() {
+        const RESUME_PEER: &str = r#"
+import socket,ssl,sys
+c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+c.minimum_version=ssl.TLSVersion.TLSv1_3
+c.num_tickets=2
+c.load_cert_chain(sys.argv[1],sys.argv[2])
+c.set_alpn_protocols(['h2','http/1.1'])
+s=socket.socket();s.bind(('127.0.0.1',0));s.listen(4);print(s.getsockname()[1],flush=True)
+reused=[]
+for _ in range(2):
+ raw,_=s.accept()
+ t=c.wrap_socket(raw,server_side=True)
+ reused.append(1 if t.session_reused else 0)
+ req=t.recv(4096)
+ t.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK')
+ t.close()
+print('reused=%d,%d'%(reused[0],reused[1]),flush=True)
+"#;
+        let host = "resume.sexos.test";
+        let dir = std::env::temp_dir().join(format!("sexos-tls-resume-{}", std::process::id()));
+        chain(&dir, host, "ec:P-256");
+        let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 1;
+        let mut peer = Command::new("python3")
+            .args(["-c", RESUME_PEER, dir.join("leaf.pem").to_str().unwrap(), dir.join("leaf.key").to_str().unwrap()])
+            .stdout(Stdio::piped()).spawn().unwrap();
+        let mut out = BufReader::new(peer.stdout.take().unwrap());
+        let mut port_line = String::new();
+        out.read_line(&mut port_line).unwrap();
+        let port: u16 = port_line.trim().parse().unwrap();
+
+        let cache = ClientCache::new();
+        let mut resumed_flags = Vec::new();
+        for conn_idx in 0..2u8 {
+            let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let mut session = Session::start_with_cache(host, &mut [conn_idx + 11; 32], seconds + conn_idx as u32, &[b"h2", b"http/1.1"], &cache).unwrap();
+            let req = format!("GET /r{conn_idx} HTTP/1.1\r\nHost: {host}\r\n\r\n");
+            let (mut sent, mut got) = (false, Vec::new());
+            let began = Instant::now();
+            loop {
+                let mut chunk = [0u8; 4096];
+                match socket.read(&mut chunk[..session.wire_room().min(4096)]) {
+                    Ok(0) => session.peer_closed(),
+                    Ok(k) => session.offer_wire(&chunk[..k]),
+                    Err(_) => {}
+                }
+                session.poll();
+                if session.stage() == Stage::Ready && !sent {
+                    assert_eq!(session.alpn(), Some(&b"h2"[..]));
+                    assert_eq!(session.send(req.as_bytes()), req.len());
+                    session.finish_request();
+                    sent = true;
+                }
+                let k = session.take_wire(&mut chunk);
+                if k > 0 { let _ = socket.write_all(&chunk[..k]); }
+                let k = session.receive(&mut chunk);
+                got.extend_from_slice(&chunk[..k]);
+                assert!(!matches!(session.stage(), Stage::Failed(_)), "conn {conn_idx}: {:?}", session.stage());
+                if session.drained() { break; }
+                assert!(began.elapsed() < Duration::from_secs(20), "conn {conn_idx} stuck at {:?}", session.stage());
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(got.ends_with(b"OK"), "conn {conn_idx}: {:?}", String::from_utf8_lossy(&got));
+            resumed_flags.push(session.resumed());
+            assert_eq!(cache.config_count(), 1, "Arc<ClientConfig> must be reused across connections");
+        }
+        assert_eq!(resumed_flags, vec![false, true], "second connection must resume TLS session");
+        let mut summary = String::new();
+        out.read_line(&mut summary).unwrap();
+        assert_eq!(summary.trim(), "reused=0,1");
         let _ = peer.wait();
         let _ = std::fs::remove_dir_all(&dir);
     }

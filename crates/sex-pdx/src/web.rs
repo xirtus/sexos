@@ -96,6 +96,30 @@ pub const ADDRESSES: u8 = 18;
 /// Send the flow's FIN after the bytes already queued; the flow can still read. A
 /// `CLOSE` after this lets the connection finish on its own instead of resetting it.
 pub const SHUTDOWN: u8 = 19;
+/// Query (`DNS_MODE_QUERY`) or set the open-side DNS resolution mode (Plain, DoT, DoH).
+pub const DNS_MODE: u8 = 20;
+/// Read open-side DNS cache stats: writes `[hits: u64, misses: u64, entries: u64]` LE
+/// into `region[0..24]` and replies with `entries`.
+pub const DNS_STATS: u8 = 21;
+/// Query negotiated TLS ALPN (`value & 0xFF`) and resumption flag (`TLS_RESUMED_BIT`).
+pub const TLS_ALPN: u8 = 22;
+
+/// Flag bit on `TLS_START`'s `value` requesting ALPN `["h2", "http/1.1"]` instead of `["http/1.1"]`.
+pub const TLS_ALPN_H2_FLAG: u64 = 1 << 16;
+pub const ALPN_NONE: u32 = 0;
+pub const ALPN_HTTP11: u32 = 1;
+pub const ALPN_H2: u32 = 2;
+/// Set in `TLS_ALPN` reply value when the TLS handshake resumed a cached session.
+pub const TLS_RESUMED_BIT: u32 = 1 << 8;
+
+pub const DNS_MODE_PLAIN: u32 = 0;
+pub const DNS_MODE_DOT_CLOUDFLARE: u32 = 1;
+pub const DNS_MODE_DOH_CLOUDFLARE: u32 = 2;
+pub const DNS_MODE_DOT_QUAD9: u32 = 3;
+pub const DNS_MODE_DOH_QUAD9: u32 = 4;
+pub const DNS_MODE_DOT_GOOGLE: u32 = 5;
+pub const DNS_MODE_DOH_GOOGLE: u32 = 6;
+pub const DNS_MODE_QUERY: u32 = 0xFFFF;
 
 /// The port is held by another flow, or is one the service keeps for itself.
 pub const IN_USE: u8 = 8;
