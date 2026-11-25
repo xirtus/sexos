@@ -146,6 +146,12 @@ def main():
   s=len(t());press('ctrl','shift','t');type_line('style grid table 1 light');q.key('ret')
   g['wait'](r'\[assuit\.table-edit\] action=style grid table 1 light\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-named-style.ppm')})
+  s=len(t());press('ctrl','shift','t');type_line('style');q.key('ret')
+  g['wait'](r'\[assuit\.table-gallery.open\] styles=\d+\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-gallery.ppm')})
+  assert (a.out/'assuit-table-gallery.ppm').stat().st_size>10000
+  s=len(t());q.key('down');q.key('ret')
+  g['wait'](r'\[assuit\.table-gallery.applied\] name=[^\n]+\n',s,120)
   keys=('ctrl','shift','i')
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]});time.sleep(.5)
   s=len(t());type_line('assuitmark.png');q.key('ret')

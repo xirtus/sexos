@@ -13,7 +13,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+L | Set the paper to Letter, Legal or A4, in portrait or landscape orientation |
 | Ctrl+Shift+M | Set normal, narrow, moderate, wide or mirrored margins, or enter top/bottom/left/right inches |
 | Ctrl+T | Insert a table by entering rows × columns |
-| Ctrl+Shift+T | Edit the table at the caret: select/insert/delete rows or columns; `merge cells` for a selected range; `split 2` through `split 10` for the current cell; `shade RRGGBB` for cell fill; `border all`, `outside`, `inside`, or `none` for DOCX table borders; `style NAME` for an available DOCX table style such as `Grid Table 1 Light` |
+| Ctrl+Shift+T | Edit the table at the caret: select/insert/delete rows or columns; `merge cells` for a selected range; `split 2` through `split 10` for the current cell; `shade RRGGBB` for cell fill; `border all`, `outside`, `inside`, or `none` for DOCX table borders; enter `style` to browse the native DOCX table-style gallery, or `style NAME` to apply one directly |
 | Ctrl+Shift+I | Insert an image from Assuit's granted folder |
 | Ctrl+Shift+R | Describe the selected picture with alternative text (1–500 characters) |
 | Ctrl+Shift+O | Set the selected picture's width in inches, preserving proportions |
