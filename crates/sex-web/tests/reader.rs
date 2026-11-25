@@ -104,4 +104,10 @@ fn article_data_table_keeps_bounded_row_spans_and_nested_tables() {
     assert!(article.html.contains("<td><table><tr><th>Time</th><th>Count</th></tr><tr><td>Dusk</td><td>Twenty</td></tr></table></td>"), "{}", article.html);
     assert!(article.html.contains("<td>Forest</td>") && !article.html.contains("rowspan=\"999\""));
     assert!(!article.html.contains("onclick") && article.html.matches("Twenty").count() == 1);
+    let flat = body.replace(
+        "<table><tr><th>Time</th><th>Count</th></tr><tr><td>Dusk</td><td>Twenty</td></tr></table>",
+        "Time Count Dusk Twenty",
+    );
+    let flat = sex_web::sex_html::parse::parse(&flat);
+    assert_eq!(article.words, reader::article(&flat, "https://news.example/survey").unwrap().words);
 }

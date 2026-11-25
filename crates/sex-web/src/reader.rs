@@ -71,10 +71,16 @@ fn clean(text: &str) -> String {
 fn visible_words(dom: &Dom, n: NodeId) -> usize {
     fn collect(dom: &Dom, n: NodeId, text: &mut String) {
         if unwanted(dom, n) { return; }
+        // A table cell is a separate run of text. Keep inline fragments
+        // together, but do not join the last word of one cell to the first
+        // word of the next (including cells in a nested table).
+        let cell = matches!(dom.tag(n), Some("th" | "td" | "caption"));
+        if cell { text.push(' '); }
         match &dom.nodes[n].kind {
             Kind::Text(value) => text.push_str(value),
             _ => for &child in &dom.nodes[n].children { collect(dom, child, text); },
         }
+        if cell { text.push(' '); }
     }
     let mut text = String::new();
     collect(dom, n, &mut text);
