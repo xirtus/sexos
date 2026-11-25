@@ -13,6 +13,7 @@ extern crate alloc;
 pub mod b64;
 pub mod fixture;
 pub mod imap;
+pub mod inbox;
 pub mod message;
 pub mod smtp;
 pub mod thread;

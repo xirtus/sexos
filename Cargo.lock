@@ -9967,6 +9967,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "valentine"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-font",
+ "sex-mail",
+ "sex-pdx",
+ "sex-theme",
+]
+
+[[package]]
 name = "vectorcraft-affinity"
 version = "0.24.1"
 source = "git+https://github.com/storytold/vectorcraft?rev=0995c130d1f5b5c8b57d22b80e1b2fc55b0b2248#0995c130d1f5b5c8b57d22b80e1b2fc55b0b2248"
