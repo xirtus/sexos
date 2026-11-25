@@ -60,7 +60,11 @@ def main():
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   target,task,sid=m[1],m[2],int(m[3])
+  g['wait'](r'\[quil.theme\] mode=Light accent=d6336c',s,60)
   g['wait'](r'\[quil.code.ready\] .*keymap=vscode',s,60);g['wait'](rf'\[display.app.title\] target={target} surface={sid}',s,60);time.sleep(2)
+  q.cmd('screendump',{'filename':str(a.out/'quil-light.ppm')});time.sleep(.5)
+  shot=(a.out/'quil-light.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>10000,'Quil did not paint the light theme background'
   g['focus'](sid);time.sleep(.5)
   # Go to File finds demo.rs among the folder's files.
   s=len(t());ctrl('p');g['wait'](r'\[quil.code.quickopen\] files=(\d+)',s,60);keys('demo');q.key('ret')

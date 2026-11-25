@@ -28,9 +28,10 @@ use quil_core::project::{self, Entry, Fs, Query, Tree};
 use quil_core::vim::{self, VKey, Vim};
 use quil_core::workspace::{Tab, Tabs};
 use quil_core::fuzzy;
-use sex_app::{files, Event, Window};
+use sex_app::{files, settings, Event, Window};
 use sex_pdx::app_key::{us_char, Key};
 use sex_pdx::app_pointer::Kind as PKind;
+use sex_theme::{Mode, Tokens};
 
 /// Files up to this size are read into memory when opened (so undo survives saving);
 /// bigger ones stay on disk and are read a block at a time.
@@ -39,20 +40,40 @@ const CELL_W: usize = 9;
 const CELL_H: usize = 18;
 const TREE_COLS: usize = 28;
 
-const BG: u32 = 0x1E1E2E;
-const FG: u32 = 0xCDD6F4;
-const DIM: u32 = 0x6C7086;
-const PANEL: u32 = 0x181825;
-const BAR: u32 = 0x11111B;
-const CURLINE: u32 = 0x262637;
-const SELECTED: u32 = 0x45475A;
-const ACCENT: u32 = 0x89B4FA;
-const CURSOR: u32 = 0xF5E0DC;
-const HIT: u32 = 0x5B4A2A;
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: u32, fg: u32, dim: u32, panel: u32, bar: u32,
+    curline: u32, selected: u32, accent: u32, cursor: u32, hit: u32,
+    keyword: u32, ty: u32, string: u32, number: u32,
+}
 
-fn color(k: Kind) -> u32 {
-    match k { Kind::Plain => FG, Kind::Keyword => 0xCBA6F7, Kind::Type => 0xF9E2AF, Kind::String => 0xA6E3A1, Kind::Number => 0xFAB387,
-        Kind::Comment => 0x7F849C, Kind::Punct => 0x9399B2, Kind::Function => 0x89B4FA }
+impl Palette {
+    fn from_tokens(t: Tokens) -> Self {
+        let rgb = |c: u32| c & 0x00FF_FFFF;
+        let bg = rgb(t.window);
+        let accent = rgb(t.accent);
+        let (keyword, ty, string, number) = match t.mode {
+            Mode::Light => (0x7135A0, 0x795500, 0x236B31, 0xA04014),
+            Mode::Dark => (0xCBA6F7, 0xF9E2AF, 0xA6E3A1, 0xFAB387),
+            Mode::HighContrast => (0xFFE600, 0x00FFFF, 0x7CFF7C, 0xFFB86C),
+        };
+        Self {
+            bg, fg: rgb(t.text), dim: rgb(t.text_dim), panel: rgb(t.surface),
+            bar: rgb(t.field), curline: rgb(t.control_hover),
+            selected: blend(bg, accent, (t.selection >> 24) & 0xFF),
+            accent, cursor: rgb(t.focus),
+            hit: blend(bg, keyword, if t.mode == Mode::HighContrast { 128 } else { 55 }),
+            keyword, ty, string, number,
+        }
+    }
+    fn color(self, k: Kind) -> u32 {
+        match k {
+            Kind::Plain => self.fg, Kind::Keyword => self.keyword,
+            Kind::Type => self.ty, Kind::String => self.string,
+            Kind::Number => self.number, Kind::Comment => self.dim,
+            Kind::Punct => self.dim, Kind::Function => self.accent,
+        }
+    }
 }
 
 #[panic_handler]
@@ -206,6 +227,9 @@ struct App {
     mark: bool,
     quit_armed: bool,
     drag: bool,
+    palette: Palette,
+    theme_generation: u64,
+    theme_next: u64,
     p: Painter,
 }
 
@@ -680,6 +704,7 @@ impl App {
     // ---- Drawing ----
 
     fn draw(&mut self, window: &mut Window) {
+        let palette = self.palette;
         let (w, h) = window.size();
         self.p.w = w;
         self.p.h = h;
@@ -687,30 +712,30 @@ impl App {
         let cols = self.cols();
         let tc = self.tree_cols();
         let gutter = self.gutter();
-        self.p.rect(0, 0, w, h, BG);
+        self.p.rect(0, 0, w, h, palette.bg);
         // Tab bar.
-        self.p.rect(0, 0, w, CELL_H, BAR);
-        if tc > 0 { self.p.text(0, 0, tc, " FOLDER", DIM, BAR); }
+        self.p.rect(0, 0, w, CELL_H, palette.bar);
+        if tc > 0 { self.p.text(0, 0, tc, " FOLDER", palette.dim, palette.bar); }
         let mut x = tc;
         for i in 0..self.tabs.len() {
             let t = &self.tabs.list[i];
             let label = format!(" {}{} ", lossy(t.name()), if t.ed.modified() { " *" } else { "  " });
-            let (fg, bg) = if i == self.tabs.active { (FG, BG) } else { (DIM, BAR) };
+            let (fg, bg) = if i == self.tabs.active { (palette.fg, palette.bg) } else { (palette.dim, palette.bar) };
             x += self.p.text(x, 0, cols.saturating_sub(x), &label, fg, bg);
-            if x < cols { self.p.ch(x, 0, '|', PANEL, BAR); x += 1; }
+            if x < cols { self.p.ch(x, 0, '|', palette.panel, palette.bar); x += 1; }
         }
         // File tree.
         if tc > 0 {
-            self.p.rect(0, CELL_H, tc * CELL_W, rows * CELL_H, PANEL);
+            self.p.rect(0, CELL_H, tc * CELL_W, rows * CELL_H, palette.panel);
             let first = self.tree.selected.saturating_sub(rows.saturating_sub(1));
             for (r, i) in (first..self.tree.rows.len()).enumerate().take(rows) {
                 let row = self.tree.rows[i].clone();
                 let sel = i == self.tree.selected;
-                let bg = if sel { if self.focus == Focus::Tree { SELECTED } else { CURLINE } } else { PANEL };
+                let bg = if sel { if self.focus == Focus::Tree { palette.selected } else { palette.curline } } else { palette.panel };
                 self.p.rect(0, (r + 1) * CELL_H, tc * CELL_W, CELL_H, bg);
                 let icon = if row.dir { if row.open { "v " } else { "> " } } else { "  " };
                 let s = format!("{:width$}{}{}", "", icon, lossy(&row.name), width = row.depth * 2);
-                self.p.text(0, r + 1, tc - 1, &s, if row.dir { ACCENT } else { FG }, bg);
+                self.p.text(0, r + 1, tc - 1, &s, if row.dir { palette.accent } else { palette.fg }, bg);
             }
         }
         // Editor.
@@ -750,11 +775,11 @@ impl App {
             let shown_end = end.min(line + 4096);
             let bytes = t.ed.buf.slice(line..shown_end);
             let is_cur = line == primary_line;
-            let row_bg = if is_cur { CURLINE } else { BG };
-            if is_cur { self.p.rect(ex * CELL_W, y * CELL_H, text_cols * CELL_W, CELL_H, CURLINE); }
+            let row_bg = if is_cur { palette.curline } else { palette.bg };
+            if is_cur { self.p.rect(ex * CELL_W, y * CELL_H, text_cols * CELL_W, CELL_H, palette.curline); }
             if numbers {
                 let label = match first_line { Some(n) => format!("{:>5} ", n + r + 1), None => String::from("    ? ") };
-                self.p.text(tc, y, gutter, &label, if is_cur { FG } else { DIM }, BG);
+                self.p.text(tc, y, gutter, &label, if is_cur { palette.fg } else { palette.dim }, palette.bg);
             }
             in_comment = highlight::line(lang, &bytes, in_comment, &mut spans);
             // Find matches on this line, for highlighting.
@@ -767,10 +792,10 @@ impl App {
                 let clen = match bytes[k] { 0..=0x7F => 1, 0xC0..=0xDF => 2, 0xE0..=0xEF => 3, _ => 4 }.min(bytes.len() - k);
                 let c = core::str::from_utf8(&bytes[k..k + clen]).ok().and_then(|s| s.chars().next()).unwrap_or('\u{FFFD}');
                 while si < spans.len() && spans[si].1 <= k { si += 1; }
-                let fg = if si < spans.len() && spans[si].0 <= k { color(spans[si].2) } else { FG };
+                let fg = if si < spans.len() && spans[si].0 <= k { palette.color(spans[si].2) } else { palette.fg };
                 let selected = in_sels(&sels, off);
                 let hit = hits.iter().any(|h| k >= *h && k < h + find.len());
-                let bg = if selected { SELECTED } else if hit { HIT } else { row_bg };
+                let bg = if selected { palette.selected } else if hit { palette.hit } else { row_bg };
                 if heads.binary_search(&off).is_ok() { cursors.push((dc, y)); }
                 let width = if c == '\t' { 4 - dc % 4 } else { 1 };
                 for wx in 0..width {
@@ -788,11 +813,11 @@ impl App {
         for (dc, y) in cursors {
             if dc < left || dc >= left + text_cols { continue; }
             let x = (ex + dc - left) * CELL_W;
-            if vim_block { self.p.rect(x, y * CELL_H + CELL_H - 3, CELL_W, 3, CURSOR); } else { self.p.rect(x, y * CELL_H + 1, 2, CELL_H - 2, CURSOR); }
+            if vim_block { self.p.rect(x, y * CELL_H + CELL_H - 3, CELL_W, 3, palette.cursor); } else { self.p.rect(x, y * CELL_H + 1, 2, CELL_H - 2, palette.cursor); }
         }
         // Status line.
         let sy = rows + 1;
-        self.p.rect(0, sy * CELL_H, w, CELL_H, BAR);
+        self.p.rect(0, sy * CELL_H, w, CELL_H, palette.bar);
         let t = &self.tabs.list[self.tabs.active];
         let c = t.ed.cursor();
         let ln = t.ed.buf.line_of(c).map_or(String::from("?"), |n| format!("{}", n + 1));
@@ -805,14 +830,15 @@ impl App {
         } else { left_s.push_str(&format!(" {}", self.status)); }
         let right = format!("Ln {ln}, Col {col}  {}{}  {} bytes  {} ", if t.ed.sels.len() > 1 { format!("{} cursors  ", t.ed.sels.len()) } else { String::new() },
             t.lang.name(), t.ed.buf.len(), if t.ed.buf.indexed() { "" } else { "indexing" });
-        let n = self.p.text(0, sy, cols, &left_s, if mode.is_empty() { FG } else { ACCENT }, BAR);
+        let n = self.p.text(0, sy, cols, &left_s, if mode.is_empty() { palette.fg } else { palette.accent }, palette.bar);
         let rx = cols.saturating_sub(right.chars().count());
-        if rx > n { self.p.text(rx, sy, cols - rx, &right, DIM, BAR); }
+        if rx > n { self.p.text(rx, sy, cols - rx, &right, palette.dim, palette.bar); }
         self.draw_overlay(cols, rows);
         window.show_pixels(w, h);
     }
 
     fn draw_overlay(&mut self, cols: usize, rows: usize) {
+        let palette = self.palette;
         let ow = (cols * 3 / 5).clamp(30.min(cols), 100.min(cols));
         let ox = (cols - ow) / 2;
         let mut lines: Vec<(String, bool)> = Vec::new();
@@ -850,14 +876,14 @@ impl App {
             }
         };
         let oh = (lines.len() + 1).min(rows);
-        self.p.rect(ox * CELL_W - 2, CELL_H - 2, ow * CELL_W + 4, oh * CELL_H + 4, ACCENT);
-        self.p.rect(ox * CELL_W, CELL_H, ow * CELL_W, oh * CELL_H, PANEL);
+        self.p.rect(ox * CELL_W - 2, CELL_H - 2, ow * CELL_W + 4, oh * CELL_H + 4, palette.accent);
+        self.p.rect(ox * CELL_W, CELL_H, ow * CELL_W, oh * CELL_H, palette.panel);
         let s = format!("{title}{input}_");
-        self.p.text(ox, 1, ow, &s, FG, PANEL);
+        self.p.text(ox, 1, ow, &s, palette.fg, palette.panel);
         for (r, (l, sel)) in lines.iter().enumerate().take(oh.saturating_sub(1)) {
-            let bg = if *sel { SELECTED } else { PANEL };
+            let bg = if *sel { palette.selected } else { palette.panel };
             self.p.rect(ox * CELL_W, (r + 2) * CELL_H, ow * CELL_W, CELL_H, bg);
-            self.p.text(ox + 1, r + 2, ow - 1, l, if *sel { FG } else { DIM }, bg);
+            self.p.text(ox + 1, r + 2, ow - 1, l, if *sel { palette.fg } else { palette.dim }, bg);
         }
     }
 
@@ -903,13 +929,18 @@ fn display_cols(line: &[u8]) -> usize {
 extern "C" fn main() -> ! {
     let mut window = Window::open();
     window.title(b"Quil");
+    let theme = settings::theme();
+    let palette = Palette::from_tokens(theme);
+    let theme_generation = settings::generation().unwrap_or(0);
+    sex_pdx::serial_record!("[quil.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
     let font = sex_font::Font::new(sex_font::GEIST_MONO).unwrap_or_else(|| sex_pdx::task_finish(4));
     let (w, h) = window.size();
     let p = Painter { px: window.pixels(), font, acc: vec![0; sex_font::raster::scratch_len(CELL_W, CELL_H)], glyphs: BTreeMap::new(), w, h };
     let mut app = App {
         tabs: Tabs::default(), tree: Tree::new(b""), show_tree: false, focus: Focus::Editor, root: Vec::new(), keymap: Keymap::VsCode,
         keys: Keys::default(), vim: Vim::new(), overlay: Overlay::None, clipboard: (Vec::new(), false), status: String::from("Ctrl+Shift+P: all commands"),
-        numbers: true, find: Vec::new(), mark: false, quit_armed: false, drag: false, p,
+        numbers: true, find: Vec::new(), mark: false, quit_armed: false, drag: false,
+        palette, theme_generation, theme_next: sex_pdx::get_ticks().saturating_add(1000), p,
     };
     // `quil @/path` opens a file or a folder; words like `vim` or `emacs` pick the keys.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
@@ -932,6 +963,20 @@ extern "C" fn main() -> ! {
     app.draw(&mut window);
     sex_pdx::serial_record!("[quil.code.ready] target={} task={} keymap={}", window.target, window.task, match app.keymap { Keymap::Vim => "vim", Keymap::Emacs => "emacs", Keymap::VsCode => "vscode" });
     loop {
+        let now = sex_pdx::get_ticks();
+        let mut theme_changed = false;
+        if now >= app.theme_next {
+            app.theme_next = now.saturating_add(1000);
+            if let Ok(generation) = settings::generation() {
+                if generation != app.theme_generation {
+                    app.theme_generation = generation;
+                    let theme = settings::theme();
+                    app.palette = Palette::from_tokens(theme);
+                    theme_changed = true;
+                    sex_pdx::serial_record!("[quil.theme] mode={:?} accent={:06x}", theme.mode, app.palette.accent);
+                }
+            }
+        }
         match window.next_within(100) {
             Some(Event::Close) => { sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task); window.close() }
             Some(Event::Resize { .. }) | Some(Event::Drop { .. }) | Some(Event::DragEnded { .. } | Event::KeyUp(_)) => {}
@@ -952,7 +997,7 @@ extern "C" fn main() -> ! {
             None => {
                 // Idle: count more of a big file's lines, a few blocks at a time.
                 let t = app.tab();
-                if t.ed.buf.indexed() { continue; }
+                if t.ed.buf.indexed() && !theme_changed { continue; }
                 t.ed.buf.index_step(8);
             }
         }
