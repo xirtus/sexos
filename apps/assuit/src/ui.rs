@@ -550,9 +550,9 @@ impl Ui {
     /// Keeps unsaved changes aside (on close, and after a quiet moment), so a crash or a
     /// closed window loses nothing: the next start opens them.
     fn keep(&mut self) {
-        self.unkept = None;
-        if !self.book.dirty() { return; }
-        match self.book.write_recovery() {
+        if !self.book.dirty() { self.unkept = None; return; }
+        let now = sex_std::sex_pdx::get_ticks();
+        match crate::book::try_recovery(&mut self.unkept, now, || self.book.write_recovery()) {
             Ok(()) => sex_std::record(&format!("[assuit.kept] name={}", crate::book::recovery_path(&self.book.path))),
             Err(e) => sex_std::record(&format!("[assuit.keep-failed] {e}")),
         }
@@ -1397,7 +1397,7 @@ impl Ui {
             }
             let Some(event) = window.next_within(1000) else {
                 // A quiet moment after a change: keep the unsaved work safe.
-                if self.unkept.is_some_and(|t| sex_std::sex_pdx::get_ticks().saturating_sub(t) >= KEEP_AFTER_MS) { self.keep(); }
+                if crate::book::recovery_due(self.unkept, sex_std::sex_pdx::get_ticks()) { self.keep(); }
                 continue;
             };
             match event {
@@ -1410,7 +1410,7 @@ impl Ui {
                     // An edit (typing, formatting, a style, undo): keep it soon, and the
                     // brought-back changes become the user's own.
                     if self.book.edits != edits && self.book.dirty() {
-                        self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks());
+                        self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks().saturating_add(KEEP_AFTER_MS));
                         if key.code != code::ESC { self.recovered = false; }
                     }
                     self.draw(window);

@@ -1120,6 +1120,25 @@ pub fn recovery_path(path: &str) -> String {
     } else { format!("{path}.recovered.docx") }
 }
 
+/// Retry a failed recovery write after a short pause, even when there is no
+/// further edit. Clear the pending edit only after the staged file is synced
+/// and Files has promoted it.
+pub const RECOVERY_RETRY_MS: u64 = 5_000;
+
+pub fn recovery_due(pending: Option<u64>, now: u64) -> bool {
+    pending.is_some_and(|due| now >= due)
+}
+
+pub fn try_recovery(
+    pending: &mut Option<u64>,
+    now: u64,
+    write: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let result = write();
+    *pending = result.as_ref().err().map(|_| now.saturating_add(RECOVERY_RETRY_MS));
+    result
+}
+
 /// Stage bytes beside the destination, then ask Files to replace its name in one
 /// rename. A failed encode or write leaves the previous document untouched.
 fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -1191,6 +1210,50 @@ mod tests {
         let path = temp(name);
         std::fs::write(&path, WELCOME).unwrap();
         Book::open(&path).unwrap()
+    }
+
+    #[test]
+    fn failed_recovery_retries_same_docx_or_odt_edit_without_another_keystroke() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("retry-recovery.{ext}"));
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(recovery_path(&path));
+            let mut book = Book::blank(&path);
+            book.type_text("Unsaved source with a footnote").unwrap();
+            book.insert_footnote("Citation survives").unwrap();
+            book.close_inserted_note();
+            let mut pending = Some(15_000);
+            assert!(recovery_due(pending, 15_000));
+            let mut attempts = 0;
+            let error = try_recovery(&mut pending, 15_000, || {
+                attempts += 1;
+                Err("injected Files write failure".into())
+            }).unwrap_err();
+            assert!(error.contains("Files write failure"));
+            assert_eq!(attempts, 1);
+            assert_eq!(pending, Some(15_000 + RECOVERY_RETRY_MS));
+            assert!(!recovery_due(pending, 19_999));
+            assert!(recovery_due(pending, 20_000));
+            try_recovery(&mut pending, 20_000, || {
+                attempts += 1;
+                book.write_recovery()
+            }).unwrap();
+            assert_eq!(attempts, 2, "retry must run without another edit");
+            assert_eq!(pending, None, "only a durable recovery clears the timer");
+            let mut recovered = Book::open_recovered(&path).expect("recovery copy");
+            assert!(recovered.dirty());
+            assert!(recovered.text().contains("Unsaved source"));
+            assert!(recovered.session.doc.parts.iter().any(|(id, part)|
+                part.kind == PartKind::Footnote &&
+                recovered.session.doc.plain_text(StoryRef::Part(*id)).contains("Citation survives")));
+            recovered.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert!(reopened.text().contains("Unsaved source"), "{ext} lost recovered text");
+            assert!(reopened.session.doc.parts.iter().any(|(id, part)|
+                part.kind == PartKind::Footnote &&
+                reopened.session.doc.plain_text(StoryRef::Part(*id)).contains("Citation survives")),
+                "{ext} lost recovered note");
+        }
     }
 
     #[test]
