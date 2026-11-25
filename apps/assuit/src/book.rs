@@ -310,8 +310,11 @@ impl Book {
     /// Add a dynamic page field to the current section's repeating header or
     /// footer. The engine owns the field, layout and DOCX/ODT serialization.
     pub fn insert_page_numbers(&mut self, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter top or bottom, then left, center or right; add 'of' for Page X of Y";
+        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; or remove top/bottom";
         let words: Vec<_> = input.split_whitespace().collect();
+        if words.len() == 2 && words[0].eq_ignore_ascii_case("remove") {
+            return self.remove_generated_page_numbers(words[1]);
+        }
         if !(words.len() == 2 || words.len() == 3 && words[2].eq_ignore_ascii_case("of")) {
             return Err(HELP.into());
         }
@@ -322,6 +325,42 @@ impl Book {
         let format = if words.len() == 3 { "x of y" } else { "" };
         self.run("insert.pageNumber", json!({ "position": position, "align": align, "format": format }))
             .map(|_| ())
+    }
+
+    /// WordCraft's removal commands clear the entire header/footer. Use them only
+    /// when the single section's target contains exactly a generated page-number
+    /// paragraph, so an author's other content can never be discarded here.
+    fn remove_generated_page_numbers(&mut self, place: &str) -> Result<(), String> {
+        let header = if place.eq_ignore_ascii_case("top") { true }
+            else if place.eq_ignore_ascii_case("bottom") { false }
+            else { return Err("Choose remove top or remove bottom".into()); };
+        if self.session.doc.sections().len() != 1 {
+            return Err("Page-number removal is available for single-section documents only".into());
+        }
+        let set = if header { self.session.doc.last_section.headers }
+            else { self.session.doc.last_section.footers };
+        if set.first.is_some() || set.even.is_some() {
+            return Err("This document has other header or footer layouts".into());
+        }
+        let id = set.default.ok_or_else(|| "No page number at that position".to_string())?;
+        let blocks = self.session.doc.story(StoryRef::Part(id))
+            .ok_or_else(|| "Page-number content is unavailable".to_string())?;
+        let [block] = blocks.as_slice() else {
+            return Err("Header or footer contains other content".into());
+        };
+        let para = block.as_para().ok_or_else(|| "Header or footer contains other content".to_string())?;
+        let fields = para.objects.iter().map(|object| match object {
+            wordcraft_engine::doc::InlineObject::Field { instr, .. } => Some(instr.as_str()),
+            _ => None,
+        }).collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "Header or footer contains other content".to_string())?;
+        let only_numbers = fields.as_slice() == ["PAGE"] || fields.as_slice() == ["PAGE", "NUMPAGES"];
+        let other_text: String = para.text.chars().filter(|&c| c != '\u{FFFC}').collect();
+        let expected = if fields.len() == 2 { "Page  of " } else { "" };
+        if !only_numbers || other_text != expected {
+            return Err("Header or footer contains other content".into());
+        }
+        self.run(if header { "insert.removeHeader" } else { "insert.removeFooter" }, json!({})).map(|_| ())
     }
 
     /// Set page margins with a named preset or top, bottom, left, right in inches.
@@ -1097,6 +1136,42 @@ mod tests {
             book.save().unwrap();
             let reopened = Book::open(&path).unwrap();
             assert_eq!(fields(&reopened), ["PAGE"], "{ext} lost its dynamic page field");
+        }
+    }
+
+    #[test]
+    fn generated_page_numbers_can_be_removed_without_erasing_other_content() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("page-number-remove.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("A numbered document").unwrap();
+            assert!(book.insert_page_numbers("remove bottom").is_err());
+            assert!(book.insert_page_numbers("remove middle").is_err());
+            book.insert_page_numbers("bottom center of").unwrap();
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert!(reopened.session.doc.last_section.footers.default.is_some(), "{ext}");
+            reopened.insert_page_numbers("remove bottom").unwrap();
+            assert!(reopened.session.doc.last_section.footers.default.is_none());
+            reopened.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert!(reopened.session.doc.last_section.footers.default.is_some(), "undo restores footer");
+            reopened.insert_page_numbers("remove bottom").unwrap();
+            reopened.save().unwrap();
+            assert!(Book::open(&path).unwrap().session.doc.last_section.footers.default.is_none(), "{ext}");
+
+            reopened.insert_page_numbers("top right").unwrap();
+            reopened.save().unwrap();
+            let mut top = Book::open(&path).unwrap();
+            assert!(top.session.doc.last_section.headers.default.is_some(), "{ext}");
+            top.insert_page_numbers("remove top").unwrap();
+            assert!(top.session.doc.last_section.headers.default.is_none(), "{ext}");
+
+            top.insert_page_numbers("bottom left").unwrap();
+            top.run("insert.footer", json!({ "text": "Confidential" })).unwrap();
+            let id = top.session.doc.last_section.footers.default.unwrap();
+            assert!(top.insert_page_numbers("remove bottom").is_err(), "author's footer must survive");
+            let text = top.session.doc.story(StoryRef::Part(id)).unwrap()[0].as_para().unwrap().plain_text();
+            assert_eq!(text, "Confidential");
         }
     }
 

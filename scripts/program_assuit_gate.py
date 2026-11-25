@@ -291,6 +291,13 @@ def main():
   assert (a.out/'assuit-page-numbers.ppm').stat().st_size>10000
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','n');type_line('remove bottom');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] remove bottom\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-removed.ppm')})
+  removed=(a.out/'assuit-page-number-removed.ppm').read_bytes()
+  assert removed.startswith(b'P6\n') and removed!=(a.out/'assuit-page-numbers.ppm').read_bytes()
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})
