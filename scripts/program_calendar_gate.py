@@ -187,7 +187,7 @@ def main():
   g['wait'](rf'\[date.alarm.added\] time={due:%H:%M} label={label}',s,60)
   s=len(t())
   close(target,task)
-  g['wait'](r'\[date.notice.worker.started\]',s,60)
+  g['wait'](r'\[date.notice.worker.resumed\]',s,60)
   time.sleep(max(0,(due-datetime.datetime.now(datetime.timezone.utc)).total_seconds())+3)
   g['wait'](r'\[date.alarm.fired\] kind=alarm title=after close notified=1',s,15)
   q.cmd('screendump',{'filename':str(a.out/'date-background-alarm.ppm')})

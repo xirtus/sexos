@@ -5,7 +5,14 @@ use alloc::format;
 use alloc::string::String;
 
 pub const MAX_CATCHUP_MINUTES: i64 = 7 * 24 * 60;
+pub const NOTICE_LEASE_MS: u64 = 10_000;
 const HEADER: &str = "# date-notices 1";
+
+/// A visible Date run or parked worker refreshes this timestamp twice a
+/// second. A stopped run gives up ownership after this short recovery window.
+pub fn lease_live(seen_ms: u64, now_ms: u64) -> bool {
+    seen_ms != 0 && seen_ms <= now_ms && now_ms - seen_ms <= NOTICE_LEASE_MS
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NoticeCursor { pub minute: i64 }
@@ -48,5 +55,15 @@ mod tests {
             "# date-notices 1\n30001\n", "# date-notices 1\n29999\nmore\n"] {
             assert_eq!(NoticeCursor::recover(text, now), NoticeCursor::current(now), "{text:?}");
         }
+    }
+
+    #[test]
+    fn crashed_handoff_and_window_leases_expire() {
+        let now = 100_000;
+        assert!(lease_live(now, now));
+        assert!(lease_live(now - NOTICE_LEASE_MS, now));
+        assert!(!lease_live(now - NOTICE_LEASE_MS - 1, now));
+        assert!(!lease_live(now + 1, now));
+        assert!(!lease_live(0, now));
     }
 }

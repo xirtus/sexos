@@ -30,7 +30,11 @@ Remaining gaps:
   catches up when Date opens again. Simultaneous visible Date windows now keep
   short Files leases and elect one Bell owner; the owner rereads saved clock,
   events and cursor before delivery. Closing one window leaves the other in
-  charge; a hidden worker waits until the final window closes. A power cut after Bell posts but before
+  charge; a hidden worker keeps a claim while the window is open and resumes
+  from saved state ten seconds after a crashed window's lease expires. The
+  opening handoff marker also expires after ten seconds. A crashed worker can
+  be restarted by the next visible Date launch; no separate system supervisor
+  restarts it while Date remains closed. A power cut after Bell posts but before
   the cursor save can replay a notice, so exactly-once delivery is not claimed.
 - Ctrl+Z/Ctrl+Y undo and redo local event additions and removals, with each
   result saved immediately. A CalDAV sync clears the event history so undo cannot roll
