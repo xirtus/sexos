@@ -24,6 +24,8 @@ and Shields. The remaining gaps are:
   discards the partial and restarts from byte zero. Last-Modified alone and weak
   ETags still require a fresh transfer; a process killed mid-transfer can leave
   an orphan hidden part because no confirmed metadata was written yet.
+  When the live resume metadata is readable but malformed, Kaleidoscope now
+  checks its previous durable copy before abandoning a synced hidden part.
   The downloads panel now offers Ctrl+Alt+J to clear saved history and current
   failures after a durable state write. Downloaded files and resumable transfers
   remain available; orphan hidden-part cleanup is still open.
