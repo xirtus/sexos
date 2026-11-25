@@ -87,6 +87,7 @@ const SHORTCUTS: &[&str] = &[
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Type text; Space toggles; Up/Down choice, Enter selects",
     "Click a choice value for its pointer menu; wheel scrolls options",
+    "Click a PDF field to focus it; checkbox clicks toggle",
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
@@ -288,6 +289,20 @@ struct Viewer {
 /// Where each part of the window is.
 struct Layout { panel: usize, bar: usize, x0: usize, y0: usize, aw: usize, ah: usize }
 
+fn shown_at_click((x, y): (usize, usize), l: &Layout, r: &Rendered, scroll: usize, hscroll: usize) -> Option<(f64, f64)> {
+    if x < l.x0 || y < l.y0 || x >= l.x0 + l.aw || y >= l.y0 + l.ah || r.scale <= 0.0 { return None; }
+    let left = l.x0 + if r.w + 2 * MARGIN <= l.aw { (l.aw - r.w) / 2 } else { MARGIN };
+    let skip = hscroll.saturating_sub(MARGIN).min(r.w);
+    let px = x as f64 - left as f64 + skip as f64;
+    let py = y as f64 - l.y0 as f64 - MARGIN as f64 + scroll as f64;
+    (px >= 0.0 && py >= 0.0 && px < r.w as f64 && py < r.h as f64)
+        .then_some((px / r.scale as f64, py / r.scale as f64))
+}
+
+fn focus_destination(first_widget_page: usize, pointer_page: Option<usize>) -> (usize, bool) {
+    (pointer_page.unwrap_or(first_widget_page), pointer_page.is_none())
+}
+
 impl Viewer {
     fn pages(&self) -> usize { self.pdf.pages().len() }
 
@@ -445,8 +460,12 @@ impl Viewer {
             let clip = (l.x0 as isize, l.y0 as isize, width as isize, height as isize);
             if let Some(region) = self.region { outline(out, width, to_screen(region), clip, REGION); }
             if let (Some(form), Ok(editor)) = (&self.form, &self.editor) {
-                if let Some((_, page, rect)) = form.fields.get(form.at).filter(|f| f.1 == r.page) {
-                    if let Ok(info) = editor.page_info(*page) { outline(out, width, to_screen(marks::rect_to_shown(&info, *rect)), clip, REGION); }
+                if let Some((field, _, _)) = form.fields.get(form.at) {
+                    if let Ok(info) = editor.page_info(r.page) {
+                        for (_, page, rect) in &field.widgets {
+                            if *page == Some(r.page) { outline(out, width, to_screen(marks::rect_to_shown(&info, *rect)), clip, REGION); }
+                        }
+                    }
                 }
             }
         }
@@ -753,7 +772,10 @@ impl Viewer {
     fn pointer(&mut self, p: sex_std::sex_pdx::app_pointer::Pointer, size: (usize, usize)) -> bool {
         let l = self.layout(size);
         let (x, y) = (p.x.max(0) as usize, p.y.max(0) as usize);
+        let popup_was_open = self.form.as_ref().is_some_and(|f| f.popup);
         if self.choice_pointer(p.kind, (x, y), size, l.bar) { return true; }
+        if self.widget_pointer(p.kind, (x, y), &l, size) { return true; }
+        if popup_was_open && self.form.as_ref().is_some_and(|f| !f.popup) { return true; }
         match p.kind {
             Kind::Wheel { steps } => {
                 let by = steps.unsigned_abs() as usize * 48;
@@ -785,6 +807,43 @@ impl Viewer {
             }
             _ => false,
         }
+    }
+
+    fn widget_pointer(&mut self, kind: Kind, point: (usize, usize), l: &Layout, size: (usize, usize)) -> bool {
+        if !matches!(kind, Kind::Down { button: 0 }) || self.shortcuts || self.region.is_some() || self.signing.is_some() || self.note.is_some() || self.signature.is_some() {
+            return false;
+        }
+        let Some(shown) = self.shown.as_ref().and_then(|r| shown_at_click(point, l, r, self.scroll, self.hscroll)) else { return false };
+        let Some(info) = self.page_info(self.page) else { return false };
+        let fields = if let Some(form) = &self.form { form.fields.clone() }
+            else { self.editor.as_ref().ok().map(|ed| marks::fillable(&ed.fields().unwrap_or_default())).unwrap_or_default() };
+        let Some(index) = marks::field_at_shown(&fields, self.page, &info, shown) else { return false };
+        let clicked_page = self.page;
+        if self.form.is_some() { self.commit_field(); }
+        else {
+            sex_std::record(&format!("[pdf.form] fields={} first={}", fields.len(), fields[0].0.name));
+            self.form = Some(Form { fields, at: 0, text: String::new(), choice: None, popup: false, popup_top: 0 });
+        }
+        self.focus_at(index, Some(clicked_page));
+        let Some((field, _, _)) = self.form.as_ref().and_then(|f| f.fields.get(index)).cloned() else { return true };
+        let kind = match &field.kind {
+            FieldKind::Checkbox => {
+                let to = marks::toggled(&field);
+                self.set_field(&field.name, FieldValue::State(to.clone()), "checkbox", &to);
+                "checkbox"
+            }
+            FieldKind::ComboBox { .. } | FieldKind::ListBox { .. } => {
+                if let Some(form) = self.form.as_mut() {
+                    let menu = choice_menu(size.0, size.1, l.bar, field.options.len());
+                    form.popup = menu.is_some();
+                    form.popup_top = form.choice.unwrap_or(0).min(field.options.len().saturating_sub(menu.map_or(0, |m| m.3)));
+                }
+                "choice"
+            }
+            _ => "text",
+        };
+        sex_std::record(&format!("[pdf.widget.pointer] name={} kind={kind} page={}", field.name, self.page + 1));
+        true
     }
 
     fn choice_pointer(&mut self, kind: Kind, (x, y): (usize, usize), (width, height): (usize, usize), bar: usize) -> bool {
@@ -820,7 +879,7 @@ impl Viewer {
                 return true;
             }
             if let Some(form) = self.form.as_mut() { form.popup = false; }
-            return true;
+            return false;
         }
         if y < bar && x < width.saturating_mul(2) / 3 {
             if let Some(form) = self.form.as_mut() {
@@ -1325,6 +1384,11 @@ impl Viewer {
 
     /// Moves to field `at`: its page, scrolled to it, its text ready to edit.
     fn focus(&mut self, at: usize) {
+        self.focus_at(at, None);
+    }
+
+    /// A pointer already sits on a widget's shown page; keyboard focus uses the first widget.
+    fn focus_at(&mut self, at: usize, pointer_page: Option<usize>) {
         let Some(form) = self.form.as_mut() else { return };
         form.at = at;
         form.popup = false;
@@ -1335,9 +1399,12 @@ impl Viewer {
             marks::choice_indices(&f).first().copied().or(Some(0))
         } else { marks::choice_index(&f) };
         let choice = form.choice;
-        self.go(page);
-        if let Some(info) = self.page_info(page) { self.reveal = Some(marks::rect_to_shown(&info, rect)[1] as f32); }
-        sex_std::record(&format!("[pdf.field.focus] name={} index={} page={}", f.name, at + 1, page + 1));
+        let (shown_page, navigate) = focus_destination(page, pointer_page);
+        if navigate {
+            self.go(page);
+            if let Some(info) = self.page_info(page) { self.reveal = Some(marks::rect_to_shown(&info, rect)[1] as f32); }
+        } else { self.reveal = None; }
+        sex_std::record(&format!("[pdf.field.focus] name={} index={} page={}", f.name, at + 1, shown_page + 1));
         if matches!(f.kind, FieldKind::ComboBox { .. } | FieldKind::ListBox { .. }) {
             sex_std::record(&format!("[pdf.choice.focus] name={} selected={} count={}", f.name, choice.map_or(0, |i| i + 1), f.options.len()));
         }
@@ -1648,6 +1715,21 @@ mod render_cache_tests {
         assert!(choice_menu(70, 180, BAR, 3).is_none());
         assert_eq!(scroll_choice_top(0, 100, 7, -100), 93);
         assert_eq!(scroll_choice_top(93, 100, 7, 100), 0);
+    }
+
+    #[test]
+    fn widget_click_converts_centering_zoom_and_scroll() {
+        let l = Layout { panel: PANEL, bar: BAR, x0: PANEL, y0: BAR, aw: 600, ah: 500 };
+        let r = Rendered { pixels: Vec::new(), w: 400, h: 600, page: 0, scale: 2.0, ink: 0 };
+        let left = PANEL + (600 - 400) / 2;
+        assert_eq!(shown_at_click((left + 200, BAR + MARGIN + 100), &l, &r, 0, 0), Some((100.0, 50.0)));
+        assert_eq!(shown_at_click((left + 200, BAR + MARGIN + 20), &l, &r, 80, 0), Some((100.0, 50.0)));
+        let wide = Rendered { pixels: Vec::new(), w: 800, h: 600, page: 0, scale: 2.0, ink: 0 };
+        assert_eq!(shown_at_click((PANEL + MARGIN + 152, BAR + MARGIN + 20), &l, &wide, 80, 60), Some((100.0, 50.0)));
+        assert_eq!(shown_at_click((PANEL - 1, BAR + MARGIN + 100), &l, &r, 0, 0), None);
+        assert_eq!(shown_at_click((left + 200, BAR - 1), &l, &r, 0, 0), None);
+        assert_eq!(focus_destination(0, Some(1)), (1, false), "a repeated widget keeps its clicked page");
+        assert_eq!(focus_destination(0, None), (0, true), "keyboard focus navigates to the first widget");
     }
 }
 

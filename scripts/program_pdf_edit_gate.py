@@ -153,8 +153,17 @@ def main():
   # Opened again from the disk: all three annotations are there.
   s=len(t());line('run vellum @form.pdf')
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=form\.pdf pages=1\n',s,600)
-  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  form_page=g['wait'](r'\[pdf\.page\] page=1 pages=1 width=(\d+) height=(\d+) ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
+  tile=latest_frame(t(),sid);bx,by,client_w,_=content_rect(t(),tile)
+  ui=chrome_metrics(t())['scale'];page_w=int(form_page[1]);scale=page_w/612
+  client_w//=ui;left=(client_w-page_w)//2 if page_w+24<=client_w else 12
+  s=len(t());click(bx+round((left+81*scale)*ui),by+round((12+225*scale)*ui))
+  g['wait'](r'\[pdf\.widget\.pointer\] name=agree kind=checkbox page=1\n',s,120)
+  g['wait'](r'\[pdf\.field\] name=agree kind=checkbox value=Off\n',s,120)
+  q.cmd('screendump',{'filename':str(a.out/'pdf-widget-checkbox.ppm')})
+  assert (a.out/'pdf-widget-checkbox.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','z'),r'\[pdf\.field\.history\] action=undo name=agree\n')
   step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,FreeText\n')
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A real AcroForm combo and list keep their export values through native
@@ -182,22 +191,31 @@ def main():
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   s=len(t());line('run vellum @choice.pdf')
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=choice\.pdf pages=1\n',s,600)
-  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  page_receipt=g['wait'](r'\[pdf\.page\] page=1 pages=1 width=(\d+) height=(\d+) ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
-  s=len(t());chord('ctrl','e')
+  tile=latest_frame(t(),sid)
+  bx,by,client_w,client_h=content_rect(t(),tile)
+  ui=chrome_metrics(t())['scale']
+  page_w,page_h=map(int,page_receipt[1:3]);scale=page_w/612
+  client_w//=ui;client_h//=ui
+  left=(client_w-page_w)//2 if page_w+24<=client_w else 12
+  widget_x=bx+round((left+240*scale)*ui)
+  widget_y=by+round((12+124*scale)*ui)
+  s=len(t());click(widget_x,widget_y)
+  g['wait'](r'\[pdf\.widget\.pointer\] name=size kind=choice page=1\n',s,120)
   g['wait'](r'\[pdf\.choice\.focus\] name=size selected=2 count=3\n',s,120)
-  step(lambda:chord('ctrl','down'),r'\[pdf\.choice\.focus\] name=team selected=2 count=3\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-choice-reopened.ppm')})
   assert (a.out/'pdf-choice-reopened.ppm').stat().st_size>10000
-  step(lambda:chord('ctrl','up'),r'\[pdf\.choice\.focus\] name=size selected=2 count=3\n')
-  tile=latest_frame(t(),sid)
-  bx,by,_,_=content_rect(t(),tile)
-  ui=chrome_metrics(t())['scale']
-  step(lambda:click(bx+100*ui,by+15*ui),r'\[pdf\.choice\.menu\] name=size count=3\n')
   q.cmd('screendump',{'filename':str(a.out/'pdf-choice-pointer-menu.ppm')})
   assert (a.out/'pdf-choice-pointer-menu.ppm').stat().st_size>10000
   s=len(t());step(lambda:click(bx+100*ui,by+(BAR+2*20+10)*ui),r'\[pdf\.choice\.pointer\] name=size selected=3 count=3\n')
   g['wait'](r'\[pdf\.field\] name=size kind=choice value=Large\n',s,120)
+  ah=client_h-BAR
+  scroll=max(0,min(int(111*scale)+12-ah//4,max(0,page_h+24-ah)))
+  team_y=by+round((BAR+12+213*scale-scroll)*ui)
+  s=len(t());click(widget_x,team_y)
+  g['wait'](r'\[pdf\.widget\.pointer\] name=team kind=choice page=1\n',s,120)
+  g['wait'](r'\[pdf\.choice\.focus\] name=team selected=2 count=3\n',s,120)
   q.cmd('screendump',{'filename':str(a.out/'pdf-choice-pointer-selected.ppm')})
   assert (a.out/'pdf-choice-pointer-selected.ppm').stat().st_size>10000
   step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
