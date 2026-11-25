@@ -50,6 +50,7 @@ def main():
   m=spindle(f'fetch http://10.0.2.2:{PORT}/cal.ics cal.ics',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   target,task,sid,today,s=start(' @cal.ics')
   g['wait'](r'\[calendar.imported\] events=6 added=6\n',s,60);g['wait'](r'\[calendar.saved\] events=6 ',s,60)
+  g['wait'](r'\[date.save.committed\] file=events.txt bytes=\d+',s,60)
   # The whole desktop for the calendar (Super+M), so a month shows its titles.
   s2=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'m'}],'hold-time':80})
   g['wait'](r'\[shell.wm.action\] action=ToggleMonocle done=1',s2,30);g['wait'](rf'\[shell.program.resize\] pd={target} task={task} w=\d+ h=\d+ status=0',s2,30);time.sleep(2)
@@ -71,6 +72,7 @@ def main():
   # Back to the month; `n` adds an event at a time on the chosen day.
   q.key('ret');time.sleep(.3);s=len(t());q.key('n');time.sleep(.3);keys('09:30 dentist');q.key('ret')
   g['wait'](r'\[calendar.added\] date=2026-03-16 when=09:30-10:30 title=dentist\n',s,30);g['wait'](r'\[calendar.saved\] events=7 ',s,60)
+  g['wait'](r'\[date.save.committed\] file=events.txt bytes=\d+',s,60)
   s=len(t());q.key('ret');g['wait'](r'\[calendar.day\] date=2026-03-16 events=5\n',s,30)
   # The 23rd is the weekly meeting's last (COUNT=4) and the 20th has only lunch: the
   # daily standup's UNTIL is that midnight.
