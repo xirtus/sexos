@@ -37,6 +37,9 @@ Enter confirms a prompt and Escape cancels it. When a background job is active,
 Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
 supported file operations in the current Loom run; redo is not yet available.
+When Delete moves items to trash, Loom saves their restore paths first and
+confirms storage before offering Ctrl+Z. If storage cannot confirm a move or
+rollback, check the folder and trash before acting again.
 Delete moves selected text-list rows to trash as one action, and one Ctrl+Z restores
 them. Ctrl+X cuts selected text-list rows; Ctrl+V moves them into another
 folder on the same disk, and one Ctrl+Z moves it back. Ctrl+C copies a selected

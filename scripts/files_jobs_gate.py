@@ -79,7 +79,11 @@ def main():
   m=step(lambda:ctrl('i'),r'\[files.app.sum\] path=(\S+) bytes=(\d+) sha256=([0-9a-f]{64})',300)
   assert m[1]=='/0gate/dst/big.bin' and int(m[2])==SIZE and m[3]==BIG_SHA,(m[1],m[2],m[3],BIG_SHA)
   # 3. Trash, see it there with where it came from, restore, same checksum.
-  step(lambda:q.key('delete'),r'\[files.app.trashed\] from=/0gate/dst/big.bin to=/.Trash/big.bin')
+  # The source's restore note reaches storage before Loom reports the move.
+  s=len(t());q.key('delete')
+  g['wait'](r'\[files.app.trash.note.synced\] from=/0gate/dst/big.bin',s,60)
+  g['wait'](r'\[files.app.trashed\] from=/0gate/dst/big.bin to=/.Trash/big.bin',s,60)
+  assert t()[s:].index('[files.app.trash.note.synced]')<t()[s:].index('[files.app.trashed]')
   step(lambda:ctrl('t'),r'\[files.app.list\] dir=/.Trash count=1\b')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files-trash.ppm')})
   step(lambda:ctrl('r'),r'\[files.app.restored\] from=/.Trash/big.bin to=/0gate/dst/big.bin')

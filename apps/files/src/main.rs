@@ -852,30 +852,21 @@ impl App {
     }
     fn trash(&mut self, window: &mut Window) {
         let chosen = self.selected_paths();
-        if chosen.len() > 1 { self.trash_many(window, &chosen); return; }
-        let Some(path) = self.selected() else { return };
-        let root = disk_root(&path);
-        let (trash, info) = (join(&root, TRASH), join(&root, INFO));
-        let _ = files::mkdir(window, &at(&trash));
-        let _ = files::mkdir(window, &at(&info));
-        let to = self.free_name(window, &trash, base(&path), "trashed");
-        match files::rename(window, &at(&path), &at(&to)) {
-            Ok(()) => {
-                // Where it came from, for Ctrl+R.
-                let note = join(&info, base(&to));
-                let _ = files::write(window, &at(&note), &path);
-                sex_pdx::serial_record!("[files.app.trashed] from={} to={}", shown(&path), shown(&to));
-                self.meta_moved(window, &path, &to);
-                self.status = format!("Moved {} to the trash. Ctrl+Z puts it back.", shown(base(&path)));
-                self.undo.push(Undo::Trashed { from: path, to, info: note });
-                let _ = files::sync(window);
-                self.load(window);
-            }
-            Err(e) => self.status = format!("Couldn't move to the trash: {}.", shown(files::message(e))),
-        }
+        if !chosen.is_empty() { self.trash_many(window, &chosen); }
     }
-    /// Move a contiguous selection as one recoverable action. If any move or
-    /// origin note fails, put the already moved items back before returning.
+    /// Reserve both the trash entry and its origin note; an orphaned note must
+    /// never be overwritten by a later item with the same name.
+    fn free_trash_name(&mut self, window: &mut Window, trash: &[u8], info: &[u8], name: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        for k in 0..1000 {
+            let candidate = if k == 0 { name.to_vec() } else { loom_core::selection::collision_name(name, "trashed", k) };
+            let to = join(trash, &candidate);
+            let note = join(info, &candidate);
+            if files::stat(window, &at(&to)).is_err() && files::stat(window, &at(&note)).is_err() { return (to, note); }
+        }
+        (Vec::new(), Vec::new())
+    }
+    /// Commit origin notes before moving items. A power cut after a move can
+    /// then always find the source path needed for restore.
     fn trash_many(&mut self, window: &mut Window, paths: &[Vec<u8>]) {
         if base(&self.cwd) == TRASH { self.status = "Use Shift+Delete for permanent deletion from trash.".into(); return; }
         let root = disk_root(&self.cwd);
@@ -886,33 +877,53 @@ impl App {
         if let Err(e) = files::mkdir(window, &at(&info)).or_else(|e| if e == w::EXISTS { Ok(()) } else { Err(e) }) {
             self.status = format!("Couldn't open trash notes: {}.", shown(files::message(e))); return;
         }
-        let mut moved = Vec::new();
+        let mut prepared = Vec::new();
+        let mut moved = 0usize;
         let result = (|| -> Result<(), u8> {
             for from in paths {
-                let to = self.free_name(window, &trash, base(from), "trashed");
-                files::rename(window, &at(from), &at(&to))?;
-                let note = join(&info, base(&to));
-                moved.push((from.clone(), to, note));
-                files::write(window, &at(&moved.last().unwrap().2), from)?;
+                let (to, note) = self.free_trash_name(window, &trash, &info, base(from));
+                if to.is_empty() { return Err(w::EXISTS); }
+                prepared.push((from.clone(), to.clone(), note));
+                files::write(window, &at(&prepared.last().unwrap().2), from)?;
+                files::sync(window)?;
+                sex_pdx::serial_record!("[files.app.trash.note.synced] from={}", shown(from));
+                // SexFS's ordinary file rename can replace a name claimed
+                // since free_trash_name checked it.
+                if !from.starts_with(b"/media/") && files::stat(window, &at(from)).map(|s| !s.dir).unwrap_or(false) {
+                    let id = files::file_id(window, &at(from))?;
+                    files::move_if_id(window, &at(from), &at(&to), id)?;
+                } else {
+                    files::rename(window, &at(from), &at(&to))?;
+                }
+                moved += 1;
             }
-            Ok(())
+            files::sync(window)
         })();
         if let Err(e) = result {
             let mut rollback_ok = true;
-            for (from, to, note) in moved.iter().rev() {
-                rollback_ok &= files::rename(window, &at(to), &at(from)).is_ok();
-                let _ = files::remove(window, &at(note));
+            for (i, (from, to, note)) in prepared.iter().enumerate().rev() {
+                let restored = i >= moved || files::rename(window, &at(to), &at(from)).is_ok();
+                rollback_ok &= restored;
+                // Keep the origin note when a move could not be rolled back.
+                if restored { rollback_ok &= files::remove(window, &at(note)).is_ok(); }
             }
+            rollback_ok &= files::sync(window).is_ok();
             self.status = format!("Batch trash failed: {}.{}", shown(files::message(e)),
-                if rollback_ok { " No items moved." } else { " Some items need restoring from trash." });
+                if rollback_ok { " No items moved." } else { " Check the folder and trash; storage state is unconfirmed." });
             self.load(window);
             return;
         }
-        for (from, to, _) in &moved { self.meta_moved(window, from, to); }
-        sex_pdx::serial_record!("[files.app.trashed.batch] count={}", moved.len());
-        self.status = format!("Moved {} items to trash. Ctrl+Z restores them together.", moved.len());
-        self.undo.push(Undo::TrashedBatch(moved));
-        let _ = files::sync(window);
+        for (from, to, _) in &prepared { self.meta_moved(window, from, to); }
+        if prepared.len() == 1 {
+            let (from, to, note) = prepared.pop().unwrap();
+            sex_pdx::serial_record!("[files.app.trashed] from={} to={}", shown(&from), shown(&to));
+            self.status = format!("Moved {} to the trash. Ctrl+Z puts it back.", shown(base(&from)));
+            self.undo.push(Undo::Trashed { from, to, info: note });
+        } else {
+            sex_pdx::serial_record!("[files.app.trashed.batch] count={}", prepared.len());
+            self.status = format!("Moved {} items to trash. Ctrl+Z restores them together.", prepared.len());
+            self.undo.push(Undo::TrashedBatch(prepared));
+        }
         self.load(window);
     }
 

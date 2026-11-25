@@ -32,6 +32,12 @@ Remaining gaps:
   root, with a recoverable previous copy. An encrypted-home unlock and missing
   removable-volume restore policy still need a full session audit.
 - Clearer file version history.
+- Trash now stores and syncs each restore path before moving its item, then
+  syncs the moved items before reporting success or offering undo. A failed
+  note, move, or final sync attempts rollback and reports unconfirmed storage
+  if rollback cannot be verified. A stale restore note also reserves its name.
+  Restore and undo still need the same durability audit; directory moves on
+  SexFS still lack a checked no-replace promotion.
 - Text folder lists support contiguous Shift+Up/Down/Home/End selection.
   Ctrl+Space toggles a row in a noncontiguous text-list selection; Ctrl+arrows
   move focus without losing the marks. The same batch trash, copy and move
