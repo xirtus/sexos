@@ -60,7 +60,9 @@ fn send(out: &mut impl Write, body: &Value) -> io::Result<()> {
 }
 
 fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
-    let mut opened: Option<(String, String, String)> = None;
+    // The child has no Files grant. It can inspect only snapshots explicitly
+    // sent by Quil, with a small bound on both count and total text.
+    let mut opened: Vec<(String, String, String)> = Vec::new();
     while let Some(body) = read_message(input)? {
         let Ok(request) = serde_json::from_slice::<Value>(&body) else {
             continue;
@@ -86,13 +88,21 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                     out,
                     &json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":uri,"diagnostics":diagnostics}}),
                 )?;
-                opened = Some((uri.to_owned(), language.to_owned(), text.to_owned()));
+                let existing = opened.iter().position(|(name, _, _)| name == uri);
+                let old = existing.map_or(0, |index| opened[index].2.len());
+                if text.len() <= 256 * 1024 && opened.iter().map(|(_, _, text)| text.len()).sum::<usize>() - old + text.len() <= 512 * 1024 {
+                    if let Some(index) = existing {
+                        opened[index] = (uri.to_owned(), language.to_owned(), text.to_owned());
+                    } else if opened.len() < 9 {
+                        opened.push((uri.to_owned(), language.to_owned(), text.to_owned()));
+                    }
+                }
             }
             Some("textDocument/completion") => {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 let requested_uri = request["params"]["textDocument"]["uri"].as_str();
                 let pos = &request["params"]["position"];
-                let items: Vec<_> = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                let items: Vec<_> = opened.iter().find(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
                     .and_then(|(_, language, text)| {
                         let at = lsp::offset_at_position(text, pos["line"].as_u64()?, pos["character"].as_u64()?)?;
                         Some(lsp::complete(text, language, at).1)
@@ -102,7 +112,7 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
             Some("textDocument/documentSymbol") => {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 let requested_uri = request["params"]["textDocument"]["uri"].as_str();
-                let items: Vec<_> = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                let items: Vec<_> = opened.iter().find(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
                     .map(|(_, language, text)| lsp::symbols(text, language))
                     .unwrap_or_default().into_iter().map(|symbol| json!({
                         "name":symbol.name,"kind":symbol.kind,
@@ -115,11 +125,26 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 let requested_uri = request["params"]["textDocument"]["uri"].as_str();
                 let position = &request["params"]["position"];
-                let result = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                let result = opened.iter().find(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
                     .and_then(|(uri, language, text)| {
                         let at = lsp::offset_at_position(text, position["line"].as_u64()?, position["character"].as_u64()?)?;
-                        let symbol = lsp::definition(text, language, at)?;
-                        Some(json!({"uri":uri,"range":{"start":{"line":symbol.line,"character":symbol.character},"end":{"line":symbol.line,"character":symbol.character}}}))
+                        let name = lsp::identifier_at(text, at)?;
+                        let local: Vec<_> = lsp::symbols(text, language).into_iter().filter(|s| s.name == name).collect();
+                        let target = if local.len() == 1 { Some((uri.as_str(), local.into_iter().next()?)) }
+                            else if !local.is_empty() { None }
+                            else {
+                                let mut found = None;
+                                for (other_uri, other_language, other_text) in &opened {
+                                    if other_uri == uri || other_language != language { continue; }
+                                    for symbol in lsp::symbols(other_text, language).into_iter().filter(|s| s.name == name) {
+                                        if found.is_some() { return None; }
+                                        found = Some((other_uri.as_str(), symbol));
+                                    }
+                                }
+                                found
+                            };
+                        let (target_uri, symbol) = target?;
+                        Some(json!({"uri":target_uri,"range":{"start":{"line":symbol.line,"character":symbol.character},"end":{"line":symbol.line,"character":symbol.character}}}))
                     });
                 send(out, &json!({"jsonrpc":"2.0","id":id,"result":result}))?;
             }
@@ -127,7 +152,7 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 let requested_uri = request["params"]["textDocument"]["uri"].as_str();
                 let position = &request["params"]["position"];
-                let result = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                let result = opened.iter().find(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
                     .and_then(|(_, language, text)| {
                         let at = lsp::offset_at_position(text, position["line"].as_u64()?, position["character"].as_u64()?)?;
                         let summary = lsp::hover(text, language, at)?;
@@ -239,5 +264,28 @@ mod tests {
         while let Some(body) = lsp::take_frame(&mut out).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
         assert_eq!(replies[1]["result"]["contents"]["value"], "Function helper at line 1");
         assert_eq!(replies[2]["result"], Value::Null);
+    }
+
+    #[test]
+    fn definition_returns_only_one_open_peer_without_a_files_grant() {
+        let open = |uri, text| json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"languageId":"rust","version":1,"text":text}}});
+        let ask = json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///quil/use.rs"},"position":{"line":0,"character":15}}});
+        let mut input = Vec::new();
+        for value in [open("file:///quil/use.rs", "fn main() { helper(); }\n"), open("file:///quil/open/0", "fn helper() {}\n"), ask.clone()] {
+            input.extend(lsp::frame(&serde_json::to_vec(&value).unwrap()));
+        }
+        let mut output = Vec::new();
+        serve(&mut BufReader::new(input.as_slice()), &mut output).unwrap();
+        let mut replies = Vec::new();
+        while let Some(body) = lsp::take_frame(&mut output).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
+        assert_eq!(replies.last().unwrap()["result"]["uri"], "file:///quil/open/0");
+        assert_eq!(replies.last().unwrap()["result"]["range"]["start"]["character"], 3);
+
+        input.extend(lsp::frame(&serde_json::to_vec(&open("file:///quil/open/1", "fn helper() {}\n")).unwrap()));
+        input.extend(lsp::frame(&serde_json::to_vec(&ask).unwrap()));
+        output.clear();
+        serve(&mut BufReader::new(input.as_slice()), &mut output).unwrap();
+        while let Some(body) = lsp::take_frame(&mut output).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
+        assert_eq!(replies.last().unwrap()["result"], Value::Null);
     }
 }

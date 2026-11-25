@@ -49,6 +49,18 @@ pub fn symbols(text: &str, language: &str) -> Vec<Symbol> {
 /// This bundled helper recognizes declaration heads; it does not resolve imports,
 /// scopes, members, or names in other files.
 pub fn definition(text: &str, language: &str, cursor: usize) -> Option<Symbol> {
+    let name = identifier_at(text, cursor)?;
+    let mut found = None;
+    for symbol in symbols(text, language).into_iter().filter(|s| s.name == name) {
+        if found.is_some() { return None; }
+        found = Some(symbol);
+    }
+    found
+}
+
+/// Identifier under one byte cursor. All bundled declaration recognition uses
+/// ASCII names; UTF-8 elsewhere in the document remains position-safe.
+pub fn identifier_at(text: &str, cursor: usize) -> Option<&str> {
     let bytes = text.as_bytes();
     if cursor > bytes.len() || !text.is_char_boundary(cursor) { return None; }
     let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
@@ -56,14 +68,7 @@ pub fn definition(text: &str, language: &str, cursor: usize) -> Option<Symbol> {
     while start > 0 && ident(bytes[start - 1]) { start -= 1; }
     let mut end = cursor;
     while end < bytes.len() && ident(bytes[end]) { end += 1; }
-    if start == end { return None; }
-    let name = &text[start..end];
-    let mut found = None;
-    for symbol in symbols(text, language).into_iter().filter(|s| s.name == name) {
-        if found.is_some() { return None; }
-        found = Some(symbol);
-    }
-    found
+    (start != end).then_some(&text[start..end])
 }
 
 /// A bounded plain-text summary for one unique declaration in this snapshot.
