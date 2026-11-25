@@ -616,14 +616,16 @@ impl Ui {
             canvas.frame(mx, my, FILTER_MENU_W, mh, palette.grid);
             let title = if menu.condition { "condition active" } else if menu.active { "values active" } else { "choose values" };
             let heading = if menu.searching || !menu.query.is_empty() {
-                format!("{} / {}_ ({})", column_name(menu.col), menu.query, menu.results.len())
+                format!("{} / {}_ ({})", column_name(menu.col), menu.query, menu.visible_len() - 1)
             } else { format!("{}: {title}  / search", column_name(menu.col)) };
             self.pen.text(&mut canvas, mx + 8, my + 5, &heading, palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
             let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
             for slot in 0..count {
                 let index = first + slot;
                 let value = menu.value_index(index);
-                let label = value.map_or("All rows", |i| menu.values[i].as_str());
+                let label = if index == 0 { "All rows" } else if let Some(i) = value {
+                    menu.values[i].as_str()
+                } else { menu.exact.as_deref().unwrap_or("All rows") };
                 let y = my + 25 + slot as i32 * FILTER_MENU_ROW;
                 if index == menu.selected { canvas.fill(mx + 3, y, FILTER_MENU_W - 6, FILTER_MENU_ROW, palette.head_on); }
                 let mark = if value.is_none() { "    " } else if value.is_some_and(|i| menu.checked[i]) { "[x] " } else { "[ ] " };
@@ -929,7 +931,10 @@ impl Ui {
             return false;
         }
         let chosen = menu.selected_value_index();
-        let values: Vec<String> = if menu.toggled {
+        let exact = menu.selected_exact().map(str::to_string);
+        let values: Vec<String> = if let Some(value) = exact {
+            vec![value]
+        } else if menu.toggled {
             menu.values.into_iter().zip(menu.checked).filter_map(|(value, checked)| checked.then_some(value)).collect()
         } else {
             chosen.map(|i| menu.values[i].clone()).into_iter().collect()
@@ -960,8 +965,18 @@ impl Ui {
             return false;
         }
         if let Some(menu) = &mut self.filter_menu {
-            if key.code == code::BACKSPACE && menu.searching { menu.pop_query(); return false; }
-            if key.code == code::SPACE && !key.control {
+            if key.code == code::BACKSPACE && menu.searching {
+                menu.pop_query();
+                if menu.results.is_empty() { menu.offer_exact(self.book.filter_exact_choice(menu.col, &menu.query)); }
+                return false;
+            }
+            if key.code == code::SPACE && menu.searching && !key.control {
+                menu.push_query(' ');
+                if menu.results.is_empty() { menu.offer_exact(self.book.filter_exact_choice(menu.col, &menu.query)); }
+                return false;
+            }
+            if key.code == code::SPACE && (!key.control || menu.searching) {
+                if menu.selected_exact().is_some() { return false; }
                 menu.toggled = true;
                 if menu.selected == 0 { menu.checked.fill(false); }
                 else if let Some(i) = menu.selected_value_index() { menu.checked[i] = !menu.checked[i]; }
@@ -973,8 +988,11 @@ impl Ui {
                 _ => if menu.searching {
                     if let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
                         menu.push_query(c);
+                        if menu.results.is_empty() {
+                            menu.offer_exact(self.book.filter_exact_choice(menu.col, &menu.query));
+                        }
                         sex_std::record(&format!("[spreadeagle.filter.search] col={} query={} matches={} selected={}",
-                            column_name(menu.col), menu.query, menu.results.len(), menu.selected));
+                            column_name(menu.col), menu.query, menu.visible_len() - 1, menu.selected));
                     }
                 },
             }

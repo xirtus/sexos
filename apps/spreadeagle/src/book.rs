@@ -397,6 +397,22 @@ impl Book {
         values.into_iter().collect()
     }
 
+    /// Resolve an exact displayed value across the full filter range. The menu preview is
+    /// deliberately bounded, but a value beyond that preview must still be reachable.
+    pub fn filter_exact_choice(&self, col: u32, query: &str) -> Option<String> {
+        let range = self.filter_range()?;
+        let (top, left, bottom, right) = range.bounds();
+        if query.is_empty() || !(left..=right).contains(&col) { return None; }
+        let needle = query.to_lowercase();
+        let d = self.session.doc().ok()?;
+        let sheet = d.wb.active()?;
+        for row in top.saturating_add(1)..=bottom {
+            let value = gridcraft_engine::display::cell_text(&d.wb, sheet, CellRef::new(row, col));
+            if value.to_lowercase() == needle { return Some(value); }
+        }
+        None
+    }
+
     /// Turns the AutoFilter on (over the region around `at`) or off.
     pub fn toggle_filter(&mut self, at: Range) -> Result<(), String> {
         self.select(at)?;
@@ -1003,6 +1019,21 @@ mod tests {
         book.toggle_filter(Range::cell(2, 0)).unwrap();
         assert!(book.filter_range().is_none());
         assert!((0..4).all(|r| book.row_height(r) > 0));
+    }
+
+    #[test]
+    fn exact_filter_lookup_reaches_beyond_menu_preview() {
+        let path = temp("filter-large.xlsx");
+        std::fs::write(&path, include_bytes!("../assets/filter-overflow.xlsx")).unwrap();
+        let mut book = Book::open(&path).unwrap().0;
+        book.toggle_filter(Range::cell(0, 0)).unwrap();
+        assert_eq!(book.filter_range().unwrap().bounds().2, 1_100);
+        assert_eq!(book.filter_choices(0).len(), 1_000);
+        assert_eq!(book.filter_exact_choice(0, "item 1100").as_deref(), Some("Item 1100"));
+        assert_eq!(book.filter_exact_choice(0, "not present"), None);
+        book.filter_by_values(Range::cell(1, 0), 0, &["Item 1100".into()]).unwrap();
+        assert!(book.row_height(1_100) > 0);
+        assert_eq!(book.row_height(1), 0);
     }
 
     #[test]
