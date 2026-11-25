@@ -18,6 +18,7 @@
 //! alarm on or off, Delete removes. Calendars: Up/Down pick, Space shows or hides,
 //! `n` adds a local calendar; new events go to the picked one. The mouse picks days,
 //! hours, tabs, calendars.
+//! Press `?` for the complete in-app shortcut reference; Up/Down scroll it.
 #![no_std]
 #![no_main]
 
@@ -62,6 +63,8 @@ pub struct App {
     pub today: Date,
     pub selected: Date,
     pub view: View,
+    pub help: bool,
+    pub help_offset: usize,
     /// The chosen day's events listed with details (Enter in the month).
     pub agenda: bool,
     /// What is being typed, and for what.
@@ -414,6 +417,23 @@ impl App {
     fn clock_rows(&self) -> usize { self.clock.alarms.len() + self.clock.timers.len() + self.clock.world().len() }
     fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
         let typed = sex_app::typed(key);
+        if self.help {
+            match (key.code, typed) {
+                (0x01, _) | (_, Some(b'?')) => { self.help = false; self.help_offset = 0; },
+                (0x48 | 0x67, _) => self.help_offset = self.help_offset.saturating_sub(1),
+                (0x50 | 0x6c, _) => self.help_offset = (self.help_offset + 1).min(views::HELP_ROWS.len().saturating_sub(1)),
+                (0x49 | 0x68, _) => self.help_offset = self.help_offset.saturating_sub(8),
+                (0x51 | 0x6d, _) => self.help_offset = (self.help_offset + 8).min(views::HELP_ROWS.len().saturating_sub(1)),
+                _ => {},
+            }
+            sex_pdx::serial_record!("[date.help] open={} offset={}", self.help as u8, self.help_offset);
+            return;
+        }
+        if self.ask.is_none() && typed == Some(b'?') {
+            self.help = true; self.help_offset = 0;
+            sex_pdx::serial_record!("[date.help] open=1 offset=0");
+            return;
+        }
         if let Some(ask) = self.ask {
             match key.code {
                 0x1C => { self.ask = None; self.typed_done(window, ask); }
@@ -580,7 +600,7 @@ pub extern "C" fn _start() -> ! {
     // one starts where the program was written.
     let minute = (now / 60_000) as i64;
     let today = if now == 0 { Date { year: 2026, month: 1, day: 1 } } else { clock.home_zone().local(minute).0 };
-    let mut app = App { cal, clock, today, selected: today, view: View::Month, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
+    let mut app = App { cal, clock, today, selected: today, view: View::Month, help: false, help_offset: 0, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
@@ -607,6 +627,7 @@ pub extern "C" fn _start() -> ! {
         match event {
             Event::Close => { sex_pdx::serial_record!("[calendar.closed] target={} task={}", window.target, window.task); window.close() }
             Event::Key(key) => { app.status.clear(); app.banner = None; app.key(&mut window, key); }
+            Event::Pointer(_) if app.help => continue,
             Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 }) && app.ask.is_none() => { app.banner = None; app.click(&mut window, p.x as i32, p.y as i32); }
             Event::Pointer(p) => match p.kind {
                 Kind::Wheel { steps } if matches!(app.view, View::Week | View::Day) => app.first_hour = (app.first_hour as i32 - steps as i32).clamp(0, 23) as u16,

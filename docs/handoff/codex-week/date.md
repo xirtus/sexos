@@ -13,3 +13,6 @@ Remaining gaps:
 - Scheduling and invitation replies need full interoperability testing with
   several CalDAV providers and mail integration.
 - Offline edits need a clearer conflict review interface.
+- The in-app `?` reference and `docs/DATE_SHORTCUTS.md` now cover Date's
+  calendar, clock, invitation, sync and export keys. Wider accessibility
+  review, including localized key names, remains.
