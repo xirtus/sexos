@@ -37,26 +37,24 @@ fn main() {
     let recovered = book::Book::open_recovered(&name);
     let was_recovered = recovered.is_some();
     let opened = if let Some(book) = recovered {
-        Ok(book)
+        Ok((book, Vec::new()))
     } else if std::fs::metadata(&name).is_ok() {
-        book::Book::open(&name).map(|(b, warnings)| {
-            for w in warnings { sex_std::record(&format!("[spreadeagle.warning] {w}")); }
-            b
-        })
+        book::Book::open(&name)
     } else {
-        Ok(book::Book::blank(&name))
+        Ok((book::Book::blank(&name), Vec::new()))
     };
-    let book = match opened {
-        Ok(book) => book,
+    let (book, warnings) = match opened {
+        Ok(pair) => pair,
         Err(message) => {
             println!("Spreadeagle could not open {name}: {message}\n\nPut a workbook in this program's folder and run: spreadeagle NAME.xlsx");
             std::process::exit(1);
         }
     };
     let (target, task) = sex_std::identity();
+    for w in &warnings { sex_std::record(&format!("[spreadeagle.warning] {w}")); }
     sex_std::record(&format!("[spreadeagle.open] target={target} task={task} name={name} sheets={}", book.sheets().join(",")));
     let window = sex_std::window();
-    let ui = ui::Ui::new(book, name);
+    let ui = ui::Ui::new(book, name).with_import_warnings(warnings);
     let ui = if was_recovered { sex_std::record("[spreadeagle.recovered]"); ui.recovered() } else { ui };
     ui.run(window);
     std::process::exit(0);

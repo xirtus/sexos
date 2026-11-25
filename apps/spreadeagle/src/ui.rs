@@ -86,6 +86,9 @@ pub struct Ui {
     function_picker: Option<FunctionPicker>,
     /// An in-app shortcut reference, opened with Ctrl+Shift+/.
     help: bool,
+    import_warnings: Vec<String>,
+    warning_open: bool,
+    warning_index: usize,
     /// The workbook came back with last time's unsaved changes: Esc throws them away until
     /// the next edit.
     recovered: bool,
@@ -136,6 +139,19 @@ const FILTER_MENU_VISIBLE: usize = 8;
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
 const KEEP_AFTER_MS: u64 = 15_000;
+fn warning_lines(message: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in message.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() { line.push(' '); }
+        line.push_str(word);
+    }
+    if !line.is_empty() { lines.push(line); }
+    lines
+}
 const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"), ("Ctrl+Shift+S", "Save as / choose format"),
     ("Ctrl+P", "Export PDF"), ("Ctrl+G", "Go to cell or range"),
@@ -151,6 +167,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+Shift+Q", "Edit selected chart layout"),
     ("Ctrl+Shift+I", "Search and insert a worksheet function"),
+    ("Ctrl+Shift+W", "Review import warnings"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -198,6 +215,7 @@ mod code {
     pub const K: u8 = 0x25;
     pub const J: u8 = 0x24;
     pub const Q: u8 = 0x10;
+    pub const W: u8 = 0x11;
     pub const F2: u8 = 0x3C;
     pub const SLASH: u8 = 0x35;
     pub const H: u8 = 0x23;
@@ -230,8 +248,18 @@ impl Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
-            ask: None, filter_menu: None, function_picker: None, help: false, recovered: false, unkept: None,
+            ask: None, filter_menu: None, function_picker: None, help: false,
+            import_warnings: Vec::new(), warning_open: false, warning_index: 0, recovered: false, unkept: None,
         }
+    }
+
+    pub fn with_import_warnings(mut self, warnings: Vec<String>) -> Ui {
+        self.import_warnings = warnings.into_iter().map(|w| w.replace("GridCraft", "Spreadeagle")).collect();
+        self.warning_open = !self.import_warnings.is_empty();
+        if self.warning_open {
+            sex_std::record(&format!("[spreadeagle.warnings.shown] count={}", self.import_warnings.len()));
+        }
+        self
     }
 
     fn with_pen<T>(&self, size: f32, f: impl FnOnce(&mut Pen) -> T) -> T {
@@ -619,6 +647,26 @@ impl Ui {
                 }
             }
         }
+        if self.warning_open {
+            let bw = (w - 2 * PAD).min(680).max(1);
+            let lines = warning_lines(&self.import_warnings[self.warning_index], 75);
+            let row = self.pen.line_height() + 8;
+            let bh = (84 + row * lines.len() as i32).min(h - 2 * PAD).max(1);
+            let (bx, by) = ((w - bw) / 2, (h - bh) / 2);
+            canvas.fill(bx + 4, by + 4, bw, bh, palette.grid);
+            canvas.fill(bx, by, bw, bh, palette.bar_bg);
+            canvas.frame(bx, by, bw, bh, palette.error);
+            self.pen.text(&mut canvas, bx + 14, by + 12,
+                &format!("Import warning {} of {}", self.warning_index + 1, self.import_warnings.len()),
+                palette.error, Some((bx + 14, bw - 28)));
+            for (i, line) in lines.iter().enumerate() {
+                self.pen.text(&mut canvas, bx + 14, by + 41 + i as i32 * row, line,
+                    palette.ink, Some((bx + 14, bw - 28)));
+            }
+            self.pen.text(&mut canvas, bx + 14, by + bh - 25,
+                "Up/Down reviews warnings  ·  Enter or Esc closes  ·  Ctrl+Shift+W reopens",
+                palette.dim, Some((bx + 14, bw - 28)));
+        }
 
         self.rows = rows;
         self.cols = cols;
@@ -951,6 +999,25 @@ impl Ui {
 
     /// One key. Returns whether the cells (or the sheet) changed: worth a record of the column.
     fn key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        if key.control && key.shift && key.code == code::W && !self.import_warnings.is_empty() {
+            self.warning_open = true;
+            self.warning_index = 0;
+            sex_std::record(&format!("[spreadeagle.warnings.shown] count={}", self.import_warnings.len()));
+            return false;
+        }
+        if self.warning_open {
+            match sex_app::nav(key) {
+                Some(Nav::Up) => self.warning_index = self.warning_index.saturating_sub(1),
+                Some(Nav::Down) => self.warning_index = (self.warning_index + 1).min(self.import_warnings.len() - 1),
+                _ if matches!(key.code, code::ENTER | code::ESC) => {
+                    self.warning_open = false;
+                    self.message = format!("Imported with {} warning(s). Ctrl+Shift+W reviews them.", self.import_warnings.len());
+                    sex_std::record("[spreadeagle.warnings.closed]");
+                }
+                _ => {}
+            }
+            return false;
+        }
         if key.control && key.shift && key.code == code::SLASH {
             self.help = !self.help;
             sex_std::record(&format!("[spreadeagle.shortcuts] shown={}", self.help as u8));

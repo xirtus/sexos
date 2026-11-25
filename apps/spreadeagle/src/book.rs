@@ -749,11 +749,22 @@ mod tests {
     use super::*;
 
     const WELCOME: &[u8] = include_bytes!("../assets/welcome.xlsx");
+    const WARNING_ODS: &[u8] = include_bytes!("../assets/import-warning.ods");
 
     fn temp(name: &str) -> String {
         let dir = std::env::temp_dir().join(format!("spreadeagle-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name).to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn warns_when_ods_import_loses_source_formatting() {
+        let path = temp("import-warning.ods");
+        std::fs::write(&path, WARNING_ODS).unwrap();
+        let (book, warnings) = Book::open(&path).unwrap();
+        assert_eq!(book.shown(0, 0).text, "Fruit");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("Source formatting")), "{warnings:?}");
     }
 
     #[test]

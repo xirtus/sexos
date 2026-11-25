@@ -22,6 +22,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+M | Choose a column, line, bar or pie chart for the selection |
 | Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `type line`, `title text`, `clear title`, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
 | Ctrl+Shift+I | Search the function catalog by name, category or description; Up/Down chooses, Enter inserts `=NAME()` with the caret between the parentheses, Esc closes |
+| Ctrl+Shift+W | Review warnings from importing the current workbook |
 | Ctrl+PageUp, Ctrl+PageDown | Previous or next sheet |
 
 The status line also shows common operations. While entering a formula, Enter
@@ -33,3 +34,6 @@ Enter to apply, and Esc to close the menu. Enter without a marked choice still
 applies the highlighted value. **All rows** clears that column's choice.
 Press C in the value menu to enter a condition for that column. A condition can
 return no rows; All rows restores them.
+When import reports lost or unsupported features, a warning panel opens over the
+workbook. Up and Down review the warnings; Enter or Esc closes the panel. The
+shortcut reopens it during the current session.
