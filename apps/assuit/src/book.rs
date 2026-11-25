@@ -310,8 +310,17 @@ impl Book {
     /// Edit dynamic page numbers in the section at the caret. The engine owns
     /// the field, numbering, layout and DOCX/ODT serialization.
     pub fn insert_page_numbers(&mut self, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; remove top/bottom; start 1–32767; continue; or format decimal/lower roman/upper roman/lower letter/upper letter";
+        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; remove top/bottom; start N; continue; format TYPE; or first/even on/off";
         let words: Vec<_> = input.split_whitespace().collect();
+        if words.len() == 2 && matches!(words[0].to_ascii_lowercase().as_str(), "first" | "even") {
+            let on = match words[1].to_ascii_lowercase().as_str() {
+                "on" => true, "off" => false, _ => return Err(HELP.into()),
+            };
+            let command = if words[0].eq_ignore_ascii_case("first") {
+                "layout.differentFirstPage"
+            } else { "layout.differentOddEven" };
+            return self.run(command, json!({ "value": on })).map(|_| ());
+        }
         if words.first().is_some_and(|w| w.eq_ignore_ascii_case("format")) {
             let choice = words[1..].join(" ").to_ascii_lowercase();
             let format = match choice.as_str() {
@@ -1252,6 +1261,52 @@ mod tests {
             reopened.key(&Chord { name: "End", ctrl: true, shift: false });
             reopened.insert_page_numbers("format upper roman").unwrap();
             assert_eq!(formats(&reopened), [NumFormat::Decimal, NumFormat::UpperRoman]);
+        }
+    }
+
+    #[test]
+    fn first_and_even_page_number_layouts_round_trip() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("page-number-variants.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First page").unwrap();
+            book.insert_page_numbers("bottom center").unwrap();
+            book.run("layout.break", json!({ "kind": "page" })).unwrap();
+            book.type_text("Second page").unwrap();
+            assert!(book.pages() >= 2, "page break should make page two");
+            for bad in ["first maybe", "even maybe", "first", "even"] {
+                assert!(book.insert_page_numbers(bad).is_err(), "{bad}");
+            }
+            let first_before = book.draw(0, 2.0).unwrap().pixels;
+            let even_before = book.draw(1, 2.0).unwrap().pixels;
+            book.insert_page_numbers("first on").unwrap();
+            assert!(book.session.doc.last_section.title_page);
+            assert!(book.draw(0, 2.0).unwrap().pixels != first_before,
+                "first page must stop using the default footer");
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert!(!book.session.doc.last_section.title_page, "one undo restores the default first page");
+            book.insert_page_numbers("first on").unwrap();
+            book.insert_page_numbers("even on").unwrap();
+            assert!(book.session.doc.settings.even_odd_headers);
+            // WordCraft uses the default footer on even pages until an even
+            // footer exists, so fill the new slot while the caret is on page 2.
+            book.insert_page_numbers("bottom right").unwrap();
+            assert!(book.session.doc.last_section.footers.even.is_some());
+            assert!(book.draw(1, 2.0).unwrap().pixels != even_before,
+                "even page must show its own right-aligned page number");
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert!(reopened.session.doc.last_section.title_page, "{ext} lost first-page setting");
+            assert!(reopened.session.doc.settings.even_odd_headers, "{ext} lost odd/even setting");
+            assert!(reopened.session.doc.last_section.footers.even.is_some(), "{ext} lost even-page footer");
+            reopened.insert_page_numbers("even off").unwrap();
+            reopened.insert_page_numbers("first off").unwrap();
+            assert!(!reopened.session.doc.last_section.title_page);
+            assert!(!reopened.session.doc.settings.even_odd_headers);
+            reopened.save().unwrap();
+            let again = Book::open(&path).unwrap();
+            assert!(!again.session.doc.last_section.title_page, "{ext} lost first-page reset");
+            assert!(!again.session.doc.settings.even_odd_headers, "{ext} lost odd/even reset");
         }
     }
 
