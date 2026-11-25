@@ -472,10 +472,19 @@ impl App {
             }
             Outcome::Failed(kind, why) => {
                 sex_pdx::serial_record!("[files.app.job.failed] kind={:?} why={}", kind, why);
+                let committed = self.job.as_ref().is_some_and(|job| job.committed);
                 self.job = None;
                 self.job_undo = None;
-                if let Some(history) = self.history_job.take() { self.restore_history(history); }
-                self.status = format!("Couldn't finish: {}. Nothing half-done was left.", why);
+                if let Some(history) = self.history_job.take() {
+                    // Once source removal began, both locations may hold data.
+                    // The old history step no longer describes a safe replay.
+                    if !committed { self.restore_history(history); }
+                }
+                self.status = if committed {
+                    format!("Couldn't finish moving: {}. Check both locations before trying again.", why)
+                } else {
+                    format!("Couldn't finish: {}. Nothing half-done was left.", why)
+                };
                 if !self.look_for_pulled(window) { self.load(window); }
                 true
             }
