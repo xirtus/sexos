@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use sex_std::{sex_app::{self, Event}, sex_pdx::{self, pdf_sign as p, SLOT_SHELL}};
+use sex_std::{sex_app::{self, Event}, sex_pdx::{self, pdf_sign as p}};
 use shibari::{Keeper, Knot, Owner};
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
@@ -45,7 +45,9 @@ fn receive(message: &sex_pdx::PdxMessage, cert: &[u8], point: &[u8], keeper: &Ke
     let answer = match message.type_id {
         p::CERT => cert.chunks(8).nth(message.arg0 as usize).map(p::pack).unwrap_or(0),
         p::POINT => point.chunks(8).nth(message.arg0 as usize).map(p::pack).unwrap_or(0),
-        p::BEGIN if message.arg1 > 0 && message.arg1 <= p::MAX_ATTRS as u64 && matches!(session, Session::Idle | Session::Refused | Session::Signed(_)) => {
+        // Shell owns the one active request. A prior client may have died while
+        // Shibari was collecting or awaiting approval; a fresh BEGIN replaces it.
+        p::BEGIN if message.arg1 > 0 && message.arg1 <= p::MAX_ATTRS as u64 => {
             *session = Session::Collect { client: message.arg0 as u32, len: message.arg1 as usize, data: Vec::with_capacity(message.arg1 as usize), next: 0 };
             0
         }
@@ -95,7 +97,7 @@ pub fn main() {
     let mut session = Session::Idle;
     show(window, &fingerprint, false, 0, &session);
     loop {
-        let Some(message) = sex_pdx::pdx_try_listen_raw(0) else { let _ = sex_pdx::sys_wait_self_ticks(16); continue };
+        let Some(message) = sex_app::mailbox::take(|m| m.caller_pd == 3).or_else(|| sex_pdx::pdx_try_listen_raw(0)) else { let _ = sex_pdx::sys_wait_self_ticks(16); continue };
         if let Some(knot) = knot {
             if let Some(answer) = receive(&message, &cert, &point, &keeper, owner, knot, &mut session) {
                 sex_pdx::pdx_reply(message.caller_pd, answer);
@@ -114,8 +116,7 @@ pub fn main() {
                                 if public == cert_point {
                                     point = public;
                                     knot = Some(candidate);
-                                    let status = sex_pdx::pdx_call_checked(SLOT_SHELL, p::REGISTER, cert.len() as u64, 0, 0);
-                                    if status != Ok(0) { knot = None; let _ = keeper.untie(owner, candidate); point.clear(); }
+                                    if sex_app::pdf_sign::register(cert.len()).is_err() { knot = None; let _ = keeper.untie(owner, candidate); point.clear(); }
                                 } else { let _ = keeper.untie(owner, candidate); }
                             }
                         }

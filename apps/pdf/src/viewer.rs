@@ -7,7 +7,7 @@ use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{render, PixmapSettings, RenderCache, RenderSettings};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::Kind;
-use sex_std::sex_pdx::pdf_sign;
+use sex_std::sex_app::pdf_sign;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Instant;

@@ -27194,11 +27194,13 @@ pub extern "C" fn _start() -> ! {
         if unsafe { denim_notice::receive(&msg) } { continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            // Signer replies carry arbitrary certificate/signature words. Give the
+            // exact pending signer run first refusal before generic reply decoders.
+            if pdf_sign::receive(&msg) { continue; }
             if restricted_routes::receive(&msg){continue;}
             if restricted_pool::blocks(&msg){continue;}
             if DESKTOP_RECORDING.receive(&msg,sex_pdx::get_ticks(),PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0) {continue;}
             if shell_launch_message(&msg) { continue; }
-            if pdf_sign::receive(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
             if shell_keys_message(&msg) { continue; }
