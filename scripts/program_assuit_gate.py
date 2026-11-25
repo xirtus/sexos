@@ -25,15 +25,21 @@ SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, t
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  elf=(ROOT/'iso_root/programs/assuit').read_bytes();assert elf[:4]==b'\x7fELF'
+ jot=(ROOT/'iso_root/programs/jot').read_bytes();assert jot[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('assuit',elf)])
+ install(disk,[('assuit',elf),('jot',jot)])
  g=boot(a.iso,disk,a.out,'assuit',a.resolution);t=g['text'];q=g['q']
  def type_line(line):
   for k in line:
-   q.key({' ':'spc','.':'dot'}.get(k,k));time.sleep(.05)
- def opened():
+   if k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
+   else:q.key({' ':'spc','.':'dot','/':'slash'}.get(k,k))
+   time.sleep(.05)
+ def opened(proofing=None):
   s=len(t());g['focus'](153);time.sleep(.5);type_line('run assuit');q.key('ret')
+  if proofing is not None:
+   g['wait'](rf'\[assuit\.proofing\.preference\] enabled={proofing} source=saved\n',s,120)
   o=g['wait'](r'\[assuit\.open\] target=(\d+) task=(\d+) name=welcome\.docx pages=1\n',s,900)
+  g['wait'](r'\[assuit\.theme\] mode=Light accent=d6336c',s,60)
   m=g['wait'](r'\[assuit\.page\] page=1 pages=1 width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
   assert int(m[3])>3000,f'page 1 looks empty: {m[0]}'
   g['focus'](SURFACE[int(o[1])]);time.sleep(.8)
@@ -48,6 +54,13 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   o=opened()
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-opened.ppm')})
+  shot=(a.out/'assuit-opened.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>10000,'Light theme desk missing'
+  s=len(t());press('ctrl','shift','slash')
+  g['wait'](r'\[assuit\.shortcuts\] shown=1',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-shortcuts.ppm')})
+  assert (a.out/'assuit-shortcuts.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','slash');g['wait'](r'\[assuit\.shortcuts\] shown=0',s,60)
   s=len(t());q.key('end');type_line(' today')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today\n',s,300)
   s=len(t());press('shift','home')
@@ -60,8 +73,22 @@ def main():
   s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','p')),(False,('p','ctrl')))for x in ks]})
   pdf=g['wait'](r'\[assuit\.pdf\] name=welcome\.pdf bytes=(\d+)\n',s,300)
   assert int(pdf[1])>500,f'PDF is too small: {pdf[0]}'
+  s=len(t());press('ctrl','shift','p')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-print-range.ppm')})
+  assert (a.out/'assuit-print-range.ppm').stat().st_size>10000
+  type_line('1');q.key('ret')
+  selected=g['wait'](r'\[assuit\.pdf-range\] pages=1 name=welcome\.pages\.pdf bytes=(\d+)\n',s,300)
+  assert int(selected[1])>500,f'page-range PDF is too small: {selected[0]}'
+  s=len(t());press('ctrl','shift','u')
+  g['wait'](r'\[assuit\.proofing\.marks\] enabled=0\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-preference-saved.ppm')})
+  assert (a.out/'assuit-proofing-preference-saved.ppm').stat().st_size>10000
   close(o)
-  o=opened()
+  o=opened(0)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-preference-restored.ppm')})
+  assert (a.out/'assuit-proofing-preference-restored.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','u')
+  g['wait'](r'\[assuit\.proofing\.marks\] enabled=1\n',s,120)
   s=len(t());q.key('end');press('shift','1')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today!\n',s,300)
   # Find, then copy the match.
@@ -75,10 +102,32 @@ def main():
   q.key('esc');time.sleep(.3)
   g['wait'](r'\[assuit\.selection\] rects=1 pages=1\n',s,60)
   g['chord']('ctrl','c',r'\[assuit\.command\] edit\.copy\n')
+  copied=g['wait'](r'\[assuit\.clipboard\.copy\] bytes=(\d+) cut=0 ok=1\n',s,60)
+  assert int(copied[1])==len('Assuit'),copied[0]
+  # Another native app pastes the exact text Assuit published through Shell.
+  s=len(t());g['focus'](153);time.sleep(.5);type_line('run jot');q.key('ret')
+  jot_ready=g['wait'](r'\[jot\.ready\] target=(\d+) task=(\d+)',s,120)
+  jot_launch=g['wait'](rf'\[shell\.program\.launch\] target={jot_ready[1]} task={jot_ready[2]} surface=(\d+)',s,60)
+  g['focus'](int(jot_launch[1]));time.sleep(.8)
+  s=len(t());press('ctrl','v')
+  g['wait'](r'\[jot\.clip\.paste\] bytes=6 system=1 err=None',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-clipboard-in-jot.ppm')})
+  assert (a.out/'assuit-clipboard-in-jot.ppm').stat().st_size>10000
+  s=len(t());q.key('f11');g['wait'](r'\[jot\.closed\]',s,60)
+  g['focus'](SURFACE[int(o[1])]);time.sleep(.5)
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'end'}],'hold-time':80});time.sleep(.5)
   for _ in range(50):q.key('ret');time.sleep(.08)
   g['wait'](r'\[assuit\.page\] page=2 pages=2 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,300)
   g['chord']('ctrl','v',r'\[assuit\.command\] edit\.paste\n')
+  g['wait'](r'\[assuit\.clipboard\.paste\] bytes=6 ok=1\n',s,60)
+  # Preview uses WordCraft's rendered paper but does not move the editing caret.
+  s=len(t());press('ctrl','alt','p')
+  g['wait'](r'\[assuit\.preview\] page=2 pages=2 width=\d+ height=\d+',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-print-preview-page2.ppm')})
+  assert (a.out/'assuit-print-preview-page2.ppm').stat().st_size>10000
+  s=len(t());q.key('left')
+  g['wait'](r'\[assuit\.preview\] page=1 pages=2 width=\d+ height=\d+',s,120)
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.preview\.closed\]',s,60)
   # Replace all, then a paragraph style.
   q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'h'}],'hold-time':80});time.sleep(.5)
   s=len(t());type_line('assuit');q.key('ret');type_line('assuit writer');q.key('ret')
@@ -93,7 +142,357 @@ def main():
   s=len(t());q.key('up');time.sleep(.3);q.key('ret')
   g['wait'](r'\[assuit\.style\] style=Heading 1\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-pages.ppm')})
+  # The native page view inserts an editable table through its dimensions prompt.
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'t'}],'hold-time':80});time.sleep(.5)
+  s=len(t());type_line('2x2');q.key('ret')
+  g['wait'](r'\[assuit\.table\] rows=2 cols=2\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-table.ppm')})
+  # Edit the table at its insertion caret and capture the native result.
+  s=len(t());press('ctrl','shift','t')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-edit-prompt.ppm')})
+  assert (a.out/'assuit-table-edit-prompt.ppm').stat().st_size>10000
+  type_line('header on');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=header on\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-repeat-header.ppm')})
+  assert (a.out/'assuit-table-repeat-header.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','t');type_line('row below');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=row below\n',s,120)
+  s=len(t());press('ctrl','shift','t');type_line('column right');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=column right\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-table-edited.ppm')})
+  assert (a.out/'assuit-table-edited.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','t');type_line('select row');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=select row\n',s,120)
+  s=len(t());press('ctrl','shift','t');type_line('merge cells');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=merge cells\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-merged.ppm')})
+  s=len(t());press('ctrl','shift','t');type_line('split 2');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=split 2\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-split.ppm')})
+  s=len(t());press('ctrl','shift','t');type_line('shade ffe8b0');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=shade ffe8b0\n',s,120)
+  s=len(t());press('ctrl','shift','t');type_line('border all');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=border all\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-styled.ppm')})
+  s=len(t());press('ctrl','shift','t');type_line('style grid table 1 light');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=style grid table 1 light\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-named-style.ppm')})
+  s=len(t());press('ctrl','shift','t');type_line('style');q.key('ret')
+  g['wait'](r'\[assuit\.table-gallery.open\] styles=\d+\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-gallery.ppm')})
+  assert (a.out/'assuit-table-gallery.ppm').stat().st_size>10000
+  s=len(t());q.key('down');q.key('ret')
+  g['wait'](r'\[assuit\.table-gallery.applied\] name=[^\n]+\n',s,120)
+  keys=('ctrl','shift','i')
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]});time.sleep(.5)
+  s=len(t());type_line('assuitmark.png');q.key('ret')
+  g['wait'](r'\[assuit\.picture\] path=assuitmark\.png\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-picture.ppm')})
+  s=len(t());press('ctrl','shift','r')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-picture-alt-prompt.ppm')})
+  type_line('SexOS lips badge');q.key('ret')
+  g['wait'](r'\[assuit\.picture-alt\] chars=16\n',s,120)
+  s=len(t());press('ctrl','shift','o');type_line('2');q.key('ret')
+  g['wait'](r'\[assuit\.picture-width\] inches=2\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-picture-sized.ppm')})
+  s=len(t());press('ctrl','shift','c');type_line('10 0 5 0');q.key('ret')
+  g['wait'](r'\[assuit\.picture-crop\] values=10 0 5 0\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-picture-cropped.ppm')})
+  s=len(t());press('ctrl','shift','w');type_line('square');q.key('ret')
+  g['wait'](r'\[assuit\.picture-wrap\] mode=square\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-picture-square-wrap.ppm')})
+  assert (a.out/'assuit-picture-square-wrap.ppm').stat().st_size>10000
+  type_line(' helo');q.key('home')
+  s=len(t());press('ctrl','shift','u')
+  g['wait'](r'\[assuit\.proofing\.marks\] enabled=0\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-hidden.ppm')})
+  s=len(t());press('ctrl','shift','u')
+  g['wait'](r'\[assuit\.proofing\.marks\] enabled=1\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-marks.ppm')})
+  assert (a.out/'assuit-proofing-marks.ppm').stat().st_size>10000
+  assert (a.out/'assuit-proofing-hidden.ppm').read_bytes()!=(a.out/'assuit-proofing-marks.ppm').read_bytes()
+  keys=('ctrl','shift','y')
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
+  g['wait'](r'\[assuit\.spelling\] word=helo suggestions=\d+\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-spelling.ppm')})
+  s=len(t());press('a')
+  g['wait'](r'\[assuit\.dictionary\.added\] word=helo\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-dictionary-added.ppm')})
+  assert (a.out/'assuit-dictionary-added.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','d')
+  g['wait'](r'\[assuit\.dictionary\.open\] words=1\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-dictionary-manager.ppm')})
+  assert (a.out/'assuit-dictionary-manager.ppm').stat().st_size>10000
+  s=len(t());q.key('delete')
+  g['wait'](r'\[assuit\.dictionary\.manager\.removed\] word=helo\n',s,120)
+  s=len(t());q.key('a');type_line('helo');q.key('ret')
+  g['wait'](r'\[assuit\.dictionary\.manager\.added\] word=helo\n',s,120)
+  q.key('esc')
+  s=len(t());press('ctrl','shift','k')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-language-prompt.ppm')})
+  assert (a.out/'assuit-proofing-language-prompt.ppm').stat().st_size>10000
+  type_line('en-GB');q.key('ret')
+  g['wait'](r'\[assuit\.proofing-language\] en-GB\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-language.ppm')})
+  s=len(t());press('ctrl','shift','k');type_line('en-AU');q.key('ret')
+  g['wait'](r'\[assuit\.proofing-language\] en-AU\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-en-au.ppm')})
+  assert (a.out/'assuit-proofing-en-au.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','l')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paper-prompt.ppm')})
+  assert (a.out/'assuit-paper-prompt.ppm').stat().st_size>10000
+  type_line('a4 landscape');q.key('ret')
+  g['wait'](r'\[assuit\.paper\] a4 landscape\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-paper.ppm')})
+  assert (a.out/'assuit-paper.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','m')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-margins-prompt.ppm')})
+  assert (a.out/'assuit-margins-prompt.ppm').stat().st_size>10000
+  type_line('narrow');q.key('ret')
+  g['wait'](r'\[assuit\.margins\] narrow\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-margins.ppm')})
+  assert (a.out/'assuit-margins.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','s')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paragraph-spacing-prompt.ppm')})
+  prompt=(a.out/'assuit-paragraph-spacing-prompt.ppm').read_bytes()
+  assert prompt.startswith(b'P6\n') and len(prompt)>10000
+  type_line('1.5 0 8');q.key('ret')
+  g['wait'](r'\[assuit\.paragraph-spacing\] 1\.5 0 8\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paragraph-spacing.ppm')})
+  assert (a.out/'assuit-paragraph-spacing.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','s');type_line('exact 24 0 8');q.key('ret')
+  g['wait'](r'\[assuit\.paragraph-spacing\] exact 24 0 8\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-exact-line-height.ppm')})
+  assert (a.out/'assuit-exact-line-height.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','s');type_line('minimum 28 0 8');q.key('ret')
+  g['wait'](r'\[assuit\.paragraph-spacing\] minimum 28 0 8\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-minimum-line-height.ppm')})
+  assert (a.out/'assuit-minimum-line-height.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','i')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paragraph-indents-prompt.ppm')})
+  assert (a.out/'assuit-paragraph-indents-prompt.ppm').stat().st_size>10000
+  type_line('0.5 0 0.25');q.key('ret')
+  g['wait'](r'\[assuit\.paragraph-indents\] 0\.5 0 0\.25\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paragraph-indents.ppm')})
+  assert (a.out/'assuit-paragraph-indents.ppm').stat().st_size>10000
+  # A native list action must change the page, and the edited DOCX must save.
+  press('ctrl','end');q.key('ret')
+  s=len(t());press('ctrl','alt','l')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-list-prompt.ppm')})
+  prompt=(a.out/'assuit-list-prompt.ppm').read_bytes()
+  assert prompt.startswith(b'P6\n') and len(prompt)>10000
+  type_line('numbered');q.key('ret')
+  g['wait'](r'\[assuit\.list\] action=numbered\n',s,120)
+  type_line('First item');q.key('ret');type_line('Second item')
+  g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today!\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-numbered-list.ppm')})
+  numbered=(a.out/'assuit-numbered-list.ppm').read_bytes()
+  assert numbered.startswith(b'P6\n') and numbered!=prompt,'List edit did not change the document view'
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','right')
+  g['wait'](r'\[assuit\.list-level\] level=2\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-list-level-key-deeper.ppm')})
+  deeper=(a.out/'assuit-list-level-key-deeper.ppm').read_bytes()
+  assert deeper.startswith(b'P6\n') and deeper!=numbered,'List-level key did not change the page'
+  s=len(t());press('ctrl','alt','left')
+  g['wait'](r'\[assuit\.list-level\] level=1\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-list-level-key-shallower.ppm')})
+  assert (a.out/'assuit-list-level-key-shallower.ppm').stat().st_size>10000
+  # The second item must move to a nested list level on the rendered page.
+  s=len(t());press('ctrl','alt','l');type_line('level 2');q.key('ret')
+  g['wait'](r'\[assuit\.list\] action=level 2\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-nested-list.ppm')})
+  nested=(a.out/'assuit-nested-list.ppm').read_bytes()
+  assert nested.startswith(b'P6\n') and nested!=numbered,'Nested level did not change the document view'
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','shift','h')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-section-running-prompt.ppm')})
+  running_prompt=(a.out/'assuit-section-running-prompt.ppm').read_bytes()
+  assert running_prompt.startswith(b'P6\n') and len(running_prompt)>10000
+  type_line('header Team report');q.key('ret')
+  g['wait'](r'\[assuit\.section\.running-text\]\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-section-running-header.ppm')})
+  running_header=(a.out/'assuit-section-running-header.ppm').read_bytes()
+  assert running_header.startswith(b'P6\n') and running_header!=running_prompt
+  s=len(t());q.key('esc')  # Return from the header story to the body before the next edit.
+  g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-prompt.ppm')})
+  assert (a.out/'assuit-page-number-prompt.ppm').stat().st_size>10000
+  type_line('bottom center of');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] bottom center of\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-numbers.ppm')})
+  assert (a.out/'assuit-page-numbers.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','n');type_line('start 5');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] start 5\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-start.ppm')})
+  started=(a.out/'assuit-page-number-start.ppm').read_bytes()
+  assert started.startswith(b'P6\n') and started!=(a.out/'assuit-page-numbers.ppm').read_bytes()
+  s=len(t());press('ctrl','alt','n');type_line('continue');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] continue\n',s,120)
+  s=len(t());press('ctrl','alt','n');type_line('format lower roman');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] format lower roman\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-format.ppm')})
+  formatted=(a.out/'assuit-page-number-format.ppm').read_bytes()
+  assert formatted.startswith(b'P6\n') and formatted!=(a.out/'assuit-page-numbers.ppm').read_bytes()
+  s=len(t());press('ctrl','alt','n');type_line('format decimal');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] format decimal\n',s,120)
+  s=len(t());press('ctrl','alt','n');type_line('even on');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] even on\n',s,120)
+  s=len(t());press('ctrl','alt','n');type_line('bottom right');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] bottom right\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-even-page-footer.ppm')})
+  assert (a.out/'assuit-even-page-footer.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','n');type_line('even off');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] even off\n',s,120)
+  s=len(t());press('ctrl','g');type_line('1');q.key('ret')
+  g['wait'](r'\[assuit\.goto\] page=1\n',s,120)
+  s=len(t());press('ctrl','alt','n');type_line('first on');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] first on\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-first-page-footer.ppm')})
+  assert (a.out/'assuit-first-page-footer.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','n');type_line('first off');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] first off\n',s,120)
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','n');type_line('remove bottom');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] remove bottom\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-removed.ppm')})
+  removed=(a.out/'assuit-page-number-removed.ppm').read_bytes()
+  assert removed.startswith(b'P6\n') and removed!=(a.out/'assuit-page-numbers.ppm').read_bytes()
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  # Enter the page's actual footer story without replacing its dynamic field.
+  s=len(t());press('ctrl','alt','n');type_line('bottom right');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] bottom right\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-footer-before-edit.ppm')})
+  before_footer=(a.out/'assuit-footer-before-edit.ppm').read_bytes()
+  def paper_pixels(ppm):
+   magic,dimensions,maximum,pixels=ppm.split(b'\n',3)
+   width,height=map(int,dimensions.split())
+   assert magic==b'P6' and maximum==b'255' and len(pixels)==width*height*3
+   return pixels[:width*(height-40)*3]  # Ignore the changing status message.
+  s=len(t());press('ctrl','alt','f')
+  g['wait'](r'\[assuit\.footer\.edit\]',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-footer-edit-mode.ppm')})
+  assert (a.out/'assuit-footer-edit-mode.ppm').stat().st_size>10000
+  type_line(' Confidential')
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-footer-rich-edit.ppm')})
+  after_footer=(a.out/'assuit-footer-rich-edit.ppm').read_bytes()
+  assert paper_pixels(after_footer)!=paper_pixels(before_footer),'Footer edit did not change page rendering'
+  s=len(t());press('ctrl','alt','h')
+  g['wait'](r'\[assuit\.header\.edit\]',s,120)
+  type_line('Draft')
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-header-rich-edit.ppm')})
+  assert (a.out/'assuit-header-rich-edit.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  press('ctrl','home')
+  s=len(t());press('ctrl','shift','n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-footnote-prompt.ppm')})
+  assert (a.out/'assuit-footnote-prompt.ppm').stat().st_size>10000
+  type_line('Source one');q.key('ret')
+  g['wait'](r'\[assuit\.footnote\.insert\] chars=10',s,120)
+  type_line(' updated')
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-footnote-edit.ppm')})
+  assert (a.out/'assuit-footnote-edit.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
+  s=len(t());press('ctrl','alt','shift','f')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-note-options-prompt.ppm')})
+  assert (a.out/'assuit-note-options-prompt.ppm').stat().st_size>10000
+  type_line('footnote format roman');q.key('ret')
+  g['wait'](r'\[assuit\.note\.options\] value=footnote format roman',s,120)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'assuit-note-roman-numbering.ppm')})
+  assert (a.out/'assuit-note-roman-numbering.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','shift','e')
+  g['wait'](r'\[assuit\.note\.open\] kind=footnote',s,120)
+  type_line(' revisited')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-note-reopened.ppm')})
+  assert (a.out/'assuit-note-reopened.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','e')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-endnote-prompt.ppm')})
+  assert (a.out/'assuit-endnote-prompt.ppm').stat().st_size>10000
+  type_line('Reference one');q.key('ret')
+  g['wait'](r'\[assuit\.endnote\.insert\] chars=13',s,120)
+  type_line(' updated')
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-endnote-edit.ppm')})
+  assert (a.out/'assuit-endnote-edit.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.endnote\.close\]',s,120)
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','shift','n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-note-convert-prompt.ppm')})
+  assert (a.out/'assuit-note-convert-prompt.ppm').stat().st_size>10000
+  type_line('endnote');q.key('ret')
+  g['wait'](r'\[assuit\.note\.convert\] to=endnote count=1',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-notes-converted.ppm')})
+  assert (a.out/'assuit-notes-converted.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  press('ctrl','end')
+  s=len(t());press('ctrl','k')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-prompt.ppm')})
+  assert (a.out/'assuit-hyperlink-prompt.ppm').stat().st_size>10000
+  type_line('https://example.org source');q.key('ret')
+  g['wait'](r'\[assuit\.link\.insert\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-inserted.ppm')})
+  assert (a.out/'assuit-hyperlink-inserted.ppm').stat().st_size>10000
+  linked_page=(a.out/'assuit-hyperlink-inserted.ppm').read_bytes()
+  press('ctrl','shift','left')
+  s=len(t());press('ctrl','alt','k')
+  g['wait'](r'\[assuit\.link\.remove\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-removed.ppm')})
+  removed_page=(a.out/'assuit-hyperlink-removed.ppm').read_bytes()
+  assert paper_pixels(removed_page)!=paper_pixels(linked_page),'Removing a link did not repaint selected text'
+  s=len(t());press('ctrl','k');type_line('https://old.example');q.key('ret')
+  g['wait'](r'\[assuit\.link\.insert\]',s,120)
+  press('right');press('left')
+  s=len(t());press('ctrl','k')
+  g['wait'](r'\[assuit\.link\.edit\]',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-link-caret-prompt.ppm')})
+  assert (a.out/'assuit-link-caret-prompt.ppm').stat().st_size>10000
+  press('ctrl','a');type_line('https://new.example revised');q.key('ret')
+  g['wait'](r'\[assuit\.link\.insert\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-link-caret-edited.ppm')})
+  assert paper_pixels((a.out/'assuit-link-caret-edited.ppm').read_bytes())!=paper_pixels(removed_page)
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  press('ctrl','home')
+  s=len(t());press('ctrl','alt','t')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-contents-prompt.ppm')})
+  assert (a.out/'assuit-contents-prompt.ppm').stat().st_size>10000
+  type_line('insert 2');q.key('ret')
+  g['wait'](r'\[assuit\.contents\] insert 2\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-contents-inserted.ppm')})
+  assert (a.out/'assuit-contents-inserted.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','t');type_line('update');q.key('ret')
+  g['wait'](r'\[assuit\.contents\] update\n',s,120)
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
+  # A person can place a licensed Hunspell pair in Assuit's own folder with
+  # Loom. Exercise the same folder through Spindle's native file commands.
+  def dictionary_file(name,lines):
+   path=f'/data/assuit/assuit-dictionaries/{name}'
+   for command,line in [('write',lines[0])]+[('append',v)for v in lines[1:]]:
+    g['focus'](153);s=len(t());type_line(f'{command} {path} {line}');q.key('ret')
+    g['wait'](r'\[spindle\.fs\.result\] kind=8 status=0 ',s,60)
+  dictionary_file('de-DE.aff',['SET UTF-8','TRY aehuskzt'])
+  dictionary_file('de-DE.dic',['2','Haus','Katze'])
+  s=len(t());g['focus'](153);type_line('run assuit german.docx');q.key('ret')
+  opened_german=g['wait'](r'\[assuit\.open\] target=(\d+) task=(\d+) name=german\.docx pages=1\n',s,900)
+  g['focus'](SURFACE[int(opened_german[1])]);time.sleep(.5)
+  s=len(t());press('ctrl','shift','k');type_line('de-DE');q.key('ret')
+  g['wait'](r'\[assuit\.proofing-language\] de-DE\n',s,120)
+  type_line('Haus Huas');press('ctrl','home')
+  s=len(t());press('ctrl','shift','y')
+  g['wait'](r'\[assuit\.spelling\] word=Huas suggestions=\d+\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-german-dictionary.ppm')})
+  assert (a.out/'assuit-german-dictionary.ppm').stat().st_size>10000
+  close(opened_german)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})
  finally:g['stop']()

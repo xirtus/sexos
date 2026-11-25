@@ -22,12 +22,18 @@ mod ui;
 
 /// The first document, hand-written WordprocessingML (apps/assuit/make_welcome.py).
 const WELCOME: &[u8] = include_bytes!("../assets/welcome.docx");
+/// A small first-run picture for trying the insert command, using SexOS's own mark.
+#[cfg(target_os = "hermit")]
+const MARK: &[u8] = include_bytes!("../../../assets/brand/sexos-lips-badge-64.png");
 
 #[cfg(target_os = "hermit")]
 fn main() {
     let name = std::env::args().nth(1).unwrap_or_else(|| {
         if std::fs::metadata("welcome.docx").is_err() {
             if let Err(e) = std::fs::write("welcome.docx", WELCOME) { eprintln!("Could not write welcome.docx: {e}"); }
+        }
+        if std::fs::metadata("assuitmark.png").is_err() {
+            if let Err(e) = std::fs::write("assuitmark.png", MARK) { eprintln!("Could not write assuitmark.png: {e}"); }
         }
         "welcome.docx".to_string()
     });
@@ -45,6 +51,14 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Err(e) = book.use_spell_dictionaries(std::path::Path::new(book::Book::SPELL_DICTIONARIES)) {
+        sex_std::record(&format!("[assuit.spell-dictionaries.error] {e}"));
+    }
+    match book.restore_proofing_preference(book::Book::PROOFING_PREFERENCE) {
+        Ok(saved) => sex_std::record(&format!("[assuit.proofing.preference] enabled={} source={}",
+            book.proofing_marks() as u8, if saved.is_some() { "saved" } else { "default" })),
+        Err(e) => sex_std::record(&format!("[assuit.proofing.preference.error] {e}")),
+    }
     let (target, task) = sex_std::identity();
     sex_std::record(&format!("[assuit.open] target={target} task={task} name={name} pages={}", book.pages()));
     let window = sex_std::window();
