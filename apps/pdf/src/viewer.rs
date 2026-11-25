@@ -581,6 +581,13 @@ impl Viewer {
                     }
                 }
             }
+            if self.panel == Panel::Annots {
+                if let (Some(annot), Ok(editor)) = (self.annots.get(self.chosen), &self.editor) {
+                    if let Ok(info) = editor.page_info(r.page) {
+                        outline(out, width, to_screen(marks::rect_to_shown(&info, annot.rect)), clip, palette.accent);
+                    }
+                }
+            }
         }
         if l.panel > 0 { self.draw_panel(out, width, height); }
         if l.bar > 0 { self.draw_bar(out, width, l.bar); }
@@ -940,6 +947,7 @@ impl Viewer {
                 }
                 before != self.page || matches!(self.panel, Panel::Outline | Panel::Annots)
             }
+            Kind::Down { button: 0 } if x >= l.panel && y >= l.bar => self.pick_annotation(x, y, &l),
             _ => false,
         }
     }
@@ -1110,6 +1118,31 @@ impl Viewer {
             return true;
         }
         false
+    }
+
+    /// Map a page click through the same centering and scroll arithmetic as
+    /// drawing, then focus the actual annotation under that point.
+    fn pick_annotation(&mut self, x: usize, y: usize, l: &Layout) -> bool {
+        if self.shortcuts || self.region.is_some() || self.form.is_some() || self.note.is_some() || self.comment.is_some() || self.signing.is_some() || self.signature.is_some() { return false; }
+        let Some(r) = self.shown.as_ref().filter(|r| r.page == self.page) else { return false };
+        let left = l.x0 + if r.w + 2 * MARGIN <= l.aw { (l.aw - r.w) / 2 } else { MARGIN };
+        let skip = self.hscroll.saturating_sub(MARGIN).min(r.w);
+        let (px, py) = (x as isize - left as isize + skip as isize,
+            y as isize - l.y0 as isize + self.scroll as isize - MARGIN as isize);
+        if px < 0 || py < 0 || px >= r.w as isize || py >= r.h as isize { return false; }
+        let point = (px as f64 / r.scale as f64, py as f64 / r.scale as f64);
+        let Some((info, annots)) = self.editor.as_ref().ok().and_then(|editor| {
+            Some((editor.page_info(self.page).ok()?, editor.annotations(self.page).ok()?))
+        }) else { return false };
+        let annots: Vec<_> = annots.into_iter().filter(listed).collect();
+        let Some(chosen) = marks::annotation_hit(&annots, &info, point) else { return false };
+        let kind = annots[chosen].subtype.clone();
+        self.annots = annots;
+        self.chosen = chosen;
+        self.panel = Panel::Annots;
+        self.status = Some(format!("Selected {}. Delete removes it.", describe(&self.annots[chosen])));
+        sex_std::record(&format!("[pdf.annot.pick] page={} selected={} kind={kind}", self.page + 1, chosen + 1));
+        true
     }
 }
 

@@ -142,9 +142,23 @@ def main():
   assert (a.out/'pdf-region-drag.ppm').stat().st_size>10000
   step(lambda:q.key('ret'),r'\[pdf\.annotate\] kind=highlight page=1 rects=1 from=region annots=3\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-marked.ppm')})
-  # The list: three, in the page's order; the last (the region) deleted.
-  step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,Highlight\n')
-  q.key('down');time.sleep(.2);q.key('down');time.sleep(.2)
+  # Click the region highlight itself. The page is returned to its top first,
+  # and the test derives the guest pointer from the window tile and page scale.
+  q.key('up');q.key('up');time.sleep(.4)
+  tile=re.findall(rf'\[shell\.tile\.apply\] sid={sid} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())
+  assert tile,'no Vellum tile for pointer selection'
+  tx,ty,tw,th=map(int,tile[-1]);screen_w,screen_h=map(int,a.resolution.split('x'))
+  scale=(tw-16-24)/612  # client width, 12-point page margins on both sides
+  px=tx+8+round(12+(0.4*612+24)*scale)
+  py=ty+36+round(12+(0.15*792+30)*scale)
+  q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(px*32767/(screen_w-1))}},{'type':'abs','data':{'axis':'y','value':round(py*32767/(screen_h-1))}}]})
+  time.sleep(.3);s=len(t())
+  q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]})
+  time.sleep(.2);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]})
+  g['wait'](r'\[pdf\.annot\.pick\] page=1 selected=3 kind=Highlight\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-annotation-pointer-selection.ppm')})
+  assert (a.out/'pdf-annotation-pointer-selection.ppm').stat().st_size>10000
+  # The hit opens the annotation list with that exact row selected.
   step(lambda:q.key('delete'),r'\[pdf\.annotate\] kind=delete page=1 was=Highlight annots=2\n')
   step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=3\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-deletion-undone.ppm')})

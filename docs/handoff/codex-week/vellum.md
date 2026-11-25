@@ -44,7 +44,9 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Editing depth:** committed form-field edits and added or deleted highlights,
   notes, and visual signatures now have bounded Ctrl+Z / Ctrl+Shift+Z histories until
   save. A deleted annotation restores its original PDF object and appearance.
-  Precise pointer selection and appearance controls remain.
+  Clicking visible markup on the page now opens the annotation list with that
+  item selected and outlined; multi-line highlights use their individual
+  quads for hit testing. Appearance controls remain.
 - **Mixed edit undo:** form edits and markup previously cleared each other's
   history. They now share one bounded, chronological Ctrl+Z / Ctrl+Shift+Z
   timeline until save. A new edit after undo drops redo for both kinds. The

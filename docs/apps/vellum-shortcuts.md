@@ -15,6 +15,7 @@ Vellum's light, dark, and high-contrast colors.
 | Highlight, add note, list annotations | Ctrl+H; Ctrl+N; Ctrl+L |
 | Choose highlight color | Ctrl+Shift+H cycles yellow, green, pink, blue; the choice applies to found text and selected regions |
 | Choose highlight opacity | Ctrl+Shift+O cycles 100%, 75%, 50%, 25% before placing a highlight |
+| Select markup on the page | Click its visible area; the annotation list opens at that item |
 | Remove selected annotation | Delete in the annotation list |
 | Edit a highlight comment | Ctrl+L, select a highlight, Enter; type up to 400 characters, Enter saves or Escape cancels |
 | Edit a sticky note | Ctrl+L, select a note, Enter; edit its text, then Enter saves or Escape cancels |
