@@ -116,7 +116,15 @@ impl Book {
     /// Edit the table containing the caret through WordCraft's undoable commands.
     /// Keep the accepted phrases explicit so a typo cannot delete a different part.
     pub fn edit_table(&mut self, action: &str) -> Result<&'static str, String> {
-        let (command, description) = match action.trim().to_ascii_lowercase().as_str() {
+        let action = action.trim().to_ascii_lowercase();
+        if let Some(columns) = action.strip_prefix("split ") {
+            let columns = columns.parse::<usize>().map_err(|_| "Enter split 2 through split 10".to_string())?;
+            if !(2..=10).contains(&columns) { return Err("Enter split 2 through split 10".into()); }
+            self.run("table.split", json!({ "columns": columns }))
+                .map_err(|_| "Place the caret in a table cell first".to_string())?;
+            return Ok("Split cell");
+        }
+        let (command, description) = match action.as_str() {
             "select row" => ("table.selectRow", "Selected row"),
             "select column" => ("table.selectColumn", "Selected column"),
             "row above" => ("table.insertRowAbove", "Inserted row above"),
@@ -125,7 +133,8 @@ impl Book {
             "column right" => ("table.insertColumnRight", "Inserted column right"),
             "delete row" => ("table.deleteRow", "Deleted row"),
             "delete column" => ("table.deleteColumn", "Deleted column"),
-            _ => return Err("Choose select row/column, row above/below, column left/right, or delete row/column".into()),
+            "merge cells" => ("table.merge", "Merged selected cells"),
+            _ => return Err("Choose select row/column, row above/below, column left/right, delete row/column, merge cells, or split 2–10".into()),
         };
         self.run(command, json!({})).map_err(|_| "Place the caret in a table cell first".to_string())?;
         Ok(description)
@@ -772,6 +781,31 @@ mod tests {
             assert_eq!(dimensions(&again), (2, 2));
             again.save().unwrap();
             assert_eq!(dimensions(&Book::open(&path).unwrap()), (2, 2), "{ext} lost deleted cells");
+        }
+    }
+
+    #[test]
+    fn merged_and_split_cells_round_trip_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("table-merge.{ext}"));
+            let mut book = Book::blank(&path);
+            book.insert_table(2, 2).unwrap();
+            assert!(book.edit_table("split 11").is_err());
+            let at = book.session.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+            let cell = |column| json!({ "story": "body", "path": [at, 0, column, 0], "off": 0 });
+            book.run("select.range", json!({ "anchor": cell(0), "focus": cell(1) })).unwrap();
+            book.edit_table("merge cells").unwrap();
+            let span = |book: &Book| book.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells[0].span();
+            assert_eq!(span(&book), 2);
+            book.save().unwrap();
+            let mut again = Book::open(&path).unwrap();
+            assert_eq!(span(&again), 2, "{ext} lost merged cell");
+            let at = again.session.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+            again.run("caret.set", json!({ "pos": { "story": "body", "path": [at, 0, 0, 0], "off": 0 } })).unwrap();
+            again.edit_table("split 2").unwrap();
+            assert_eq!(again.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.len(), 2);
+            again.save().unwrap();
+            assert_eq!(Book::open(&path).unwrap().session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.len(), 2, "{ext} lost split cells");
         }
     }
 
