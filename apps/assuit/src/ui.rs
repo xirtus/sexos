@@ -166,7 +166,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+Shift+N", "Convert notes to endnotes, footnotes, or swap"),
     ("Ctrl+Alt+Shift+F", "Set note placement or numbering"),
     ("Ctrl+K", "Link selected text or insert a labeled link"),
-    ("Ctrl+Alt+K", "Remove a link from selected text"),
+    ("Ctrl+Alt+K", "Remove the link at the caret or in a selection"),
     ("Ctrl+Alt+T", "Insert, refresh or remove a table of contents"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
@@ -1075,7 +1075,7 @@ impl Ui {
                         Ok(()) => {
                             self.invalidate();
                             sex_std::record("[assuit.link.remove]");
-                            self.message = "Removed link from selected text".into();
+                            self.message = "Removed link while keeping the text".into();
                         }
                         Err(e) => self.message = e,
                     }
