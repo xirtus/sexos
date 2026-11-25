@@ -28,10 +28,15 @@ def server(root):
  <h1>Login fixture</h1><form method=post action=/session>
  <label>User <input name=user autocomplete=username></label><br>
  <label>Password <input name=pass type=password autocomplete=current-password></label>
- <button type=submit>Sign in</button></form><script>
+ <button type=submit disabled>Sign in</button></form><p id=state>Waiting for login input</p><script>
+ const u=document.querySelector('[name=user]'),p=document.querySelector('[name=pass]');
  let sent=false;
- setInterval(()=>{const u=document.querySelector('[name=user]'),p=document.querySelector('[name=pass]');
- if(!sent&&u.value&&p.value){sent=true;setTimeout(()=>document.querySelector('form').submit(),4000)}},200);
+ const update=()=>{if(sent||!u.value||!p.value)return;sent=true;
+  document.querySelector('button').disabled=false;
+  document.querySelector('#state').textContent='Ready to sign in';
+  console.log('login inputs ready');
+  setTimeout(()=>document.querySelector('form').submit(),30000)};
+ u.addEventListener('input',update);p.addEventListener('input',update);
  </script>'''
  class H(http.server.BaseHTTPRequestHandler):
   protocol_version='HTTP/1.1'
@@ -112,6 +117,7 @@ def main():
   g['wait'](rf'\[chastity.consent.control\] token={prompt[1]} name=allow x=\d+ y=\d+ enabled=1',s,60)
   click_allow(vault,prompt[1]);g['wait'](rf'\[chastity.autofill.approved\] token={prompt[1]}',s,60)
   g['wait'](r'\[web.autofill.filled\] fields=2',s,120)
+  g['wait'](r'\[web.console\] level=0 login inputs ready',s,120)
   g['focus'](browser);time.sleep(.5);g['q'].cmd('screendump',{'filename':str(out/'browser-password-filled.ppm')})
   # Save is an explicit browser proposal; Chastity must show a second,
   # default-deny prompt and store the encrypted vault before acknowledging it.
