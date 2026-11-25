@@ -300,7 +300,16 @@ impl Book {
         let original = self.session.doc().map_err(|e| e.to_string())?.clone();
         let sheet_index = original.wb.active_sheet();
         let has_stop = original.wb.active().is_some_and(|s| s.validations.iter().any(|v| v.show_error && v.error_style == ErrorStyle::Stop));
-        if !has_stop { return self.run_on(range, id, params); }
+        // GridCraft skips plain-text cells past the sheet edge. A cheap
+        // delimiter bound keeps ordinary pastes fast; near an edge, the probe
+        // below checks the parsed shape before anything changes in the book.
+        let may_cross_edge = params.get("text").and_then(Json::as_str).is_some_and(|text| {
+            let rows_left = gridcraft_engine::core::MAX_ROWS.saturating_sub(range.r0) as usize;
+            let cols_left = gridcraft_engine::core::MAX_COLS.saturating_sub(range.c0) as usize;
+            text.bytes().filter(|b| matches!(b, b'\n' | b'\r')).count() >= rows_left
+                || text.bytes().filter(|b| *b == b'\t').count() >= cols_left
+        });
+        if !has_stop && !may_cross_edge { return self.run_on(range, id, params); }
         let mut probe = Session::new();
         probe.add_document(original.clone());
         probe.clipboard = self.session.clipboard.clone();
@@ -311,6 +320,7 @@ impl Book {
         } else {
             gridcraft_engine::core::RangeRef::parse(&range.a1()).unwrap()
         };
+        if !has_stop { return self.run_on(range, id, params); }
         let before = original.wb.active().ok_or("No active sheet")?;
         let after_doc = probe.doc().map_err(|e| e.to_string())?;
         let after = after_doc.wb.active().ok_or("No active sheet")?;
@@ -1522,6 +1532,22 @@ mod tests {
         book.paste_text(2, 0, "Food\n").unwrap();
         assert_eq!(book.input(2, 0), "Food");
         assert!(book.validation_choices(2, 0).is_some(), "plain paste keeps destination validation");
+    }
+
+    #[test]
+    fn external_text_paste_refuses_sheet_edge_without_partial_edit() {
+        let mut book = Book::blank(&temp("text-paste-edge.xlsx"));
+        let last_row = gridcraft_engine::core::MAX_ROWS - 1;
+        let last_col = gridcraft_engine::core::MAX_COLS - 1;
+        book.set(last_row, 0, "old row").unwrap();
+        book.set(0, last_col, "old col").unwrap();
+        let history = book.session.doc().unwrap().undo.len();
+        assert!(book.paste_text(last_row, 0, "new row\nextra").is_err());
+        assert_eq!(book.input(last_row, 0), "old row");
+        assert_eq!(book.session.doc().unwrap().undo.len(), history);
+        assert!(book.paste_text(0, last_col, "new col\textra").is_err());
+        assert_eq!(book.input(0, last_col), "old col");
+        assert_eq!(book.session.doc().unwrap().undo.len(), history);
     }
 
     #[test]
