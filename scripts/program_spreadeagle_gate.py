@@ -520,6 +520,21 @@ def main():
   assert (a.out/'spreadeagle-validation-dropdown.ppm').stat().st_size>10000
   s=len(t());q.key('down');q.key('ret')
   g['wait'](r'\[spreadeagle\.validation\.chosen\] cell=B9 value=Fun\n',s,120)
+  s=len(t());g['chord']('ctrl','g');type_line('D9');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=D9 cell=D9\n',s,120)
+  g['chord']('ctrl','c',r'\[spreadeagle\.command\] edit\.copy\n')
+  s=len(t());g['chord']('ctrl','g');type_line('A9');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=A9 cell=A9\n',s,120)
+  g['chord']('ctrl','v',r'\[spreadeagle\.command-failed\] edit\.paste A9:')
+  s=len(t());g['chord']('ctrl','g');type_line('B8');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=B8 cell=B8\n',s,120)
+  s=len(t());type_line('Other');q.key('ret')
+  g['wait'](r'\[spreadeagle\.set\] cell=B8 input=Other\n',s,120)
+  s=len(t());g['chord']('ctrl','g');type_line('B8:B9');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=B8:B9 cell=B8\n',s,120)
+  g['chord']('ctrl','d',r'\[spreadeagle\.command-failed\] edit\.fillDown B9:')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-validation-bulk.ppm')})
+  assert (a.out/'spreadeagle-validation-bulk.ppm').stat().st_size>10000
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1]),'powercut_recovered':True})
