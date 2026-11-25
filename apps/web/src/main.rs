@@ -20,6 +20,7 @@ mod media;
 mod mse;
 mod keys;
 mod profile;
+mod state_file;
 mod shields;
 mod extensions;
 mod tabs;
