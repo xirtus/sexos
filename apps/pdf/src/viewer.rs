@@ -87,6 +87,7 @@ const SHORTCUTS: &[&str] = &[
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Text: arrows/Home/End move; Shift selects; Ctrl+A selects all",
     "Backspace/Delete or typing replaces selected form text",
+    "Click the focused text value in the bar to place its caret",
     "Space toggles; Up/Down choice, Enter selects",
     "Click a choice value for its pointer menu; wheel scrolls options",
     "Click a PDF field to focus it; checkbox clicks toggle",
@@ -140,6 +141,10 @@ fn text_with_caret(text: &str, caret: usize) -> String {
 fn text_display(text: &str, caret: usize, anchor: Option<usize>) -> String {
     if text_selection(anchor, caret).is_some() { text.to_owned() }
     else { text_with_caret(text, caret) }
+}
+
+fn text_caret_at_x(x: usize, value_x: usize, chars: usize) -> usize {
+    ((x.saturating_sub(value_x).saturating_add(CW / 2)) / CW).min(chars)
 }
 
 fn text_backspace(text: &mut String, caret: &mut usize) {
@@ -834,6 +839,7 @@ impl Viewer {
         let (x, y) = (p.x.max(0) as usize, p.y.max(0) as usize);
         let popup_was_open = self.form.as_ref().is_some_and(|f| f.popup);
         if self.choice_pointer(p.kind, (x, y), size, l.bar) { return true; }
+        if self.text_pointer(p.kind, (x, y), l.bar) { return true; }
         if self.widget_pointer(p.kind, (x, y), &l, size) { return true; }
         if popup_was_open && self.form.as_ref().is_some_and(|f| !f.popup) { return true; }
         match p.kind {
@@ -867,6 +873,18 @@ impl Viewer {
             }
             _ => false,
         }
+    }
+
+    fn text_pointer(&mut self, kind: Kind, (x, y): (usize, usize), bar: usize) -> bool {
+        if !matches!(kind, Kind::Down { button: 0 }) || y >= bar || self.shortcuts { return false; }
+        let Some(form) = self.form.as_mut() else { return false };
+        let Some((field, _, _)) = form.fields.get(form.at) else { return false };
+        if !matches!(field.kind, FieldKind::Text { .. }) { return false; }
+        let value_x = 8 + (field.name.chars().count() + 2) * CW;
+        form.caret = text_caret_at_x(x, value_x, form.text.chars().count());
+        form.anchor = None;
+        sex_std::record(&format!("[pdf.form.pointer] name={} at={} chars={}", field.name, form.caret, form.text.chars().count()));
+        true
     }
 
     fn widget_pointer(&mut self, kind: Kind, point: (usize, usize), l: &Layout, size: (usize, usize)) -> bool {
@@ -1843,6 +1861,15 @@ mod render_cache_tests {
         anchor = Some(0);
         assert!(replace_text_selection(&mut text, &mut caret, &mut anchor));
         assert_eq!((text.as_str(), caret, anchor), ("", 0, None));
+    }
+
+    #[test]
+    fn form_bar_click_places_caret_at_nearest_character_boundary() {
+        let origin = 62;
+        assert_eq!(text_caret_at_x(0, origin, 12), 0);
+        assert_eq!(text_caret_at_x(origin + 5 * CW + 2, origin, 12), 5);
+        assert_eq!(text_caret_at_x(origin + 5 * CW + 5, origin, 12), 6);
+        assert_eq!(text_caret_at_x(usize::MAX, origin, 12), 12);
     }
 
     #[test]
