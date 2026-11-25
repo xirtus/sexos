@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Archives in Files: Enter on a zip, tar (plain, gz, zst, xz) or 7z browses into it as a
 //! read-only folder; Ctrl+Shift+X extracts it next to itself (or, inside one, copies the
-//! selected item out); Ctrl+Shift+A packs the selected file or folder into a zip.
+//! selected item out); Ctrl+Shift+A/N/B/M packs the selected file or folder
+//! into zip, tar, tar.gz or tar.zst.
 //!
 //! The archive is read through Files' own file calls a piece at a time, never loaded
 //! whole. What is extracted or packed is written under a hidden `.NAME.part` name and
@@ -370,6 +371,16 @@ impl App {
     /// Ctrl+Shift+M: a compressed tar, using the same staged write as zip.
     pub(crate) fn make_tar_zst(&mut self, window: &mut Window) {
         self.make_archive(window, OutputFormat::TarZst, b".tar.zst", "tar.zst");
+    }
+
+    /// Ctrl+Shift+N: an uncompressed tar, useful when compression is unwanted.
+    pub(crate) fn make_tar(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::Tar, b".tar", "tar");
+    }
+
+    /// Ctrl+Shift+B: gzip-compressed tar for widely shared archives.
+    pub(crate) fn make_tar_gz(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::TarGz, b".tar.gz", "tar.gz");
     }
 
     fn make_archive(&mut self, window: &mut Window, format: OutputFormat, extension: &[u8], kind: &str) {

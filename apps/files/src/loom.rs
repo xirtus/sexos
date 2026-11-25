@@ -3,7 +3,8 @@
 //! and the few calls Files makes into them for keys, drawing and background work.
 //!
 //! Keys: Enter on an archive browses into it, Ctrl+Shift+X extracts, Ctrl+Shift+A packs
-//! a zip, Ctrl+Shift+M packs tar.zst; Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
+//! a zip, Ctrl+Shift+N packs tar, Ctrl+Shift+B packs tar.gz, Ctrl+Shift+M packs tar.zst;
+//! Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
 //! Ctrl+Shift+D finds duplicates; Ctrl+U maps disk usage; Ctrl+Shift+C compares folders.
 //! Enter on a disk or CD image (`.iso`, `.img`, `.qcow2`, `.vhd(x)`, `.vmdk`, ...) browses it
 //! the same way, its partitions as folders (see `diskimg`). Ctrl+Shift+P lists network
@@ -28,6 +29,8 @@ const KEY_U: u8 = 0x16;
 const KEY_O: u8 = 0x18;
 const KEY_P: u8 = 0x19;
 const KEY_M: u8 = 0x32;
+const KEY_N: u8 = 0x31;
+const KEY_B: u8 = 0x30;
 /// `1`..`5` are 0x02..0x06; `0` is 0x0B.
 const KEY_0: u8 = 0x0B;
 
@@ -103,6 +106,8 @@ impl App {
                 },
                 KEY_A => self.make_zip(window),
                 KEY_M => self.make_tar_zst(window),
+                KEY_N => self.make_tar(window),
+                KEY_B => self.make_tar_gz(window),
                 KEY_X => self.extract_any(window),
                 KEY_O => self.actions_open(window),
                 KEY_P => self.places_open(window),

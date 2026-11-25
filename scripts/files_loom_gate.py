@@ -4,8 +4,9 @@
 A FAT32 USB stick holds a folder `docs` (two text files and a 300 KiB file in `docs/sub`),
 a folder `ren` with three files, and `host.tar.gz` made on the host. Files, given that
 stick:
-1. packs `docs` into `docs.zip` (Ctrl+Shift+A), browses into it (Enter, then into its
-   `docs` folder) and out (Backspace), then extracts it (Ctrl+Shift+X) into a new folder;
+1. packs `docs` into `docs.zip` (Ctrl+Shift+A), plain tar (Ctrl+Shift+N),
+   tar.gz (Ctrl+Shift+B) and tar.zst (Ctrl+Shift+M), browses into each,
+   then extracts the zip (Ctrl+Shift+X) into a new folder;
 2. compares `docs` with the extracted copy (Ctrl+Shift+C): everything is the same;
 3. browses into `host.tar.gz`, made by another program;
 4. renames the files in `ren` by the mask `pic_[C:2]` (Ctrl+Shift+R), takes it back with
@@ -275,6 +276,22 @@ def main():
   assert int(m[1])>=4,m[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-zst.ppm')})
   step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.zst')
+  # Plain tar and gzip tar use the same complete staged write. Browse each
+  # result in Loom and inspect every member on the host after the guest stops.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('n'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar format=Tar entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar')
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('b'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.gz files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.gz format=TarGz entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-gz.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.gz')
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
   # 7. Disk and CD images, on a second stick.
   q.cmd('blockdev-add',{'driver':'raw','node-name':'imgsdrive','file':{'driver':'file','filename':str(imgs)}})
@@ -375,6 +392,9 @@ def main():
  plain=subprocess.run(['zstd','-dc'],input=compressed,capture_output=True,check=True).stdout
  with tarfile.open(fileobj=io.BytesIO(plain),mode='r:') as packed:
   for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,name
+ for archived,mode in [('docs.tar','r:'),('docs.tar.gz','r:gz')]:
+  with tarfile.open(fileobj=io.BytesIO(mread(stick,archived)),mode=mode) as packed:
+   for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,(archived,name)
  for name,data in CONTENT.items():assert mread(stick,'docs (extracted)/'+name)==data,name
  assert mlist(stick,'ren')==['pic_01.txt','pic_02.txt','pic_03.txt'],mlist(stick,'ren')
  assert mread(stick,'ren/pic_01.txt')==REN['one.txt']
