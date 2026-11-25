@@ -3,11 +3,13 @@
 Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked against `apps/pdf` and `crates/vellum-edit` at `d48bcc919`.
 
 - **Already present:** native page rendering, zoom and thumbnails, full-document search, outline navigation, highlights and notes, AcroForm text/checkbox filling, incremental PDF updates, and signature field inspection. CI has host tests and QEMU viewer/edit gates.
-- **Search across layout breaks:** Find currently treats extracted line breaks as
-  literal characters, so a phrase typed with a space misses words split across
-  two visible lines. This slice makes whitespace runs match one query space and
-  highlights the exact source character span. Hyphenated word joins and
-  multi-column reading order remain separate gaps.
+- **Search across layout breaks:** Find collapses extracted whitespace runs, so
+  a phrase typed with a space matches adjacent visible lines while its highlight
+  keeps the source span. Find also matches both `international` and
+  `inter-national` when the PDF prints `inter-` then `national` on the next line.
+  Both queries retain that full source span; same-line hyphens remain literal.
+  The fixture, pure search tests, and QEMU gate cover both forms.
+  Multi-column reading order remains separate.
 - **Save safety:** edited PDF saves overwrite the destination directly; thumbnail output can delete an existing destination on a partial write. First slice: stage and sync complete bytes, then replace through Files' rename.
 - **Signing:** Ctrl+Shift+G places an explicitly labelled typed visual signature. Ctrl+Shift+V inspects stored digital signature fields and checks exact covered bytes for the supported P-256/SHA-256 detached CMS shape. Ctrl+Shift+B selects a saved empty field and requires Enter in Vellum plus per-request Y approval in the separate Shibari window; Escape also cancels while waiting for approval. Shibari imports a public DER certificate, accepts a matching private scalar only in its own protection view, and returns bounded DER signatures through Shell; Vellum constructs CMS and verifies content before and after saving. The QEMU gate signs a PDF in the guest and an independent OpenSSL host check validates its saved bytes. Certificate-chain trust, signer identity, other CMS algorithms, DocMDP/FieldMDP permissions, and multiple signatures still need implementation. Vellum refuses an already signed PDF until those permission rules exist.
 - **Signature field placement:** Ctrl+Shift+D places a visible, empty PDF signature widget at the selected region (or a default location). It persists through incremental save and can be signed after reopening. Adding a field to an already signed PDF is refused until DocMDP and FieldMDP permissions can be evaluated.

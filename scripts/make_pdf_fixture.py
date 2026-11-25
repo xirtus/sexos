@@ -22,7 +22,9 @@ def esc(text):
 def content(n):
     lines = [f'Page {n} of {PAGES}', '', 'The quick brown fox jumps over the lazy dog.', f'This is filler text for page number {n}.']
     if n == UNIQUE_PAGE:
-        lines += ['', f'The hidden word is {UNIQUE} and nowhere else.']
+        lines += ['', f'The hidden word is {UNIQUE} and nowhere else.',
+                  'The report describes inter-',
+                  'national travel, beside the literal co-operate.']
     lines += ['', 'Every page repeats the word lantern so search can step through hits.']
     body = ' T*\n'.join(f'({esc(line)}) Tj' for line in lines)
     return f'BT /F1 14 Tf 72 720 Td 20 TL\n{body} ET\n0.2 0.4 0.8 rg 72 100 {40 * n} 20 re f\n'
