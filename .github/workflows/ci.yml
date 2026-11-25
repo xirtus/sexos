@@ -525,11 +525,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: image
     if: needs.image.outputs.full == 'true'
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - uses: ./.github/actions/image
+    - name: Browser test image with a temporary TLS fixture root
+      run: |
+        python3 scripts/program_web_tls_gate.py --make-root "$RUNNER_TEMP/browser-ca"
+        SEXOS_TLS_GATE_ROOT="$(cat "$RUNNER_TEMP/browser-ca/ca.hex")" ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/browser-ca-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/browser-ca-build.log"; exit 1)
     - name: Web page JavaScript (native QuickJS tier)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
@@ -557,6 +561,8 @@ jobs:
       run: python3 scripts/program_web_download_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-download"
     - name: Browser forms (GET, urlencoded and multipart POST)
       run: python3 scripts/program_web_form_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-form"
+    - name: Kaleidoscope HTTPS password fill with Chastity consent and tab cancellation
+      run: python3 scripts/program_web_autofill_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --root-dir "$RUNNER_TEMP/browser-ca" --out "$RUNNER_TEMP/sexos-runtime/web-autofill"
     - name: Kaleidoscope Shields block 12 trackers, Ctrl+Shift+S lets them through
       run: python3 scripts/program_web_shields_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-shields"
     - name: Kaleidoscope installs an MV3 extension; its content script and rules apply
