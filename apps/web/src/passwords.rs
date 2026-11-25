@@ -240,7 +240,7 @@ impl Browser {
                         if self.active != pending.tab || self.doc.get_ref().owner() != pending.owner
                             || !ready(self).is_ok_and(|pair| pair.origin == pending.origin
                                 && pair.username == pending.username && pair.password == pending.password) {
-                            sex_pdx::serial_record!("[web.autofill.changed_after_events]");
+                            web_record!("[web.autofill.changed_after_events]");
                             return;
                         }
                     }

@@ -23,7 +23,8 @@ fn map() -> &'static Mutex<BTreeMap<Vec<u8>, Vec<u8>>> { MAP.get_or_init(|| Mute
 fn step() { let n = STEP.fetch_add(1, Ordering::SeqCst); if n == STOP.load(Ordering::SeqCst) { panic!("power cut"); } }
 pub mod files {
     use super::*;
-    pub fn remove(_: &mut Window, p: &[u8]) -> Result<(), u8> { let r=map().lock().unwrap().remove(p).map(|_|()).ok_or(1); step(); r }
+    pub const NOT_FOUND: u8 = 2;
+    pub fn remove(_: &mut Window, p: &[u8]) -> Result<(), u8> { let r=map().lock().unwrap().remove(p).map(|_|()).ok_or(NOT_FOUND); step(); r }
     pub fn write(_: &mut Window, p: &[u8], b: &[u8]) -> Result<(), u8> { map().lock().unwrap().insert(p.to_vec(), b.to_vec()); step(); Ok(()) }
     pub fn sync(_: &mut Window) -> Result<(), u8> { step(); Ok(()) }
     pub fn size(_: &mut Window, p: &[u8]) -> Result<u64, u8> { let r=map().lock().unwrap().get(p).map(|v|v.len() as u64).ok_or(1); step(); r }
