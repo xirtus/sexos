@@ -171,6 +171,16 @@ impl Browser {
     /// Clear the list, not the person's downloaded files or resumable transfers.
     pub(super) fn clear_download_history(&mut self) {
         if self.url != "about:downloads" { return; }
+        if self.jarbox == super::profile::Jarbox::Private {
+            // A standalone private window never loaded the ordinary profile.
+            // In mixed tabs, keep its ordinary rows visible and untouched.
+            let old = self.downloads.iter().filter(|d| d.private).count();
+            self.downloads.retain(|d| !d.private);
+            self.download_failures.clear();
+            web_record!("[web.download.history.cleared] count={} kept=1 private=1", old);
+            self.open("about:downloads", false);
+            return;
+        }
         let old = self.downloads.len();
         let replaced = state_file::replace(&mut self.window, "Kaleidoscope/downloads.tsv", b"v1\n");
         // The normal recovery copy contains the old list. A deliberate clear
@@ -196,6 +206,12 @@ impl Browser {
         if self.url != "about:downloads" || index >= self.downloads.len() { return; }
         let mut kept = self.downloads.clone();
         let forgotten = kept.remove(index);
+        if self.jarbox == super::profile::Jarbox::Private && !forgotten.private {
+            web_record!("[web.download.history.forget.blocked] path={}", forgotten.path);
+            self.download_status = Some(String::from("Switch to a normal tab to remove saved history."));
+            self.draw();
+            return;
+        }
         // Private rows live only in this process. A private window has not
         // loaded the normal profile, so saving `kept` here would erase it.
         if forgotten.private {
@@ -502,14 +518,23 @@ impl Browser {
     pub(super) fn downloads_page(&mut self) -> String {
         web_record!("[web.download.panel] done={} failed={}", self.downloads.len(), self.download_failures.len());
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
-        let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2><p>Ctrl+Alt+J clears this history; downloaded files and resumable transfers stay.</p>");
+        let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2>");
+        if self.jarbox == super::profile::Jarbox::Private {
+            html.push_str("<p>Ctrl+Alt+J clears private history in this window; normal saved history and downloaded files stay.</p>");
+        } else {
+            html.push_str("<p>Ctrl+Alt+J clears this history; downloaded files and resumable transfers stay.</p>");
+        }
         if self.downloads.is_empty() { html.push_str("<p>No completed downloads in history yet.</p>"); }
         html.push_str("<ul>");
         let mut here = Vec::with_capacity(self.downloads.len());
         for d in self.downloads.iter() { here.push(files::size(&mut self.window, d.path.as_bytes()).is_ok()); }
         for (index, (d, there)) in self.downloads.iter().zip(here).enumerate().rev() {
             let name = esc(d.path.trim_start_matches("Downloads/"));
-            let forget = alloc::format!(" <a href=\"about:downloads?forget={}\">Remove from history</a>", index);
+            let forget = if self.jarbox == super::profile::Jarbox::Private && !d.private {
+                String::new()
+            } else {
+                alloc::format!(" <a href=\"about:downloads?forget={}\">Remove from history</a>", index)
+            };
             // Files' Organizer may have placed it in the person's folders (Documents,
             // Pictures...), outside this program's own: say so rather than link nowhere.
             if there {
