@@ -37,6 +37,43 @@ impl Queue {
         }
         self.push(item)
     }
+    /// Coalesces consecutive queued wheel scrolls for the same window without delaying
+    /// delivery; opposite steps that cancel out drop the redundant entry.
+    pub fn push_scroll(&mut self,item:Item)->bool {
+        if let Input::Scroll(new)=item.input {
+            if self.len>0 {
+                let last=(self.head+self.len-1)%CAPACITY;
+                if let Some(Item{destination,input:Input::Scroll(old)})=self.items[last] {
+                    if destination==item.destination {
+                        let sum=(old.vertical() as i16)+(new.vertical() as i16);
+                        if sum==0 {
+                            unsafe{core::ptr::write_volatile(&mut self.items[last],None)};
+                            self.len-=1;
+                            return true;
+                        }
+                        if (i8::MIN as i16..=i8::MAX as i16).contains(&sum) {
+                            if let Some(combined)=sex_pdx::app_scroll::Scroll::new(sum as i8) {
+                                self.items[last]=Some(Item{destination,input:Input::Scroll(combined)});
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.push(item)
+    }
+    /// Replaces a resize still queued last for the same window so rapid corner drags
+    /// deliver the latest geometry instead of replaying stale intermediate sizes.
+    pub fn push_resize(&mut self,item:Item)->bool {
+        if matches!(item.input,Input::Resize(_)) && self.len>0 {
+            let last=(self.head+self.len-1)%CAPACITY;
+            if let Some(Item{destination,input:Input::Resize(_)}) = self.items[last] {
+                if destination==item.destination { self.items[last]=Some(item); return true; }
+            }
+        }
+        self.push(item)
+    }
     pub fn pop(&mut self){
         if self.len==0{return;}
         unsafe{core::ptr::write_volatile(&mut self.items[self.head],None)};

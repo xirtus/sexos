@@ -17,3 +17,15 @@ pub fn deadline(period_us: u64) -> bool {
     }
     ret == 0
 }
+
+/// Nominates one domain (`domain_id`, or 0 to clear) for interactive scheduler priority.
+/// Mechanism-only hint: only interactive-class domains may set it, and existing streak
+/// limits prevent starvation.
+pub fn set_priority_hint(domain_id: u64) -> bool {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!("syscall", inlateout("rax") 104u64 => ret, in("rdi") 2u64, in("rsi") domain_id,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    ret == 0
+}

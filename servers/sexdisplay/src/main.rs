@@ -218,6 +218,7 @@ static mut FOCUSED_SURFACE_ID: u64 = 0;
 static mut MOTION: sex_pdx::window_motion::Motion<32> = sex_pdx::window_motion::Motion::new();
 /// Animation frames at 60 Hz (pacing.rs).
 static mut PACER: pacing::Pacer = pacing::Pacer::new();
+static mut FRAME_METER: pacing::FrameMeter = pacing::FrameMeter::new();
 /// Draws moving windows at their tweened geometry in this frame's scene.
 fn motion_place(scene: &mut scene::SceneSnapshot) {
     let now = sex_pdx::get_ticks();
@@ -712,9 +713,12 @@ fn fast_content_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,sourc
 /// The ink and selection of `surface_text_fg_at` for one row run.
 fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics){
     if let Some((src,from,to))=program_pixel_row_for(y,x0,x1,surf,metrics){
-        // Straight from the program's own region: one span copy per row.
-        let out=unsafe{core::slice::from_raw_parts_mut(row.add(from),to-from)};
-        for(i,o)in out.iter_mut().enumerate(){*o=unsafe{core::ptr::read_volatile(src.add(i))}&0x00FF_FFFF;}
+        // Straight from the program's own region (regular RAM, Acquire-fenced on flip):
+        // plain slice loop vectorizes instead of per-pixel volatile loads.
+        let count=to-from;
+        let out=unsafe{core::slice::from_raw_parts_mut(row.add(from),count)};
+        let inp=unsafe{core::slice::from_raw_parts(src,count)};
+        for(o,&s)in out.iter_mut().zip(inp.iter()){*o=s&0x00FF_FFFF;}
         return;
     }
     if program_pixel_at_for(0,0,surf,metrics).is_some(){return;}
@@ -757,8 +761,8 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
                 let back=if selected{0xff36577c}else{surf.color};
                 for x in left.max(x0)..(left+advance).min(x1){
                     let alpha=cell[gy*advance*span+half*advance+(x-left)];
-                    if alpha!=0{unsafe{core::ptr::write_volatile(row.add(x),coverage_blend(surf.text_color,back,alpha));}}
-                    else if selected{unsafe{core::ptr::write_volatile(row.add(x),back);}}
+                    if alpha!=0{unsafe{*row.add(x)=coverage_blend(surf.text_color,back,alpha);}}
+                    else if selected{unsafe{*row.add(x)=back;}}
                 }
                 continue;
             }
@@ -768,8 +772,8 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
         for x in left.max(x0)..(left+advance).min(x1){
             let px=(x-left)/scale;
             let ink=px<GLYPH_W&&(bits>>(GLYPH_W-1-px))&1!=0;
-            if ink{unsafe{core::ptr::write_volatile(row.add(x),surf.text_color);}}
-            else if selected{unsafe{core::ptr::write_volatile(row.add(x),0xff36577c);}}
+            if ink{unsafe{*row.add(x)=surf.text_color;}}
+            else if selected{unsafe{*row.add(x)=0xff36577c;}}
         }
     }
 }
@@ -841,7 +845,7 @@ fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
                     c=coverage_blend(ink,c,alpha);
                 }
             }
-            unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
+            unsafe{*row.add(sx+lx)=c;}
         }
     }else{
         // The rim band: the whole row on the top and bottom rims, else the side rims.
@@ -857,7 +861,7 @@ fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         for lx in l0..l1{
             if !band_row&&lx>=c0&&lx<c1{continue;}
             let c=if edge_row||lx<edge||lx>=sw.saturating_sub(edge){outline}else{inset};
-            unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
+            unsafe{*row.add(sx+lx)=c;}
         }
     }
     if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
@@ -2039,11 +2043,13 @@ fn join_pending_text(paint:&mut paint_batch::Dirty,w:usize,h:usize){
 }
 
 /// Program pixel surfaces: Display's read-only view of each row's region, and the size
-/// the row last asked to show (zero is text). Reset when the row presents a new run.
+/// and front pixel offset the row last asked to show (zero size is text). Reset when
+/// the row presents a new run.
 const PROGRAM_ROWS:usize=sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 static mut PIXEL_REGIONS:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_BYTES:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_SIZE:[(usize,usize);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
+static mut PIXEL_OFFSET:[usize;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 /// The program row's picture under this pixel, when the surface shows one.
 fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
     program_pixel_at_for(x,y,surf,chrome_metrics())
@@ -2051,8 +2057,9 @@ fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
 fn program_pixel_at_for(x:usize,y:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics)->Option<Option<u32>>{
     let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
     if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
-    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
-    if w==0||h==0||base==0{return None;}
+    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};let off=unsafe{PIXEL_OFFSET[k]};
+    let cap=unsafe{PIXEL_BYTES[k]} as usize / 4;
+    if w==0||h==0||base==0||off.checked_add(w.saturating_mul(h)).is_none_or(|end|end>cap){return None;}
     let bx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let by=(surf.y.max(0) as usize).saturating_add(top);
@@ -2060,7 +2067,7 @@ fn program_pixel_at_for(x:usize,y:usize,surf:&Surface,metrics:sex_pdx::desktop_s
     let right=(surf.x.max(0) as usize+surf.w as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     if x<bx||y<by||x>=bx+w||y>=by+h||x>=right||y>=bottom{return Some(None);}
-    Some(Some(unsafe{core::ptr::read_volatile((base as *const u32).add((y-by)*w+(x-bx)))}&0x00FF_FFFF))
+    Some(Some(unsafe{*((base as *const u32).add(off+(y-by)*w+(x-bx)))}&0x00FF_FFFF))
 }
 /// The part of row `y` within `x0..x1` that shows the program's picture: where it
 /// starts in the region, and the screen columns it covers. Same bounds as
@@ -2071,8 +2078,9 @@ fn program_pixel_row(y:usize,x0:usize,x1:usize,surf:&Surface)->Option<(*const u3
 fn program_pixel_row_for(y:usize,x0:usize,x1:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics)->Option<(*const u32,usize,usize)>{
     let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
     if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
-    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
-    if w==0||h==0||base==0{return None;}
+    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};let off=unsafe{PIXEL_OFFSET[k]};
+    let cap=unsafe{PIXEL_BYTES[k]} as usize / 4;
+    if w==0||h==0||base==0||off.checked_add(w.saturating_mul(h)).is_none_or(|end|end>cap){return None;}
     let bx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
     let by=(surf.y.max(0) as usize).saturating_add(top);
@@ -2080,7 +2088,7 @@ fn program_pixel_row_for(y:usize,x0:usize,x1:usize,surf:&Surface,metrics:sex_pdx
     let bottom=(surf.y.max(0) as usize+surf.h as usize).saturating_sub(metrics.px(sex_pdx::desktop_style::INSET)as usize).min(by+h);
     let from=x0.max(bx);
     if y<by||y>=bottom||from>=right{return None;}
-    Some((unsafe{(base as *const u32).add((y-by)*w+(from-bx))},from,right))
+    Some((unsafe{(base as *const u32).add(off+(y-by)*w+(from-bx))},from,right))
 }
 /// Read-only views of each app's BOOT text region, resolved once at startup.
 static mut TEXT_REGIONS:[u64;sex_pdx::app_catalog::COUNT]=[0;sex_pdx::app_catalog::COUNT];
@@ -2514,6 +2522,92 @@ fn glass_body(fb:*mut u32,w:usize,h:usize,scene:&scene::SceneSnapshot,plan:Plan)
     }
 }
 
+/// Lightweight toggleable frame-time meter HUD (Super+Shift+F).
+/// Zero cost when disabled; draws a compact pill + 48-frame bar sparkline in the top-right.
+fn draw_frame_meter_hud(fb:*mut u32,w:usize,h:usize,total:usize,scene:&scene::SceneSnapshot){
+    let meter=unsafe{&*core::ptr::addr_of!(FRAME_METER)};
+    if !meter.hud_enabled(){return;}
+    let s=scene.metrics.scale().max(1) as usize;
+    let bar_y=scene.metrics.bar() as usize;
+    let pad=6*s;
+    let pw=220*s;
+    let ph=38*s;
+    if w<pw+pad*2||h<bar_y+ph+pad*2{return;}
+    let ox=w-pw-pad;
+    let oy=bar_y+pad;
+    let bg_col=0x0011_151Cu32;
+    let border_col=0x0034_4154u32;
+    for y in oy..oy+ph{
+        let row_off=y*w;
+        for x in ox..ox+pw{
+            let idx=row_off+x;
+            if idx<total{
+                let edge=y==oy||y+1==oy+ph||x==ox||x+1==ox+pw;
+                unsafe{*fb.add(idx)=if edge{border_col}else{bg_col};}
+            }
+        }
+    }
+    // Format compact ASCII summary: "FT 00ms P95:00 P99:00 S:0"
+    let mut txt=[b' ';36];
+    let mut pos=0usize;
+    let push_bytes=|buf:&mut [u8],p:&mut usize,src:&[u8]|{
+        for &b in src{if *p<buf.len(){buf[*p]=b;*p+=1;}}
+    };
+    let push_u64=|buf:&mut [u8],p:&mut usize,mut v:u64|{
+        let mut tmp=[0u8;20];let mut n=0usize;
+        if v==0{tmp[0]=b'0';n=1;}else{while v>0&&n<tmp.len(){tmp[n]=b'0'+(v%10) as u8;v/=10;n+=1;}}
+        while n>0{n-=1;if *p<buf.len(){buf[*p]=tmp[n];*p+=1;}}
+    };
+    push_bytes(&mut txt,&mut pos,b"FT ");
+    push_u64(&mut txt,&mut pos,meter.last_ms() as u64);
+    push_bytes(&mut txt,&mut pos,b"MS P95:");
+    push_u64(&mut txt,&mut pos,meter.percentile(95) as u64);
+    push_bytes(&mut txt,&mut pos,b" P99:");
+    push_u64(&mut txt,&mut pos,meter.percentile(99) as u64);
+    push_bytes(&mut txt,&mut pos,b" S:");
+    push_u64(&mut txt,&mut pos,meter.slow_frames().min(999));
+    let tx0=ox+6*s;
+    let ty0=oy+5*s;
+    let fg_col=if meter.last_ms()>=20{0x00F3_8BA8}else if meter.last_ms()>=pacing::SLOW_THRESHOLD_MS{0x00F9_E2AF}else{0x00A6_E3A1};
+    for (ci,&ch) in txt[..pos].iter().enumerate(){
+        let glyph=scalar_glyph(ch as u32);
+        let gx=tx0+ci*6*s;
+        if gx+5*s>=ox+pw{break;}
+        for gy in 0..7{
+            let bits=glyph[gy];
+            if bits==0{continue;}
+            for px in 0..5{
+                if (bits>>(4-px))&1!=0{
+                    for sy in 0..s{
+                        for sx in 0..s{
+                            let idx=(ty0+gy*s+sy)*w+(gx+px*s+sx);
+                            if idx<total{unsafe{*fb.add(idx)=fg_col;}}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 48-bar sparkline (0..32 ms mapped to bar height)
+    let mut recent=[0u16;48];
+    let n=meter.recent(&mut recent);
+    let gx0=ox+6*s;
+    let gy_base=oy+ph-5*s;
+    let max_bar=16*s;
+    for i in 0..n{
+        let ms=recent[i];
+        let bh=((ms.min(32) as usize)*max_bar/32).max(s);
+        let col=if ms>=20{0x00F3_8BA8}else if ms>=pacing::SLOW_THRESHOLD_MS{0x00F9_E2AF}else{0x00A6_E3A1};
+        let bx=gx0+i*4*s;
+        for by in (gy_base.saturating_sub(bh))..gy_base{
+            for dx in 0..(3*s){
+                let idx=by*w+bx+dx;
+                if bx+dx<ox+pw-2*s&&idx<total{unsafe{*fb.add(idx)=col;}}
+            }
+        }
+    }
+}
+
 fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,plan:Plan)->bool{
     if !scene.is_valid()||scene.width!=target.width()||scene.height!=target.height()||plan.is_empty(){return false;}
     // Verified no-pixel text work republishes the committed baseline. Do not
@@ -2538,6 +2632,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_window_switcher(fb,w,h,total,scene);
         window_menu::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
+        draw_frame_meter_hud(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
     lock_screen::draw(fb,w,h,total);
@@ -5045,6 +5140,12 @@ pub extern "C" fn _start() -> ! {
                         if msg.arg0 == 0 && decor::clear_fades() { needs_full_redraw = true; }
                         // arg2 bit 0: plain look (square corners, no shadows).
                         if decor::set_effects(msg.arg2 & 1 == 0) { needs_full_redraw = true; }
+                        // arg2 bit 1: toggleable frame-time meter HUD.
+                        let meter = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_METER) };
+                        if meter.set_hud(msg.arg2 & 2 != 0) {
+                            needs_full_redraw = true;
+                            sex_pdx::serial_record!("[display.frame.meter.hud] on={} frames={} p95={} p99={} slow={}", meter.hud_enabled() as u8, meter.total_frames(), meter.percentile(95), meter.percentile(99), meter.slow_frames());
+                        }
                         let dir = msg.arg1 as u8 as i8;
                         if dir != 0 { motion.workspace(dir, unsafe { FB_W } as u32 / 8, sex_pdx::get_ticks()); }
                         sex_pdx::serial_record!("[display.motion] on={} dir={}", motion.enabled() as u8, dir);
@@ -5129,18 +5230,44 @@ pub extern "C" fn _start() -> ! {
                     if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
                         // Any shape the region holds: a full-screen window shows full-screen pixels.
                         let pixels = unsafe { PIXEL_BYTES[k] } as usize / 4;
-                        let w = ((msg.arg1 >> 32) as usize).min(pixels);
-                        let h = if w == 0 { 0 } else { ((msg.arg1 & 0xFFFF_FFFF) as usize).min(pixels / w) };
-                        unsafe { PIXEL_SIZE[k] = (w, h); }
-                        needs_full_redraw = true;
-                        sex_pdx::serial_record!("[display.app.pixels] target={} surface={} w={} h={}", msg.caller_pd, msg.arg0, w, h);
+                        let offset = (msg.arg2 as usize).min(pixels);
+                        let avail = pixels - offset;
+                        let w = ((msg.arg1 >> 32) as usize).min(avail);
+                        let h = if w == 0 { 0 } else { ((msg.arg1 & 0xFFFF_FFFF) as usize).min(avail / w) };
+                        let prev = unsafe { PIXEL_SIZE[k] };
+                        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+                        unsafe {
+                            PIXEL_OFFSET[k] = if w == 0 || h == 0 { 0 } else { offset };
+                            PIXEL_SIZE[k] = (w, h);
+                        }
+                        // Same-size frame flips only damage the program's body rectangle instead of
+                        // forcing a full-screen redraw. Size or text<->pixel transitions stay Full.
+                        let mut damaged = false;
+                        if prev == (w, h) && w > 0 && h > 0 {
+                            let (fw, fh) = unsafe { (FB_W as usize, FB_H as usize) };
+                            let m = chrome_metrics();
+                            if let Some(surf) = unsafe { SURFACES.iter().find(|s| s.active && s.owner_pd == msg.caller_pd && s.surface_id == msg.arg0) } {
+                                let inset = m.px(sex_pdx::desktop_style::INSET) as usize;
+                                let top = if surf.chrome_flags & SURFACE_CHROME_TOP_BAR != 0 { (m.title() as usize) + (m.px(8) as usize) } else { m.px(sex_pdx::desktop_style::TEXT_TOP) as usize };
+                                let bx = (surf.x.max(0) as usize).saturating_add(inset);
+                                let by = (surf.y.max(0) as usize).saturating_add(top);
+                                let bw = (surf.w as usize).saturating_sub(2 * inset).min(w);
+                                let bh = (surf.h as usize).saturating_sub(top + inset).min(h);
+                                if bw > 0 && bh > 0 && bx < fw && by < fh {
+                                    text_damage.add((bx, by, bw, bh), fw, fh);
+                                    damaged = true;
+                                }
+                            }
+                        }
+                        if !damaged { needs_full_redraw = true; }
+                        sex_pdx::serial_record!("[display.app.pixels] target={} surface={} w={} h={} off={}", msg.caller_pd, msg.arg0, w, h, if w == 0 || h == 0 { 0 } else { offset });
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_PRESENT => {
                     // A new run starts with the catalog's name and text until it gives its own.
                     if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program) {
                         set_program_title(msg.arg0, None);
-                        if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) { unsafe { PIXEL_SIZE[k] = (0, 0); } }
+                        if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) { unsafe { PIXEL_SIZE[k] = (0, 0); PIXEL_OFFSET[k] = 0; } }
                     }
                     if lifecycle.request_present(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) {
                         sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request={}", msg.caller_pd, msg.arg0, msg.arg1);
@@ -6037,6 +6164,22 @@ pub extern "C" fn _start() -> ! {
         pending_paint.complete(published.is_some());
         let render_cycles=decor::cycles_now().wrapping_sub(render_start);
         let render_ms=sex_pdx::get_ticks().saturating_sub(render_ms_start);
+        if published.is_some() {
+            let meter = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_METER) };
+            meter.record(render_ms);
+            if meter.total_frames() % 64 == 0 {
+                static mut FRAME_METER_BUDGET: u32 = 32;
+                unsafe {
+                    if FRAME_METER_BUDGET > 0 {
+                        FRAME_METER_BUDGET -= 1;
+                        sex_pdx::serial_record!(
+                            "[display.frame.meter] frames={} last_ms={} p50={} p95={} p99={} max_ms={} slow={}",
+                            meter.total_frames(), meter.last_ms(), meter.percentile(50), meter.percentile(95), meter.percentile(99), meter.max_ms(), meter.slow_frames()
+                        );
+                    }
+                }
+            }
+        }
         // The landing frame counts too; then the next animation starts a fresh grid.
         let landing = !animating && motion_damage.is_some();
         if (animating && paced || landing) && published.is_some() {

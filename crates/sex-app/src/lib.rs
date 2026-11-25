@@ -82,7 +82,13 @@ pub struct Window {
     size: (usize, usize),
     /// Events that arrived while a file request waited for its answer.
     held: [Option<Event>; 16],
-    /// The frame being painted (see [`Window::frame`]).
+    /// Cached writable pixel region `(base, total_pixels)` once mapped.
+    pixel_buf: Option<(*mut u32, usize)>,
+    /// Active front buffer slot (0 or 1) inside the shared pixel region.
+    front_slot: u8,
+    /// Pixel offset handed out by [`Window::frame`] when painting directly into the back half.
+    pending_offset: Option<usize>,
+    /// Fallback private frame when two frames do not fit in the shared region.
     back: alloc::vec::Vec<u32>,
 }
 
@@ -96,17 +102,30 @@ impl Window {
         call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
         call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
         let (w, h) = sex_pdx::pixel_region::area(640, 400);
-        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16], back: alloc::vec::Vec::new() };
+        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16], pixel_buf: None, front_slot: 0, pending_offset: None, back: alloc::vec::Vec::new() };
         window.show(b"");
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
+    }
+    fn pixel_region_cached(&mut self) -> (*mut u32, usize) {
+        if let Some(buf) = self.pixel_buf { return buf; }
+        let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
+        let buf = (base as *mut u32, (bytes / 4) as usize);
+        self.pixel_buf = Some(buf);
+        buf
     }
     /// The window's pixel surface, 0x00RRGGBB, row-major at the width you show. It holds
     /// at least 800 by 600 pixels and enough for the whole screen; what you don't show is
     /// the program's own scratch.
     pub fn pixels(&self) -> &'static mut [u32] {
-        let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
-        unsafe { core::slice::from_raw_parts_mut(base as *mut u32, (bytes / 4) as usize) }
+        let (base, pixels) = match self.pixel_buf {
+            Some(buf) => buf,
+            None => {
+                let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
+                (base as *mut u32, (bytes / 4) as usize)
+            }
+        };
+        unsafe { core::slice::from_raw_parts_mut(base, pixels) }
     }
     /// The width and height of the window's pixel area, as Shell last reported it
     /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
@@ -117,25 +136,49 @@ impl Window {
     pub fn want_keys(&self, flags: u64) -> bool {
         sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
     }
-    /// A private `width` by `height` frame to paint whole, then show with
-    /// [`Window::show_frame`]. Display reads the window's pixels whenever it composites
-    /// (a cursor move, the clock, a neighbour's damage), so a program that clears and
-    /// repaints in [`Window::pixels`] can be caught half drawn; this one never is. It
-    /// keeps the last frame painted, so a program may repaint only what changed.
+    /// A back-buffer `width` by `height` frame to paint whole, then flip with
+    /// [`Window::show_frame`]. Display reads from the front offset whenever it composites
+    /// (a cursor move, the clock, a neighbour's damage), so painting here is never caught
+    /// half drawn. When two frames fit in the pixel region, this returns the back half
+    /// directly so [`Window::show_frame`] flips with zero copy; larger frames fall back
+    /// to a private buffer copied on present.
     pub fn frame(&mut self, width: usize, height: usize) -> &mut [u32] {
-        if self.back.len() < width * height { self.back.resize(width * height, 0); }
-        &mut self.back[..width * height]
+        let need = width.saturating_mul(height);
+        let (base, total) = self.pixel_region_cached();
+        if let Some((off0, off1)) = sex_pdx::pixel_region::double_buffer_offsets(total, width, height) {
+            let back_off = if self.front_slot == 0 { off1 } else { off0 };
+            self.pending_offset = Some(back_off);
+            return unsafe { core::slice::from_raw_parts_mut(base.add(back_off), need) };
+        }
+        self.pending_offset = None;
+        if self.back.len() < need { self.back.resize(need, 0); }
+        &mut self.back[..need]
     }
-    /// Copies the finished [`Window::frame`] into the window and shows it.
+    /// Flips the finished [`Window::frame`] to the front and shows it.
     pub fn show_frame(&mut self, width: usize, height: usize) {
-        let pixels = self.pixels();
-        let n = (width * height).min(pixels.len()).min(self.back.len());
+        if let Some(offset) = self.pending_offset.take() {
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+            self.front_slot ^= 1;
+            self.show_pixels_at(width, height, offset);
+            return;
+        }
+        let (base, total) = self.pixel_region_cached();
+        let pixels = unsafe { core::slice::from_raw_parts_mut(base, total) };
+        let n = width.saturating_mul(height).min(pixels.len()).min(self.back.len());
         pixels[..n].copy_from_slice(&self.back[..n]);
-        self.show_pixels(width, height);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+        self.front_slot = 0;
+        self.show_pixels_at(width, height, 0);
+    }
+    /// Shows `width` by `height` pixels starting at `offset` in the window's pixel region.
+    pub fn show_pixels_at(&mut self, width: usize, height: usize, offset: usize) {
+        call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, offset as u64);
     }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
-        call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
+        self.front_slot = 0;
+        self.pending_offset = None;
+        self.show_pixels_at(width, height, 0);
     }
     /// The name in the window's title bar, up to sixteen characters.
     pub fn title(&mut self, name: &[u8]) {
