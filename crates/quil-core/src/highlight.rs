@@ -45,6 +45,27 @@ impl Lang {
     fn block_comments(self) -> bool { matches!(self, Lang::Rust | Lang::C | Lang::Js | Lang::Go) }
 }
 
+/// End of a complete one-line Rust raw (byte) string, including its delimiters.
+/// Multiline raw strings need a richer lexer state and are left to that work.
+fn rust_raw_string_end(text: &[u8], start: usize) -> Option<usize> {
+    let mut at = start;
+    if text.get(at) == Some(&b'b') { at += 1; }
+    if text.get(at) != Some(&b'r') { return None; }
+    at += 1;
+    let marks = at;
+    while text.get(at) == Some(&b'#') && at - marks < 16 { at += 1; }
+    if text.get(at) != Some(&b'"') { return None; }
+    let hashes = &text[marks..at];
+    at += 1;
+    while at < text.len() {
+        if text[at] == b'"' && text.get(at + 1..at + 1 + hashes.len()) == Some(hashes) {
+            return Some(at + 1 + hashes.len());
+        }
+        at += 1;
+    }
+    None
+}
+
 /// Colours one line. `in_comment` says whether it starts inside a block comment; the
 /// return value says whether the next line does.
 pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usize, Kind)>) -> bool {
@@ -66,6 +87,13 @@ pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usi
             continue;
         }
         let c = text[i];
+        if lang == Lang::Rust {
+            if let Some(end) = rust_raw_string_end(text, i) {
+                push(out, i, end, Kind::String);
+                i = end;
+                continue;
+            }
+        }
         let line_comment = match lang {
             Lang::Python | Lang::Shell | Lang::Toml => c == b'#',
             Lang::Plain => false,
