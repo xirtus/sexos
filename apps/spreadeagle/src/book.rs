@@ -253,6 +253,11 @@ impl Book {
         let name = column_name(col);
         self.run("home.columnWidth", json!({ "cols": format!("{name}:{name}"), "width": width.min(1800) })).map(|_| ())
     }
+    /// Sets one row's height in pixels at 100% (0 hides it).
+    pub fn set_row_height(&mut self, row: u32, height: u32) -> Result<(), String> {
+        let number = row.saturating_add(1);
+        self.run("home.rowHeight", json!({ "rows": format!("{number}:{number}"), "height": height.min(546) })).map(|_| ())
+    }
     /// Gives `range` a number format: "General", "Number", "Currency", "Short Date",
     /// "Time", "Percentage", "Scientific" (GridCraft's names), or a format code.
     pub fn number_format(&mut self, range: Range, format: &str) -> Result<(), String> {
@@ -993,6 +998,22 @@ mod tests {
         assert_eq!(Book::open(&path).unwrap().0.frozen(), Some((1, 1)));
         book.freeze(None).unwrap();
         assert_eq!(book.frozen(), None);
+    }
+
+    #[test]
+    fn row_height_drag_result_undoes_and_survives_xlsx() {
+        let mut book = budget("row-height.xlsx");
+        let original = book.row_height(0);
+        book.set_row_height(0, 72).unwrap();
+        assert_eq!(book.row_height(0), 72);
+        assert_eq!(book.row_height(1), 20);
+        book.undo().unwrap();
+        assert_eq!(book.row_height(0), original);
+        book.redo().unwrap();
+        assert_eq!(book.row_height(0), 72);
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(Book::open(&path).unwrap().0.row_height(0), 72);
     }
 
     #[test]

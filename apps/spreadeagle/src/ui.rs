@@ -78,6 +78,8 @@ pub struct Ui {
     /// A column whose right edge is being dragged: (column, pointer x at the start, width then,
     /// width now).
     resizing: Option<(u32, i32, i32, i32)>,
+    /// A row whose bottom edge is being dragged: (row, pointer y at start, height then, height now).
+    resizing_row: Option<(u32, i32, i32, i32)>,
     /// The Save As, Go To or insert/delete prompt, while it is open.
     ask: Option<Ask>,
     /// Value picker opened from an AutoFilter header button or Ctrl+Shift+O.
@@ -247,7 +249,7 @@ impl Ui {
         Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
-            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
+            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None, resizing_row: None,
             ask: None, filter_menu: None, function_picker: None, help: false,
             import_warnings: Vec::new(), warning_open: false, warning_index: 0, recovered: false, unkept: None,
         }
@@ -1335,6 +1337,13 @@ impl Ui {
                         return;
                     }
                 }
+                // A row header's bottom edge changes that row's height.
+                if (0..ROW_HEAD_W).contains(&x) {
+                    if let Some(&(r, _, rh)) = self.rows.iter().find(|r| (y - (r.1 + r.2)).abs() <= 3) {
+                        self.resizing_row = Some((r, y, rh, rh));
+                        return;
+                    }
+                }
                 if let Some(range) = self.book.filter_range() {
                     let (header, left, _, right) = range.bounds();
                     if let Some(&(_, ry, rh)) = self.rows.iter().find(|r| r.0 == header) {
@@ -1369,6 +1378,7 @@ impl Ui {
             }
             Kind::Move => {
                 if let Some((c, x0, w0, _)) = self.resizing { self.resizing = Some((c, x0, w0, (w0 + x - x0).clamp(8, 1800))); }
+                if let Some((r, y0, h0, _)) = self.resizing_row { self.resizing_row = Some((r, y0, h0, (h0 + y - y0).clamp(8, 546))); }
             }
             Kind::Up { button: 0 } => {
                 if let Some((c, _, w0, w)) = self.resizing.take() {
@@ -1376,6 +1386,13 @@ impl Ui {
                         let done = self.book.set_col_width(c, w as u32);
                         sex_std::record(&format!("[spreadeagle.width] col={} width={}", column_name(c), self.book.col_width(c)));
                         self.command("home.columnWidth", done, format!("Column {} is {w} pixels wide", column_name(c)));
+                    }
+                }
+                if let Some((r, _, h0, h)) = self.resizing_row.take() {
+                    if h != h0 {
+                        let done = self.book.set_row_height(r, h as u32);
+                        sex_std::record(&format!("[spreadeagle.height] row={} height={}", r + 1, self.book.row_height(r)));
+                        self.command("home.rowHeight", done, format!("Row {} is {h} pixels high", r + 1));
                     }
                 }
             }
@@ -1396,6 +1413,7 @@ impl Ui {
         let frozen = self.book.frozen().map_or("none".into(), |(r, c)| format!("{r},{c}"));
         sex_std::record(&format!("[spreadeagle.view] charts={} frozen={frozen}", self.book.charts().len()));
         sex_std::record(&format!("[spreadeagle.columns] A={} B={}", self.book.col_width(0), self.book.col_width(1)));
+        sex_std::record(&format!("[spreadeagle.rows] 1={} 2={}", self.book.row_height(0), self.book.row_height(1)));
         self.record_column();
         loop {
             let now = sex_std::sex_pdx::get_ticks();

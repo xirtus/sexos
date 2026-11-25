@@ -27,6 +27,8 @@ window. Press it again, or Esc, to return to the grid.
 
 The status line also shows common operations. While entering a formula, Enter
 commits it and F2 edits the current cell without replacing its contents.
+Drag the right edge of a column header to change its width, or the bottom edge
+of a row header to change its height. Ctrl+Z undoes either size change.
 
 With AutoFilter on, click a column header's filter button or press Ctrl+Shift+O
 on that column. Use Up and Down to highlight a value, Space to mark several,
