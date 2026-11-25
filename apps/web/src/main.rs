@@ -891,6 +891,11 @@ impl Browser {
     fn open(&mut self, url: &str, remember: bool) {
         self.cancel_autofill();
         self.cancel_password_save();
+        if self.in_frame.is_none() && self.url == "about:downloads" {
+            if let Some(index) = url.strip_prefix("about:downloads?forget=").and_then(|s| s.parse::<usize>().ok()) {
+                return self.forget_download(index);
+            }
+        }
         // "Continue to the site" on the HTTPS-only page: this host may use plain HTTP
         // for the rest of the run.
         if let Some(target) = url.strip_prefix("about:http?url=") {

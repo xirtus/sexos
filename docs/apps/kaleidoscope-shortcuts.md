@@ -28,6 +28,9 @@ Ctrl+Alt+C clears only that site's cookies and Ctrl+Alt+S clears only its local
 storage in the current container; the full clear also removes saved code.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
+Each completed row also has **Remove from history**, which leaves its saved file
+in Downloads and survives a browser restart. Removing a private row affects only
+the current window and leaves the normal saved history alone.
 Ctrl+Alt+J clears the panel's saved history and failed-transfer list. It keeps
 downloaded files and resumable transfers.
 Ctrl+Shift+J pauses the live transfer at its current staged file offset and

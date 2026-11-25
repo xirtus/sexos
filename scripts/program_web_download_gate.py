@@ -92,7 +92,7 @@ threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 from quil_autosave_gate import boot
-KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
+KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','=':'equal'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -188,6 +188,49 @@ def main():
   g['wait'](r'\[web.download.panel\] done=5 failed=0',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-history-reopened.ppm')})
   assert (a.out/'browser-download-history-reopened.ppm').stat().st_size>10000
+  # Remove only the newest row from the panel. Its saved file must stay in Downloads.
+  s=len(t());q.key('slash');time.sleep(.3);keys('about:downloads?forget=4');q.key('ret')
+  g['wait'](r'\[web.download.history.forgot\] path=Downloads/pause.bin kept=1',s,120)
+  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-item-forgotten.ppm')})
+  assert (a.out/'browser-download-item-forgotten.ppm').stat().st_size>10000
+  s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  g['focus'](153);time.sleep(.3);s=len(t());keys('ls Downloads');q.key('ret')
+  assert 'pause.bin' in g['wait'](r'\[spindle.fs.line\] [^\n]*pause\.bin[^\n]*',s,90)[0]
+  # Reopen to prove the removed row does not return from the recovery copy.
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.history.loaded\] count=4',s,300)
+  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
+  # A private tab shares the panel but must never write its secret row to disk.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'p'}],'hold-time':80})
+  g['wait'](r'\[web.tab.opened\] index=1 count=2 box=private',s,120)
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/small.zip');q.key('ret')
+  g['wait'](r'\[web.download.done\] path=Downloads/small \(2\)\.zip bytes=9 ',s,300)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.panel\] done=5 failed=0',s,120)
+  s=len(t());q.key('slash');time.sleep(.3);keys('about:downloads?forget=4');q.key('ret')
+  g['wait'](r'\[web.download.history.forgot\] path=Downloads/small \(2\)\.zip kept=1 private=1',s,120)
+  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'w'}],'hold-time':80})
+  g['wait'](r'\[web.tab.closed\] index=1 count=1 shown=0',s,120)
+  s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  # A standalone private window has no loaded public rows. Forgetting there
+  # must leave the ordinary profile's four saved rows intact after restart.
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope --private about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.panel\] done=0 failed=0',s,300)
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/small.zip');q.key('ret')
+  g['wait'](r'\[web.download.done\] path=Downloads/small \(3\)\.zip bytes=9 ',s,300)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.panel\] done=1 failed=0',s,120)
+  s=len(t());q.key('slash');time.sleep(.3);keys('about:downloads?forget=0');q.key('ret')
+  g['wait'](r'\[web.download.history.forgot\] path=Downloads/small \(3\)\.zip kept=1 private=1',s,120)
+  g['wait'](r'\[web.download.panel\] done=0 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-private-forgotten.ppm')})
+  assert (a.out/'browser-download-private-forgotten.ppm').stat().st_size>10000
+  s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.history.loaded\] count=4',s,300)
+  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
   # A validated hidden part survives this browser process and resumes by Range.
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/resume.bin');q.key('ret')
   g['wait'](r'\[web.download.resume.kept\] path=Downloads/resume.bin bytes=65536\n',s,300)
