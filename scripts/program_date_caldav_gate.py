@@ -114,6 +114,28 @@ def main():
   s0=len(t());target,task,sid,s=start('')
   g['wait'](r'\[calendar.loaded\] events=5\n',s0,60)
   s=len(t());keys('s');g['wait'](r'\[date.sync\] calendar=Home unchanged=1 ',s,120)
+  # A local invitation reply races with a newer server version. Date must keep
+  # the losing local copy and show both versions in its read-only review view.
+  conflict_day=today+datetime.timedelta(days=3)
+  conflict_start=f'{conflict_day:%Y%m%d}T080000Z'
+  conflict_end=f'{conflict_day:%Y%m%d}T090000Z'
+  attendee='ATTENDEE;CN=Alice;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:alice@example.org\r\n'
+  dav.put('conflict.ics',ics('conflict@fixture',conflict_start,conflict_end,'Local invitation',attendee))
+  s=len(t());keys('s')
+  g['wait'](r'\[date.sync\] calendar=Home .*pulled=1 .*conflicts=0 failed=0\n',s,120)
+  for _ in range(3):q.key('right');time.sleep(.15)
+  s=len(t());q.key('ret')
+  g['wait'](rf'\[calendar.day\] date={conflict_day} events=\d+\n',s,30)
+  press('a',r'\[date.invite.answered\] uid=conflict@fixture partstat=ACCEPTED reply=\S+ bytes=\d+\n')
+  q.key('esc');time.sleep(.3)
+  dav.put('conflict.ics',ics('conflict@fixture',conflict_start,conflict_end,'Server revised',attendee))
+  s=len(t());keys('s')
+  g['wait'](r'\[date.sync\] calendar=Home .*conflicts=1 failed=0\n',s,120)
+  g['wait'](r'\[date.sync.done\] events=\d+ pulled=\d+ pushed=\d+ conflicts=1\n',s,60)
+  press('v',r'\[date.conflict.review\] item=1 total=1 local=1 server=1\n')
+  shot('date-conflict-review')
+  press('v',r'\[date.conflict.review\] item=1 total=1 local=1 server=1\n')
+  q.key('esc');time.sleep(.3)
   close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'requests':len(dav.requests),'today':str(today)})

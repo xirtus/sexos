@@ -12,7 +12,9 @@ Remaining gaps:
   when its account service is ready.
 - Scheduling and invitation replies need full interoperability testing with
   several CalDAV providers and mail integration.
-- Offline edits need a clearer conflict review interface.
+- Offline CalDAV conflicts retain local copies in Date's Conflicts calendar;
+  `V` now compares each retained copy with the current server event. Resolution
+  still requires editing the calendar event and removing the reviewed note.
 - The in-app `?` reference and `docs/DATE_SHORTCUTS.md` now cover Date's
   calendar, clock, invitation, sync and export keys. Wider accessibility
   review, including localized key names, remains.
