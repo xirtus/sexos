@@ -390,6 +390,13 @@ def main():
   g['wait'](r'\[assuit\.link\.insert\]',s,120)
   time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-inserted.ppm')})
   assert (a.out/'assuit-hyperlink-inserted.ppm').stat().st_size>10000
+  linked_page=(a.out/'assuit-hyperlink-inserted.ppm').read_bytes()
+  press('ctrl','shift','left')
+  s=len(t());press('ctrl','alt','k')
+  g['wait'](r'\[assuit\.link\.remove\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-removed.ppm')})
+  removed_page=(a.out/'assuit-hyperlink-removed.ppm').read_bytes()
+  assert paper_pixels(removed_page)!=paper_pixels(linked_page),'Removing a link did not repaint selected text'
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   press('ctrl','home')
   s=len(t());press('ctrl','alt','t')

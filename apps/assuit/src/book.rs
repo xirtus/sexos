@@ -153,6 +153,22 @@ impl Book {
         Ok(())
     }
 
+    /// Remove a link from selected text, leaving the text in place. A collapsed
+    /// caret cannot identify a multi-word link safely, so require a selection.
+    pub fn remove_hyperlink(&mut self) -> Result<(), String> {
+        if self.session.sel.is_collapsed() { return Err("Select linked text to remove its link".into()); }
+        let (a, b) = self.session.sel.ordered();
+        let linked = self.session.doc.paths_between(&a, &b).into_iter().any(|path| {
+            let Some(para) = self.session.doc.para(a.story, &path) else { return false };
+            let from = if path == a.path { a.off } else { 0 };
+            let to = if path == b.path { b.off } else { para.len() };
+            para.run_ranges().any(|(range, props)| range.end > from && range.start < to && props.link.is_some())
+        });
+        if !linked { return Err("The selected text has no link".into()); }
+        self.run("insert.removeLink", json!({}))?;
+        Ok(())
+    }
+
     fn has_table_of_contents(&self) -> bool {
         let is_toc = |instr: &str| instr.split_whitespace().next() == Some("TOC") && !instr.contains("\\c");
         self.session.doc.body.iter().filter_map(|block| block.as_para())
@@ -1396,6 +1412,34 @@ mod tests {
             assert!(links(&reopened).contains(&"https://example.org".to_string()), "{ext} lost web link");
             assert!(links(&reopened).contains(&"mailto:help@example.org".to_string()), "{ext} lost mail link");
             assert!(reopened.text().contains("Contact"), "{ext} lost display label");
+        }
+    }
+
+    #[test]
+    fn selected_hyperlink_removal_keeps_text_and_round_trips() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("remove-link.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Visit Assuit").unwrap();
+            assert!(book.remove_hyperlink().is_err(), "a caret is not a link selection");
+            book.key(&Chord { name: "Home", ctrl: false, shift: true });
+            assert!(book.remove_hyperlink().is_err(), "plain selected text has no link");
+            book.insert_hyperlink("https://example.org").unwrap();
+            assert!(book.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .any(|r| r.props.link.as_deref() == Some("https://example.org")));
+            book.remove_hyperlink().unwrap();
+            assert_eq!(book.text(), "Visit Assuit");
+            assert!(book.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .all(|r| r.props.link.is_none()));
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert!(book.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .any(|r| r.props.link.is_some()), "one undo restores the link");
+            book.key(&Chord { name: "Y", ctrl: true, shift: false });
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert_eq!(reopened.text(), "Visit Assuit");
+            assert!(reopened.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .all(|r| r.props.link.is_none()), "{ext} restored a removed link");
         }
     }
 

@@ -149,6 +149,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
     ("Ctrl+K", "Link selected text or insert a labeled link"),
+    ("Ctrl+Alt+K", "Remove a link from selected text"),
     ("Ctrl+Alt+T", "Insert, refresh or remove a table of contents"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
@@ -961,6 +962,17 @@ impl Ui {
                 (code::S, _) if key.alt => { self.ask = Some(Ask::Spacing(String::new())); return; }
                 (code::I, _) if key.alt && !key.shift => { self.ask = Some(Ask::Indents(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
+                (code::K, _) if key.alt => {
+                    match self.book.remove_hyperlink() {
+                        Ok(()) => {
+                            self.invalidate();
+                            sex_std::record("[assuit.link.remove]");
+                            self.message = "Removed link from selected text".into();
+                        }
+                        Err(e) => self.message = e,
+                    }
+                    return;
+                }
                 (code::K, _) if !key.alt => { self.ask = Some(Ask::Link(String::new())); return; }
                 (code::T, _) if key.alt && !key.shift => { self.ask = Some(Ask::Contents(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
