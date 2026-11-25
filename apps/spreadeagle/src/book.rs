@@ -543,6 +543,14 @@ impl Book {
             if !switched { return Err("This chart has no selectable source range".into()); }
             return Ok("Chart series switched between rows and columns".into());
         }
+        if let Some(range) = input.strip_prefix("data ") {
+            let range = range.trim();
+            if range.is_empty() || range.chars().count() > 120 {
+                return Err("Enter a chart data range such as A1:B4".into());
+            }
+            self.run("chart.selectData", json!({ "chart": id, "range": range }))?;
+            return Ok(format!("Chart data: {range}"));
+        }
         if let Some(title) = input.strip_prefix("title ") {
             if title.is_empty() || title.chars().count() > 120 { return Err("Enter title followed by 1–120 characters".into()); }
             self.run("chart.set", json!({ "chart": id, "title": title }))?;
@@ -609,7 +617,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter switch, type, title, legend, table, hole, angle, axes, labels or gridlines".into())
+        Err("Enter data A1:B4, switch, type, title, legend, table, hole, angle, axes or labels".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -1334,6 +1342,36 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(state(&Book::open(&path).unwrap().0).1, 3);
+    }
+
+    #[test]
+    fn chart_data_range_expands_series_and_round_trips() {
+        let mut book = Book::blank(&temp("chart-data.xlsx"));
+        book.set(0, 0, "Month").unwrap();
+        book.set(0, 1, "Sales").unwrap();
+        for (row, month, sales) in [(1, "Jan", "10"), (2, "Feb", "20"), (3, "Mar", "30")] {
+            book.set(row, 0, month).unwrap();
+            book.set(row, 1, sales).unwrap();
+        }
+        book.add_chart(Range { r0: 0, c0: 0, r1: 2, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        let values = |book: &Book| book.session.doc().unwrap().wb.active().unwrap().charts[0].series[0].values.clone();
+        assert!(values(&book).contains("$B$2:$B$3"));
+        let before = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        for bad in ["data ", "data nowhere", "data A1:XFD1048576"] {
+            assert!(book.edit_chart(id, bad).is_err(), "{bad}");
+        }
+        book.edit_chart(id, "data A1:B4").unwrap();
+        assert!(values(&book).contains("$B$2:$B$4"));
+        let after = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(before, after);
+        book.undo().unwrap();
+        assert!(values(&book).contains("$B$2:$B$3"));
+        book.redo().unwrap();
+        assert!(values(&book).contains("$B$2:$B$4"));
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert!(values(&Book::open(&path).unwrap().0).contains("$B$2:$B$4"));
     }
 
     #[test]
