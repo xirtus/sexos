@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU32, AtomicPtr, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicPtr, AtomicBool, Ordering};
 use x86_64::registers::model_specific::GsBase;
 use x86_64::VirtAddr;
 
@@ -14,14 +14,33 @@ pub struct CoreLocal {
     pub core_id: u32,
     pub kernel_stack: u64,
     pub user_stack: u64,
-    /// Was the unused per-core user page on key 15 (audit S13); kept so gs offsets stay put.
-    pub _reserved: u64,
+    /// Pointer to this CoreLocal struct (gs:[32]) so `CoreLocal::get()` is one
+    /// load instead of an `RDMSR IA32_GS_BASE` on every syscall and switch.
+    pub self_ptr: *const CoreLocal,
+    /// Last IA32_FS_BASE written on this core (gs:[40]); `switch_to` skips WRMSR when unchanged.
+    pub last_fs_base: AtomicU64,
+    /// Last IA32_TSC_AUX written on this core (gs:[48]); `switch_to` skips WRMSR when unchanged.
+    pub last_gate_aux: AtomicU64,
+    /// Active protection view index on this core (`u32::MAX` before first `views::enter`).
+    pub active_view: AtomicU32,
+    pub _pad_iret: u32,
+    /// Per-core last IRET frame debug snapshot (gs:[64..112]: rsp, rip, cs, rflags, user_rsp, ss),
+    /// replacing global statics to eliminate SMP cache-line bouncing on every switch.
+    pub last_iret: [u64; 6],
     pub pdx_ring: crate::ipc_ring::SpscRing<crate::ipc::messages::Message>,
     /// This core's own TSS, or null for the boot core's static one.
     pub tss: *mut x86_64::structures::tss::TaskStateSegment,
     /// This core's own stack, for when no task owns the core.
     pub idle_stack: u64,
 }
+
+const _: () = assert!(core::mem::offset_of!(CoreLocal, kernel_stack) == 16);
+const _: () = assert!(core::mem::offset_of!(CoreLocal, user_stack) == 24);
+const _: () = assert!(core::mem::offset_of!(CoreLocal, self_ptr) == 32);
+const _: () = assert!(core::mem::offset_of!(CoreLocal, last_fs_base) == 40);
+const _: () = assert!(core::mem::offset_of!(CoreLocal, last_gate_aux) == 48);
+const _: () = assert!(core::mem::offset_of!(CoreLocal, active_view) == 56);
+const _: () = assert!(core::mem::offset_of!(CoreLocal, last_iret) == 64);
 
 impl CoreLocal {
     pub unsafe fn init(core_id: u32) { Self::init_with_tss(core_id, core::ptr::null_mut()) }
@@ -35,7 +54,12 @@ impl CoreLocal {
             core_id,
             kernel_stack: 0,
             user_stack: 0,
-            _reserved: 0,
+            self_ptr: core::ptr::null(),
+            last_fs_base: AtomicU64::new(0),
+            last_gate_aux: AtomicU64::new(0),
+            active_view: AtomicU32::new(u32::MAX),
+            _pad_iret: 0,
+            last_iret: [0; 6],
             pdx_ring: crate::ipc_ring::SpscRing::new(),
             tss,
             idle_stack: 0,
@@ -49,6 +73,7 @@ impl CoreLocal {
         core::mem::forget(stack); // Leak stack for simplicity
         
         let ptr = alloc::boxed::Box::into_raw(core_local);
+        (*ptr).self_ptr = ptr;
         GsBase::write(VirtAddr::from_ptr(ptr));
         x86_64::registers::model_specific::KernelGsBase::write(VirtAddr::from_ptr(ptr));
 
@@ -66,9 +91,12 @@ impl CoreLocal {
         INITIALIZED.store(true, Ordering::Release);
     }
 
+    #[inline(always)]
     pub fn get() -> &'static CoreLocal {
+        let ptr: *const CoreLocal;
         unsafe {
-            &*(GsBase::read().as_ptr() as *const CoreLocal)
+            core::arch::asm!("mov {}, gs:[32]", out(reg) ptr, options(nostack, pure, readonly, preserves_flags));
+            &*ptr
         }
     }
 
@@ -78,9 +106,12 @@ impl CoreLocal {
         if base == 0 { None } else { Some(unsafe { &*(base as *const CoreLocal) }) }
     }
 
+    #[inline(always)]
     pub fn get_mut() -> &'static mut CoreLocal {
+        let ptr: *mut CoreLocal;
         unsafe {
-            &mut *(GsBase::read().as_u64() as *mut CoreLocal)
+            core::arch::asm!("mov {}, gs:[32]", out(reg) ptr, options(nostack, pure, readonly, preserves_flags));
+            &mut *ptr
         }
     }
 

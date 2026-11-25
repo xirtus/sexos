@@ -175,6 +175,7 @@ pub const E_BUSY: u64 = 0xFFFF_FFFF_FFFF_FFF6;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Received { pub badge: u64, pub words: [u64; 4] }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
 fn raw(nr: u64, op: u64, slot: u32, w: [u64; 4]) -> (u64, Received) {
     let (status, badge, a, b, c, d): (u64, u64, u64, u64, u64, u64);
@@ -193,6 +194,12 @@ fn raw(nr: u64, op: u64, slot: u32, w: [u64; 4]) -> (u64, Received) {
         );
     }
     (status, Received { badge, words: [a, b, c, d] })
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+fn raw(_nr: u64, _op: u64, _slot: u32, _w: [u64; 4]) -> (u64, Received) {
+    unreachable!("x86_64 syscall invoked on non-x86_64 host")
 }
 
 /// One endpoint operation; a spurious wake is retried with OP_WAIT, so callers only

@@ -170,10 +170,15 @@ pub fn resync() {
 pub fn enter(view: usize) {
     let root = ROOT[view].load(Ordering::Acquire);
     if root == 0 { return; }
+    let core_local = crate::core_local::CoreLocal::get();
+    if core_local.active_view.load(Ordering::Relaxed) == view as u32 { return; }
     x86_64::instructions::interrupts::without_interrupts(|| {
         let now = cr3();
         let pcid = PCID.load(Ordering::Relaxed);
-        if now == rules::cr3(root, view, pcid, true) { return; }
+        if now == rules::cr3(root, view, pcid, true) {
+            core_local.active_view.store(view as u32, Ordering::Relaxed);
+            return;
+        }
         let core = crate::apic::local_id() as usize % CORES;
         if pcid && !tagged() {
             // Tags start now; this core's PCID 0 entries are the canonical tables'.
@@ -184,6 +189,7 @@ pub fn enter(view: usize) {
         }
         let stale = STALE[core].fetch_and(!(1 << view), Ordering::AcqRel) & (1 << view) != 0;
         unsafe { set_cr3(rules::cr3(root, view, pcid, stale)); }
+        core_local.active_view.store(view as u32, Ordering::Relaxed);
         if ENTERED[core].fetch_or(1 << view, Ordering::Relaxed) & (1 << view) == 0 {
             crate::serial_println!("[views.first] view={} core={}", view, core);
         }

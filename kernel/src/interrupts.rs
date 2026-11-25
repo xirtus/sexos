@@ -162,25 +162,21 @@ pub unsafe extern "C" fn syscall_entry() {
         "push r8",          // Save Arg 4 (r8)
         "push r9",          // Save Arg 5 (r9)
 
-        // 2. Read and Save User PKRU (or synthetic 0 when PKU unsupported)
+        // 2. Read and Save User PKRU, then Enter God Mode (single PKU_ENABLED check)
         "cmp byte ptr [rip + {pku_enabled}], 0",
         "je 90f",
         "xor ecx, ecx",
         "rdpkru",
+        "mov r10, rax",     // r10 is already saved above; stash user PKRU across wrpkru
+        "xor eax, eax",
+        "xor edx, edx",
+        "wrpkru",
+        "mov rax, r10",
         "jmp 91f",
         "90:",
         "xor eax, eax",
         "91:",
         "push rax",         // Save PKRU mask to stack
-
-        // 4. Enter God Mode
-        "cmp byte ptr [rip + {pku_enabled}], 0",
-        "je 92f",
-        "xor eax, eax",
-        "xor ecx, ecx",
-        "xor edx, edx",
-        "wrpkru",
-        "92:",
 
         // 5. Save Callee-Saved Registers
         "push rbp", "push rbx", "push r12", "push r13", "push r14", "push r15",
@@ -860,12 +856,9 @@ pub extern "C" fn general_protection_fault_handler(
     let gdtr_base = unsafe { core::ptr::addr_of!(gdtr.base).read_unaligned() };
     let gdtr_limit = unsafe { core::ptr::addr_of!(gdtr.limit).read_unaligned() };
 
-    let actual_rsp = unsafe { crate::scheduler::ACTUAL_IRET_RSP };
-    let q0 = unsafe { crate::scheduler::ACTUAL_IRET_Q0_RIP };
-    let q1 = unsafe { crate::scheduler::ACTUAL_IRET_Q1_CS };
-    let q2 = unsafe { crate::scheduler::ACTUAL_IRET_Q2_RFLAGS };
-    let q3 = unsafe { crate::scheduler::ACTUAL_IRET_Q3_RSP };
-    let q4 = unsafe { crate::scheduler::ACTUAL_IRET_Q4_SS };
+    let [actual_rsp, q0, q1, q2, q3, q4] = crate::core_local::CoreLocal::try_get()
+        .map(|c| c.last_iret)
+        .unwrap_or([0; 6]);
 
     serial_println!(
         "iret.actual rsp={:#x} q0.rip={:#x} q1.cs={:#x} q2.rflags={:#x} q3.rsp={:#x} q4.ss={:#x}",
