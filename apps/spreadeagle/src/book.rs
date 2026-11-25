@@ -5,6 +5,7 @@
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use serde_json::{Value as Json, json};
+use std::io::Write;
 
 /// How a cell reads in the grid.
 #[derive(Clone, Debug, PartialEq)]
@@ -376,7 +377,7 @@ impl Book {
     pub fn export_pdf(&mut self) -> Result<(String, usize), String> {
         let path = self.beside("pdf");
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+        replace_file(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
         Ok((path, bytes.len()))
     }
 
@@ -393,7 +394,7 @@ impl Book {
         let copy = [".pdf", ".html", ".htm", ".json"].iter().any(|e| lower.ends_with(e))
             || ([".csv", ".tsv"].iter().any(|e| lower.ends_with(e)) && self.sheets().len() > 1);
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        replace_file(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
         if !copy {
             let old = std::mem::replace(&mut self.path, path.clone());
             let _ = std::fs::remove_file(recovery_path(&old));
@@ -411,7 +412,7 @@ impl Book {
         let d = self.session.doc().map_err(|e| e.to_string())?;
         let path = recovery_path(&self.path);
         let bytes = gridcraft_engine::io::save_bytes_as(&d.wb, &path, gridcraft_engine::io::FileKind::Xlsx).map_err(|e| e.to_string())?;
-        std::fs::write(&path, bytes).map_err(|e| format!("Could not keep the changes in {path}: {e}"))
+        replace_file(&path, &bytes).map_err(|e| format!("Could not keep the changes in {path}: {e}"))
     }
 
     /// Opens `path` with the unsaved changes kept from last time, if there are any: the
@@ -463,12 +464,11 @@ impl Book {
         else { self.run("home.deleteColumns", json!({ "cols": format!("{}:{}", column_name(l), column_name(r)) })) }.map(|_| ())
     }
 
-    /// Writes the workbook to its file (see [`Book::save_path`]). std::fs::write, not the
-    /// engine's write-then-rename, so a save works on every SexOS volume. Returns the size.
+    /// Writes the workbook to its file (see [`Book::save_path`]). Returns the size.
     pub fn save(&mut self) -> Result<usize, String> {
         let path = self.save_path();
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        replace_file(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
         self.forget_recovery();
         self.path = path.clone();
         if let Ok(d) = self.session.doc_mut() {
@@ -485,6 +485,50 @@ pub const LAST_COL: u32 = 16_383;
 
 /// Where unsaved changes to `path` are kept: `report.ods` -> `report.ods.recovered.xlsx`.
 pub fn recovery_path(path: &str) -> String { format!("{path}.recovered.xlsx") }
+
+/// Write a complete file beside the destination before Files replaces its name.
+fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut staged = None;
+    for _ in 0..16 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!("{path}.spreadeagle-{n}.tmp");
+        match OpenOptions::new().write(true).create_new(true).open(&name) {
+            Ok(file) => { staged = Some((name, file)); break; }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    let (name, mut file) = staged.ok_or_else(|| Error::new(ErrorKind::AlreadyExists, "no free Spreadeagle staging name"))?;
+    let write_result = (|| {
+        file.write_all(bytes)?;
+        file.flush()?;
+        sync_staged(&file)
+    })();
+    drop(file);
+    let result = write_result.and_then(|()| rename_staged(&name, path));
+    if result.is_err() { let _ = std::fs::remove_file(&name); }
+    result
+}
+
+#[cfg(target_os = "hermit")]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> {
+    use sex_std::fs::FileExt;
+    file.fsync()
+}
+
+#[cfg(not(target_os = "hermit"))]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> { file.sync_all() }
+
+#[cfg(target_os = "hermit")]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { sex_std::fs::rename(from, to) }
+
+#[cfg(not(target_os = "hermit"))]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 /// `A`, `B`, … `Z`, `AA`, … for column `col` counted from 0.
 pub fn column_name(col: u32) -> String {
@@ -778,6 +822,18 @@ mod tests {
         back.save().unwrap();
         assert!(Book::open_recovered(&path).is_none(), "saving forgets the kept copy");
         assert_eq!(Book::open(&path).unwrap().0.shown(1, 1).text, "999");
+    }
+
+    #[test]
+    fn replacement_keeps_a_previous_workbook_until_complete() {
+        let path = temp("replacement.xlsx");
+        std::fs::write(&path, b"previous workbook").unwrap();
+        let stale = format!("{path}.spreadeagle-0.tmp");
+        std::fs::write(&stale, b"stale staging data").unwrap();
+        replace_file(&path, b"new complete workbook").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new complete workbook");
+        assert_eq!(std::fs::read(&stale).unwrap(), b"stale staging data");
+        std::fs::remove_file(stale).unwrap();
     }
 
     #[test]
