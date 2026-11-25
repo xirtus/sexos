@@ -312,8 +312,10 @@ impl Book {
         let para = self.session.doc.para_at(&at)?;
         let runs = para.run_ranges().filter_map(|(range, props)|
             props.link.as_ref().map(|link| (range, link.clone()))).collect::<Vec<_>>();
-        let i = runs.iter().position(|(range, _)| range.start < at.off && at.off <= range.end)
-            .or_else(|| runs.iter().position(|(range, _)| range.start <= at.off && at.off < range.end))?;
+        // At the join between two links, the caret belongs to the link on its
+        // right. Still accept the end of a link when no link starts there.
+        let i = runs.iter().position(|(range, _)| range.start <= at.off && at.off < range.end)
+            .or_else(|| runs.iter().position(|(range, _)| range.start < at.off && at.off <= range.end))?;
         let url = runs[i].1.clone();
         let mut first = i;
         while first > 0 && runs[first - 1].1 == url && runs[first - 1].0.end == runs[first].0.start { first -= 1; }
@@ -1884,6 +1886,32 @@ mod tests {
             assert!(reopened.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
                 .all(|r| r.props.link.is_none()));
         }
+    }
+
+    #[test]
+    fn caret_at_adjacent_link_boundary_uses_right_hand_link() {
+        let mut book = Book::blank("adjacent-links.docx");
+        book.insert_hyperlink("https://left.example A").unwrap();
+        book.session.sel = Selection::caret(Pos::body(0, 1));
+        book.insert_hyperlink("https://right.example B").unwrap();
+        assert_eq!(book.text(), "AB");
+
+        book.session.sel = Selection::caret(Pos::body(0, 1));
+        book.remove_hyperlink().unwrap();
+        let links = book.session.doc.body.iter().filter_map(|b| b.as_para())
+            .flat_map(|p| &p.runs).filter_map(|r| r.props.link.as_deref()).collect::<Vec<_>>();
+        assert_eq!(links, ["https://left.example"]);
+
+        book.key(&Chord { name: "Z", ctrl: true, shift: false });
+        book.session.sel = Selection::caret(Pos::body(0, 1));
+        assert_eq!(book.select_hyperlink_at_caret().as_deref(), Some("https://right.example"));
+        let (from, to) = book.session.sel.ordered();
+        assert_eq!((from.off, to.off), (1, 2));
+        book.insert_hyperlink("https://new.example C").unwrap();
+        assert_eq!(book.text(), "AC");
+        let links = book.session.doc.body.iter().filter_map(|b| b.as_para())
+            .flat_map(|p| &p.runs).filter_map(|r| r.props.link.as_deref()).collect::<Vec<_>>();
+        assert_eq!(links, ["https://left.example", "https://new.example"]);
     }
 
     #[test]

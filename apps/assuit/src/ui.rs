@@ -1075,7 +1075,7 @@ impl Ui {
                         Ok(()) => {
                             self.invalidate();
                             sex_std::record("[assuit.link.remove]");
-                            self.message = "Removed link from selected text".into();
+                            self.message = "Removed link while keeping the text".into();
                         }
                         Err(e) => self.message = e,
                     }
