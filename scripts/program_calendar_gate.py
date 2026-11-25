@@ -155,8 +155,8 @@ def main():
   g['wait'](rf'\[calendar.event\] date={today} when=10:20-11:20 title=power cut\n',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-after-powercut.ppm')})
   close(target,task)
-  # A clock alarm becomes due while Date has no window. The durable cursor
-  # makes the next run check that closed interval and ring through Bell.
+  # A clock alarm becomes due while Date has no window. The hidden Date worker
+  # must ring Bell before another visible Date run starts.
   target,task,sid,_,s=start('')
   g['wait'](r'\[date.notice.cursor.loaded\] minute=\d+ now=\d+ catchup=[01]',s,60)
   q.key('c');time.sleep(.3)
@@ -165,11 +165,17 @@ def main():
   label='after close'
   s=len(t());q.key('n');time.sleep(.3);keys(due.strftime('%H:%M')+' '+label);q.key('ret')
   g['wait'](rf'\[date.alarm.added\] time={due:%H:%M} label={label}',s,60)
+  s=len(t())
   close(target,task)
+  g['wait'](r'\[date.notice.worker.started\]',s,60)
   time.sleep(max(0,(due-datetime.datetime.now(datetime.timezone.utc)).total_seconds())+3)
+  g['wait'](r'\[date.alarm.fired\] kind=alarm title=after close notified=1',s,15)
+  q.cmd('screendump',{'filename':str(a.out/'date-background-alarm.ppm')})
+  assert (a.out/'date-background-alarm.ppm').read_bytes().startswith(b'P6\n')
+  s=len(t())
   target,task,sid,_,s=start('')
-  g['wait'](r'\[date.notice.cursor.loaded\] minute=\d+ now=\d+ catchup=1',s,60)
-  g['wait'](r'\[date.alarm.fired\] kind=alarm title=after close notified=1',s,60)
+  g['wait'](r'\[date.notice.worker.handoff\]',s,60)
+  g['wait'](r'\[date.notice.cursor.loaded\] minute=\d+ now=\d+ catchup=[01]',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-overdue-alarm.ppm')})
   close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
