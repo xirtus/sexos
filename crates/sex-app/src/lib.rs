@@ -2364,6 +2364,9 @@ pub mod net {
             self.idle += 1;
             Ok(false)
         }
+        /// A person's explicit pause stops RECEIVE calls. Exclude that time
+        /// from the 60-second no-byte deadline when the same flow resumes.
+        pub fn resume_after_pause(&mut self) { self.began = sex_pdx::get_ticks(); }
         fn end(&mut self, window: &mut Window) {
             self.whole = true;
             // Keep the connection when the reply ended exactly where its framing said and

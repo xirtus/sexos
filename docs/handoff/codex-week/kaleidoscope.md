@@ -10,7 +10,9 @@ and Shields. The remaining gaps are:
   a bounded, staged history with source URL and size that survives restart;
   private-tab addresses stay out of the stored history. Escape now cancels a
   synchronous transfer, removes its hidden partial file, and offers a retry.
-  Pause/resume while a transfer is active remains open.
+  Ctrl+Shift+J now pauses the live request and file writes at the committed
+  offset, then resumes that same connection. A server that closes during a
+  long pause still requires a fresh retry; durable Range/ETag resume remains.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an

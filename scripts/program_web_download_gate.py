@@ -2,7 +2,8 @@
 """Downloads: opening a 20 MB attachment saves it to Downloads/ in Files as it arrives
 (never whole in memory), with progress; the file read back from disk hashes the same as
 what the server sent; about:downloads lists it; a second download of the same name gets
-"name (2)". Escape cancels a paced transfer and removes its hidden partial file."""
+"name (2)". Ctrl+Shift+J pauses a paced live transfer without advancing its
+file offset, then resumes it; Escape cancels another transfer and cleans up."""
 import argparse,http.server,os,random,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -25,6 +26,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
    try:
     for i in range(0,len(body),1<<16):
      self.wfile.write(body[i:i+(1<<16)]);self.wfile.flush();time.sleep(.025)
+   except (BrokenPipeError,ConnectionResetError):pass
+   return
+  if self.path=='/files/pause.bin':
+   body=DATA[:12*1024*1024]
+   self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Disposition','attachment; filename="pause.bin"');self.send_header('Content-Length',str(len(body)));self.end_headers()
+   try:
+    for i in range(0,len(body),1<<16):
+     self.wfile.write(body[i:i+(1<<16)]);self.wfile.flush();time.sleep(.05)
    except (BrokenPipeError,ConnectionResetError):pass
    return
   if self.path=='/files/small.zip':
@@ -86,19 +95,37 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-recovered.ppm')})
   assert (a.out/'browser-download-recovered.ppm').stat().st_size>10000
   g['wait'](r'\[web.download.history.saved\] count=4 kept=1',0,120)
+  # A live transfer stops polling and writing while paused, then resumes the
+  # same flow at the exact staged file offset. The complete file still hashes.
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/pause.bin');q.key('ret')
+  g['wait'](r'\[web.download.start\] path=Downloads/pause.bin ',s,300)
+  g['wait'](r'\[web.download.progress\] bytes=\d+ total=12582912',s,300)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'j'}],'hold-time':80})
+  paused=g['wait'](r'\[web.download.pause\] paused=1 bytes=(\d+)\n',s,120)
+  paused_bytes=int(paused[1]);assert 0<paused_bytes<len(DATA[:12*1024*1024]),paused[0]
+  time.sleep(1)
+  assert '[web.download.progress]' not in t()[s+paused.end():], 'download advanced while paused'
+  assert '[web.download.done] path=Downloads/pause.bin' not in t()[s+paused.end():], 'paused transfer completed'
+  q.cmd('screendump',{'filename':str(a.out/'browser-download-paused.ppm')})
+  assert (a.out/'browser-download-paused.ppm').stat().st_size>10000
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'j'}],'hold-time':80})
+  resumed=g['wait'](r'\[web.download.pause\] paused=0 bytes=(\d+)\n',s,120)
+  assert int(resumed[1])==paused_bytes,(resumed[0],paused[0])
+  done=g['wait'](r'\[web.download.done\] path=Downloads/pause.bin bytes=(\d+) ticks=\d+ fnv=([0-9a-f]+)',s,900)
+  assert int(done[1])==12*1024*1024 and int(done[2],16)==fnv(DATA[:12*1024*1024]),done[0]
   # Escape interrupts an in-flight transfer and removes its hidden partial file.
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/slow.bin');q.key('ret')
   g['wait'](r'\[web.download.start\] path=Downloads/slow.bin ',s,300)
   g['wait'](r'\[web.download.progress\] bytes=\d+ total=8388608',s,300)
   s=len(t());q.key('esc')
   g['wait'](r'\[web.download.cancelled\] path=Downloads/slow.bin cleaned=1\n',s,120)
-  g['wait'](r'\[web.download.panel\] done=4 failed=1',s,120)
+  g['wait'](r'\[web.download.panel\] done=5 failed=1',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-cancelled.ppm')})
   assert (a.out/'browser-download-cancelled.ppm').stat().st_size>10000
   s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
   g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
-  g['wait'](r'\[web.download.history.loaded\] count=4',s,300)
-  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
+  g['wait'](r'\[web.download.history.loaded\] count=5',s,300)
+  g['wait'](r'\[web.download.panel\] done=5 failed=0',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-history-reopened.ppm')})
   assert (a.out/'browser-download-history-reopened.ppm').stat().st_size>10000
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
