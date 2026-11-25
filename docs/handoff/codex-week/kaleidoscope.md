@@ -5,6 +5,9 @@ bookmarks, cookies, downloads with a panel, reader view, private and container t
 and Shields. The remaining gaps are:
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
+  The first autofill slice defines and tests exact top-level HTTPS scope and an
+  unambiguous same-origin POST login pair. Live consent, fill and cancellation
+  are still required before passwords can be used in the browser.
 - A visible per-site settings view for Shields and stored data. This change adds a
   first view and controls; permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
