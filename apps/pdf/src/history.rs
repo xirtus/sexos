@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded undo/redo for committed form fields and new annotations.
-use vellum_edit::{Editor, Error, FieldValue, NewAnnot, ObjId};
+//! Bounded undo/redo for committed form fields and annotation changes.
+use vellum_edit::{Editor, Error, FieldValue, NewAnnot, ObjId, RemovedAnnot};
 
 const LIMIT: usize = 32;
 
@@ -11,10 +11,13 @@ struct Change { name: String, before: FieldValue, after: FieldValue }
 pub struct FieldHistory { undo: Vec<Change>, redo: Vec<Change> }
 
 #[derive(Clone)]
-struct AddedAnnotation { page: usize, annot: NewAnnot, id: ObjId }
+struct AddedAnnotation { page: usize, annot: NewAnnot, id: ObjId, removed: Option<RemovedAnnot> }
+
+#[derive(Clone)]
+enum AnnotationChange { Added(AddedAnnotation), Deleted { page: usize, removed: RemovedAnnot } }
 
 #[derive(Default)]
-pub struct AnnotationHistory { undo: Vec<AddedAnnotation>, redo: Vec<AddedAnnotation> }
+pub struct AnnotationHistory { undo: Vec<AnnotationChange>, redo: Vec<AnnotationChange> }
 
 impl AnnotationHistory {
     pub fn clear(&mut self) { self.undo.clear(); self.redo.clear(); }
@@ -22,25 +25,43 @@ impl AnnotationHistory {
 
     pub fn record_add(&mut self, page: usize, annot: NewAnnot, id: ObjId) {
         if self.undo.len() == LIMIT { self.undo.remove(0); }
-        self.undo.push(AddedAnnotation { page, annot, id });
+        self.undo.push(AnnotationChange::Added(AddedAnnotation { page, annot, id, removed: None }));
+        self.redo.clear();
+    }
+
+    pub fn record_delete(&mut self, page: usize, removed: RemovedAnnot) {
+        if self.undo.len() == LIMIT { self.undo.remove(0); }
+        self.undo.push(AnnotationChange::Deleted { page, removed });
         self.redo.clear();
     }
 
     /// Undo removes only the annotation this history created, identified by PDF object id.
-    /// Redo creates a fresh appearance and remembers its new object id.
+    /// Redo restores that same object and appearance so a later delete step stays valid.
     pub fn step(&mut self, editor: &mut Editor, redo: bool) -> Result<Option<usize>, Error> {
         let Some(mut change) = (if redo { self.redo.last() } else { self.undo.last() }).cloned() else { return Ok(None) };
-        if redo {
-            change.id = editor.add_annotation(change.page, &change.annot)?;
-            self.redo.pop(); self.undo.push(change.clone());
-        } else {
-            let index = editor.annotations(change.page)?.into_iter()
-                .find(|a| a.id == Some(change.id)).map(|a| a.index)
-                .ok_or(Error::NoSuchAnnotation(usize::MAX))?;
-            editor.delete_annotation(change.page, index)?;
-            self.undo.pop(); self.redo.push(change.clone());
-        }
-        Ok(Some(change.page))
+        let page = match &mut change {
+            AnnotationChange::Added(add) => {
+                if redo {
+                    if let Some(removed) = &add.removed { editor.restore_annotation(removed)?; }
+                    else { add.id = editor.add_annotation(add.page, &add.annot)?; }
+                }
+                else {
+                    let index = editor.annotations(add.page)?.into_iter()
+                        .find(|a| a.id == Some(add.id)).map(|a| a.index)
+                        .ok_or(Error::NoSuchAnnotation(usize::MAX))?;
+                    add.removed = Some(editor.remove_annotation(add.page, index)?);
+                }
+                add.page
+            }
+            AnnotationChange::Deleted { page, removed } => {
+                if redo { editor.remove_restored_annotation(removed)?; }
+                else { editor.restore_annotation(removed)?; }
+                *page
+            }
+        };
+        if redo { self.redo.pop(); self.undo.push(change); }
+        else { self.undo.pop(); self.redo.push(change); }
+        Ok(Some(page))
     }
 }
 
@@ -127,5 +148,44 @@ mod tests {
         let id = editor.add_annotation(0, &annot).unwrap();
         history.record_add(0, annot, id);
         assert!(!history.has_step(true), "a new annotation clears redo");
+    }
+
+    #[test]
+    fn deleted_existing_annotation_undo_redo_on_real_pdf() {
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        let annot = NewAnnot { kind: AnnotKind::Note { at: (60.0, 80.0), icon: NoteIcon::Comment },
+            style: AnnotStyle { contents: Some("existing review".into()), ..AnnotStyle::default() } };
+        editor.add_annotation(0, &annot).unwrap();
+        let mut editor = Editor::open(editor.save_incremental().unwrap()).unwrap();
+        let original = editor.annotations(0).unwrap();
+        let removed = editor.remove_annotation(0, 0).unwrap();
+        let mut history = AnnotationHistory::default();
+        history.record_delete(0, removed);
+        assert!(editor.annotations(0).unwrap().is_empty());
+        assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
+        assert_eq!(editor.annotations(0).unwrap(), original);
+        assert_eq!(history.step(&mut editor, true).unwrap(), Some(0));
+        assert!(editor.annotations(0).unwrap().is_empty());
+        assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
+        assert_eq!(Editor::open(editor.save_incremental().unwrap()).unwrap().annotations(0).unwrap(), original);
+    }
+
+    #[test]
+    fn add_then_delete_keeps_identity_through_undo_redo() {
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        let mut history = AnnotationHistory::default();
+        let annot = NewAnnot { kind: AnnotKind::Note { at: (60.0, 80.0), icon: NoteIcon::Comment },
+            style: AnnotStyle::default() };
+        let id = editor.add_annotation(0, &annot).unwrap();
+        history.record_add(0, annot, id);
+        let removed = editor.remove_annotation(0, 0).unwrap();
+        history.record_delete(0, removed);
+        history.step(&mut editor, false).unwrap();
+        history.step(&mut editor, false).unwrap();
+        assert!(editor.annotations(0).unwrap().is_empty());
+        history.step(&mut editor, true).unwrap();
+        assert_eq!(editor.annotations(0).unwrap()[0].id, Some(id));
+        history.step(&mut editor, true).unwrap();
+        assert!(editor.annotations(0).unwrap().is_empty());
     }
 }
