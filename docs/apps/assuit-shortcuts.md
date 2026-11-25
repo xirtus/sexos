@@ -9,6 +9,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+E | Save As; the extension selects DOCX, ODT, RTF, HTML, Markdown, text or PDF |
 | Ctrl+P | Export the pages to PDF beside the document |
 | Ctrl+Shift+P | Enter a page range such as `1-3,5` and print it to a separate PDF |
+| Ctrl+Shift+L | Set the paper to Letter, Legal or A4, in portrait or landscape orientation |
 | Ctrl+T | Insert a table by entering rows × columns |
 | Ctrl+Shift+I | Insert an image from Assuit's granted folder |
 | Ctrl+Shift+S | Choose a paragraph style |
