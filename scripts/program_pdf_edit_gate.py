@@ -121,9 +121,20 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-deletion-undone.ppm')})
   step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
   q.key('esc');time.sleep(.3)
-  # The form: type the name, Tab to the checkbox, Space ticks it, Escape ends.
+  # Edit inside the name, including a forward delete and an end-of-field edit.
+  # The committed value remains NAME after these caret operations.
   step(lambda:chord('ctrl','e'),r'\[pdf\.form\] fields=2 first=name\n')
-  keys(NAME)
+  keys('Ada Lvelace')
+  step(lambda:q.key('home'),r'\[pdf\.form\.caret\] at=0 chars=11\n')
+  s=len(t())
+  for _ in range(5):q.key('right');time.sleep(.1)
+  g['wait'](r'\[pdf\.form\.caret\] at=5 chars=11\n',s)
+  keys('o')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-form-caret.ppm')})
+  assert (a.out/'pdf-form-caret.ppm').stat().st_size>10000
+  q.key('left');q.key('delete');keys('o')
+  step(lambda:q.key('end'),r'\[pdf\.form\.caret\] at=12 chars=12\n')
+  q.key('backspace');keys('e')
   # Shell keeps Tab (it moves focus between windows): Ctrl+Down is the next field.
   s=len(t());chord('ctrl','down')
   g['wait'](rf'\[pdf\.field\] name=name kind=text value={NAME}\n',s);g['wait'](r'\[pdf\.field\.focus\] name=agree index=2 page=1\n',s)
