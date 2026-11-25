@@ -437,20 +437,31 @@ impl Book {
         self.run("layout.margins", params).map(|_| ())
     }
 
-    /// Apply a line-height multiple and points before/after the current paragraph
+    /// Apply a line-height multiple or a point height and points before/after the current paragraph
     /// (or every selected paragraph). These are document properties, not view zoom.
     pub fn set_paragraph_spacing(&mut self, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter line multiple (0.5–3), space before and after (0–72 pt), for example 1.5 0 8";
+        const HELP: &str = "Enter a line multiple (0.5–3) or exact/minimum height (6–72 pt), then before and after (0–72 pt); e.g. exact 18 0 8";
         let words: Vec<_> = input.split_whitespace().collect();
-        if words.len() != 3 { return Err(HELP.into()); }
+        let (mode, numbers) = match words.as_slice() {
+            [_, _, _] => ("multiple", words.as_slice()),
+            [mode @ ("multiple" | "exact" | "minimum"), _, _, _] => (*mode, &words[1..]),
+            _ => return Err(HELP.into()),
+        };
         let mut values = [0.0_f32; 3];
-        for (at, word) in words.iter().enumerate() {
+        for (at, word) in numbers.iter().enumerate() {
             values[at] = word.parse::<f32>().map_err(|_| HELP.to_string())?;
             if !values[at].is_finite() { return Err(HELP.into()); }
         }
-        if !(0.5..=3.0).contains(&values[0]) || !(0.0..=72.0).contains(&values[1])
+        let valid_height = if mode == "multiple" { (0.5..=3.0).contains(&values[0]) }
+            else { (6.0..=72.0).contains(&values[0]) };
+        if !valid_height || !(0.0..=72.0).contains(&values[1])
             || !(0.0..=72.0).contains(&values[2]) { return Err(HELP.into()); }
-        self.run("para.lineSpacing", json!({ "value": values[0] }))?;
+        let line = match mode {
+            "exact" => json!({ "exactly": values[0] }),
+            "minimum" => json!({ "atLeast": values[0] }),
+            _ => json!({ "value": values[0] }),
+        };
+        self.run("para.lineSpacing", line)?;
         self.run("para.spacing", json!({ "before": values[1], "after": values[2] }))?;
         Ok(())
     }
@@ -1410,6 +1421,37 @@ mod tests {
             book.save().unwrap();
             let reopened = Book::open(&path).unwrap();
             assert_eq!(spacing(&reopened), spacing(&book), "{ext} lost paragraph spacing");
+        }
+    }
+
+    #[test]
+    fn exact_and_minimum_line_heights_round_trip() {
+        use wordcraft_engine::doc::props::LineSpacing;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("paragraph-line-height.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text(&"Lines of text should wrap naturally on a document page. ".repeat(18)).unwrap();
+            let before = book.draw(0, 1.0).unwrap().pixels;
+            for bad in ["exact 0 0 0", "minimum 73 0 0", "exact NaN 0 0", "minimum 18 -1 0", "exact 18 0", "approx 18 0 8"] {
+                assert!(book.set_paragraph_spacing(bad).is_err(), "{bad}");
+            }
+            let spacing = |b: &Book| {
+                let p = b.session.doc.body.iter().find_map(|block| block.as_para()).unwrap();
+                (p.props.line_spacing, p.props.space_before, p.props.space_after)
+            };
+            book.set_paragraph_spacing("multiple 1.5 0 8").unwrap();
+            assert_eq!(spacing(&book).0, Some(LineSpacing::Multiple(1.5)));
+            book.set_paragraph_spacing("exact 24 6 12").unwrap();
+            assert_eq!(spacing(&book), (Some(LineSpacing::Exactly(24.0)), Some(6.0), Some(12.0)));
+            assert!(book.draw(0, 1.0).unwrap().pixels != before, "exact height must change page rendering");
+            book.save().unwrap();
+            let exact = Book::open(&path).unwrap();
+            assert_eq!(spacing(&exact), spacing(&book), "{ext} lost exact height");
+            book.set_paragraph_spacing("minimum 28 0 8").unwrap();
+            assert_eq!(spacing(&book), (Some(LineSpacing::AtLeast(28.0)), Some(0.0), Some(8.0)));
+            book.save().unwrap();
+            let minimum = Book::open(&path).unwrap();
+            assert_eq!(spacing(&minimum), spacing(&book), "{ext} lost minimum height");
         }
     }
 

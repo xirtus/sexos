@@ -12,7 +12,8 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Paragraph spacing:** WordCraft stores line spacing and paragraph space
   before/after, but Assuit currently has no native control for these common
   document edits. This slice adds a bounded paragraph-spacing prompt and checks
-  DOCX/ODT save and reopen. More advanced exact/at-least line heights remain.
+  DOCX/ODT save and reopen. The prompt now also accepts `exact` and `minimum`
+  line heights in points, with DOCX/ODT round trips and a guest screenshot gate.
 - **Page numbering:** WordCraft can insert dynamic page fields in a header or
   footer, but Assuit has no native control for it. This slice exposes bounded
   top/bottom and left/center/right choices, checks the visible page and

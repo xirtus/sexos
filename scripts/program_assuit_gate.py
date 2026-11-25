@@ -250,6 +250,14 @@ def main():
   g['wait'](r'\[assuit\.paragraph-spacing\] 1\.5 0 8\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paragraph-spacing.ppm')})
   assert (a.out/'assuit-paragraph-spacing.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','s');type_line('exact 24 0 8');q.key('ret')
+  g['wait'](r'\[assuit\.paragraph-spacing\] exact 24 0 8\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-exact-line-height.ppm')})
+  assert (a.out/'assuit-exact-line-height.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','s');type_line('minimum 28 0 8');q.key('ret')
+  g['wait'](r'\[assuit\.paragraph-spacing\] minimum 28 0 8\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-minimum-line-height.ppm')})
+  assert (a.out/'assuit-minimum-line-height.ppm').stat().st_size>10000
   # A native list action must change the page, and the edited DOCX must save.
   press('ctrl','end');q.key('ret')
   s=len(t());press('ctrl','alt','l')

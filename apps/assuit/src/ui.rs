@@ -137,7 +137,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+Alt+N", "Add page numbers to header or footer"),
     ("Ctrl+Alt+H / F", "Edit shown header / footer; Esc returns to body"),
-    ("Ctrl+Alt+S", "Paragraph line and before/after spacing"),
+    ("Ctrl+Alt+S", "Paragraph line multiple or exact/minimum height"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
@@ -412,7 +412,7 @@ impl Ui {
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
                 Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("place, remove, start N, continue, format TYPE, first/even on/off")),
-                Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("line multiple, before pt, after pt; for example 1.5 0 8")),
+                Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("multiple 1.5 0 8, exact 18 0 8, or minimum 18 0 8")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
