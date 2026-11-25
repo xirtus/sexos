@@ -83,6 +83,13 @@ impl Presentation {
         Self::decode_ack(a, b, c).and_then(|(identity, disposition)|
             (identity == self).then_some(disposition))
     }
+    /// Bell must also keep the original sender run alive before replying to
+    /// its PD: a new Date task can reuse both that PD and its first ticket.
+    pub fn accepts_ack_for_live_tasks(self, a: u64, b: u64, c: u64,
+        sender_task: u32, live_bell_task: u32, live_sender_task: u32) -> Option<Disposition> {
+        (sender_task != 0 && self.bell_task == live_bell_task
+            && sender_task == live_sender_task).then(|| self.accepts_ack(a, b, c)).flatten()
+    }
 }
 
 pub fn receipt(ticket: u32, disposition: Disposition) -> u64 {
@@ -225,6 +232,9 @@ mod receipt_tests {
         let (a, b, c) = p.ack_words(Disposition::Accepted);
         assert_eq!(Presentation::decode_ack(a, b, c), Some((p, Disposition::Accepted)));
         assert_eq!(p.accepts_ack(a, b, c), Some(Disposition::Accepted));
+        assert_eq!(p.accepts_ack_for_live_tasks(a, b, c, 801, 901, 801), Some(Disposition::Accepted));
+        assert_eq!(p.accepts_ack_for_live_tasks(a, b, c, 801, 902, 801), None);
+        assert_eq!(p.accepts_ack_for_live_tasks(a, b, c, 801, 901, 802), None);
         assert_eq!(Presentation::new(a, p.ticket, p.sender, 902).unwrap().accepts_ack(a, b, c), None);
         assert_eq!(Presentation::new(a + 1, p.ticket, p.sender, p.bell_task).unwrap().accepts_ack(a, b, c), None);
         assert_eq!(Presentation::new(a, p.ticket + 1, p.sender, p.bell_task).unwrap().accepts_ack(a, b, c), None);

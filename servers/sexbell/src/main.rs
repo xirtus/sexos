@@ -252,7 +252,7 @@ fn post_assembler(caller: u32) -> &'static mut sex_pdx::notify::Assembler {
 }
 
 #[derive(Clone, Copy)]
-struct PendingPresentation { identity: sex_pdx::notify::Presentation, since: u64 }
+struct PendingPresentation { identity: sex_pdx::notify::Presentation, sender_task: u32, since: u64 }
 /// Date gets an accepted receipt only after Shell has handled this event.
 /// One slot keeps the cross-service ordering unambiguous; another confirmed
 /// sender gets Retry and may ask again after the first receipt or timeout.
@@ -1480,15 +1480,14 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::notify::OP_NOTIFICATION_HANDLED => {
                 if msg.caller_pd != 3 { continue; }
                 let Some(pending) = (unsafe { PENDING_PRESENTATION }) else { continue };
-                let Some(disposition) = pending.identity.accepts_ack(msg.arg0, msg.arg1, msg.arg2) else {
+                let live_bell_task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
+                let live_sender_task = sex_pdx::system_stats::domain(pending.identity.sender).map_or(0, |run| run.task);
+                let Some(disposition) = pending.identity.accepts_ack_for_live_tasks(msg.arg0, msg.arg1,
+                    msg.arg2, pending.sender_task, live_bell_task, live_sender_task) else {
                     sex_pdx::serial_record!("[bell.post.presentation.reject] reason=stale_identity");
                     continue;
                 };
                 let identity = pending.identity;
-                if sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(true, |run| run.task != identity.bell_task) {
-                    sex_pdx::serial_record!("[bell.post.presentation.reject] reason=ended_bell_task");
-                    continue;
-                }
                 unsafe { PENDING_PRESENTATION = None; }
                 sex_pdx::serial_record!("[bell.post.presentation] event_id={} ticket={} handled={} muted={}",
                     identity.event_id, identity.ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
@@ -1541,7 +1540,7 @@ pub extern "C" fn _start() -> ! {
                         continue;
                     }
                     let task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
-                    if task == 0 || caller > u16::MAX as u32 {
+                    if task == 0 || msg.caller_task == 0 || caller > u16::MAX as u32 {
                         acknowledge(sex_pdx::notify::Disposition::Retry);
                         continue;
                     }
@@ -1561,7 +1560,8 @@ pub extern "C" fn _start() -> ! {
                         acknowledge(sex_pdx::notify::Disposition::Retry);
                         continue;
                     };
-                    unsafe { PENDING_PRESENTATION = Some(PendingPresentation { identity, since: sex_pdx::get_ticks() }); }
+                    unsafe { PENDING_PRESENTATION = Some(PendingPresentation {
+                        identity, sender_task: msg.caller_task, since: sex_pdx::get_ticks() }); }
                 }
                 if lane == LANE_NOW && sound::chime() {
                     sex_pdx::serial_record!("[bell.sound.chime] event_id={}", event_id);
