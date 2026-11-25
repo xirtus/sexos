@@ -1168,6 +1168,19 @@ pub mod files {
             both.extend_from_slice(to);
             simple(w::RENAME, &both, 0)
         }
+        /// Promote a staged file only while `to` still contains the bytes whose
+        /// SHA-256 the caller saved. The comparison and replacement are one Files
+        /// request; a changed destination answers `STALE` and stays intact.
+        pub fn replace_if_sha256(from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<(), Error> {
+            if from.is_empty() || to.is_empty() || from.contains(&0) || to.contains(&0)
+                || from.len() + 1 + to.len() > w::PATH_BYTES { return Err(w::NAME); }
+            let mut both = alloc::vec::Vec::with_capacity(from.len() + 1 + to.len());
+            both.extend_from_slice(from);
+            both.push(0);
+            both.extend_from_slice(to);
+            exchange(None, w::REPLACE_IF_SHA256, &both, 0, 32,
+                |data| data[..32].copy_from_slice(expected), |_, _| ())
+        }
         /// Makes everything written so far durable.
         pub fn sync() -> Result<(), Error> { simple(w::SYNC, b"", 0) }
         /// Asks Files to hold a run of the program file `path` with argument line `args`,

@@ -59,6 +59,10 @@ def main():
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','detached_cms_in_pdf_verifies_over_its_byte_range','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_CMS_PDF_FIXTURE':str(signed_fixture)},check=True)
  FILES['/cms-signed.pdf']=signed_fixture.read_bytes()
+ empty_field=a.out/'home-empty-signature-field.pdf'
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','new_signature_field_round_trips_and_can_receive_detached_cms','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_EMPTY_FIELD_PDF_FIXTURE':str(empty_field)},check=True)
+ FILES['/home-empty-signature-field.pdf']=empty_field.read_bytes()
  with disk.open('r+b') as f:f.truncate(1024**3)
  install(disk,[('vellum',pdf),('shibari-sign',signer)])
  extractor=a.out/'sexfs-extract';subprocess.run(['rustc','--edition=2021','-O','-A','dead_code','-A','unused_attributes',str(ROOT/'scripts/sexfs_extract.rs'),'-o',str(extractor)],check=True)
@@ -424,15 +428,21 @@ def main():
   files_launch=g['wait'](r'\[shell\.program\.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,300)
   files_sid=int(files_launch[3])
   g['wait'](r'\[files\.app\.ready\].*portal=1',s,180)
-  def choose_signing_source(since):
+  # A second signing target lives in encrypted home. Its source is staged in
+  # Vellum's own folder, then Files copies it inside home before the CAS move.
+  g['focus'](files_sid);time.sleep(.5);s=len(t());chord('ctrl','k')
+  g['wait'](r'\[display\.text\.committed\] ',s,30);time.sleep(.5)
+  keys('vellum 42');q.key('ret');time.sleep(.5);keys('vellum 42');q.key('ret')
+  g['wait'](r'\[files\.home\.setup\] mib=\d+ kdf_ms=\d+ ',s,300)
+  def choose_signing_source(since, name='signature-field.pdf', chosen='/signature-field.pdf'):
    g['wait'](r'\[files\.app\.question\] program=shibari-sign mode=Open',since,120)
    g['focus'](files_sid);time.sleep(.5)
-   chord('ctrl','h');chord('ctrl','f');keys('signature-field.pdf');q.key('ret')
-   g['wait'](r'\[files\.app\.search\] base=/ query=signature-field\.pdf results=1 .* finished=1',since,120)
+   chord('ctrl','h');chord('ctrl','f');keys(name);q.key('ret')
+   g['wait'](r'\[files\.app\.search\] base=/ query='+re.escape(name)+r' results=1 .* finished=1',since,120)
    q.key('home');q.key('ret')
-   g['wait'](r'\[files\.app\.found\.opened\] path=/signature-field\.pdf',since,120)
+   g['wait'](r'\[files\.app\.found\.opened\] path='+re.escape(chosen),since,120)
    q.key('ret')
-   g['wait'](r'\[files\.pick\.granted\] row=\d+ path=/signature-field\.pdf',since,120)
+   g['wait'](r'\[files\.pick\.granted\] row=\d+ path='+re.escape(chosen),since,120)
    g['wait'](r'\[shibari\.pdf\.document\] matched=1\n',since,120)
    g['focus'](signer_sid);time.sleep(.5)
   s=len(t());line('run vellum @signature-field.pdf')
@@ -477,6 +487,31 @@ def main():
   step(lambda:q.key('ret'),r'\[pdf\.annotate\.refused\] action=highlight reason=bad value: cannot edit annotations in a signed PDF\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signed-markup-refused.ppm')})
   assert (a.out/'pdf-signed-markup-refused.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # Vellum's app-folder stage and the chosen PDF are on different SexFS
+  # instances. Files must copy to an internal home stage and compare the saved
+  # bytes in the same request that promotes the signed result.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/home-empty-signature-field.pdf /home/home-cas.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @/home/home-cas.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=home-cas\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(.5);g['focus'](sid)
+  step(lambda:chord('ctrl','shift','b'),r'\[pdf\.sign\.choice\] field=Vellum signature 1 certificate_bytes=\d+ confirmed=0\n')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[pdf\.sign\.request\] client=\d+ signer=\d+ attrs=\d+\n',s,120)
+  choose_signing_source(s,'home-cas.pdf','/home/home-cas.pdf')
+  q.cmd('screendump',{'filename':str(a.out/'pdf-home-conditional-consent.ppm')})
+  assert (a.out/'pdf-home-conditional-consent.ppm').stat().st_size>10000
+  q.key('y')
+  g['wait'](r'\[shibari\.pdf\.approved\] ok=1\n',s,120)
+  g['wait'](r'\[pdf\.sign\.saved\] field=Vellum signature 1 bytes=\d+ content_intact=1 verified=0\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  s=len(t());line('run vellum @/home/home-cas.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=home-cas\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(.5);g['focus'](sid)
   step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # The catalog's /Perms /DocMDP can carry a certification signature even

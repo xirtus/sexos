@@ -67,6 +67,9 @@ fn new_signature_field_round_trips_and_can_receive_detached_cms() {
     assert_eq!(field.widgets[0].2, [20.0, 20.0, 160.0, 50.0]);
     assert!(!editor.signatures().unwrap()[0].signed);
     let saved = editor.save_incremental().unwrap();
+    if let Some(destination) = std::env::var_os("SEXOS_VELLUM_EMPTY_FIELD_PDF_FIXTURE") {
+        std::fs::write(destination, &saved).unwrap();
+    }
     assert_incremental(&original, &saved);
     assert!(region_diff(&render(&original), &render(&saved), [19.0, 19.0, 162.0, 52.0]) > 0,
         "the empty signature field must be visible");
