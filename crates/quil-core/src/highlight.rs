@@ -89,6 +89,39 @@ fn python_f_string_end(text: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Color simple references in a complete, one-line f-string. Escaped braces
+/// and expressions needing Python parsing stay within the string span.
+fn python_inline_f_string(text: &[u8], start: usize, end: usize, out: &mut Vec<(usize, usize, Kind)>) {
+    let quote = (start..end).find(|&at| matches!(text[at], b'\'' | b'"')).unwrap();
+    let (mut at, mut segment) = (quote + 1, start);
+    while at + 1 < end {
+        if text[at] == b'\\' { at = (at + 2).min(end - 1); continue; }
+        if text[at..].starts_with(b"{{") { at += 2; continue; }
+        if text[at] == b'{' {
+            let begin = at + 1;
+            let mut after = begin;
+            if text.get(after).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_') {
+                after += 1;
+                while text.get(after).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_') { after += 1; }
+                if after < end - 1 && text[after] == b'}' {
+                    if at > segment { out.push((segment, at, Kind::String)); }
+                    out.push((at, begin, Kind::Punct));
+                    let word = core::str::from_utf8(&text[begin..after]).unwrap_or("");
+                    let kind = if Lang::Python.keywords().contains(&word) { Kind::Keyword }
+                        else if text[begin].is_ascii_uppercase() { Kind::Type } else { Kind::Plain };
+                    out.push((begin, after, kind));
+                    out.push((after, after + 1, Kind::Punct));
+                    segment = after + 1;
+                    at = segment;
+                    continue;
+                }
+            }
+        }
+        at += 1;
+    }
+    out.push((segment, end, Kind::String));
+}
+
 /// Split only simple `${identifier}` substitutions in a complete one-line JS
 /// template. Complex expressions stay string-colored until a parser is used.
 fn js_inline_template(text: &[u8], start: usize, out: &mut Vec<(usize, usize, Kind)>) -> Option<usize> {
@@ -158,7 +191,7 @@ pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usi
         }
         if lang == Lang::Python {
             if let Some(end) = python_f_string_end(text, i) {
-                push(out, i, end, Kind::String);
+                python_inline_f_string(text, i, end, out);
                 i = end;
                 continue;
             }

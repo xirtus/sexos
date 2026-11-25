@@ -614,16 +614,33 @@ fn rust_inline_raw_strings_keep_comment_markers_inside_string() {
 
 #[test]
 fn python_inline_f_string_prefixes_are_colored_with_the_string() {
-    let text = b"label = f\"#{value}\"; path = rf'//{name}'; other = Fr\"ok\"";
+    let text = b"label = f\"#value\"; path = rf'//name'; other = Fr\"ok\"";
     let mut out = Vec::new();
     assert!(!highlight::line(Lang::Python, text, false, &mut out));
-    for token in [b"f\"#{value}\"".as_slice(), b"rf'//{name}'".as_slice(), b"Fr\"ok\"".as_slice()] {
+    for token in [b"f\"#value\"".as_slice(), b"rf'//name'".as_slice(), b"Fr\"ok\"".as_slice()] {
         let start = text.windows(token.len()).position(|part| part == token).unwrap();
         assert!(out.contains(&(start, start + token.len(), Kind::String)));
     }
     assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::Comment));
     highlight::line(Lang::Python, b"format = 1", false, &mut out);
     assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::String));
+}
+
+#[test]
+fn python_f_string_colors_simple_references() {
+    let text = b"label = f\"Hello {name}, {True}!\"";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Python, text, false, &mut out));
+    for (token, kind) in [(b"name".as_slice(), Kind::Plain), (b"True".as_slice(), Kind::Keyword)] {
+        let start = text.windows(token.len()).position(|part| part == token).unwrap();
+        assert!(out.contains(&(start, start + token.len(), kind)));
+        assert!(out.contains(&(start - 1, start, Kind::Punct)));
+        assert!(out.contains(&(start + token.len(), start + token.len() + 1, Kind::Punct)));
+    }
+    for fallback in [b"f\"{{name}}\"".as_slice(), b"f\"{person.name}\"".as_slice()] {
+        highlight::line(Lang::Python, fallback, false, &mut out);
+        assert_eq!(out, vec![(0, fallback.len(), Kind::String)]);
+    }
 }
 
 #[test]
