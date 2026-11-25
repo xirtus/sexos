@@ -71,3 +71,4 @@ Use Up/Down and Enter to navigate; Escape returns to the folder view.
 In the F3 preview, Up/Down scroll, Home/End jump, and Escape or F3 closes it.
 The preview is read only and shows at most the first 32 KiB of UTF-8 text.
 Picture previews fit PNG, JPEG, GIF and WebP files up to 16 MiB to the window.
+F3 also previews a text member while browsing an archive, without extracting it.

@@ -85,3 +85,6 @@ Remaining gaps:
   app. Picture inputs over 16 MiB are refused. The text preview shows the first
   32 KiB only and rejects binary or control-bearing files; Enter still opens
   the chosen app. Richer document previews remain.
+  F3 also previews a small UTF-8 member while browsing an archive, without
+  extracting it into a folder. Unknown-size and over-32-KiB members are refused
+  before decompression, and the output sink enforces the limit again.
