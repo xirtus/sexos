@@ -372,7 +372,7 @@ impl Book {
         self.charts().into_iter().rev().find(|c| c.row == row && c.col == col)
     }
 
-    /// Change an existing chart's type or title through GridCraft's undoable command.
+    /// Change an existing chart through GridCraft's undoable command.
     pub fn edit_chart(&mut self, id: u32, input: &str) -> Result<String, String> {
         let input = input.trim();
         let exists = self.session.doc().ok().and_then(|d| d.wb.active()
@@ -394,7 +394,36 @@ impl Book {
             self.run("chart.set", json!({ "chart": id, "type": kind }))?;
             return Ok(format!("Chart type: {kind}"));
         }
-        Err("Enter type column/line/bar/pie, title text, or clear title".into())
+        if let Some(position) = input.strip_prefix("legend ") {
+            if !matches!(position, "none" | "top" | "bottom" | "left" | "right") {
+                return Err("Choose legend none, top, bottom, left or right".into());
+            }
+            self.run("chart.set", json!({ "chart": id, "legend": position }))?;
+            return Ok(format!("Chart legend: {position}"));
+        }
+        for (prefix, field, label) in [("x title ", "xTitle", "horizontal axis"), ("y title ", "yTitle", "vertical axis")] {
+            if let Some(title) = input.strip_prefix(prefix) {
+                if title.is_empty() || title.chars().count() > 120 {
+                    return Err("Enter an axis title of 1–120 characters".into());
+                }
+                self.run("chart.set", json!({ "chart": id, (field): title }))?;
+                return Ok(format!("Chart {label}: {title}"));
+            }
+        }
+        for (command, field, label) in [("clear x title", "xTitle", "horizontal axis"), ("clear y title", "yTitle", "vertical axis")] {
+            if input == command {
+                self.run("chart.set", json!({ "chart": id, (field): null }))?;
+                return Ok(format!("Chart {label} title cleared"));
+            }
+        }
+        for (prefix, field, label) in [("labels ", "dataLabels", "data labels"), ("gridlines ", "gridlines", "gridlines")] {
+            if let Some(choice) = input.strip_prefix(prefix) {
+                let on = match choice { "on" => true, "off" => false, _ => return Err(format!("Choose {prefix}on or off")) };
+                self.run("chart.set", json!({ "chart": id, (field): on }))?;
+                return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
+            }
+        }
+        Err("Enter type, title, legend, x/y title, labels or gridlines".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -886,6 +915,35 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(state(&Book::open(&path).unwrap().0), (Some("Budget by category".into()), "Line".into()));
+    }
+
+    #[test]
+    fn chart_layout_controls_undo_and_round_trip_in_xlsx() {
+        let mut book = budget("chart-layout.xlsx");
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        for bad in ["legend diagonal", "x title ", "y title ", "labels maybe", "gridlines maybe"] {
+            assert!(book.edit_chart(id, bad).is_err(), "{bad}");
+        }
+        book.edit_chart(id, "legend right").unwrap();
+        book.edit_chart(id, "x title Category").unwrap();
+        book.edit_chart(id, "y title Annual cost").unwrap();
+        book.edit_chart(id, "labels on").unwrap();
+        book.edit_chart(id, "gridlines off").unwrap();
+        let state = |book: &Book| {
+            let c = &book.session.doc().unwrap().wb.active().unwrap().charts[0];
+            (format!("{:?}", c.legend), c.x_title.clone(), c.y_title.clone(), c.data_labels, c.gridlines)
+        };
+        assert_eq!(state(&book), ("Right".into(), Some("Category".into()), Some("Annual cost".into()), true, false));
+        book.undo().unwrap();
+        assert!(state(&book).4);
+        book.redo().unwrap();
+        book.edit_chart(id, "clear x title").unwrap();
+        assert_eq!(state(&book).1, None);
+        book.undo().unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(state(&Book::open(&path).unwrap().0), ("Right".into(), Some("Category".into()), Some("Annual cost".into()), true, false));
     }
 
     #[test]
