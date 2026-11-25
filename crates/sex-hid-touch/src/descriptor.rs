@@ -6,8 +6,10 @@
 pub const PAGE_DESKTOP: u16 = 0x01;
 pub const PAGE_BUTTON: u16 = 0x09;
 pub const PAGE_DIGITIZER: u16 = 0x0D;
+pub const USAGE_MOUSE: u16 = 0x02;
 pub const USAGE_X: u16 = 0x30;
 pub const USAGE_Y: u16 = 0x31;
+pub const USAGE_WHEEL: u16 = 0x38;
 pub const USAGE_TOUCH_PAD: u16 = 0x05;
 pub const USAGE_FINGER: u16 = 0x22;
 pub const USAGE_TIP_SWITCH: u16 = 0x42;
@@ -17,7 +19,7 @@ pub const USAGE_CONTACT_COUNT: u16 = 0x54;
 pub const USAGE_SCAN_TIME: u16 = 0x56;
 pub const USAGE_INPUT_MODE: u16 = 0x52;
 
-pub const MAX_FIELDS: usize = 96;
+pub const MAX_FIELDS: usize = 160;
 pub const MAX_FINGERS: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,8 +47,12 @@ pub struct Layout {
     pub count: usize,
     /// The input report the touchpad's contacts arrive in.
     pub touch_report: Option<u8>,
+    /// Fallback mouse-collection input report (if firmware exposes one).
+    pub mouse_report: Option<u8>,
     /// Feature report id carrying Input Mode (write 3 for touchpad mode).
     pub input_mode_report: Option<u8>,
+    /// Total byte length of the Input Mode feature report payload (excluding report id).
+    pub input_mode_bytes: u8,
     pub fingers: u8,
     pub uses_report_ids: bool,
 }
@@ -60,6 +66,10 @@ impl Layout {
     pub fn field(&self, page: u16, usage: u16) -> Option<&Field> {
         self.fields().iter().find(|f| f.page == page && f.usage == usage && f.report_id == self.touch_report.unwrap_or(0))
     }
+    pub fn mouse_field(&self, page: u16, usage: u16) -> Option<&Field> {
+        let id = self.mouse_report?;
+        self.fields().iter().find(|f| f.finger.is_none() && f.page == page && f.usage == usage && f.report_id == id)
+    }
 }
 
 fn signed(v: u32, bytes: usize) -> i32 {
@@ -70,19 +80,24 @@ fn signed(v: u32, bytes: usize) -> i32 {
 struct Globals { page: u16, lmin: i32, lmax: i32, pmax: i32, size: u8, count: u16, id: u8 }
 
 pub fn parse(desc: &[u8]) -> Option<Layout> {
-    let mut out = Layout { fields: [Field::default(); MAX_FIELDS], count: 0, touch_report: None, input_mode_report: None, fingers: 0, uses_report_ids: false };
+    let mut out = Layout {
+        fields: [Field::default(); MAX_FIELDS], count: 0, touch_report: None, mouse_report: None,
+        input_mode_report: None, input_mode_bytes: 0, fingers: 0, uses_report_ids: false,
+    };
     let mut g = Globals::default();
     let mut stack: [Globals; 8] = [Globals::default(); 8];
     let mut sp = 0;
     let mut usages: [(u16, u16); 16] = [(0, 0); 16];
     let mut n_usages = 0;
     let mut usage_range: Option<(u32, u32)> = None;
-    // Collection nesting: (is_touchpad_app, finger index)
+    // Collection nesting: (is_touchpad_app, is_mouse_app, finger index)
     let mut depth = 0usize;
     let mut touchpad_depth: Option<usize> = None;
+    let mut mouse_depth: Option<usize> = None;
     let mut finger_depth: Option<usize> = None;
     let mut finger: Option<u8> = None;
     let mut bits = [0u16; 256]; // bit offset per input report id
+    let mut feat_bits = [0u16; 256]; // bit offset per feature report id
     let mut i = 0;
     while i < desc.len() {
         let prefix = desc[i];
@@ -104,12 +119,13 @@ pub fn parse(desc: &[u8]) -> Option<Layout> {
                 let constant = v & 1 != 0;
                 if input {
                     let base = &mut bits[g.id as usize];
+                    let in_app = touchpad_depth.is_some() || mouse_depth.is_some();
                     for k in 0..g.count {
                         let (page, usage) = if let Some((lo, hi)) = usage_range {
                             let u = lo.saturating_add(k as u32).min(hi);
                             (if lo > 0xFFFF { (lo >> 16) as u16 } else { g.page }, u as u16)
                         } else if n_usages > 0 { usages[(k as usize).min(n_usages - 1)] } else { (g.page, 0) };
-                        if out.count < MAX_FIELDS && touchpad_depth.is_some() {
+                        if !constant && out.count < MAX_FIELDS && in_app {
                             out.fields[out.count] = Field { report_id: g.id, bit: *base, size: g.size, page, usage,
                                 logical_min: g.lmin, logical_max: g.lmax, physical_max: g.pmax, finger, constant };
                             out.count += 1;
@@ -117,8 +133,13 @@ pub fn parse(desc: &[u8]) -> Option<Layout> {
                         *base = base.saturating_add(g.size as u16);
                     }
                     if touchpad_depth.is_some() && out.touch_report.is_none() && !constant { out.touch_report = Some(g.id); }
-                } else if usages[..n_usages].iter().any(|&(p, u)| p == PAGE_DIGITIZER && u == USAGE_INPUT_MODE) {
-                    out.input_mode_report = Some(g.id);
+                    if mouse_depth.is_some() && out.mouse_report.is_none() && !constant { out.mouse_report = Some(g.id); }
+                } else {
+                    let fb = &mut feat_bits[g.id as usize];
+                    *fb = fb.saturating_add((g.size as u16).saturating_mul(g.count));
+                    if usages[..n_usages].iter().any(|&(p, u)| p == PAGE_DIGITIZER && u == USAGE_INPUT_MODE) {
+                        out.input_mode_report = Some(g.id);
+                    }
                 }
                 n_usages = 0; usage_range = None;
             }
@@ -127,6 +148,7 @@ pub fn parse(desc: &[u8]) -> Option<Layout> {
                 depth += 1;
                 let (page, usage) = if n_usages > 0 { usages[0] } else { (g.page, 0) };
                 if page == PAGE_DIGITIZER && usage == USAGE_TOUCH_PAD && v == 1 && touchpad_depth.is_none() { touchpad_depth = Some(depth); }
+                if page == PAGE_DESKTOP && usage == USAGE_MOUSE && v == 1 && mouse_depth.is_none() && touchpad_depth.is_none() { mouse_depth = Some(depth); }
                 if touchpad_depth.is_some() && page == PAGE_DIGITIZER && usage == USAGE_FINGER && finger_depth.is_none() {
                     finger_depth = Some(depth);
                     finger = Some(out.fingers);
@@ -137,6 +159,7 @@ pub fn parse(desc: &[u8]) -> Option<Layout> {
             (0, 0xC) => { // End Collection
                 if finger_depth == Some(depth) { finger_depth = None; finger = None; }
                 if touchpad_depth == Some(depth) { touchpad_depth = None; }
+                if mouse_depth == Some(depth) { mouse_depth = None; }
                 depth = depth.saturating_sub(1);
                 n_usages = 0; usage_range = None;
             }
@@ -158,7 +181,10 @@ pub fn parse(desc: &[u8]) -> Option<Layout> {
         }
         i += 1 + size;
     }
-    (out.touch_report.is_some() || out.count > 0).then_some(out)
+    if let Some(id) = out.input_mode_report {
+        out.input_mode_bytes = ((feat_bits[id as usize] + 7) / 8).clamp(1, 8) as u8;
+    }
+    (out.touch_report.is_some() || out.mouse_report.is_some() || out.count > 0).then_some(out)
 }
 
 /// Reads a field's value from a report (report id byte stripped).

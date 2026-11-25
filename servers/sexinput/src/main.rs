@@ -1308,6 +1308,7 @@ pub extern "C" fn _start() -> ! {
 
         // The laptop touchpad, when one was found. Its interrupt bit is taken even when
         // the outboxes are full, so it cannot keep the wait below from sleeping.
+        touchpad::fallback_scan(sex_pdx::get_ticks());
         touchpad::take_interrupt();
         if pointer_outbox.available() > 0 && keyboard_outbox.available() >= 20 {
             touchpad::poll(sex_pdx::get_ticks(), |o| match o {

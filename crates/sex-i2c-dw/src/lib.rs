@@ -13,6 +13,8 @@
 pub mod timing;
 #[cfg(test)]
 mod sim;
+#[cfg(test)]
+mod sweep_tests;
 
 pub const IC_CON: u32 = 0x00;
 pub const IC_TAR: u32 = 0x04;
@@ -127,7 +129,9 @@ impl<R: Regs> Controller<R> {
     pub fn new(mut regs: R, speed: Speed, counts: Counts, intel_lpss: bool) -> Result<Self, Error> {
         if intel_lpss && regs.read(LPSS_RESETS) & LPSS_RESETS_RELEASE != LPSS_RESETS_RELEASE {
             regs.write(LPSS_RESETS, 0);
+            let _ = regs.read(LPSS_RESETS);
             regs.write(LPSS_RESETS, LPSS_RESETS_RELEASE);
+            let _ = regs.read(LPSS_RESETS);
         }
         let kind = regs.read(IC_COMP_TYPE);
         if kind != COMP_TYPE { return Err(Error::NotDesignWare(kind)); }
@@ -136,6 +140,7 @@ impl<R: Regs> Controller<R> {
         // A zero parameter word means the block does not report its FIFOs: assume the
         // smallest depth any Intel or AMD part has.
         let (tx_depth, rx_depth) = if param == 0 { (16, 16) } else { (((param >> 16) & 0xff) + 1, ((param >> 8) & 0xff) + 1) };
+        let counts = if counts.high == 0 || counts.low == 0 { timing::counts(timing::INTEL_TGL_HZ, speed, 300) } else { counts };
         let mut c = Self { regs, tx_depth, rx_depth, target: None, version };
         c.enable(false)?;
         let con = CON_MASTER | CON_RESTART_EN | CON_SLAVE_DISABLE
@@ -150,10 +155,20 @@ impl<R: Regs> Controller<R> {
         // Polled: no interrupt ever leaves the block.
         c.regs.write(IC_INTR_MASK, 0);
         let _ = c.regs.read(IC_CLR_INTR);
+        c.drain_rx();
         Ok(c)
     }
 
     pub fn fifo_depths(&self) -> (u32, u32) { (self.tx_depth, self.rx_depth) }
+
+    fn drain_rx(&mut self) {
+        let limit = self.rx_depth.max(64);
+        for _ in 0..limit {
+            let status = self.regs.read(IC_STATUS);
+            if status == u32::MAX || status & STATUS_RFNE == 0 { break; }
+            let _ = self.regs.read(IC_DATA_CMD);
+        }
+    }
 
     fn enable(&mut self, on: bool) -> Result<(), Error> {
         for _ in 0..10_000 {
@@ -191,6 +206,7 @@ impl<R: Regs> Controller<R> {
             if status & STATUS_MST_ACTIVITY == 0 { break; }
             budget = budget.checked_sub(1).ok_or(Error::Timeout)?;
         }
+        self.drain_rx();
         let _ = self.regs.read(IC_CLR_INTR);
         let (mut sent, mut received) = (0usize, 0usize);
         loop {
@@ -232,6 +248,7 @@ impl<R: Regs> Controller<R> {
         let source = self.regs.read(IC_TX_ABRT_SOURCE);
         let _ = self.regs.read(IC_CLR_TX_ABRT);
         let _ = self.regs.read(IC_CLR_INTR);
+        self.drain_rx();
         if source & (ABRT_7B_ADDR_NOACK | ABRT_10ADDR1_NOACK | ABRT_10ADDR2_NOACK) != 0 { Error::AddressNack }
         else if source & ABRT_TXDATA_NOACK != 0 { Error::DataNack }
         else if source & ABRT_ARB_LOST != 0 { Error::ArbitrationLost }
@@ -243,6 +260,7 @@ impl<R: Regs> Controller<R> {
         let _ = self.enable(false);
         self.target = None;
         let _ = self.regs.read(IC_CLR_INTR);
+        self.drain_rx();
     }
 
     pub fn into_regs(self) -> R { self.regs }
