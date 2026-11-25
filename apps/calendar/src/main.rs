@@ -14,7 +14,8 @@
 //! next server sync or other calendar change.
 //! Month: arrows move a day or a week, PageUp and PageDown a month, Home (or `t`)
 //! today, Enter opens the chosen day and Esc goes back, `n` adds an event (start it
-//! with `HH:MM` to give it a time). An open day: Up/Down pick, Delete removes, `a`
+//! with `HH:MM` to give it a time). An open day: Up/Down pick, `d` copies the
+//! selected occurrence to tomorrow, Delete removes, `a`
 //! prepares accepting an invitation, `x` prepares declining it; Enter queues a
 //! local reply and Esc cancels. Week and day: Left/Right a day, Up/Down
 //! scroll the hours, PageUp/PageDown a week. Clock: `n` new alarm (`07:30 Wake up`),
@@ -332,6 +333,21 @@ impl App {
         self.selected = day;
         self.picked = 0;
         if month_changed { sex_pdx::serial_record!("[calendar.month] month={:04}-{:02}", day.year, day.month); }
+    }
+    fn copy_tomorrow(&mut self, window: &mut Window) {
+        let Some(source) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
+        let from = self.selected;
+        let tomorrow = from.add_days(1);
+        let linked = !self.cal.info(source.calendar).url.is_empty();
+        let copy = source.copy_occurrence_to(tomorrow, self.new_uid(), linked);
+        let index = self.cal.events.len();
+        self.cal.events.push(copy.clone());
+        self.event_history.push(EventEdit { index, before: None, after: Some(copy.clone()) });
+        self.select(tomorrow);
+        self.picked = self.cal.on_day(tomorrow).iter().position(|e| e.uid == copy.uid).unwrap_or(0);
+        self.status = format!("Copied \"{}\" to {}.", copy.title, tomorrow);
+        sex_pdx::serial_record!("[date.event.copied] from={} to={} title={} linked={}", from, tomorrow, copy.title, linked as u8);
+        self.save(window);
     }
     fn set_view(&mut self, view: View) {
         self.view = view;
@@ -781,6 +797,7 @@ impl App {
                 (0x01 | 0x1C, _, _) => self.agenda = false,
                 (_, Some(Nav::Up), _) => self.picked = self.picked.saturating_sub(1),
                 (_, Some(Nav::Down), _) => self.picked = (self.picked + 1).min(self.cal.on_day(self.selected).len().saturating_sub(1)),
+                (_, _, Some(b'd')) => self.copy_tomorrow(window),
                 (_, Some(Nav::Delete), _) | (0x6F, _, _) => {
                     let Some(gone) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
                     let Some(index) = self.cal.events.iter().position(|e| *e == gone) else { return };

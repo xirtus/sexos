@@ -416,6 +416,27 @@ impl Event {
     pub fn all_day(start: Date, title: &str) -> Event {
         Event { start, title: title.into(), ..Event::default() }
     }
+    /// Copy one displayed occurrence as an independent personal event. Server and
+    /// invitation identities belong to the source and must never follow the copy.
+    pub fn copy_occurrence_to(&self, day: Date, uid: String, linked: bool) -> Event {
+        let mut copy = self.clone();
+        copy.start = day;
+        copy.uid = uid;
+        copy.rule = None;
+        copy.exdates.clear();
+        copy.rdates.clear();
+        copy.recurrence_id = None;
+        copy.organizer.clear();
+        copy.attendees.clear();
+        copy.invitation = false;
+        copy.sequence = 0;
+        copy.href.clear();
+        copy.etag.clear();
+        copy.state = if linked { SyncState::New } else { SyncState::Clean };
+        copy.conflict_source_calendar = None;
+        copy.conflict_source_href.clear();
+        copy
+    }
     /// Calls `f` with each occurrence's first day that lies in `from..=to`, in order.
     /// RFC 5545: DTSTART is the first occurrence, COUNT counts before EXDATE removes
     /// any, RDATE adds days, and a day that does not exist is skipped, not moved.

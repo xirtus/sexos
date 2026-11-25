@@ -6,6 +6,10 @@ Bell, world clocks, alarms, timers, `.ics` import/export and two-way CalDAV.
 
 Remaining gaps:
 
+- The open agenda now copies its picked occurrence to tomorrow with D. The
+  copy keeps event details and reminders, gets a fresh UID, strips the source's
+  recurrence, invitation and CalDAV identity, and participates in Ctrl+Z/Y.
+  Arbitrary move/copy dates and full event editing remain.
 - Saved event, clock and account files truncate the current copy during a write.
   This change stages and syncs them before replacement.
 - Account secrets still live in a local `dav.txt` file. Move them into Multipass

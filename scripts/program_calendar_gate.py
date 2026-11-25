@@ -154,6 +154,25 @@ def main():
   g['wait'](rf'\[calendar.day\] date={today} events=\d+\n',s,60)
   g['wait'](rf'\[calendar.event\] date={today} when=10:20-11:20 title=power cut\n',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-after-powercut.ppm')})
+  # Copy the picked occurrence to tomorrow. It is a separate saved event and one
+  # undo step; the new agenda is visibly different from today's source agenda.
+  tomorrow=today+datetime.timedelta(days=1)
+  s=len(t());q.key('d')
+  g['wait'](rf'\[date.event.copied\] from={today} to={tomorrow} title=power cut linked=0',s,60)
+  g['wait'](r'\[calendar.saved\] events=9 ',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-event-copied.ppm')})
+  copied_pixels=(a.out/'date-event-copied.ppm').read_bytes()
+  assert copied_pixels.startswith(b'P6\n') and copied_pixels!=(a.out/'date-after-powercut.ppm').read_bytes()
+  s=len(t());g['chord']('ctrl','z',r'\[date.undo\] events=8\n')
+  g['wait'](r'\[calendar.saved\] events=8 ',s,60)
+  s=len(t());g['chord']('ctrl','y',r'\[date.redo\] events=9\n')
+  g['wait'](r'\[calendar.saved\] events=9 ',s,60)
+  close(target,task)
+  target,task,sid,_,s=start('')
+  g['wait'](r'\[calendar.loaded\] events=9\n',s,60)
+  q.key('right');time.sleep(.2);s=len(t());q.key('ret')
+  g['wait'](rf'\[calendar.day\] date={tomorrow} events=1\n',s,60)
+  g['wait'](rf'\[calendar.event\] date={tomorrow} when=10:20-11:20 title=power cut\n',s,60)
   close(target,task)
   # Two visible Date windows share one Bell owner. The first window reloads a
   # timer created before the second opens; only one notice may be posted.
