@@ -38,8 +38,9 @@ Enter confirms a prompt and Escape cancels it. When a background job is active,
 Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
 supported file operations in the current Loom run. Ctrl+Y redoes one undone
-batch rename. A new file operation clears that redo; other operations do not
-yet have redo.
+batch rename on SexFS, where object IDs protect the original files. A mounted
+volume without stable IDs can undo its rename but cannot redo it. A new file
+operation clears redo; other operations do not yet have redo.
 When Delete moves items to trash, Loom saves their restore paths first and
 confirms storage before offering Ctrl+Z. If storage cannot confirm a move or
 rollback, check the folder and trash before acting again.

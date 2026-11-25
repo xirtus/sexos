@@ -88,9 +88,11 @@ enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: V
     MovedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     TrashedBatch(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>),
     /// A batch rename in `dir`: the moves that take it back, in order.
-    Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
-fn inverse_moves(moves: &[(Vec<u8>, Vec<u8>)]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    moves.iter().rev().map(|(from, to)| (to.clone(), from.clone())).collect()
+    Renamed { dir: Vec<u8>, moves: Vec<RenameMove> } }
+#[derive(Clone)]
+struct RenameMove { from: Vec<u8>, to: Vec<u8>, id: u64 }
+fn inverse_moves(moves: &[RenameMove]) -> Vec<RenameMove> {
+    moves.iter().rev().map(|m| RenameMove { from: m.to.clone(), to: m.from.clone(), id: m.id }).collect()
 }
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
@@ -1052,7 +1054,7 @@ impl App {
             Undo::CopiedBatch(items) => self.undo_copy_batch(window, items),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
-            Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
+            Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves, false) }
         };
         match result {
             Ok(()) => {
@@ -1067,8 +1069,12 @@ impl App {
                 self.load(window);
             }
             Err(e) => {
-                self.status = format!("Couldn't undo: {}.{}", shown(files::message(e)),
-                    if matches!(&step, Undo::Renamed { .. }) { " Check the folder before retrying." } else { "" });
+                self.status = if e == rename::ROLLBACK_UNCONFIRMED {
+                    "Couldn't undo: rollback was not confirmed. Inspect the folder before retrying.".into()
+                } else {
+                    format!("Couldn't undo: {}.{}", shown(files::message(e)),
+                        if matches!(&step, Undo::Renamed { .. }) { " Check the folder before retrying." } else { "" })
+                };
                 self.undo.push(step);
             }
         }
@@ -1078,7 +1084,7 @@ impl App {
     fn redo_rename(&mut self, window: &mut Window) {
         let Some(step) = self.redo_rename.take() else { self.status = "Nothing to redo.".into(); return };
         let Undo::Renamed { dir, moves } = &step else { unreachable!() };
-        match self.rename_undo(window, dir, moves) {
+        match self.rename_undo(window, dir, moves, true) {
             Ok(()) => {
                 self.meta_undone(window, &step);
                 self.undo.push(Undo::Renamed { dir: dir.clone(), moves: inverse_moves(moves) });
@@ -1087,8 +1093,16 @@ impl App {
                 self.load(window);
             }
             Err(e) => {
-                self.status = format!("Couldn't redo: {}. Check the folder before retrying.", shown(files::message(e)));
-                self.redo_rename = Some(step);
+                if e == sex_pdx::fs::UNSUPPORTED {
+                    self.status = "This disk has no stable file IDs, so Loom cannot safely redo its batch rename.".into();
+                } else {
+                    self.status = if e == rename::ROLLBACK_UNCONFIRMED {
+                        "Couldn't redo: rollback was not confirmed. Inspect the folder before retrying.".into()
+                    } else {
+                        format!("Couldn't redo: {}. Check the folder before retrying.", shown(files::message(e)))
+                    };
+                    self.redo_rename = Some(step);
+                }
             }
         }
     }
