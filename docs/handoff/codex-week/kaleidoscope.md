@@ -30,7 +30,9 @@ and Shields. The remaining gaps are:
   acknowledges the browser. The GitHub CI two-app QEMU gate is the runtime
   evidence for this first end-to-end password save. Passkeys still remain.
 - A visible per-site settings view for Shields and stored data. This change adds a
-  first view and controls; permission prompts and a full settings catalog remain.
+  first view and controls. The view now counts cookies matching this host and
+  local storage items and bytes in the current container. Clearing site data
+  updates those counts to zero. Permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
 - Inline PDF, print to PDF, service workers, and web app installation.
 - Profile and session writes previously replaced live files in place. This slice

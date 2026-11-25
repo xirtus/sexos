@@ -19,6 +19,8 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | Keyboard reference | Ctrl+Shift+/ |
 
 The reader view shortcut returns to the source page when used in reader view.
+Site settings shows the current container's cookie and local-storage counts for
+the site. Clearing site data refreshes those counts.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
 Esc stops the active download, removes its hidden partial file, and shows a
