@@ -12,6 +12,11 @@
   multi-value checks, XLSX reopen, and the existing 200-function catalog. The
   guest filter gate opens a fixture with two late values, captures
   `spreadeagle-filter-partial-search.ppm`, and applies both through the menu.
+- Review fix: blank-matching queries use a one-bit-per-row coverage map rather
+  than a tree node per occupied row, and retain at most 128 text matches while
+  checking for blanks. A dense-column regression rejects a false blank, then
+  confirms a blank after removing one interior value; 300 matching values
+  confirm the menu remains bounded.
 - Local checks: all 59 host tests, Python gate syntax, and `git diff --check`
   passed. The custom SexOS target needs `-Zbuild-std`; full image and QEMU tests
   run on GitHub CI only.

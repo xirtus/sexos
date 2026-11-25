@@ -549,17 +549,29 @@ impl Book {
         let Some(sheet) = d.wb.active() else { return Vec::new() };
         let mut matches = BTreeSet::new();
         let wants_blank = "(blank)".contains(&needle);
-        let mut occupied_rows = wants_blank.then(BTreeSet::new);
+        // A full column can contain over a million occupied rows. Track row
+        // coverage in one bit per row instead of allocating a tree node for
+        // every value whenever the query also matches "(blank)".
+        let row_count = (bottom - top) as usize;
+        let mut occupied_rows = wants_blank.then(|| vec![0u8; row_count.div_ceil(8)]);
+        let mut occupied_count = 0usize;
         let cells = sheet.cells.iter_range(RangeRef::new(CellRef::new(top + 1, col), CellRef::new(bottom, col)))
             .map(|(at, _)| at).chain(sheet.spill.keys().copied().filter(|at| at.col == col && at.row > top && at.row <= bottom));
         for at in cells {
             let value = gridcraft_engine::display::cell_text(&d.wb, sheet, at);
-            if let Some(rows) = &mut occupied_rows { if !value.is_empty() { rows.insert(at.row); } }
+            if let Some(rows) = &mut occupied_rows {
+                if !value.is_empty() {
+                    let index = (at.row - top - 1) as usize;
+                    let (byte, mask) = (index / 8, 1u8 << (index % 8));
+                    if rows[byte] & mask == 0 { rows[byte] |= mask; occupied_count += 1; }
+                }
+            }
             let label = if value.is_empty() { "(blank)" } else { value.as_str() };
-            if label.to_lowercase().contains(&needle) { matches.insert(value); }
+            if label.to_lowercase().contains(&needle)
+                && (value.is_empty() || matches.len() < MAX_MATCHES) { matches.insert(value); }
             if matches.len() >= MAX_MATCHES && !wants_blank { break; }
         }
-        if wants_blank && occupied_rows.is_some_and(|rows| rows.len() < (bottom - top) as usize) { matches.insert(String::new()); }
+        if wants_blank && occupied_count < row_count { matches.insert(String::new()); }
         matches.into_iter().take(MAX_MATCHES).collect()
     }
 
@@ -2079,6 +2091,26 @@ mod tests {
         book.toggle_filter(Range { r0: 0, c0: 0, r1: 3, c1: 1 }).unwrap();
         assert_eq!(book.filter_search_choices(0, "blank"), [""]);
         assert_eq!(book.filter_search_choices(1, "3"), ["3"]);
+    }
+
+    #[test]
+    fn filter_blank_search_handles_dense_rows_without_false_blanks() {
+        let path = temp("filter-dense-blank.xlsx");
+        std::fs::write(&path, include_bytes!("../assets/filter-overflow.xlsx")).unwrap();
+        let mut book = Book::open(&path).unwrap().0;
+        book.toggle_filter(Range::cell(0, 0)).unwrap();
+        // Every data row is occupied, including those beyond the menu preview.
+        assert!(!book.filter_search_choices(0, "a").contains(&String::new()));
+        book.set(500, 0, "").unwrap();
+        assert!(book.filter_search_choices(0, "a").contains(&String::new()));
+
+        let mut many = Book::blank(&temp("filter-many-blank-matches.xlsx"));
+        many.set(0, 0, "Code").unwrap();
+        for row in 1..=300 { if row != 150 { many.set(row, 0, &format!("alpha {row}")).unwrap(); } }
+        many.toggle_filter(Range { r0: 0, c0: 0, r1: 300, c1: 0 }).unwrap();
+        let matches = many.filter_search_choices(0, "a");
+        assert_eq!(matches.len(), 128);
+        assert!(matches.contains(&String::new()));
     }
 
     #[test]
