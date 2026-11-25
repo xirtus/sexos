@@ -443,7 +443,7 @@ impl Ui {
                 Ask::NoteOptions(options) => format!("Note options: {options}_   {}", said("footnote/endnote start N, restart TYPE, format TYPE, position TYPE")),
                 Ask::Link(link) => format!("Link: {link}_   {}", said("Edit address here, Ctrl+A clears it; optional display text follows a space")),
                 Ask::Contents(action) => format!("Contents: {action}_   {}", said("insert 1–9 heading levels, update, or remove")),
-                Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US, en-GB, en-AU, en-CA, or none (DOCX); applies to selection")),
+                Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("English, installed ll-RR dictionary, or none (DOCX); applies to selection")),
             }
         } else if let Some(p) = &self.find {
             match &p.with {

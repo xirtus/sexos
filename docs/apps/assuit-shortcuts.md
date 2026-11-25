@@ -42,9 +42,14 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+Y | Check spelling and choose a suggestion |
 | Ctrl+Shift+U | Show or hide continuous spelling marks on the editable page; Assuit remembers the choice across launches |
 | A (during a spelling suggestion) | Add the selected word to Assuit's persistent dictionary |
-| Ctrl+Shift+K | Set the document default and selected text's proofing language to `en-US`, `en-GB`, `en-AU`, or `en-CA`; `none` disables proofing for DOCX |
+| Ctrl+Shift+K | Set the document default and selected text's proofing language to `en-US`, `en-GB`, `en-AU`, `en-CA`, an installed language such as `de-DE`, or `none` for DOCX |
 | Ctrl+Shift+D | Manage Assuit's custom dictionary: A adds a word, Up/Down chooses, Delete removes, Esc closes |
 | Ctrl+=, Ctrl+-, Ctrl+0 | Zoom in, out, or reset |
 
 The status bar shows the most common actions. Selection, cursor movement and
 editing commands also follow the WordCraft document engine's keymap.
+
+For another language, place a licensed Hunspell pair such as `de-DE.aff` and
+`de-DE.dic` in Assuit's `assuit-dictionaries` folder using Loom. Reopen the
+language prompt and enter the matching language-region tag. Assuit checks that
+WordCraft can load the dictionary before changing the document.

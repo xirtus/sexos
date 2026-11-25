@@ -456,6 +456,26 @@ def main():
   g['wait'](r'\[assuit\.contents\] update\n',s,120)
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
+  # A person can place a licensed Hunspell pair in Assuit's own folder with
+  # Loom. Exercise the same folder through Spindle's native file commands.
+  def dictionary_file(name,lines):
+   path=f'/data/assuit/assuit-dictionaries/{name}'
+   for command,line in [('write',lines[0])]+[('append',v)for v in lines[1:]]:
+    g['focus'](153);s=len(t());type_line(f'{command} {path} {line}');q.key('ret')
+    g['wait'](r'\[spindle\.fs\.result\] kind=8 status=0 ',s,60)
+  dictionary_file('de-DE.aff',['SET UTF-8','TRY aehuskzt'])
+  dictionary_file('de-DE.dic',['2','Haus','Katze'])
+  s=len(t());g['focus'](153);type_line('run assuit german.docx');q.key('ret')
+  opened_german=g['wait'](r'\[assuit\.open\] target=(\d+) task=(\d+) name=german\.docx pages=1\n',s,900)
+  g['focus'](SURFACE[int(opened_german[1])]);time.sleep(.5)
+  s=len(t());press('ctrl','shift','k');type_line('de-DE');q.key('ret')
+  g['wait'](r'\[assuit\.proofing-language\] de-DE\n',s,120)
+  type_line('Haus Huas');press('ctrl','home')
+  s=len(t());press('ctrl','shift','y')
+  g['wait'](r'\[assuit\.spelling\] word=Huas suggestions=\d+\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-german-dictionary.ppm')})
+  assert (a.out/'assuit-german-dictionary.ppm').stat().st_size>10000
+  close(opened_german)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})
  finally:g['stop']()
