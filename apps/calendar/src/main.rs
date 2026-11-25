@@ -32,7 +32,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use draw::Face;
-use sex_app::{files, Event, Nav, Window};
+use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
 use sex_dav::FileAccount;
@@ -63,6 +63,8 @@ pub struct App {
     pub today: Date,
     pub selected: Date,
     pub view: View,
+    pub palette: views::Palette,
+    theme_generation: u64,
     pub help: bool,
     pub help_offset: usize,
     /// The chosen day's events listed with details (Enter in the month).
@@ -600,7 +602,12 @@ pub extern "C" fn _start() -> ! {
     // one starts where the program was written.
     let minute = (now / 60_000) as i64;
     let today = if now == 0 { Date { year: 2026, month: 1, day: 1 } } else { clock.home_zone().local(minute).0 };
-    let mut app = App { cal, clock, today, selected: today, view: View::Month, help: false, help_offset: 0, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
+    let theme = settings::theme();
+    let palette = views::Palette::from_tokens(theme);
+    let theme_generation = settings::generation().unwrap_or(0);
+    sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
+    let mut app = App { cal, clock, today, selected: today, view: View::Month, palette, theme_generation,
+        help: false, help_offset: 0, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
@@ -614,7 +621,21 @@ pub extern "C" fn _start() -> ! {
     views::render(&mut window, &app, &mut faces);
     sex_pdx::serial_record!("[calendar.ready] target={} task={} today={} month={:04}-{:02}", window.target, window.task, today, today.year, today.month);
     let mut shown_second = now / 1000;
+    let mut theme_next = sex_pdx::get_ticks().saturating_add(1000);
     loop {
+        let ticks = sex_pdx::get_ticks();
+        if ticks >= theme_next {
+            theme_next = ticks.saturating_add(1000);
+            if let Ok(generation) = settings::generation() {
+                if generation != app.theme_generation {
+                    app.theme_generation = generation;
+                    let theme = settings::theme();
+                    app.palette = views::Palette::from_tokens(theme);
+                    sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, app.palette.accent);
+                    views::render(&mut window, &app, &mut faces);
+                }
+            }
+        }
         let Some(event) = window.next_within(500) else {
             let rang = app.tick(&mut window);
             let second = app.now_ms / 1000;
