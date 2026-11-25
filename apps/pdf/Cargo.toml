@@ -18,3 +18,4 @@ sex-font = { path = "../../crates/sex-font" }
 vellum-edit = { path = "../../crates/vellum-edit" }
 # --thumb's shrinking, shared with Gaze.
 sex-image = { path = "../../crates/sex-image" }
+sex-theme = { path = "../../crates/sex-theme" }

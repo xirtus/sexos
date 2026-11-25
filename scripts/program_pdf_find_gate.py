@@ -53,10 +53,14 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
   s=len(t());line('run vellum @find10.pdf')
   o=g['wait'](rf'\[pdf\.open\] target=(\d+) task=(\d+) name=find10\.pdf pages={PAGES}\n',s,600)
+  g['wait'](r'\[pdf\.theme\] mode=Light accent=d6336c',s,60)
   g['wait'](rf'\[pdf\.page\] page=1 pages={PAGES} width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
   launch=re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])
   sid=int(launch[-1]) if launch else SURFACE[int(o[1])]
   time.sleep(1);g['focus'](sid);time.sleep(.5)
+  q.cmd('screendump',{'filename':str(a.out/'pdf-theme.ppm')});time.sleep(.5)
+  shot=(a.out/'pdf-theme.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>1000,'Vellum did not paint the Light theme desk'
   # Find: Ctrl+F, the word in lower case (search ignores case), Enter.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.5)
   keys(UNIQUE.lower());q.key('ret')

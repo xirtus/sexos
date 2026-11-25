@@ -9,6 +9,7 @@ use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::Kind;
 use std::collections::HashMap;
 use std::time::Instant;
+use sex_theme::Tokens;
 use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
 
 use crate::marks;
@@ -17,12 +18,22 @@ use crate::text::{self, PageText};
 use crate::zoom::{self, Zoom};
 use crate::{outline, sample, thumb};
 
-const BACKGROUND: u32 = 0x003a3a3e;
-const PANEL_BACK: u32 = 0x002a2a2e;
-const BAR_BACK: u32 = 0x00202024;
-const INK: u32 = 0x00e8e8ea;
-const DIM: u32 = 0x009a9aa0;
-const ACCENT: u32 = 0x004f8fe8;
+#[derive(Clone, Copy)]
+struct Palette {
+    background: u32, panel_back: u32, bar_back: u32,
+    ink: u32, dim: u32, accent: u32, selected: u32, danger: u32,
+}
+
+impl Palette {
+    fn from_tokens(t: Tokens) -> Self {
+        let rgb = |c: u32| c & 0x00FF_FFFF;
+        Self {
+            background: rgb(t.window), panel_back: rgb(t.surface), bar_back: rgb(t.field),
+            ink: rgb(t.text), dim: rgb(t.text_dim), accent: rgb(t.accent),
+            selected: rgb(sex_theme::mix(t.surface, t.accent, 0.25)), danger: rgb(t.danger),
+        }
+    }
+}
 /// Search hits are multiplied into the page, so text under them stays legible.
 const HIT_NOW: u32 = 0x00ffd23a;
 const HIT_OTHER: u32 = 0x00fff2b0;
@@ -151,6 +162,8 @@ fn render_page(pdf: &Pdf, index: usize, scale: f32) -> Option<(Vec<u32>, usize, 
 }
 
 struct Viewer {
+    palette: Palette,
+    theme_generation: u64,
     pdf: Pdf,
     name: String,
     page: usize,
@@ -271,6 +284,7 @@ impl Viewer {
     }
 
     fn draw(&mut self, window: &mut sex_app::Window) {
+        let palette = self.palette;
         let size = window.size();
         let out = window.pixels();
         let (width, height) = (size.0.min(out.len() / size.1.max(1)), size.1);
@@ -278,7 +292,7 @@ impl Viewer {
         let l = self.layout((width, height));
         let scale = self.scale(&l);
         self.render(scale);
-        out[..width * height].fill(BACKGROUND);
+        out[..width * height].fill(palette.background);
         if let Some(r) = &self.shown {
             let max_scroll = (r.h + 2 * MARGIN).saturating_sub(l.ah);
             if let Some(y) = self.reveal.take() { self.scroll = zoom::scroll_to(y, r.scale, r.h, l.ah, MARGIN); }
@@ -340,8 +354,9 @@ impl Viewer {
     }
 
     fn draw_bar(&mut self, out: &mut [u32], width: usize, bar: usize) {
-        fill(out, width, (0, 0, width, bar), BAR_BACK);
-        fill(out, width, (0, bar - 1, width, 1), ACCENT);
+        let palette = self.palette;
+        fill(out, width, (0, 0, width, bar), palette.bar_back);
+        fill(out, width, (0, bar - 1, width, 1), palette.accent);
         let y = (bar.saturating_sub(CH)) / 2;
         // Editing has the bar before find: what is typed goes where the bar says.
         let editing = if let Some(signature) = &self.signature {
@@ -364,11 +379,11 @@ impl Viewer {
         if let Some((label, value, right)) = editing {
             let right = self.status.clone().unwrap_or(right);
             let Some(letters) = self.letters.as_mut() else { return };
-            letters.draw(out, width, (8, y), width, &label, DIM);
+            letters.draw(out, width, (8, y), width, &label, palette.dim);
             let vx = 8 + (label.chars().count() + 1) * CW;
-            letters.draw(out, width, (vx, y), width.saturating_sub((right.len() + 2) * CW), &value, INK);
+            letters.draw(out, width, (vx, y), width.saturating_sub((right.len() + 2) * CW), &value, palette.ink);
             let sx = width.saturating_sub(8 + right.len() * CW);
-            letters.draw(out, width, (sx, y), width, &right, DIM);
+            letters.draw(out, width, (sx, y), width, &right, palette.dim);
             return;
         }
         let status = if self.term != self.searched || self.term.is_empty() { String::new() }
@@ -376,14 +391,15 @@ impl Viewer {
             else { self.hit.and_then(|h| self.hits.iter().position(|x| *x == h)).map(|i| format!("{} of {}", i + 1, self.hits.len())).unwrap_or_default() };
         let y = (bar.saturating_sub(CH)) / 2;
         let Some(letters) = self.letters.as_mut() else { return };
-        letters.draw(out, width, (8, y), width, "Find:", DIM);
-        letters.draw(out, width, (8 + 6 * CW, y), width.saturating_sub(16 * CW), &format!("{}_", self.term), INK);
+        letters.draw(out, width, (8, y), width, "Find:", palette.dim);
+        letters.draw(out, width, (8 + 6 * CW, y), width.saturating_sub(16 * CW), &format!("{}_", self.term), palette.ink);
         let sx = width.saturating_sub(8 + status.len() * CW);
-        letters.draw(out, width, (sx, y), width, &status, if self.found_none { 0x00ff8a7a } else { DIM });
+        letters.draw(out, width, (sx, y), width, &status, if self.found_none { palette.danger } else { palette.dim });
     }
 
     fn draw_panel(&mut self, out: &mut [u32], width: usize, height: usize) {
-        fill(out, width, (0, 0, PANEL, height), PANEL_BACK);
+        let palette = self.palette;
+        fill(out, width, (0, 0, PANEL, height), palette.panel_back);
         match self.panel {
             Panel::Thumbs => self.draw_thumbs(out, width, height),
             Panel::Outline => self.draw_outline(out, width, height),
@@ -393,19 +409,20 @@ impl Viewer {
     }
 
     fn draw_annots(&mut self, out: &mut [u32], width: usize, height: usize) {
+        let palette = self.palette;
         let top = if self.bar_shown() { BAR } else { 0 } + 6;
         let rows: Vec<String> = self.annots.iter().enumerate().map(|(i, a)| format!("{} {}", i + 1, describe(a))).collect();
         let Some(letters) = self.letters.as_mut() else { return };
         if rows.is_empty() {
-            letters.draw(out, width, (8, top), PANEL - 4, "No annotations", DIM);
+            letters.draw(out, width, (8, top), PANEL - 4, "No annotations", palette.dim);
             return;
         }
         let fits = ((height - top) / ROW).max(1);
         let first = self.chosen.saturating_sub(fits - 1);
         for (row, (i, text)) in rows.iter().enumerate().skip(first).take(fits).enumerate() {
             let y = top + row * ROW;
-            if i == self.chosen { fill(out, width, (0, y, PANEL, ROW), 0x00384a66); }
-            letters.draw(out, width, (8, y + (ROW - CH) / 2), PANEL - 4, text, if i == self.chosen { INK } else { DIM });
+            if i == self.chosen { fill(out, width, (0, y, PANEL, ROW), palette.selected); }
+            letters.draw(out, width, (8, y + (ROW - CH) / 2), PANEL - 4, text, if i == self.chosen { palette.ink } else { palette.dim });
         }
     }
 
@@ -416,6 +433,7 @@ impl Viewer {
     }
 
     fn draw_thumbs(&mut self, out: &mut [u32], width: usize, height: usize) {
+        let palette = self.palette;
         let top = if self.bar_shown() { BAR } else { 0 };
         let slot = self.thumb_slot().max(1);
         let fits = ((height - top) / slot).max(1);
@@ -431,7 +449,7 @@ impl Viewer {
             let y = top + (i - self.thumb_top) * slot + 8;
             let Some((pixels, w, h)) = &self.thumbs[i] else { continue };
             let x = (PANEL - w) / 2;
-            if i == self.page { fill(out, width, (x - 3, y.saturating_sub(3), w + 6, (*h + 6).min(height.saturating_sub(y.saturating_sub(3)))), ACCENT); }
+            if i == self.page { fill(out, width, (x - 3, y.saturating_sub(3), w + 6, (*h + 6).min(height.saturating_sub(y.saturating_sub(3)))), palette.accent); }
             for row in 0..*h {
                 if y + row >= height { break; }
                 out[(y + row) * width + x..(y + row) * width + x + w].copy_from_slice(&pixels[row * w..row * w + w]);
@@ -439,7 +457,7 @@ impl Viewer {
             let label = format!("{}", i + 1);
             if y + h + 4 + CH <= height {
                 let lx = (PANEL - label.len() * CW) / 2;
-                if let Some(letters) = self.letters.as_mut() { letters.draw(out, width, (lx, y + h + 4), PANEL, &label, if i == self.page { INK } else { DIM }); }
+                if let Some(letters) = self.letters.as_mut() { letters.draw(out, width, (lx, y + h + 4), PANEL, &label, if i == self.page { palette.ink } else { palette.dim }); }
             }
         }
         if rendered > 0 {
@@ -448,20 +466,21 @@ impl Viewer {
     }
 
     fn draw_outline(&mut self, out: &mut [u32], width: usize, height: usize) {
+        let palette = self.palette;
         let top = if self.bar_shown() { BAR } else { 0 } + 6;
         let entries = self.outline.clone().unwrap_or_default();
         let Some(letters) = self.letters.as_mut() else { return };
         if entries.is_empty() {
-            letters.draw(out, width, (8, top), PANEL - 4, "No outline", DIM);
+            letters.draw(out, width, (8, top), PANEL - 4, "No outline", palette.dim);
             return;
         }
         let fits = ((height - top) / ROW).max(1);
         let first = self.chosen.saturating_sub(fits - 1);
         for (row, (i, e)) in entries.iter().enumerate().skip(first).take(fits).enumerate() {
             let y = top + row * ROW;
-            if i == self.chosen { fill(out, width, (0, y, PANEL, ROW), 0x00384a66); }
+            if i == self.chosen { fill(out, width, (0, y, PANEL, ROW), palette.selected); }
             let indent = 8 + e.depth.min(4) * CW;
-            let color = if e.page == Some(self.page) { INK } else { DIM };
+            let color = if e.page == Some(self.page) { palette.ink } else { palette.dim };
             letters.draw(out, width, (indent, y + (ROW - CH) / 2), PANEL - 4, &e.title, color);
         }
     }
@@ -1045,8 +1064,13 @@ pub fn main() {
     sex_std::record(&format!("[pdf.open] target={target} task={task} name={short} pages={}", pdf.pages().len()));
     if let Err(why) = &editor { sex_std::record(&format!("[pdf.edit.refused] {why}")); }
     let window = sex_std::window();
+    let theme = sex_app::settings::theme();
+    let palette = Palette::from_tokens(theme);
+    let theme_generation = sex_app::settings::generation().unwrap_or(0);
+    sex_std::record(&format!("[pdf.theme] mode={:?} accent={:06x}", theme.mode, palette.accent));
     let pages = pdf.pages().len();
     let mut viewer = Viewer {
+        palette, theme_generation,
         pdf, name: short, page: 0, zoom: Zoom::FitWidth, scroll: 0, hscroll: 0, shown: None,
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
@@ -1054,17 +1078,31 @@ pub fn main() {
         path: name, editor, region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
     };
     viewer.draw(window);
+    let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
     loop {
-        let changed = match window.next() {
-            Event::Close => break,
-            Event::Resize { .. } => true,
-            Event::Key(key) => {
+        let now = sex_std::sex_pdx::get_ticks();
+        if now >= theme_next {
+            theme_next = now.saturating_add(1000);
+            if let Ok(generation) = sex_app::settings::generation() {
+                if generation != viewer.theme_generation {
+                    viewer.theme_generation = generation;
+                    let theme = sex_app::settings::theme();
+                    viewer.palette = Palette::from_tokens(theme);
+                    sex_std::record(&format!("[pdf.theme] mode={:?} accent={:06x}", theme.mode, viewer.palette.accent));
+                    viewer.draw(window);
+                }
+            }
+        }
+        let changed = match window.next_within(1000) {
+            Some(Event::Close) => break,
+            Some(Event::Resize { .. }) => true,
+            Some(Event::Key(key)) => {
                 let changed = viewer.key(key, window.size());
                 if viewer.panel == Panel::Annots { viewer.load_annots(false); }
                 changed
             }
-            Event::Pointer(p) => viewer.pointer(p, window.size()),
-            Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => false,
+            Some(Event::Pointer(p)) => viewer.pointer(p, window.size()),
+            Some(Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_)) | None => false,
         };
         if changed { viewer.draw(window); }
     }
