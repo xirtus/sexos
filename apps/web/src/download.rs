@@ -4,10 +4,11 @@
 //! it arrives, with its progress in the bar, instead of into memory. `about:downloads`
 //! lists them; each opens from there.
 
-use super::{net, Browser, Pending};
+use super::{net, state_file, Browser, Pending};
 use alloc::string::String;
 use alloc::vec::Vec;
 use sex_app::files;
+use sex_web::download_history::{self, Record};
 
 const DIR: &str = "Downloads";
 /// Largest download.
@@ -45,11 +46,31 @@ pub fn file_name(head: &sex_fetch::Head, url: &str) -> String {
 use sex_web::sex_html;
 
 /// A finished download: its file and size.
-pub struct Done { pub path: String, pub bytes: u64, pub url: String }
+pub use sex_web::download_history::Record as Done;
 /// A failed transfer retained only for this browser window, with an explicit retry.
 pub struct Failure { pub name: String, pub url: String, pub why: String }
 
 impl Browser {
+    /// Load the person's finished transfers before the first page opens. A private
+    /// window never calls this, and private-tab records are excluded from saves.
+    pub(super) fn load_downloads(&mut self) {
+        const PATH: &str = "Kaleidoscope/downloads.tsv";
+        let loaded = state_file::read(&mut self.window, PATH, download_history::MAX_FILE)
+            .and_then(|s| download_history::decode(&s).ok())
+            .or_else(|| state_file::read(&mut self.window, "Kaleidoscope/downloads.tsv.previous", download_history::MAX_FILE)
+                .and_then(|s| download_history::decode(&s).ok()))
+            .unwrap_or_default();
+        sex_pdx::serial_record!("[web.download.history.loaded] count={}", loaded.len());
+        self.downloads = loaded;
+    }
+
+    fn keep_downloads(&mut self) {
+        let _ = files::mkdir(&mut self.window, b"Kaleidoscope");
+        let text = download_history::encode(&self.downloads);
+        let kept = state_file::replace(&mut self.window, "Kaleidoscope/downloads.tsv", text.as_bytes());
+        sex_pdx::serial_record!("[web.download.history.saved] count={} kept={}", self.downloads.iter().filter(|d| !d.private).count(), kept as u8);
+    }
+
     /// Loads `url` for showing as a page: like `fetch`, but an answer that is a download
     /// streams to Files instead (then `Ok(None)`).
     pub(super) fn fetch_or_download(&mut self, url: &str) -> Result<Option<(String, core::ops::Range<usize>)>, &'static [u8]> {
@@ -156,7 +177,10 @@ impl Browser {
         match result {
             Ok((wrote, _)) => {
                 self.download_failures.retain(|f| f.url != url);
-                self.downloads.push(Done { path, bytes: wrote, url: String::from(url) });
+                let private = self.jarbox == super::profile::Jarbox::Private;
+                self.downloads.push(Record { path, bytes: wrote, url: String::from(url), private });
+                if self.downloads.len() > download_history::MAX_RECORDS { self.downloads.remove(0); }
+                if !private { self.keep_downloads(); }
                 Ok(())
             }
             Err(why) => {
@@ -210,7 +234,7 @@ impl Browser {
         sex_pdx::serial_record!("[web.download.panel] done={} failed={}", self.downloads.len(), self.download_failures.len());
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
         let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2>");
-        if self.downloads.is_empty() { html.push_str("<p>Nothing downloaded in this window yet.</p>"); }
+        if self.downloads.is_empty() { html.push_str("<p>No completed downloads in history yet.</p>"); }
         html.push_str("<ul>");
         let mut here = Vec::with_capacity(self.downloads.len());
         for d in self.downloads.iter() { here.push(files::size(&mut self.window, d.path.as_bytes()).is_ok()); }

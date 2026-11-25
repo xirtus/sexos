@@ -77,6 +77,13 @@ def main():
   g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-recovered.ppm')})
   assert (a.out/'browser-download-recovered.ppm').stat().st_size>10000
+  g['wait'](r'\[web.download.history.saved\] count=4 kept=1',0,120)
+  s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.history.loaded\] count=4',s,300)
+  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-history-reopened.ppm')})
+  assert (a.out/'browser-download-history-reopened.ppm').stat().st_size>10000
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fnv':m.group(0)})
  finally:g['stop']()
