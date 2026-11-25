@@ -131,6 +131,8 @@ def main():
   g['wait'](loaded,s,300);time.sleep(1)
   q.cmd('screendump',{'filename':str(a.out/'web-private-launch-redacted.ppm')})
   assert (a.out/'web-private-launch-redacted.ppm').stat().st_size>100000
+  g['focus'](153);undo_start=len(t());q.key('esc');q.key('u')
+  g['wait'](r'\[spindle.line.edit.ok\] op=undo len=0',undo_start,30)
   launch_trace=t()[s:]
   assert PRIVATE_SENTINEL not in launch_trace,'private launch contents reached serial diagnostics'
   assert '[spindle.history.push]' not in launch_trace,'private launch entered command history'

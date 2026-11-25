@@ -16369,6 +16369,11 @@ unsafe fn spindle_dispatch() {
     // Clear command buffer after dispatch.
     yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
     yarn.cmd_len = 0;
+    if private_launch {
+        SPINDLE_VI_PREV_BUF = [0u8; YARN_CMD_BUF_CAP];
+        SPINDLE_VI_PREV_LEN = 0;
+        serial_println!("[spindle.private.input.scrubbed] undo=0 nav=0");
+    }
     SPINDLE_VI_CUR = 0;
     SPINDLE_VI_NORMAL = false; // return to insert mode for next command
     SPINDLE_VI_PENDING_D = false;
@@ -16384,7 +16389,7 @@ unsafe fn spindle_session_save(idx: usize) {
     if idx >= SPINDLE_SESSION_COUNT { return; }
     let s = &mut SPINDLE_SESSIONS[idx];
     let yarn = &YARN;
-    if sex_pdx::private_launch::is_private_browser_launch(&yarn.cmd_buf[..yarn.cmd_len]) {
+    if sex_pdx::private_launch::is_browser_launch_candidate(&yarn.cmd_buf[..yarn.cmd_len]) {
         s.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
         s.cmd_len = 0;
     } else {
@@ -16394,7 +16399,7 @@ unsafe fn spindle_session_save(idx: usize) {
     s.vi_normal = SPINDLE_VI_NORMAL;
     s.vi_cur = SPINDLE_VI_CUR;
     s.vi_pending_d = SPINDLE_VI_PENDING_D;
-    if sex_pdx::private_launch::is_private_browser_launch(&SPINDLE_VI_PREV_BUF[..SPINDLE_VI_PREV_LEN]) {
+    if sex_pdx::private_launch::is_browser_launch_candidate(&SPINDLE_VI_PREV_BUF[..SPINDLE_VI_PREV_LEN]) {
         s.vi_prev_buf = [0u8; YARN_CMD_BUF_CAP];
         s.vi_prev_len = 0;
     } else {

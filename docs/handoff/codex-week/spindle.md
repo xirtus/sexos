@@ -7,3 +7,5 @@ last gap for recognized `--private` Kaleidoscope launches: input receipts carry
 structure only, and neither command history nor session restore retains the URL.
 Shell Yarn's integrated prompt receives the same input redaction and skips a
 private launch-shaped command in its in-memory history and output.
+Private launches also clear vi undo and history-navigation snapshots after
+submission; unfinished browser commands are omitted from Yarn session saves.

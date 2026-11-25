@@ -206,6 +206,19 @@ impl CmdLine {
 
     fn clear(&mut self) { self.len = 0; self.cur = 0; }
 
+    /// A private browser launch must not be recalled through vi undo or a
+    /// pending history-navigation snapshot after Enter.
+    fn clear_private(&mut self) {
+        self.buf.fill(0);
+        self.prev_buf.fill(0);
+        self.nav_saved.fill(0);
+        self.len = 0;
+        self.cur = 0;
+        self.prev_len = 0;
+        self.nav_saved_len = 0;
+        self.hist_nav = None;
+    }
+
     fn as_bytes(&self) -> &[u8] { &self.buf[..self.len] }
 
     fn insert_at(&mut self, pos: usize, b: u8) {
@@ -3028,11 +3041,12 @@ pub extern "C" fn _start() -> ! {
             }
 
             // On Enter, record command, persist, dispatch, and optionally Bell-notify.
+            let private_launch = scancode == 0x1C && line.len > 0
+                && sex_pdx::private_launch::is_private_browser_launch(line.as_bytes());
             if scancode == 0x1C && line.len > 0 {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
                 let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"|b"probe-status"|b"probe-cancel"|b"probe-retry");
-                let private_launch = sex_pdx::private_launch::is_private_browser_launch(line.as_bytes());
                 if !control && !private_launch{let idx=hist.push(wifi_command::without_passphrase(line.as_bytes()));serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
@@ -3061,6 +3075,10 @@ pub extern "C" fn _start() -> ! {
                 line.hist_nav = None;
             }
             handle_key(scancode, shift, &mut line, hist);
+            if private_launch {
+                line.clear_private();
+                serial_println!("[spindle.private.input.scrubbed] undo=0 nav=0");
+            }
             unsafe {
                 static mut SPINDLE_ECHO_BUDGET: u32 = 16;
                 if SPINDLE_ECHO_BUDGET > 0 {

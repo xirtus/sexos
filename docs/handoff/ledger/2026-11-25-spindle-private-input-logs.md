@@ -6,11 +6,15 @@
 - **Change:** Redact typed characters and command text in native Spindle and
   Shell Yarn receipts. Keep fixed command names needed by existing gates. Skip
   history and session restore for exact private Kaleidoscope launch syntax;
-  Shell Yarn also skips its in-memory command echo and history.
+  Shell Yarn also skips its in-memory command echo and history. After Enter,
+  wipe both prompts' vi undo buffers and Spindle's navigation snapshot so a
+  private launch cannot be recalled. Yarn also excludes an unfinished browser
+  command from session snapshots, since its URL may precede `--private`.
 - **Proof:** Unit tests cover exact private launch recognition and false
   positives. The existing Kaleidoscope private QEMU gate now types a private
   launch through Spindle, waits for the browser, captures a screenshot, and
-  rejects its URL sentinel or a history push in the serial slice. Full build
+  rejects its URL sentinel or a history push in the serial slice. It then
+  checks vi undo leaves the prompt empty. Full build
   and QEMU proof are assigned to GitHub CI.
 - **Limit:** Shell Yarn has no app launch command. Its saved sessions are
   in-memory only. Other commands may intentionally display their own output;

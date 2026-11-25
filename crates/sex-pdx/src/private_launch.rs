@@ -9,20 +9,28 @@ pub fn is_private_browser_target(target: &[u8], args: &[u8]) -> bool {
     browser(target) && args.split(|&b| b == b' ').any(|word| word == b"--private")
 }
 
-pub fn is_private_browser_launch(line: &[u8]) -> bool {
+fn launch_target(line: &[u8]) -> (Option<&[u8]>, impl Iterator<Item = &[u8]>) {
     let mut words = line.split(|&b| b == b' ').filter(|w| !w.is_empty());
-    let Some(first) = words.next() else { return false };
-    let target = if first == b"run" {
+    let target = if words.next() == Some(b"run".as_slice()) {
         let mut next = words.next();
         while matches!(next, Some(b"+net" | b"+pkg")) { next = words.next(); }
         next
-    } else { Some(first) };
-    target.is_some_and(browser) && words.any(|word| word == b"--private")
+    } else { line.split(|&b| b == b' ').find(|w| !w.is_empty()) };
+    (target, words)
+}
+
+pub fn is_browser_launch_candidate(line: &[u8]) -> bool {
+    launch_target(line).0.is_some_and(browser)
+}
+
+pub fn is_private_browser_launch(line: &[u8]) -> bool {
+    let (target, words) = launch_target(line);
+    target.is_some_and(browser) && words.into_iter().any(|word| word == b"--private")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_private_browser_launch as private;
+    use super::{is_browser_launch_candidate as candidate, is_private_browser_launch as private};
 
     #[test]
     fn exact_private_browser_commands_only() {
@@ -34,5 +42,8 @@ mod tests {
         assert!(!private(b"run +net another-app --private https://private.invalid/x"));
         assert!(!private(b"run +net kaleidoscope https://private.invalid/x"));
         assert!(!private(b"run +net kaleidoscope '--private https://private.invalid/x'"));
+        assert!(candidate(b"run +net kaleidoscope https://private.invalid/x --pri"));
+        assert!(candidate(b"browser https://private.invalid/x --pri"));
+        assert!(!candidate(b"echo browser https://private.invalid/x --pri"));
     }
 }

@@ -18,6 +18,9 @@ class TerminalPrivateInput(unittest.TestCase):
             self.assertFalse(any(re.search(r' ch=| text=| key=\{| code=\{|scancode=\{|down=\{', line) for line in lines), receipt)
         self.assertIn('!private_launch{let idx=hist.push', source)
         self.assertIn('command_receipt_name(cmd_name)', source)
+        self.assertIn('line.clear_private();', source)
+        self.assertIn('self.prev_buf.fill(0);', source)
+        self.assertIn('self.nav_saved.fill(0);', source)
 
     def test_shell_yarn_receipts_and_saved_state_exclude_private_input(self):
         source = (ROOT / 'servers/silk-shell/src/main.rs').read_text()
@@ -28,7 +31,8 @@ class TerminalPrivateInput(unittest.TestCase):
             self.assertTrue(lines, receipt)
             self.assertFalse(any(re.search(r' ch=\{| args=\{| cmd=\{|scancode=\{', line) for line in lines), receipt)
         self.assertIn('if !private_launch { yarn_append_output', source)
-        self.assertIn('is_private_browser_launch(&yarn.cmd_buf[..yarn.cmd_len])', source)
+        self.assertIn('SPINDLE_VI_PREV_BUF = [0u8; YARN_CMD_BUF_CAP]', source)
+        self.assertIn('is_browser_launch_candidate(&yarn.cmd_buf[..yarn.cmd_len])', source)
 
 
 if __name__ == '__main__':
