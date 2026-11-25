@@ -6,7 +6,21 @@ use alloc::string::String;
 
 pub const MAX_CATCHUP_MINUTES: i64 = 7 * 24 * 60;
 pub const NOTICE_LEASE_MS: u64 = 10_000;
+pub const NOTICE_POLL_MS: u64 = 500;
 const HEADER: &str = "# date-notices 1";
+
+/// Poll independently of the window's input stream. A stream of pointer or
+/// keyboard events must not postpone a due Bell notice indefinitely.
+pub struct NoticeCadence { next: u64 }
+
+impl NoticeCadence {
+    pub fn new(now_ticks: u64) -> Self { Self { next: now_ticks.saturating_add(NOTICE_POLL_MS) } }
+    pub fn due(&mut self, now_ticks: u64) -> bool {
+        if now_ticks < self.next { return false; }
+        self.next = now_ticks.saturating_add(NOTICE_POLL_MS);
+        true
+    }
+}
 
 /// A visible Date run or parked worker refreshes this timestamp twice a
 /// second. A stopped run gives up ownership after this short recovery window.
@@ -65,5 +79,18 @@ mod tests {
         assert!(!lease_live(now - NOTICE_LEASE_MS - 1, now));
         assert!(!lease_live(now + 1, now));
         assert!(!lease_live(0, now));
+    }
+
+    #[test]
+    fn notice_poll_advances_during_continuous_events_without_duplicate_interval() {
+        let mut cadence = NoticeCadence::new(0);
+        let mut polls = alloc::vec::Vec::new();
+        for ticks in (0..=2_000).step_by(50) {
+            // Every iteration represents an input event, so there is never an
+            // idle return from a window event wait.
+            if cadence.due(ticks) { polls.push(ticks); }
+        }
+        assert_eq!(polls, [500, 1_000, 1_500, 2_000]);
+        assert!(!cadence.due(2_000), "one interval gets one due check");
     }
 }
