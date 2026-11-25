@@ -801,6 +801,13 @@ impl Book {
         }).collect()
     }
 
+    /// Chart kinds in draw order, for the guest's visible-chart check.
+    pub fn chart_kinds(&self) -> Vec<gridcraft_engine::model::ChartKind> {
+        self.session.doc().ok().and_then(|d| d.wb.active().map(|sheet| {
+            sheet.charts.iter().map(|chart| chart.kind).collect()
+        })).unwrap_or_default()
+    }
+
     /// The topmost chart anchored at the current cell.
     pub fn chart_at_anchor(&self, row: u32, col: u32) -> Option<Placed> {
         self.charts().into_iter().rev().find(|c| c.row == row && c.col == col)
