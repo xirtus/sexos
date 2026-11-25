@@ -77,7 +77,7 @@ const HOME: &[u8] = sex_pdx::home_lock::HOME;
 const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
-enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, RenamedOne { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
+enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, MovedSame { from: Vec<u8>, to: Vec<u8> }, RenamedOne { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
     /// A batch rename in `dir`: the moves that take it back, in order.
     Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
@@ -393,7 +393,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+Y redo rename/trash/folder  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+Y redo move/rename/trash/folder  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -591,7 +591,7 @@ impl App {
                 sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&from), shown(&to), cut as u8);
                 if cut { self.meta_moved(window, &from, &to); }
                 self.status = format!("{} {}.", if cut { "Moved" } else { "Copied" }, shown(base(&to)));
-                self.record_undo(if cut { Undo::Moved { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
+                self.record_undo(if cut { Undo::MovedSame { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
                 if cut { self.clip = None; }
                 let _ = files::sync(window);
                 self.load(window);
@@ -710,6 +710,11 @@ impl App {
         let Some(step) = self.undo.pop() else { self.status = "Nothing to undo.".into(); return };
         let result = match &step {
             Undo::Moved { from, to } => self.move_path(window, to, from),
+            Undo::MovedSame { from, to } => match files::stat(window, &at(from)) {
+                Ok(_) => Err(w::EXISTS),
+                Err(w::NOT_FOUND) => files::rename(window, &at(to), &at(from)),
+                Err(e) => Err(e),
+            },
             Undo::RenamedOne { from, to } => match files::stat(window, &at(from)) {
                 Ok(_) => Err(w::EXISTS),
                 Err(w::NOT_FOUND) => files::rename(window, &at(to), &at(from)),
@@ -725,7 +730,7 @@ impl App {
                 self.meta_undone(window, &step);
                 sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
                 self.status = "Undone.".into();
-                if matches!(&step, Undo::Renamed { .. } | Undo::RenamedOne { .. } | Undo::Trashed { .. } | Undo::Made { .. }) {
+                if matches!(&step, Undo::Renamed { .. } | Undo::RenamedOne { .. } | Undo::MovedSame { .. } | Undo::Trashed { .. } | Undo::Made { .. }) {
                     if self.redo.len() == 64 { self.redo.remove(0); }
                     self.redo.push(step);
                 } else { self.redo.clear(); }
@@ -748,6 +753,11 @@ impl App {
                 self.rename_undo(window, dir, &forward)
             }
             Undo::RenamedOne { from, to } => match files::stat(window, &at(to)) {
+                Ok(_) => Err(w::EXISTS),
+                Err(w::NOT_FOUND) => files::rename(window, &at(from), &at(to)),
+                Err(e) => Err(e),
+            },
+            Undo::MovedSame { from, to } => match files::stat(window, &at(to)) {
                 Ok(_) => Err(w::EXISTS),
                 Err(w::NOT_FOUND) => files::rename(window, &at(from), &at(to)),
                 Err(e) => Err(e),
