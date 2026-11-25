@@ -20,7 +20,8 @@
 //! checkbox, Escape ends. Ctrl+S saves every change as an incremental update appended
 //! to the file (its original bytes stay as they were) and shows the file as saved.
 //! Ctrl+Shift+G places a typed visual signature. It is visible markup, not a
-//! cryptographically verified digital signature.
+//! cryptographically verified digital signature. Ctrl+Shift+/ opens Vellum's
+//! keyboard reference; Escape closes it.
 //!
 //! `vellum --thumb @IN @OUT SIZE` opens no window: it writes the first page, on white, as
 //! a thumbnail (the format is in the `thumb` module).

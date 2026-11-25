@@ -61,6 +61,13 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'pdf-theme.ppm')});time.sleep(.5)
   shot=(a.out/'pdf-theme.ppm').read_bytes()
   assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>1000,'Vellum did not paint the Light theme desk'
+  # The shortcut reference is Vellum's own overlay over the current page.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':k}for k in ('ctrl','shift','slash')],'hold-time':80})
+  g['wait'](r'\[pdf\.shortcuts\] shown=1 rows=14\n',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-shortcuts.ppm')})
+  help_shot=(a.out/'pdf-shortcuts.ppm').read_bytes()
+  assert help_shot.startswith(b'P6\n') and help_shot!=shot,'Vellum shortcut overlay did not repaint'
+  s=len(t());q.key('esc');g['wait'](r'\[pdf\.shortcuts\] shown=0 top=0\n',s,60)
   # Find: Ctrl+F, the word in lower case (search ignores case), Enter.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.5)
   keys(UNIQUE.lower());q.key('ret')

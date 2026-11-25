@@ -64,6 +64,23 @@ const KEY_S: u8 = 0x1F;
 const KEY_H: u8 = 0x23;
 const KEY_L: u8 = 0x26;
 const KEY_N: u8 = 0x31;
+const SLASH: u8 = 0x35;
+const SHORTCUTS: &[&str] = &[
+    "Pages: Right / Space / N next; Left / P previous",
+    "Home / End first / last; Up / Down scroll",
+    "+ / - zoom; 0 / W fit width; F fit page; 1 actual size",
+    "T thumbnails; O outline (Up / Down / Enter choose)",
+    "Search: Ctrl+F find; Enter / Ctrl+G next; Shift previous",
+    "Escape closes search",
+    "Markup: Ctrl+R select region; arrows move; Shift+arrows size",
+    "Ctrl+H highlight a found word or selected region",
+    "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
+    "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
+    "Type in text fields; Space toggles checkbox; Escape ends",
+    "Ctrl+Shift+G places a typed visual signature",
+    "Visual signatures are markup, not digital signatures",
+    "Ctrl+S saves edits; Ctrl+Shift+/ opens this help",
+];
 /// The chosen region's outline, and a focused form field's.
 const REGION: u32 = 0x00e0457b;
 /// How far one arrow press moves or sizes the region, in points.
@@ -210,6 +227,8 @@ struct Viewer {
     annots: Vec<AnnotInfo>,
     /// A line of news in the bar until the next key: saved, refused, ...
     status: Option<String>,
+    shortcuts: bool,
+    shortcuts_top: usize,
 }
 
 /// Where each part of the window is.
@@ -380,6 +399,7 @@ impl Viewer {
         }
         if l.panel > 0 { self.draw_panel(out, width, height); }
         if l.bar > 0 { self.draw_bar(out, width, l.bar); }
+        if self.shortcuts { self.draw_shortcuts(out, width, height); }
         window.show_pixels(width, height);
         let short: String = self.name.chars().take(9).collect();
         let changed = if self.editor.as_ref().is_ok_and(|e| e.is_modified()) { "*" } else { "" };
@@ -388,6 +408,22 @@ impl Viewer {
 
     fn bar_shown(&self) -> bool {
         self.finding || self.note.is_some() || self.signature.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
+    }
+
+    fn draw_shortcuts(&mut self, out: &mut [u32], width: usize, height: usize) {
+        if width < 220 || height < 100 { return; }
+        let palette = self.palette;
+        let (x, y, w, h) = (16, 16, width - 32, height - 32);
+        fill(out, width, (x, y, w, h), palette.panel_back);
+        fill(out, width, (x, y, w, 2), palette.accent);
+        let Some(letters) = self.letters.as_mut() else { return };
+        letters.draw(out, width, (x + 12, y + 12), width - 16, "Vellum shortcuts", palette.ink);
+        let fits = (h.saturating_sub(64) / ROW).max(1);
+        let top = self.shortcuts_top.min(SHORTCUTS.len().saturating_sub(fits));
+        for (i, line) in SHORTCUTS.iter().skip(top).take(fits).enumerate() {
+            letters.draw(out, width, (x + 12, y + 40 + i * ROW), width - 16, line, palette.dim);
+        }
+        letters.draw(out, width, (x + 12, height - 36), width - 16, "Up / Down scroll; Escape closes", palette.accent);
     }
 
     fn draw_bar(&mut self, out: &mut [u32], width: usize, bar: usize) {
@@ -543,6 +579,22 @@ impl Viewer {
 
     /// A key; true when something changed and the window should be drawn again.
     fn key(&mut self, key: sex_std::sex_pdx::app_key::Key, size: (usize, usize)) -> bool {
+        if key.control && key.shift && key.code == SLASH {
+            self.shortcuts = !self.shortcuts;
+            self.shortcuts_top = 0;
+            sex_std::record(&format!("[pdf.shortcuts] shown={} rows={}", self.shortcuts as u8, SHORTCUTS.len()));
+            return true;
+        }
+        if self.shortcuts {
+            match sex_app::nav(key) {
+                Some(Nav::Down) => self.shortcuts_top = (self.shortcuts_top + 1).min(SHORTCUTS.len().saturating_sub(1)),
+                Some(Nav::Up) => self.shortcuts_top = self.shortcuts_top.saturating_sub(1),
+                _ if key.code == ESCAPE => self.shortcuts = false,
+                _ => return false,
+            }
+            sex_std::record(&format!("[pdf.shortcuts] shown={} top={}", self.shortcuts as u8, self.shortcuts_top));
+            return true;
+        }
         let had_status = self.status.take().is_some();
         if self.edit_key(key) { return true; }
         self.view_key(key, size) || had_status
@@ -1113,6 +1165,7 @@ pub fn main() {
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
+        shortcuts: false, shortcuts_top: 0,
     };
     viewer.draw(window);
     let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
