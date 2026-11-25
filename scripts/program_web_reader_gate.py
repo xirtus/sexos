@@ -53,7 +53,9 @@ def main():
   m=g['wait'](r'\[web.reader\] words=(\d+) title=([^\n]*) url=(\S+)',s,300)
   words,title,url=int(m[1]),m[2].strip(),m[3]
   assert 60<words<120 and title=='Why moths fly towards light' and url==page,(words,title,url)
+  g['wait'](r'\[web.reader.current\] url=',s,60)
   g['wait'](r'\[web.loaded\] bytes_ok=1 [^\n]*images=1 ',s,120);time.sleep(2)
+  assert '/site/reader/article.html' not in hits,('reader view refetched the source',hits)
   assert '/site/reader/moth.png' in hits,hits
   img=shot('reader')
   # The reader page's warm background fills the view.

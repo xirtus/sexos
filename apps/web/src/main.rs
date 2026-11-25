@@ -236,6 +236,8 @@ struct Browser {
     frame_dirty: bool,
     /// The page the next `open` comes from (its `Referer`).
     referrer_next: Option<String>,
+    /// A reader page made from the live document, consumed by the next navigation.
+    reader_pending: Option<(String, String)>,
     /// While a page loads (`Some`): the page it was opened from, for its requests'
     /// `Referer`, or `None` when it has none (a typed address, `no-referrer`).
     nav_from: Option<Option<String>>,
@@ -949,22 +951,27 @@ impl Browser {
         } else if let Some(target) = url.strip_prefix("about:reader?url=") {
             // Reader view: the page's article on a quiet page of its own.
             let target = extensions::decode(target);
-            let got = if target.starts_with("http://") || target.starts_with("https://") { self.fetch(&target).map(|(u, body)| (u, text_of(&self.buf[body]))) } else { Err(&b"Reader view needs a web address."[..]) };
-            match got {
-                Ok((final_url, html)) => {
-                    let dom = sex_html::parse::parse(&html);
-                    match sex_web::reader::article(&dom, &final_url) {
-                        Some(a) => {
-                            sex_pdx::serial_record!("[web.reader] words={} title={} url={}", a.words, a.title, final_url);
-                            (sex_web::reader::page(&a, &final_url), String::from("about:reader"))
-                        }
-                        None => {
-                            sex_pdx::serial_record!("[web.reader] words=0 url={}", final_url);
-                            (message_page("No reader view", "This page has no article to show on its own.", &final_url), String::from("about:reader"))
+            if let Some((source, page)) = self.reader_pending.take().filter(|(source, _)| source == &target) {
+                sex_pdx::serial_record!("[web.reader.current] url={}", source);
+                (page, String::from("about:reader"))
+            } else {
+                let got = if target.starts_with("http://") || target.starts_with("https://") { self.fetch(&target).map(|(u, body)| (u, text_of(&self.buf[body]))) } else { Err(&b"Reader view needs a web address."[..]) };
+                match got {
+                    Ok((final_url, html)) => {
+                        let dom = sex_html::parse::parse(&html);
+                        match sex_web::reader::article(&dom, &final_url) {
+                            Some(a) => {
+                                sex_pdx::serial_record!("[web.reader] words={} title={} url={}", a.words, a.title, final_url);
+                                (sex_web::reader::page(&a, &final_url), String::from("about:reader"))
+                            }
+                            None => {
+                                sex_pdx::serial_record!("[web.reader] words=0 url={}", final_url);
+                                (message_page("No reader view", "This page has no article to show on its own.", &final_url), String::from("about:reader"))
+                            }
                         }
                     }
+                    Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), &target), String::from("about:reader")),
                 }
-                Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), &target), String::from("about:reader")),
             }
         } else if url.starts_with(extensions::SCHEME) {
             // An extension's own page (its popup or options page), while it is on.
@@ -2179,7 +2186,7 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
