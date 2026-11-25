@@ -19,7 +19,8 @@ endpoint_src = (root / "crates/sex-pdx/src/endpoint.rs").read_text()
 ipc_v2_src = (root / "servers/sexfiles/src/ipc_v2.rs").read_text()
 
 # Keep everything in endpoint.rs up to `fn raw(` (all pure constants, types, and encode/decode helpers).
-cut = endpoint_src.index("#[inline]\nfn raw(")
+marker = '#[cfg(target_arch = "x86_64")]\n#[inline]\nfn raw('
+cut = endpoint_src.index(marker) if marker in endpoint_src else endpoint_src.index("#[inline]\nfn raw(")
 pure_endpoint = "\n".join(
     line for line in endpoint_src[:cut].splitlines() if not line.startswith("//!")
 )
