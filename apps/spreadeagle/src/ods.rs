@@ -9,7 +9,7 @@
 use quick_xml::events::{BytesStart, Event};
 use gridcraft_engine::core::Value;
 use gridcraft_engine::core::{CellRef, RangeRef};
-use gridcraft_engine::model::{Validation, ValidationKind};
+use gridcraft_engine::model::{FilterCriterion, Validation, ValidationKind};
 use std::io::Read;
 
 /// A formula found in the file: sheet, row and column counted from 0, Excel spelling.
@@ -19,6 +19,10 @@ pub struct Found { pub sheet: usize, pub row: u32, pub col: u32, pub formula: St
 /// A cell's font as the file styles it: sheet, row, column, (bold, italic, underline).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Styled { pub sheet: usize, pub row: u32, pub col: u32, pub font: (bool, bool, bool) }
+
+/// One ODF database range that can be represented by GridCraft's AutoFilter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FoundFilter { pub sheet: usize, pub range: RangeRef, pub criteria: Vec<(u32, FilterCriterion)> }
 
 /// What GridCraft's ODS import leaves out: formulas, cell fonts, and column widths (sheet,
 /// column, width in pixels at 96 per inch).
@@ -37,6 +41,9 @@ pub struct Extras {
     pub validations: Vec<(usize, RangeRef, Validation)>,
     /// Frozen rows and columns from LibreOffice's per-sheet view settings.
     pub freezes: Vec<(usize, u32, u32)>,
+    pub filters: Vec<FoundFilter>,
+    /// ODF filter expressions outside the native AutoFilter model are not silently applied.
+    pub filter_warnings: Vec<String>,
 }
 
 /// Rows and columns past these are not walked (a repeat count can say a million).
@@ -160,7 +167,208 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
     // View settings are optional metadata. A damaged settings.xml must not
     // discard formulas, formatting, and validations recovered from content.xml.
     out.freezes = read_freezes(&mut zip, &out.sheet_names).unwrap_or_default();
+    let (filters, filter_warnings) = read_filters(&xml, &out.sheet_names)?;
+    out.filters = filters;
+    out.filter_warnings = filter_warnings;
     Ok(out)
+}
+
+#[derive(Clone, Debug)]
+struct FilterCondition { field: u32, operator: String, value: String, data_type: String, items: Vec<String>, case_sensitive: bool, regex_enabled: bool }
+#[derive(Clone, Debug)]
+enum FilterExpr { Condition(FilterCondition), And(Vec<FilterExpr>), Or(Vec<FilterExpr>) }
+
+fn odf_filter_range(address: &str, names: &[String]) -> Option<(usize, RangeRef)> {
+    fn endpoint(input: &str) -> Option<(String, CellRef)> {
+        let (name, cell) = input.rsplit_once('.')?;
+        let name = name.strip_prefix('$').unwrap_or(name);
+        let name = if name.starts_with('\'') && name.ends_with('\'') && name.len() >= 2 {
+            name[1..name.len() - 1].replace("''", "'")
+        } else { name.to_string() };
+        Some((name, CellRef::parse(cell)?))
+    }
+    let (a, b) = address.split_once(':').unwrap_or((address, address));
+    let (first_name, first) = endpoint(a)?;
+    let (last_name, last) = endpoint(b)?;
+    if first_name != last_name || first.row > last.row || first.col > last.col { return None; }
+    let sheet = names.iter().position(|name| name == &first_name)?;
+    Some((sheet, RangeRef::new(first, last)))
+}
+
+fn filter_condition(c: &FilterCondition) -> Option<FilterCriterion> {
+    if c.case_sensitive { return None; }
+    if !c.items.is_empty() {
+        return Some(FilterCriterion::Values { values: c.items.iter().filter(|v| !v.is_empty()).cloned().collect(),
+            blanks: c.items.iter().any(String::is_empty) });
+    }
+    if c.operator == "empty" { return Some(FilterCriterion::Values { values: Vec::new(), blanks: true }); }
+    let ranked = match c.operator.as_str() {
+        "top values" => Some((false, false)), "bottom values" => Some((true, false)),
+        "top percent" => Some((false, true)), "bottom percent" => Some((true, true)), _ => None,
+    };
+    if let Some((bottom, percent)) = ranked {
+        let count = c.value.parse::<u32>().ok()?;
+        if count == 0 || count > if percent { 100 } else { 1_000_000 } { return None; }
+        return Some(FilterCriterion::Top10 { bottom, percent, count });
+    }
+    let op = match c.operator.as_str() {
+        "=" => "=", "!=" => "<>", "<" => "<", "<=" => "<=", ">" => ">", ">=" => ">=",
+        "begins" => "beginsWith", "ends" => "endsWith", "contains" => "contains", "!contains" => "notContains",
+        _ => return None,
+    };
+    // ODF enables regular expressions for string comparisons by default.
+    // GridCraft's custom filter compares literal text, so only plain values
+    // can be imported while that setting is active.
+    if c.data_type == "text" && c.regex_enabled && c.value.bytes().any(|b| matches!(b,
+        b'.' | b'^' | b'$' | b'*' | b'+' | b'?' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'|' | b'\\')) {
+        return None;
+    }
+    let numeric_value = c.value.parse::<f64>().is_ok_and(f64::is_finite);
+    // GridCraft infers numeric comparisons from the criterion, whereas ODF's
+    // data-type is authoritative. Numeric equality would also match text "2"
+    // in GridCraft, and a text comparison with "2" would hide text cells.
+    if !matches!(c.data_type.as_str(), "text" | "number")
+        || (matches!(op, "=" | "<>") && numeric_value)
+        || (matches!(op, "<" | "<=" | ">" | ">=") && numeric_value != (c.data_type == "number"))
+        || (matches!(op, "beginsWith" | "endsWith" | "contains" | "notContains") && c.data_type != "text") {
+        return None;
+    }
+    // ODF equality is literal; GridCraft's equality treats * and ? as wildcards.
+    if matches!(op, "=" | "<>") && c.value.contains(['*', '?']) { return None; }
+    Some(FilterCriterion::Custom { a: (op.to_string(), c.value.clone()), b: None, and: true })
+}
+
+fn filter_criteria(expr: FilterExpr, width: u32) -> Option<Vec<(u32, FilterCriterion)>> {
+    fn column(expr: FilterExpr) -> Option<(u32, FilterCriterion)> {
+        match expr {
+            FilterExpr::Condition(c) => Some((c.field, filter_condition(&c)?)),
+            FilterExpr::And(mut parts) | FilterExpr::Or(mut parts) if parts.len() == 1 => column(parts.remove(0)),
+            FilterExpr::And(parts) if parts.len() == 2 => paired(parts, true),
+            FilterExpr::Or(parts) if parts.len() == 2 => paired(parts, false),
+            _ => None,
+        }
+    }
+    fn paired(parts: Vec<FilterExpr>, and: bool) -> Option<(u32, FilterCriterion)> {
+        let mut parts = parts.into_iter();
+        let FilterExpr::Condition(a) = parts.next()? else { return None };
+        let FilterExpr::Condition(b) = parts.next()? else { return None };
+        if a.field != b.field { return None; }
+        let FilterCriterion::Custom { a: first, b: None, .. } = filter_condition(&a)? else { return None };
+        let FilterCriterion::Custom { a: second, b: None, .. } = filter_condition(&b)? else { return None };
+        Some((a.field, FilterCriterion::Custom { a: first, b: Some(second), and }))
+    }
+    // An AND of two conditions for the same column is one custom criterion;
+    // an AND across columns is the worksheet's set of criteria.
+    if let Some((field, criterion)) = column(expr.clone()) {
+        return (field < width).then_some(vec![(field, criterion)]);
+    }
+    let terms = match expr { FilterExpr::And(terms) => terms, _ => return None };
+    let mut out = Vec::new();
+    for term in terms {
+        let (field, criterion) = column(term)?;
+        if field >= width || out.iter().any(|(old, _)| *old == field) { return None; }
+        out.push((field, criterion));
+    }
+    Some(out)
+}
+
+fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<String>), String> {
+    let regex_enabled = odf_regex_enabled(xml)?;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut in_ranges = false;
+    // Address, buttons, has filter, expressions, and whether ODF semantics
+    // cannot be represented by GridCraft's header-row, row-oriented filter.
+    let mut current: Option<(String, bool, bool, Vec<FilterExpr>, bool)> = None;
+    let mut groups: Vec<(bool, Vec<FilterExpr>)> = Vec::new();
+    let mut condition: Option<FilterCondition> = None;
+    let (mut found, mut warnings) = (Vec::new(), Vec::new());
+    loop {
+        let event = reader.read_event().map_err(|e| e.to_string())?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(ref e) | Event::Empty(ref e) => {
+                match e.local_name().as_ref() {
+                    b"database-ranges" => in_ranges = true,
+                    b"database-range" if in_ranges => {
+                        current = Some((attr(e, b"target-range-address").unwrap_or_default(),
+                            attr(e, b"display-filter-buttons").as_deref() == Some("true"), false, Vec::new(),
+                            attr(e, b"contains-header").as_deref() == Some("false")
+                                || attr(e, b"orientation").as_deref() == Some("column")));
+                    }
+                    b"filter" if current.is_some() => if let Some(c) = &mut current {
+                        c.2 = true;
+                        c.4 |= attr(e, b"display-duplicates").as_deref() == Some("false")
+                            || attr(e, b"condition-source").is_some_and(|source| source != "self")
+                            || attr(e, b"condition-source-range-address").is_some();
+                        if attr(e, b"target-range-address").is_some() { c.0.clear(); }
+                    },
+                    b"filter-and" if current.is_some() => groups.push((true, Vec::new())),
+                    b"filter-or" if current.is_some() => groups.push((false, Vec::new())),
+                    b"filter-condition" if current.is_some() => {
+                        condition = Some(FilterCondition { field: attr(e, b"field-number").and_then(|v| v.parse().ok()).unwrap_or(u32::MAX),
+                            operator: attr(e, b"operator").unwrap_or_default(), value: attr(e, b"value").unwrap_or_default(),
+                            data_type: attr(e, b"data-type").unwrap_or_else(|| "text".into()),
+                            items: Vec::new(), case_sensitive: attr(e, b"case-sensitive").as_deref() == Some("true"), regex_enabled });
+                    }
+                    b"filter-set-item" if condition.is_some() => if let Some(c) = &mut condition {
+                        c.items.push(attr(e, b"value").unwrap_or_default());
+                    },
+                    _ => {},
+                }
+                if empty { finish_filter_element(e.local_name().as_ref(), &mut current, &mut groups, &mut condition, names, &mut found, &mut warnings); }
+            }
+            Event::End(ref e) => finish_filter_element(e.local_name().as_ref(), &mut current, &mut groups, &mut condition, names, &mut found, &mut warnings),
+            Event::Eof => break,
+            _ => {},
+        }
+        if matches!(event, Event::End(ref e) if e.local_name().as_ref() == b"database-ranges") { in_ranges = false; }
+    }
+    Ok((found, warnings))
+}
+
+fn odf_regex_enabled(xml: &str) -> Result<bool, String> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut enabled = true; // ODF 1.3 table:use-regular-expressions default.
+    loop {
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Start(ref e) | Event::Empty(ref e) if e.local_name().as_ref() == b"calculation-settings" => {
+                enabled = !matches!(attr(e, b"use-regular-expressions").as_deref(), Some("false" | "0"));
+            }
+            Event::Eof => return Ok(enabled),
+            _ => {},
+        }
+    }
+}
+
+fn finish_filter_element(name: &[u8], current: &mut Option<(String, bool, bool, Vec<FilterExpr>, bool)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>,
+    condition: &mut Option<FilterCondition>, names: &[String], found: &mut Vec<FoundFilter>, warnings: &mut Vec<String>) {
+    let push = |expr, current: &mut Option<(String, bool, bool, Vec<FilterExpr>, bool)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>| {
+        if let Some((_, children)) = groups.last_mut() { children.push(expr); }
+        else if let Some(c) = current { c.3.push(expr); }
+    };
+    match name {
+        b"filter-condition" => if let Some(c) = condition.take() { push(FilterExpr::Condition(c), current, groups); },
+        b"filter-and" | b"filter-or" => if let Some((and, parts)) = groups.pop() {
+            push(if and { FilterExpr::And(parts) } else { FilterExpr::Or(parts) }, current, groups);
+        },
+        b"database-range" => if let Some((address, buttons, has_filter, terms, unsupported)) = current.take() {
+            if !buttons && !has_filter { return; }
+            if unsupported {
+                warnings.push("ODS AutoFilter uses no-header, column-oriented, unique-row, or cell-range conditions Spreadeagle cannot preserve".into());
+                return;
+            }
+            let Some((sheet, range)) = odf_filter_range(&address, names) else {
+                warnings.push("ODS AutoFilter range could not be represented".into()); return;
+            };
+            if found.iter().any(|f| f.sheet == sheet) { warnings.push("ODS has more than one AutoFilter on a sheet".into()); return; }
+            let criteria = if terms.is_empty() { Some(Vec::new()) }
+                else if terms.len() == 1 { filter_criteria(terms.into_iter().next().unwrap(), range.width()) }
+                else { None }; // ODF requires an explicit group for mixed conditions.
+            if let Some(criteria) = criteria { found.push(FoundFilter { sheet, range, criteria }); }
+            else { warnings.push(format!("ODS AutoFilter on {} has conditions Spreadeagle cannot preserve", names[sheet])); }
+        },
+        _ => {},
+    }
 }
 
 /// LibreOffice stores frozen panes in settings.xml, under a named Tables map.
@@ -523,6 +731,84 @@ fn percent_places(code: &str) -> u8 {
     code.split_once('.').map_or(0, |(_, after)| after.chars().take_while(|&c| c == '0').count().min(10) as u8)
 }
 
+fn odf_filter_address(name: &str, range: RangeRef) -> String {
+    fn cell(at: CellRef) -> String {
+        let a1 = at.a1();
+        let split = a1.find(|c: char| c.is_ascii_digit()).unwrap_or(a1.len());
+        format!("${}${}", &a1[..split], &a1[split..])
+    }
+    let sheet = format!("$'{}'", name.replace('\'', "''"));
+    format!("{sheet}.{}:{sheet}.{}", cell(range.start), cell(range.end))
+}
+
+fn odf_filter_condition(out: &mut String, field: u32, criterion: &FilterCriterion) -> Result<(), String> {
+    use std::fmt::Write as _;
+    let put_custom = |out: &mut String, op: &str, value: &str| -> Result<(), String> {
+        let odf = match op { "=" => "=", "<>" => "!=", "<" => "<", "<=" => "<=", ">" => ">", ">=" => ">=",
+            "beginsWith" => "begins", "endsWith" => "ends", "contains" => "contains", "notContains" => "!contains",
+            _ => return Err("ODS cannot preserve this custom AutoFilter; save as XLSX".into()) };
+        if matches!(op, "=" | "<>") && value.contains(['*', '?']) {
+            return Err("ODS cannot preserve wildcard AutoFilter equality; save as XLSX".into());
+        }
+        let numeric_value = value.parse::<f64>().is_ok_and(f64::is_finite);
+        if matches!(op, "=" | "<>") && numeric_value {
+            return Err("ODS cannot preserve typed numeric AutoFilter equality; save as XLSX".into());
+        }
+        let kind = if matches!(op, "<" | "<=" | ">" | ">=") && numeric_value { "number" } else { "text" };
+        let _ = write!(out, "<table:filter-condition table:field-number=\"{field}\" table:operator=\"{}\" table:value=\"{}\" table:data-type=\"{kind}\"/>",
+            escape(odf), escape(value));
+        Ok(())
+    };
+    match criterion {
+        FilterCriterion::Values { values, blanks } => {
+            if values.is_empty() && !blanks { return Err("ODS cannot preserve an empty AutoFilter choice; save as XLSX".into()); }
+            let first = values.first().map(String::as_str).unwrap_or("");
+            let _ = write!(out, "<table:filter-condition table:field-number=\"{field}\" table:operator=\"=\" table:value=\"{}\" table:data-type=\"text\">", escape(first));
+            for value in values { let _ = write!(out, "<table:filter-set-item table:value=\"{}\"/>", escape(value)); }
+            if *blanks { out.push_str("<table:filter-set-item table:value=\"\"/>"); }
+            out.push_str("</table:filter-condition>");
+        }
+        FilterCriterion::Custom { a, b, and } => {
+            if let Some(b) = b { out.push_str(if *and { "<table:filter-and>" } else { "<table:filter-or>" });
+                put_custom(out, &a.0, &a.1)?; put_custom(out, &b.0, &b.1)?;
+                out.push_str(if *and { "</table:filter-and>" } else { "</table:filter-or>" });
+            } else { put_custom(out, &a.0, &a.1)?; }
+        }
+        FilterCriterion::Top10 { bottom, percent, count } => {
+            let op = match (*bottom, *percent) { (false, false) => "top values", (true, false) => "bottom values",
+                (false, true) => "top percent", (true, true) => "bottom percent" };
+            let _ = write!(out, "<table:filter-condition table:field-number=\"{field}\" table:operator=\"{op}\" table:value=\"{count}\" table:data-type=\"number\"/>");
+        }
+        _ => return Err("ODS cannot preserve this AutoFilter condition; save as XLSX".into()),
+    }
+    Ok(())
+}
+
+fn odf_filters(wb: &gridcraft_engine::model::Workbook) -> Result<String, String> {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
+        let Some(filter) = &sheet.autofilter else { continue };
+        if out.is_empty() { out.push_str("<table:database-ranges>"); }
+        let address = odf_filter_address(&sheet.name, filter.range);
+        let _ = write!(out, "<table:database-range table:name=\"Spreadeagle_Filter_{}\" table:target-range-address=\"{}\" table:contains-header=\"true\" table:display-filter-buttons=\"true\">",
+            sheet_index + 1, escape(&address));
+        if !filter.criteria.is_empty() {
+            out.push_str("<table:filter>");
+            if filter.criteria.len() > 1 { out.push_str("<table:filter-and>"); }
+            for (offset, criterion) in &filter.criteria {
+                if *offset >= filter.range.width() { return Err("AutoFilter column is outside its range".into()); }
+                odf_filter_condition(&mut out, *offset, criterion)?;
+            }
+            if filter.criteria.len() > 1 { out.push_str("</table:filter-and>"); }
+            out.push_str("</table:filter>");
+        }
+        out.push_str("</table:database-range>");
+    }
+    if !out.is_empty() { out.push_str("</table:database-ranges>"); }
+    Ok(out)
+}
+
 /// The workbook as an .ods file: every sheet, its values and formulas (with their results,
 /// so a reader that does not recalculate shows them), dates and percentages, bold, italic
 /// and underline, and column widths.
@@ -687,8 +973,14 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     places.dedup();
     let data_styles: String = std::iter::once(data_styles.to_string()).chain(places.iter().map(|d| format!(
         "<number:percentage-style style:name=\"P{d}\"><number:number number:decimal-places=\"{d}\" number:min-decimal-places=\"{d}\" number:min-integer-digits=\"1\"/><number:text>%</number:text></number:percentage-style>"))).collect();
+    let filters = odf_filters(wb)?;
+    // ODF defaults regex comparisons on; GridCraft's exported filter values
+    // are literal. Keep the saved filter's comparison meaning explicit.
+    let filter_calculation_settings = if filters.is_empty() { "" } else {
+        "<table:calculation-settings table:use-regular-expressions=\"false\" table:use-wildcards=\"false\"/>"
+    };
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{data_styles}{styles}</office:automatic-styles><office:body><office:spreadsheet><table:content-validations>{validation_defs}</table:content-validations>{body}</office:spreadsheet></office:body></office:document-content>");
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{data_styles}{styles}</office:automatic-styles><office:body><office:spreadsheet>{filter_calculation_settings}<table:content-validations>{validation_defs}</table:content-validations>{body}{filters}</office:spreadsheet></office:body></office:document-content>");
     let styles_xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles><style:default-style style:family=\"table-cell\"/><style:style style:name=\"Default\" style:family=\"table-cell\"/></office:styles></office:document-styles>");
     let meta = format!(
@@ -730,6 +1022,108 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn libreoffice_database_range_restores_value_choices_and_quoted_sheet() {
+        let xml = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:spreadsheet>
+            <table:database-ranges><table:database-range table:name="Filter1" table:target-range-address="$'Q1.Q2'.$A$1:$'Q1.Q2'.$B$5" table:contains-header="true" table:display-filter-buttons="true">
+            <table:filter><table:filter-and><table:filter-condition table:field-number="0" table:operator="=" table:value="East" table:data-type="text"><table:filter-set-item table:value="East"/><table:filter-set-item table:value=""/></table:filter-condition>
+            <table:filter-condition table:field-number="1" table:operator="top values" table:value="2" table:data-type="number"/></table:filter-and></table:filter></table:database-range></table:database-ranges>
+            </office:spreadsheet></office:body></office:document-content>"#;
+        let (filters, warnings) = read_filters(xml, &["Q1.Q2".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].range.a1(), "A1:B5");
+        assert_eq!(filters[0].criteria, vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: true }),
+            (1, FilterCriterion::Top10 { bottom: false, percent: false, count: 2 })]);
+    }
+
+    #[test]
+    fn unsupported_filter_is_reported_instead_of_misapplied() {
+        let xml = r#"<office:document-content><office:body><office:spreadsheet><table:database-ranges>
+            <table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$B$3" table:display-filter-buttons="true"><table:filter>
+            <table:filter-condition table:field-number="0" table:operator="match" table:value="^A.*"/>
+            </table:filter></table:database-range></table:database-ranges></office:spreadsheet></office:body></office:document-content>"#;
+        let (filters, warnings) = read_filters(xml, &["Sheet1".into()]).unwrap();
+        assert!(filters.is_empty());
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn filters_with_unrepresentable_odf_range_semantics_are_not_misapplied() {
+        for (range_attr, filter_attr) in [
+            ("table:contains-header=\"false\"", ""),
+            ("table:orientation=\"column\"", ""),
+            ("", "table:display-duplicates=\"false\""),
+            ("", "table:condition-source=\"cell-range\" table:condition-source-range-address=\"$Sheet1.$D$1:$Sheet1.$D$2\""),
+        ] {
+            let xml = format!(r#"<office:document-content><office:body><office:spreadsheet>
+                <table:database-ranges><table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$A$3"
+                table:display-filter-buttons="true" {range_attr}><table:filter {filter_attr}>
+                <table:filter-condition table:field-number="0" table:operator="=" table:value="East"/>
+                </table:filter></table:database-range></table:database-ranges>
+                </office:spreadsheet></office:body></office:document-content>"#);
+            let (filters, warnings) = read_filters(&xml, &["Sheet1".into()]).unwrap();
+            assert!(filters.is_empty(), "{range_attr} {filter_attr}");
+            assert_eq!(warnings.len(), 1, "{range_attr} {filter_attr}");
+        }
+    }
+
+    #[test]
+    fn odf_typed_numeric_conditions_are_not_silently_reinterpreted() {
+        for (operator, value, data_type) in [
+            ("&gt;", "2", "text"), // GridCraft would filter text rows as numeric.
+            ("=", "2", "number"), // GridCraft would also match a text cell "2".
+        ] {
+            let xml = format!(r#"<office:document-content><office:body><office:spreadsheet>
+                <table:database-ranges><table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$A$3"
+                table:display-filter-buttons="true"><table:filter>
+                <table:filter-condition table:field-number="0" table:operator="{operator}"
+                table:value="{value}" table:data-type="{data_type}"/>
+                </table:filter></table:database-range></table:database-ranges>
+                </office:spreadsheet></office:body></office:document-content>"#);
+            let (filters, warnings) = read_filters(&xml, &["Sheet1".into()]).unwrap();
+            assert!(filters.is_empty(), "{operator} {data_type}");
+            assert_eq!(warnings.len(), 1, "{operator} {data_type}");
+        }
+        let mut output = String::new();
+        assert!(odf_filter_condition(&mut output, 0, &FilterCriterion::Custom {
+            a: ("=".into(), "2".into()), b: None, and: true,
+        }).unwrap_err().contains("save as XLSX"));
+    }
+
+    #[test]
+    fn regex_setting_controls_literal_text_filter_import_and_export() {
+        let filter = r#"<table:database-ranges><table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$A$3"
+            table:display-filter-buttons="true"><table:filter><table:filter-condition table:field-number="0"
+            table:operator="=" table:value="A.B" table:data-type="text"/></table:filter>
+            </table:database-range></table:database-ranges>"#;
+        let xml = |setting: &str| format!("<office:document-content><office:body><office:spreadsheet>{setting}{filter}</office:spreadsheet></office:body></office:document-content>");
+        let (filters, warnings) = read_filters(&xml(""), &["Sheet1".into()]).unwrap();
+        assert!(filters.is_empty());
+        assert_eq!(warnings.len(), 1);
+        let setting = "<table:calculation-settings table:use-regular-expressions=\"false\"/>";
+        let (filters, warnings) = read_filters(&xml(setting), &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(filters[0].criteria, vec![(0, FilterCriterion::Custom {
+            a: ("=".into(), "A.B".into()), b: None, and: true,
+        })]);
+
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute_headless("cell.set", serde_json::json!({ "cell": "A1", "input": "Name" })).unwrap();
+        session.execute_headless("cell.set", serde_json::json!({ "cell": "A2", "input": "A.B" })).unwrap();
+        session.execute_headless("data.filter", serde_json::json!({ "range": "A1:A2" })).unwrap();
+        session.execute_headless("data.filterBy", serde_json::json!({ "column": "A", "custom": { "op": "=", "value": "A.B" } })).unwrap();
+        let bytes = write(&session.doc().unwrap().wb).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut content = String::new();
+        archive.by_name("content.xml").unwrap().read_to_string(&mut content).unwrap();
+        assert!(content.contains("table:use-regular-expressions=\"false\""));
+        let (saved, warnings) = read_filters(&content, &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(saved[0].criteria, filters[0].criteria);
+    }
 
     fn zip_parts(parts: &[(&str, &str)]) -> Vec<u8> {
         use std::io::Write;

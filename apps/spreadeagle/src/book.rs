@@ -147,7 +147,7 @@ impl Book {
         let mut warnings: Vec<String> = r["warnings"].as_array().into_iter().flatten().filter_map(Json::as_str).map(str::to_string).collect();
         let mut book = Book { session, path: path.to_string() };
         if path.to_ascii_lowercase().ends_with(".ods") {
-            match book.restore_ods_extras(path) {
+            match book.restore_ods_extras(path, &mut warnings) {
                 Ok(n) => if n > 0 { warnings.retain(|w| !w.contains("formulas become their saved results")); },
                 Err(e) => warnings.push(format!("ODS formulas were kept as values: {e}")),
             }
@@ -158,10 +158,11 @@ impl Book {
     /// Puts the file's formulas back over the values GridCraft imported, and its fonts and
     /// column widths, as part of the opened file: no undo step, not a change. Returns how
     /// many formulas.
-    fn restore_ods_extras(&mut self, path: &str) -> Result<usize, String> {
+    fn restore_ods_extras(&mut self, path: &str, warnings: &mut Vec<String>) -> Result<usize, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let extras = crate::ods::extras(&bytes)?;
         if extras == crate::ods::Extras::default() { return Ok(0); }
+        warnings.extend(extras.filter_warnings.iter().cloned());
         let imported_names = self.sheets();
         let active = self.active_sheet();
         let mut sheet = usize::MAX;
@@ -210,6 +211,32 @@ impl Book {
                 wb.sheet_mut(s).ok_or("Validation refers to a missing sheet")?.validations.push(rule);
             }
             d.wb = std::sync::Arc::new(wb);
+        }
+        // Use GridCraft's own filter commands so hidden rows, SUBTOTAL results,
+        // and the visible header buttons agree with the restored criteria.
+        for filter in &extras.filters {
+            let result = (|| -> Result<(), String> {
+                self.activate(filter.sheet)?;
+                self.run("data.filter", json!({ "range": filter.range.a1() }))?;
+                for (offset, criterion) in &filter.criteria {
+                    let column = column_name(filter.range.start.col + offset);
+                    let params = match criterion {
+                        FilterCriterion::Values { values, blanks } => json!({ "column": column, "values": values, "blanks": blanks }),
+                        FilterCriterion::Custom { a, b, and } => {
+                            if let Some(b) = b { json!({ "column": column, "custom": { "op": a.0, "value": a.1,
+                                "op2": b.0, "value2": b.1, "and": and } }) }
+                            else { json!({ "column": column, "custom": { "op": a.0, "value": a.1 } }) }
+                        }
+                        FilterCriterion::Top10 { bottom, percent, count } => json!({ "column": column,
+                            "top": { "bottom": bottom, "percent": percent, "count": count } }),
+                        _ => return Err("unsupported ODS filter condition".into()),
+                    };
+                    self.run("data.filterBy", params)?;
+                }
+                Ok(())
+            })();
+            if let Err(e) = result { warnings.push(format!("ODS AutoFilter on {} could not be restored: {e}",
+                extras.sheet_names.get(filter.sheet).map(String::as_str).unwrap_or("sheet"))); }
         }
         self.activate(active)?;
         if let Ok(d) = self.session.doc_mut() {
@@ -1731,6 +1758,67 @@ mod tests {
         book.freeze(None).unwrap();
         book.save().unwrap();
         assert_eq!(Book::open(&path).unwrap().0.frozen(), None);
+    }
+
+    #[test]
+    fn ods_autofilter_keeps_values_and_ranked_rows() {
+        let path = temp("filter-roundtrip.ods");
+        let mut book = Book::blank(&path);
+        for (row, region, score) in [(1, "East", "9"), (2, "West", "3"), (3, "East", "6"), (4, "", "1")] {
+            book.set(row, 0, region).unwrap();
+            book.set(row, 1, score).unwrap();
+        }
+        book.set(0, 0, "Region").unwrap(); book.set(0, 1, "Score").unwrap();
+        let area = Range { r0: 0, c0: 0, r1: 4, c1: 1 };
+        book.toggle_filter(area).unwrap();
+        book.filter_by_values(area, 0, &["East".into(), String::new()]).unwrap();
+        book.filter_by_condition(area, 1, "top 2").unwrap();
+        book.save().unwrap();
+        let raw = std::fs::read(&path).unwrap();
+        let filters = crate::ods::extras(&raw).unwrap().filters;
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].range.a1(), "A1:B5");
+        assert_eq!(filters[0].criteria.len(), 2);
+        let (again, warnings) = Book::open(&path).unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("AutoFilter")), "{warnings:?}");
+        assert_eq!(again.filter_range(), Some(area));
+        assert_eq!(again.filter_state(0), FilterState::Values { values: vec!["East".into()], blanks: true });
+        let sheet = again.session.doc().unwrap().wb.active().unwrap();
+        assert!(sheet.is_row_filtered(2)); // West is excluded by the value choice.
+        assert!(!sheet.is_row_filtered(1));
+    }
+
+    #[test]
+    fn ods_autofilter_keeps_two_numeric_conditions() {
+        let path = temp("filter-condition-ods.ods");
+        let mut book = Book::blank(&path);
+        book.set(0, 0, "Score").unwrap();
+        for row in 1..=5 { book.set(row, 0, &row.to_string()).unwrap(); }
+        let area = Range { r0: 0, c0: 0, r1: 5, c1: 0 };
+        book.toggle_filter(area).unwrap();
+        book.filter_by_condition(area, 0, ">= 2 and <= 4").unwrap();
+        book.save().unwrap();
+        let (again, warnings) = Book::open(&path).unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("AutoFilter")), "{warnings:?}");
+        let sheet = again.session.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sheet.autofilter.as_ref().unwrap().range.a1(), "A1:A6");
+        assert_eq!(sheet.autofilter.as_ref().unwrap().criteria.len(), 1);
+        assert!(sheet.is_row_filtered(1));
+        assert!(!sheet.is_row_filtered(3));
+        assert!(sheet.is_row_filtered(5));
+    }
+
+    #[test]
+    fn ods_refuses_filter_it_cannot_preserve() {
+        let path = temp("unsupported-filter.ods");
+        let mut book = Book::blank(&path);
+        book.set(0, 0, "Score").unwrap();
+        book.set(1, 0, "1").unwrap();
+        book.set(2, 0, "2").unwrap();
+        let area = Range { r0: 0, c0: 0, r1: 2, c1: 0 };
+        book.toggle_filter(area).unwrap();
+        book.filter_by_condition(area, 0, "above average").unwrap();
+        assert!(book.save().unwrap_err().contains("save as XLSX"));
     }
 
     #[test]
