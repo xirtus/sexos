@@ -42,7 +42,7 @@ def main():
  g=boot(a.iso,disk,a.out,'session',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
-   if k in SHIFTED:q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED[k]}],'hold-time':80})
+   if k in SHIFTED or k.isupper():q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED.get(k,k.lower())}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
  def chord(*ks):
