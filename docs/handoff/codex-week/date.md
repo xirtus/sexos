@@ -14,7 +14,8 @@ Remaining gaps:
   each operation one undo step. Moving a recurring occurrence or invitation
   requires explicit series/attendee semantics and remains outside this slice;
   the agenda now changes a personal event title with E as one undo step;
-  full time and location editing remains.
+  the agenda now changes or clears a personal event location with L as one undo
+  step. Full time editing remains.
 - Saved event, clock and account files truncate the current copy during a write.
   This change stages and syncs them before replacement.
 - Account secrets still live in a local `dav.txt` file. Move them into Multipass

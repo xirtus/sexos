@@ -69,7 +69,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub enum View { Month, Week, Day, Clock, Calendars }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Ask { Event, CopyDate, MoveDate, Title, Alarm, Timer, Zone, Home, NewCalendar }
+pub enum Ask { Event, CopyDate, MoveDate, Title, Location, Alarm, Timer, Zone, Home, NewCalendar }
 
 pub struct App {
     pub cal: Calendar,
@@ -389,6 +389,23 @@ impl App {
         sex_pdx::serial_record!("[date.event.retitled] date={} from={} to={} linked={}", self.selected, source.title, edited.title, linked as u8);
         self.save(window);
     }
+    fn relocate(&mut self, window: &mut Window, location: &str) {
+        let Some(source) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
+        let Some(index) = self.cal.events.iter().position(|e| *e == source) else { return };
+        if location.trim() == source.location { self.status = String::from("The location is unchanged."); return; }
+        let linked = !self.cal.info(source.calendar).url.is_empty();
+        let edited = match source.located_personal(location, linked) {
+            Ok(event) => event,
+            Err(why) => { self.status = String::from(why); return; }
+        };
+        self.cal.events[index] = edited.clone();
+        self.event_history.push(EventEdit { index, before: Some(source.clone()), after: Some(edited.clone()) });
+        self.picked = self.cal.on_day(self.selected).iter().position(|e| **e == edited).unwrap_or(0);
+        self.status = if edited.location.is_empty() { String::from("Cleared event location.") }
+            else { format!("Set event location to \"{}\".", edited.location) };
+        sex_pdx::serial_record!("[date.event.location] date={} title={} from={} to={} linked={}", self.selected, source.title, source.location, edited.location, linked as u8);
+        self.save(window);
+    }
     fn set_view(&mut self, view: View) {
         self.view = view;
         self.agenda = false;
@@ -674,7 +691,7 @@ impl App {
     fn typed_done(&mut self, window: &mut Window, ask: Ask) {
         let text = String::from(self.input.trim());
         self.input.clear();
-        if text.is_empty() { return; }
+        if text.is_empty() && ask != Ask::Location { return; }
         match ask {
             Ask::Event => {
                 let mut e = quick_event(self.selected, &text);
@@ -694,6 +711,7 @@ impl App {
                 None => self.status = String::from("Enter a date as YYYY-MM-DD."),
             },
             Ask::Title => self.retitle(window, &text),
+            Ask::Location => self.relocate(window, &text),
             Ask::Alarm => {
                 let (time, label) = text.split_once(' ').unwrap_or((&text, ""));
                 match clock::parse_time(time) {
@@ -848,6 +866,7 @@ impl App {
                 (_, _, Some(b'D')) => { self.ask = Some(Ask::CopyDate); self.input.clear(); },
                 (_, _, Some(b'm')) => { self.ask = Some(Ask::MoveDate); self.input.clear(); },
                 (_, _, Some(b'e')) => { self.ask = Some(Ask::Title); self.input.clear(); },
+                (_, _, Some(b'l')) => { self.ask = Some(Ask::Location); self.input.clear(); },
                 (_, Some(Nav::Delete), _) | (0x6F, _, _) => {
                     let Some(gone) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
                     let Some(index) = self.cal.events.iter().position(|e| *e == gone) else { return };
