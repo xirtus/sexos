@@ -174,7 +174,7 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
 }
 
 #[derive(Clone, Debug)]
-struct FilterCondition { field: u32, operator: String, value: String, items: Vec<String>, case_sensitive: bool }
+struct FilterCondition { field: u32, operator: String, value: String, data_type: String, items: Vec<String>, case_sensitive: bool }
 #[derive(Clone, Debug)]
 enum FilterExpr { Condition(FilterCondition), And(Vec<FilterExpr>), Or(Vec<FilterExpr>) }
 
@@ -216,6 +216,16 @@ fn filter_condition(c: &FilterCondition) -> Option<FilterCriterion> {
         "begins" => "beginsWith", "ends" => "endsWith", "contains" => "contains", "!contains" => "notContains",
         _ => return None,
     };
+    let numeric_value = c.value.parse::<f64>().is_ok_and(f64::is_finite);
+    // GridCraft infers numeric comparisons from the criterion, whereas ODF's
+    // data-type is authoritative. Numeric equality would also match text "2"
+    // in GridCraft, and a text comparison with "2" would hide text cells.
+    if !matches!(c.data_type.as_str(), "text" | "number")
+        || (matches!(op, "=" | "<>") && numeric_value)
+        || (matches!(op, "<" | "<=" | ">" | ">=") && numeric_value != (c.data_type == "number"))
+        || (matches!(op, "beginsWith" | "endsWith" | "contains" | "notContains") && c.data_type != "text") {
+        return None;
+    }
     // ODF equality is literal; GridCraft's equality treats * and ? as wildcards.
     if matches!(op, "=" | "<>") && c.value.contains(['*', '?']) { return None; }
     Some(FilterCriterion::Custom { a: (op.to_string(), c.value.clone()), b: None, and: true })
@@ -258,7 +268,9 @@ fn filter_criteria(expr: FilterExpr, width: u32) -> Option<Vec<(u32, FilterCrite
 fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<String>), String> {
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut in_ranges = false;
-    let mut current: Option<(String, bool, bool, Vec<FilterExpr>)> = None;
+    // Address, buttons, has filter, expressions, and whether ODF semantics
+    // cannot be represented by GridCraft's header-row, row-oriented filter.
+    let mut current: Option<(String, bool, bool, Vec<FilterExpr>, bool)> = None;
     let mut groups: Vec<(bool, Vec<FilterExpr>)> = Vec::new();
     let mut condition: Option<FilterCondition> = None;
     let (mut found, mut warnings) = (Vec::new(), Vec::new());
@@ -271,10 +283,15 @@ fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<St
                     b"database-ranges" => in_ranges = true,
                     b"database-range" if in_ranges => {
                         current = Some((attr(e, b"target-range-address").unwrap_or_default(),
-                            attr(e, b"display-filter-buttons").as_deref() == Some("true"), false, Vec::new()));
+                            attr(e, b"display-filter-buttons").as_deref() == Some("true"), false, Vec::new(),
+                            attr(e, b"contains-header").as_deref() == Some("false")
+                                || attr(e, b"orientation").as_deref() == Some("column")));
                     }
                     b"filter" if current.is_some() => if let Some(c) = &mut current {
                         c.2 = true;
+                        c.4 |= attr(e, b"display-duplicates").as_deref() == Some("false")
+                            || attr(e, b"condition-source").is_some_and(|source| source != "self")
+                            || attr(e, b"condition-source-range-address").is_some();
                         if attr(e, b"target-range-address").is_some() { c.0.clear(); }
                     },
                     b"filter-and" if current.is_some() => groups.push((true, Vec::new())),
@@ -282,6 +299,7 @@ fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<St
                     b"filter-condition" if current.is_some() => {
                         condition = Some(FilterCondition { field: attr(e, b"field-number").and_then(|v| v.parse().ok()).unwrap_or(u32::MAX),
                             operator: attr(e, b"operator").unwrap_or_default(), value: attr(e, b"value").unwrap_or_default(),
+                            data_type: attr(e, b"data-type").unwrap_or_else(|| "text".into()),
                             items: Vec::new(), case_sensitive: attr(e, b"case-sensitive").as_deref() == Some("true") });
                     }
                     b"filter-set-item" if condition.is_some() => if let Some(c) = &mut condition {
@@ -300,9 +318,9 @@ fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<St
     Ok((found, warnings))
 }
 
-fn finish_filter_element(name: &[u8], current: &mut Option<(String, bool, bool, Vec<FilterExpr>)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>,
+fn finish_filter_element(name: &[u8], current: &mut Option<(String, bool, bool, Vec<FilterExpr>, bool)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>,
     condition: &mut Option<FilterCondition>, names: &[String], found: &mut Vec<FoundFilter>, warnings: &mut Vec<String>) {
-    let push = |expr, current: &mut Option<(String, bool, bool, Vec<FilterExpr>)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>| {
+    let push = |expr, current: &mut Option<(String, bool, bool, Vec<FilterExpr>, bool)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>| {
         if let Some((_, children)) = groups.last_mut() { children.push(expr); }
         else if let Some(c) = current { c.3.push(expr); }
     };
@@ -311,8 +329,12 @@ fn finish_filter_element(name: &[u8], current: &mut Option<(String, bool, bool, 
         b"filter-and" | b"filter-or" => if let Some((and, parts)) = groups.pop() {
             push(if and { FilterExpr::And(parts) } else { FilterExpr::Or(parts) }, current, groups);
         },
-        b"database-range" => if let Some((address, buttons, has_filter, terms)) = current.take() {
+        b"database-range" => if let Some((address, buttons, has_filter, terms, unsupported)) = current.take() {
             if !buttons && !has_filter { return; }
+            if unsupported {
+                warnings.push("ODS AutoFilter uses no-header, column-oriented, unique-row, or cell-range conditions Spreadeagle cannot preserve".into());
+                return;
+            }
             let Some((sheet, range)) = odf_filter_range(&address, names) else {
                 warnings.push("ODS AutoFilter range could not be represented".into()); return;
             };
@@ -706,7 +728,11 @@ fn odf_filter_condition(out: &mut String, field: u32, criterion: &FilterCriterio
         if matches!(op, "=" | "<>") && value.contains(['*', '?']) {
             return Err("ODS cannot preserve wildcard AutoFilter equality; save as XLSX".into());
         }
-        let kind = if matches!(op, "<" | "<=" | ">" | ">=") && value.parse::<f64>().is_ok_and(f64::is_finite) { "number" } else { "text" };
+        let numeric_value = value.parse::<f64>().is_ok_and(f64::is_finite);
+        if matches!(op, "=" | "<>") && numeric_value {
+            return Err("ODS cannot preserve typed numeric AutoFilter equality; save as XLSX".into());
+        }
+        let kind = if matches!(op, "<" | "<=" | ">" | ">=") && numeric_value { "number" } else { "text" };
         let _ = write!(out, "<table:filter-condition table:field-number=\"{field}\" table:operator=\"{}\" table:value=\"{}\" table:data-type=\"{kind}\"/>",
             escape(odf), escape(value));
         Ok(())
@@ -994,6 +1020,49 @@ mod tests {
         let (filters, warnings) = read_filters(xml, &["Sheet1".into()]).unwrap();
         assert!(filters.is_empty());
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn filters_with_unrepresentable_odf_range_semantics_are_not_misapplied() {
+        for (range_attr, filter_attr) in [
+            ("table:contains-header=\"false\"", ""),
+            ("table:orientation=\"column\"", ""),
+            ("", "table:display-duplicates=\"false\""),
+            ("", "table:condition-source=\"cell-range\" table:condition-source-range-address=\"$Sheet1.$D$1:$Sheet1.$D$2\""),
+        ] {
+            let xml = format!(r#"<office:document-content><office:body><office:spreadsheet>
+                <table:database-ranges><table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$A$3"
+                table:display-filter-buttons="true" {range_attr}><table:filter {filter_attr}>
+                <table:filter-condition table:field-number="0" table:operator="=" table:value="East"/>
+                </table:filter></table:database-range></table:database-ranges>
+                </office:spreadsheet></office:body></office:document-content>"#);
+            let (filters, warnings) = read_filters(&xml, &["Sheet1".into()]).unwrap();
+            assert!(filters.is_empty(), "{range_attr} {filter_attr}");
+            assert_eq!(warnings.len(), 1, "{range_attr} {filter_attr}");
+        }
+    }
+
+    #[test]
+    fn odf_typed_numeric_conditions_are_not_silently_reinterpreted() {
+        for (operator, value, data_type) in [
+            ("&gt;", "2", "text"), // GridCraft would filter text rows as numeric.
+            ("=", "2", "number"), // GridCraft would also match a text cell "2".
+        ] {
+            let xml = format!(r#"<office:document-content><office:body><office:spreadsheet>
+                <table:database-ranges><table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$A$3"
+                table:display-filter-buttons="true"><table:filter>
+                <table:filter-condition table:field-number="0" table:operator="{operator}"
+                table:value="{value}" table:data-type="{data_type}"/>
+                </table:filter></table:database-range></table:database-ranges>
+                </office:spreadsheet></office:body></office:document-content>"#);
+            let (filters, warnings) = read_filters(&xml, &["Sheet1".into()]).unwrap();
+            assert!(filters.is_empty(), "{operator} {data_type}");
+            assert_eq!(warnings.len(), 1, "{operator} {data_type}");
+        }
+        let mut output = String::new();
+        assert!(odf_filter_condition(&mut output, 0, &FilterCriterion::Custom {
+            a: ("=".into(), "2".into()), b: None, and: true,
+        }).unwrap_err().contains("save as XLSX"));
     }
 
     fn zip_parts(parts: &[(&str, &str)]) -> Vec<u8> {
