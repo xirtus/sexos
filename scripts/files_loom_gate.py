@@ -239,6 +239,14 @@ def main():
   m=g['wait'](r'\[files.app.usage.view\] path=/ total=\d+ items=5 biggest=([^:\n]+):',0,10)
   if not m[1].endswith('.zip'):step(lambda:q.key('ret'),rf'\[files.app.usage.view\] path=/{E(m[1])} ',10)
   step(lambda:q.key('esc'),r'\[files.app.list\] dir=/media/LOOM count=5\b')
+  # Pack the same folder as tar.zst, then browse the result through Loom.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('m'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.zst files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.zst format=TarZst entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-zst.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.zst')
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
   # 7. Disk and CD images, on a second stick.
   q.cmd('blockdev-add',{'driver':'raw','node-name':'imgsdrive','file':{'driver':'file','filename':str(imgs)}})
@@ -335,6 +343,10 @@ def main():
  z=zipfile.ZipFile(io.BytesIO(mread(stick,'docs.zip')))
  assert z.testzip() is None
  for name,data in CONTENT.items():assert z.read(name)==data,name
+ compressed=mread(stick,'docs.tar.zst')
+ plain=subprocess.run(['zstd','-dc'],input=compressed,capture_output=True,check=True).stdout
+ with tarfile.open(fileobj=io.BytesIO(plain),mode='r:') as packed:
+  for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,name
  for name,data in CONTENT.items():assert mread(stick,'docs (extracted)/'+name)==data,name
  assert mlist(stick,'ren')==['pic_01.txt','pic_02.txt','pic_03.txt'],mlist(stick,'ren')
  assert mread(stick,'ren/pic_01.txt')==REN['one.txt']

@@ -364,14 +364,23 @@ impl App {
 
     /// Ctrl+Shift+A: packs the selected file or folder into `NAME.zip` beside it.
     pub(crate) fn make_zip(&mut self, window: &mut Window) {
-        let Some(path) = self.selected() else { self.status = "Ctrl+Shift+A packs the selected file or folder into a zip: select one.".into(); return };
+        self.make_archive(window, OutputFormat::Zip, b".zip", "zip");
+    }
+
+    /// Ctrl+Shift+M: a compressed tar, using the same staged write as zip.
+    pub(crate) fn make_tar_zst(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::TarZst, b".tar.zst", "tar.zst");
+    }
+
+    fn make_archive(&mut self, window: &mut Window, format: OutputFormat, extension: &[u8], kind: &str) {
+        let Some(path) = self.selected() else { self.status = format!("Select a file or folder to pack as {kind}."); return };
         let dir_item = self.entries.get(self.cursor).is_some_and(|e| e.dir);
         let name = base(&path).to_vec();
-        let mut zip_name = if dir_item { name.clone() } else {
+        let mut archive_name = if dir_item { name.clone() } else {
             match name.iter().rposition(|b| *b == b'.') { Some(i) if i > 0 => name[..i].to_vec(), _ => name.clone() }
         };
-        zip_name.extend_from_slice(b".zip");
-        let to = self.free_name(window, &self.cwd.clone(), &zip_name, "copy");
+        archive_name.extend_from_slice(extension);
+        let to = self.free_name(window, &self.cwd.clone(), &archive_name, "copy");
         let mut part_name = b".".to_vec();
         part_name.extend_from_slice(base(&to));
         part_name.extend_from_slice(b".part");
@@ -390,7 +399,7 @@ impl App {
             }
         }
         let cut = parent(&path).len() + if parent(&path) == b"/" { 0 } else { 1 };
-        let mut builder = ArchiveBuilder::new(OutputFormat::Zip);
+        let mut builder = ArchiveBuilder::new(format);
         let mut files_n = 0u64;
         for (p, dir, size, mtime) in &items {
             let rel = shown(&p[cut..]);
@@ -401,7 +410,7 @@ impl App {
             if let Err(e) = r { self.status = format!("Couldn't pack {}: {}.", rel, e); return; }
         }
         let _ = files::remove(window, &at(&part));
-        if let Err(e) = files::create(window, &at(&part)) { self.status = format!("Couldn't make the zip: {}.", shown(files::message(e))); return; }
+        if let Err(e) = files::create(window, &at(&part)) { self.status = format!("Couldn't make the {kind}: {}.", shown(files::message(e))); return; }
         sex_pdx::serial_record!("[files.app.archive.create.start] from={} to={} items={}", shown(&path), shown(&to), items.len());
         let mut sink = FileSink { path: at(&part), offset: 0 };
         let mut ticker = Ticker::new("Packing", base(&to));
@@ -423,12 +432,12 @@ impl App {
             End::Stopped => {
                 let _ = files::remove(window, &at(&part));
                 sex_pdx::serial_record!("[files.app.archive.cancelled] kind=create to={}", shown(&to));
-                self.status = "Stopped packing: no half-made zip was left.".into();
+                self.status = "Stopped packing: no half-made archive was left.".into();
             }
             End::Failed(why) => {
                 let _ = files::remove(window, &at(&part));
                 sex_pdx::serial_record!("[files.app.archive.failed] kind=create to={} why={}", shown(&to), why);
-                self.status = format!("Couldn't pack {}: {}. No half-made zip was left.", shown(&name), why);
+                self.status = format!("Couldn't pack {}: {}. No half-made archive was left.", shown(&name), why);
             }
         }
         let _ = files::sync(window);

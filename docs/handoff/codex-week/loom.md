@@ -10,7 +10,9 @@ Remaining gaps:
 - Independent folder tabs. This change adds them with Ctrl+Shift+T to open,
   Ctrl+PageUp/PageDown to switch, and Ctrl+Shift+W to close.
 - Split panes and a full graphical places sidebar.
-- Broader preview types and archive creation formats.
+- Broader preview types and archive creation formats. ZIP and tar.zst can now
+  be created from a selected file or folder; plain tar and tar.gz creation still
+  need file-manager controls.
 - Folder tabs now restore from a versioned session file under the granted
   root, with a recoverable previous copy. An encrypted-home unlock and missing
   removable-volume restore policy still need a full session audit.
