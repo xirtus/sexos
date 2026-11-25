@@ -47,10 +47,23 @@ impl Book {
     /// authorizes writing a sibling next to someone else's document.
     pub const DICTIONARY: &'static str = "assuit-custom-dictionary.txt";
     pub const PROOFING_PREFERENCE: &'static str = "assuit-proofing-marks.txt";
+    pub const SPELL_DICTIONARIES: &'static str = "assuit-dictionaries";
 
     pub fn load_dictionary(&mut self, path: &Path) {
         wordcraft_engine::proof::load_user_dictionary(path);
         self.session.user_dict_path = Some(path.to_path_buf());
+    }
+
+    /// Search only Assuit's granted folder for optional Hunspell pairs. People
+    /// can place a licensed `<locale>.aff` and `<locale>.dic` pair here in Loom.
+    pub fn use_spell_dictionaries(&mut self, folder: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(folder).map_err(|e| format!("Could not create Assuit dictionaries folder: {e}"))?;
+        let absolute = std::fs::canonicalize(folder)
+            .map_err(|e| format!("Could not open Assuit dictionaries folder: {e}"))?;
+        let path = absolute.to_str().ok_or("Dictionaries folder name is not UTF-8")?;
+        self.session.run("file.options", &json!({ "dictionariesFolder": path }))
+            .map_err(|e| format!("Could not use Assuit dictionaries folder: {e:?}"))?;
+        Ok(())
     }
 
     /// An empty document that Ctrl+S saves to `path`.
@@ -828,14 +841,42 @@ impl Book {
     }
 
     /// Set the document's default proofing language and the current selection.
-    pub fn proofing_language(&mut self, input: &str) -> Result<&'static str, String> {
+    pub fn proofing_language(&mut self, input: &str) -> Result<String, String> {
         let tag = match input.trim().to_ascii_lowercase().as_str() {
-            "en-us" | "us" => "en-US",
-            "en-gb" | "uk" => "en-GB",
-            "en-au" => "en-AU",
-            "en-ca" => "en-CA",
-            "none" | "zxx" => "zxx",
-            _ => return Err("Choose en-US, en-GB, en-AU, en-CA or none".into()),
+            "en-us" | "us" => "en-US".to_string(),
+            "en-gb" | "uk" => "en-GB".to_string(),
+            "en-au" => "en-AU".to_string(),
+            "en-ca" => "en-CA".to_string(),
+            "none" | "zxx" => "zxx".to_string(),
+            other => {
+                let (language, region) = other.split_once('-').ok_or("Choose an installed language such as de-DE")?;
+                if !(2..=3).contains(&language.len()) || !language.bytes().all(|b| b.is_ascii_lowercase())
+                    || !(region.len() == 2 && region.bytes().all(|b| b.is_ascii_lowercase())
+                        || region.len() == 3 && region.bytes().all(|b| b.is_ascii_digit())) {
+                    return Err("Choose a language-region tag such as de-DE".into());
+                }
+                let region = if region.len() == 2 { region.to_ascii_uppercase() } else { region.to_string() };
+                let tag = format!("{language}-{region}");
+                if !wordcraft_engine::proof::has_dictionary(Some(&tag)) {
+                    return Err("WordCraft cannot proof that language".into());
+                }
+                let folder = self.session.prefs.dictionaries_folder.clone()
+                    .ok_or("Assuit dictionaries folder is unavailable")?;
+                let names = [tag.replace('-', "_"), tag.clone(), language.to_string()];
+                if wordcraft_engine::proof::hunspell::find_in(Path::new(&folder),
+                    &[&names[0], &names[1], &names[2]]).is_none() {
+                    return Err(format!("Add {tag}.aff and {tag}.dic to Assuit dictionaries, then retry"));
+                }
+                // A pair copied while this window was open must become visible now.
+                wordcraft_engine::proof::set_dictionaries_folder(Some(folder.into()));
+                if let Some((_, _, reason)) = wordcraft_engine::proof::unreadable_dictionary(Some(&tag)) {
+                    return Err(format!("Dictionary for {tag} could not be read: {reason}"));
+                }
+                if let Some(name) = wordcraft_engine::proof::missing_dictionary(Some(&tag)) {
+                    return Err(format!("Add {name}.aff and {name}.dic to Assuit dictionaries, then retry"));
+                }
+                tag
+            }
         };
         if tag == "zxx" && self.path.to_ascii_lowercase().ends_with(".odt") {
             return Err("ODT cannot preserve the no-proofing language; use DOCX".into());
@@ -2481,6 +2522,40 @@ mod tests {
         let before = book.session.doc.styles.default_chr.lang.clone();
         assert!(book.proofing_language("de-DE").is_err());
         assert_eq!(book.session.doc.styles.default_chr.lang, before);
+    }
+
+    #[test]
+    fn installed_german_dictionary_checks_words_and_round_trips() {
+        let folder = std::env::temp_dir().join(format!("assuit-german-dictionary-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let invalid = folder.join("invalid");
+        std::fs::create_dir_all(&invalid).unwrap();
+        std::fs::write(invalid.join("de_DE.aff"), b"SET UTF-16\n").unwrap();
+        std::fs::write(invalid.join("de_DE.dic"), b"1\nHaus\n").unwrap();
+        let mut rejected = Book::blank(&temp("assuit-invalid-german.docx"));
+        rejected.use_spell_dictionaries(&invalid).unwrap();
+        let original = rejected.session.doc.styles.default_chr.lang.clone();
+        assert!(rejected.proofing_language("de-DE").is_err());
+        assert_eq!(rejected.session.doc.styles.default_chr.lang, original);
+        std::fs::write(folder.join("de-DE.aff"), b"SET UTF-8\nTRY aehuskzt\n").unwrap();
+        std::fs::write(folder.join("de-DE.dic"), b"2\nHaus\nKatze\n").unwrap();
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("assuit-german-proofing.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.proofing_language("de-DE").is_err(), "missing dictionary must not claim proofing");
+            book.use_spell_dictionaries(&folder).unwrap();
+            assert_eq!(book.proofing_language("de-de").unwrap(), "de-DE");
+            assert!(wordcraft_engine::proof::is_correct_for("Haus", Some("de-DE")));
+            assert!(!wordcraft_engine::proof::is_correct_for("Huas", Some("de-DE")));
+            book.type_text("Haus Huas").unwrap();
+            book.key(&Chord { name: "Home", ctrl: true, shift: false });
+            assert_eq!(book.next_spelling_issue().unwrap().unwrap().0, "Huas");
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert_eq!(reopened.session.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
+        }
+        wordcraft_engine::proof::set_dictionaries_folder(None);
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]

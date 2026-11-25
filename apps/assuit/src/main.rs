@@ -51,6 +51,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Err(e) = book.use_spell_dictionaries(std::path::Path::new(book::Book::SPELL_DICTIONARIES)) {
+        sex_std::record(&format!("[assuit.spell-dictionaries.error] {e}"));
+    }
     match book.restore_proofing_preference(book::Book::PROOFING_PREFERENCE) {
         Ok(saved) => sex_std::record(&format!("[assuit.proofing.preference] enabled={} source={}",
             book.proofing_marks() as u8, if saved.is_some() { "saved" } else { "default" })),
