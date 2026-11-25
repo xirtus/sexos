@@ -628,8 +628,10 @@ pub fn init(drive: u32, display: u32, usb: u32, net: u32, files: u32) {
     // Fixed BOOT_DAG budget, not runtime allocation policy. Drivers may reserve
     // byte subregions within these grants; they cannot create frame authority.
     // SexUSB: rings, contexts and report pages for up to 32 devices, plus the
-    // scratchpad pages real xHCI controllers ask for.
-    dma(usb, 1, 2 * 1024 * 1024);
+    // scratchpad pages real xHCI controllers ask for; each extra xHCI (Tiger Lake laptops
+    // have two) takes 1 MiB more, split off by SexUSB. One xHCI keeps the old 2 MiB.
+    let extra = crate::devmgr::xhci_leases().saturating_sub(1).min(2) as u64;
+    dma(usb, 1, (2 + extra) * 1024 * 1024);
     dma(net, sex_pdx::pci_command::DMA_REGION_ID, sex_pdx::pci_command::DMA_BYTES);
     dma(drive, 3, 512 * 1024);
     paired(files, drive, sex_pdx::SLOT_BLOCK_BUFFER, 4, sex_pdx::BLOCK_MAX_RUN, true);

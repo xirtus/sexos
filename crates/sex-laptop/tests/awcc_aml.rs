@@ -154,3 +154,29 @@ fn dell_charge_modes_end_to_end() {
     assert!(d::set_mode(&mut fw, &tokens, Mode::Adaptive, None));
     assert_eq!(d::charge(&mut fw, &tokens).mode, Some(Mode::Adaptive));
 }
+
+/// AccessAs, Connection and extended AccessAs in field lists (GPIO and I2C fields in
+/// laptop DSDTs): the table loads, and what follows the fields still runs.
+#[test]
+fn field_lists_with_connections_load() {
+    let aml = interpreter();
+    let fields: &'static [u8] = include_bytes!("fixtures/fields_ssdt.aml");
+    aml.load_table(&fields[36..]).unwrap();
+    assert_eq!(as_int(eval(&aml, "\\CHK", vec![])), 0x2B);
+    for name in ["\\_SB.GPO1", "\\_SB.SMB1", "\\_SB.RPB0"] {
+        assert!(aml.namespace.lock().get(AmlName::from_str(name).unwrap()).is_ok(), "{name}");
+    }
+}
+
+/// Not, FindSetLeftBit and FindSetRightBit with a target (the x17 R1's DSDT panicked the
+/// interpreter with them), and a divide by zero, which fails its method only.
+#[test]
+fn unary_maths_and_divide_by_zero() {
+    let aml = interpreter();
+    let math: &'static [u8] = include_bytes!("fixtures/math_ssdt.aml");
+    aml.load_table(&math[36..]).unwrap();
+    // Not(0x0F) & 0xFF = 0xF0; FindSetLeftBit(0x30) = 6; FindSetRightBit(0x30) = 5; 0x30 >> 3 = 6.
+    assert_eq!(as_int(eval(&aml, "\\MATH", vec![int(0x0F), int(0x30)])), 0xF0_0656);
+    assert!(aml.evaluate_if_present(AmlName::from_str("\\DIV0").unwrap(), vec![int(0)]).is_err());
+    assert_eq!(as_int(eval(&aml, "\\DIV0", vec![int(5)])), 2);
+}

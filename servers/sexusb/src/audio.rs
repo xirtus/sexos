@@ -302,6 +302,7 @@ impl Usb {
         let slot = self.dev[a.dev].slot;
         let dci = a.dci;
         self.audio = Some(a);
+        self.select(self.dev[a.dev].ctl);
         if moved { self.x.doorbell(slot, dci); }
         moved
     }
@@ -356,6 +357,7 @@ impl Usb {
         let listen = unsafe { Shared::at(self.audio_region as *mut u8) }.listen();
         if listen == m.running { return false; }
         let (i, slot) = (m.dev, self.dev[m.dev].slot);
+        self.select(self.dev[i].ctl);
         if listen {
             // Its streaming setting starts the microphone; then 48 kHz, which a
             // microphone with one rate may refuse.

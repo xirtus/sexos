@@ -2,7 +2,7 @@
 //! `hw`: the hardware report on screen. A laptop like the Alienware x17 R1 has no
 //! serial port, and the boot log on screen ends when Display takes the framebuffer,
 //! before the disk, Wi-Fi and sound drivers have said what they found. The kernel keeps
-//! the boot log's first 256 KiB (`crash_log::OP_LOG_HEAD`); this picks out the lines
+//! the boot log's first 512 KiB (`crash_log::OP_LOG_HEAD`); this picks out the lines
 //! about hardware, so one photo of Spindle is the hardware report.
 //!
 //! `hw` shows the hardware lines; `hw all` shows the newest lines of the whole head;
@@ -28,9 +28,15 @@ pub const TAGS: &[&[u8]] = &[
     b"[sexdrive.nvme.reprovision.err]", b"[sexdrive.nvme.irq", b"[device.irq.", b"[sexdrive.nvme2.", b"[sexdrive.raid.serve]",
     b"[sexdrive.disk.", b"[sexdrive.ahci.", b"[wifi.chip", b"[wifi.firmware]", b"[wifi.alive]", b"[wifi.ready]",
     b"[wifi.failed]", b"[wifi.lease.bad]", b"[wifi.link.up]", b"[bell.hda.ready]", b"[bell.hda.codec]",
-    b"[sexnet.nic.", b"[net.dhcp.lease]", b"[usb.host.controller.found]", b"[sexusb.device]",
-    b"[sexusb.device.refused]", b"[sexusb.device.fail]", b"[sexacpi.ready]", b"[sexacpi.tables]", b"[sexacpi.ec]",
-    b"[sexacpi.touchpad]", b"[crash.record]", b"[files.fs.foreign]", b"[files.media.", b"[kernel.safe_start]",
+    // Only the few lines per service that say how it got on: `hw` shows the newest 160,
+    // so a chatty prefix (every page fault, every packet) pushes the drives out.
+    b"[sexnet.nic.", b"[sexnet.phase", b"[sexnet.wifi.", b"[sexnet.irq", b"[sexnet.usb.link", b"[net.dhcp.lease]",
+    b"fault.kill", b"[service.restarted]", b"[service.stack.overflow]", b"[usb.host.controller.found]", b"[sexusb.device]",
+    b"[sexusb.device.refused]", b"[sexusb.device.fail]", b"[sexacpi.ready]", b"[sexacpi.tables]", b"[sexacpi.start",
+    b"[sexacpi.ec]", b"[sexacpi.ec.error", b"[sexacpi.touchpad", b"[sexacpi.aml.", b"[sexacpi.fadt.refused", b"[sexacpi.window.refused",
+    b"[crash.record]", b"[files.fs.foreign]", b"[files.media.", b"[kernel.safe_start]",
+    b"[kernel.ps2", b"[kernel.pci.xhci", b"[devmgr.lease", b"[ps2.port", b"[sexusb.controller", b"[iommu.boot_options]", b"[spindle.autorun", b"[spindle.tether.",
+    b"[timer.source]", b"[shell.boot.windows]",
 ];
 
 /// Whether `line` is a hardware line: one of `TAGS`, at its start or after a prefix.
@@ -57,6 +63,8 @@ pub fn pick(args: &[u8]) -> Pick<'_> {
 }
 
 pub fn keeps(pick: Pick, line: &[u8]) -> bool {
+    // An earlier `hw`'s own echo of a line: the line itself is shown, not its copies.
+    if line.starts_with(b"[spindle.hw") { return false; }
     match pick {
         Pick::Hardware => is_hardware(line),
         Pick::All => !line.is_empty(),
@@ -94,7 +102,11 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
         if index >= skip {
             let n = line.len().min(LINE);
             sb.push(&line[..n]);
-            serial_println!("[spindle.hw.line] {}", core::str::from_utf8(&line[..n]).unwrap_or("?"));
+            // Plain `hw` only (the gates read it): a filtered one's echo would fill the
+            // log's newest part with copies and push out the lines asked about next.
+            if matches!(pick, Pick::Hardware) {
+                serial_println!("[spindle.hw.line] {}", core::str::from_utf8(&line[..n]).unwrap_or("?"));
+            }
         }
         index += 1;
     }, pick);
@@ -102,15 +114,15 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     let mut text = [0u8; 120];
     let mut w = Cursor { buf: &mut text, len: 0 };
     let _ = core::fmt::Write::write_fmt(&mut w, format_args!(
-        "{} of {} lines from the first {} KiB of the boot log. hw all | hw TEXT for more.",
+        "{} of {} lines from {} KiB of the boot log (its start and newest part). hw all | hw TEXT for more.",
         total.min(SHOW), total, bytes / 1024));
     let n = w.len;
     sb.push(&text[..n]);
 }
 
-/// The most a saved report holds: every hardware line of a 256 KiB head fits easily,
+/// The most a saved report holds: every hardware line of the head fits easily,
 /// with room for the boot log's tail and Spindle's own newest lines.
-const SAVE_MAX: usize = 160 * 1024;
+const SAVE_MAX: usize = 240 * 1024;
 /// Spindle's own newest lines kept in a report.
 const SAVE_SPINDLE_LINES: usize = 300;
 static mut OWN_LINES: [[u8; crate::MAX_LINE_BYTES]; SAVE_SPINDLE_LINES] = [[0; crate::MAX_LINE_BYTES]; SAVE_SPINDLE_LINES];
@@ -151,10 +163,10 @@ fn save(path: &[u8], sb: &mut crate::Scrollback) -> Option<usize> {
         put(&stamp[..n], &mut at);
         head = walk(|line| { put(line, &mut at); lines += 1; }, Pick::Hardware);
         if head.is_none() { put(b"The boot log is not available here.", &mut at); }
-        // The newest 200 lines of the whole head, for what the tags miss.
+        // The newest lines of the whole head, for what the tags miss.
         let mut total = 0usize;
         let _ = walk(|_| total += 1, Pick::All);
-        let skip = total.saturating_sub(200);
+        let skip = total.saturating_sub(1200);
         put(b"", &mut at);
         put(b"--- newest lines of the boot log head ---", &mut at);
         let mut index = 0usize;
@@ -235,6 +247,19 @@ fn record(args: &[u8], sb: &mut crate::Scrollback) {
     sb.push(&text[..n]);
 }
 
+/// Whether the boot entry's command line holds `word` (the kernel prints it once at
+/// boot as `[iommu.boot_options] cmdline="..."`; there is no other way to read it here).
+pub fn boot_word(word: &[u8]) -> bool {
+    let mut found = false;
+    let _ = walk(|line| {
+        let Some(at) = line.windows(9).position(|w| w == b"cmdline=\"") else { return };
+        let rest = &line[at + 9..];
+        let rest = &rest[..rest.iter().position(|b| *b == b'"').unwrap_or(rest.len())];
+        if rest.split(|b| *b == b' ').any(|w| w == word) { found = true; }
+    }, Pick::Matching(b"[iommu.boot_options]"));
+    found
+}
+
 /// Whether `hw record` is on (the main loop then keeps its clock running).
 pub fn recording() -> bool { unsafe { (*core::ptr::addr_of!(RECORDING)).on } }
 
@@ -261,28 +286,71 @@ pub fn tick(sb: &mut crate::Scrollback, files_free: bool) -> bool {
     true
 }
 
-/// Calls `each` for every kept line of the head, in order; returns the head's length.
+/// Calls `each` for every kept line of the log, in order: the head (the first 512 KiB),
+/// then whatever of the newest 64 KiB came after it, so lines logged after the head
+/// filled (a Wi-Fi join, an address lease) are found too. Returns the bytes read.
 fn walk(mut each: impl FnMut(&[u8]), pick: Pick) -> Option<usize> {
     let mut chunk = [0u8; log::LOG_CHUNK];
     let mut line = [0u8; 256];
-    let (mut len, mut offset, mut total) = (0usize, 0usize, 0usize);
-    loop {
-        let (n, head) = log::log_head(offset, &mut chunk)?;
-        total = head;
-        for &b in &chunk[..n] {
+    let mut len = 0usize;
+    let mut feed = |bytes: &[u8], len: &mut usize, line: &mut [u8; 256]| {
+        for &b in bytes {
             if b == b'\n' {
-                let text = trim(&line[..len]);
+                let text = trim(&line[..*len]);
                 if keeps(pick, text) { each(text); }
-                len = 0;
-            } else if b != b'\r' && len < line.len() {
-                line[len] = b;
-                len += 1;
+                *len = 0;
+            } else if b != b'\r' && *len < line.len() {
+                line[*len] = b;
+                *len += 1;
             }
         }
+    };
+    // The kernel answers 0 bytes while another core is writing the log: ask again.
+    let mut busy = 0u32;
+    let (mut offset, mut head) = (0usize, 0usize);
+    loop {
+        let (n, total) = log::log_head(offset, &mut chunk)?;
+        if n == 0 && total == 0 && busy < 256 { busy += 1; sex_pdx::sys_yield(); continue; }
+        head = head.max(total);
+        feed(&chunk[..n], &mut len, &mut line);
         offset += n;
         if n == 0 || offset >= head { break; }
     }
-    Some(total)
+    // The newest part, from where the head stopped (or the oldest byte still held).
+    let mut written = 0usize;
+    for _ in 0..256 {
+        if let Some((_, w)) = log::log_at(usize::MAX, &mut chunk) { if w != 0 { written = w; break; } }
+        sex_pdx::sys_yield();
+    }
+    let mut read = offset;
+    if written > offset {
+        let mut at = offset.max(written.saturating_sub(log::LOG_TAIL_BYTES));
+        // Starting past the head means starting mid-line: that partial line is dropped.
+        let mut skipping = at != offset;
+        if skipping { len = 0; }
+        let mut tries = 0u32;
+        while at < written {
+            let Some((n, now)) = log::log_at(at, &mut chunk) else { break };
+            if n == 0 {
+                if now == 0 && tries < 256 { tries += 1; sex_pdx::sys_yield(); continue; }
+                // Overwritten while reading: jump to the oldest byte still held.
+                let oldest = now.saturating_sub(log::LOG_TAIL_BYTES);
+                if now != 0 && at < oldest { at = oldest; len = 0; skipping = true; continue; }
+                break;
+            }
+            let mut bytes = &chunk[..n.min(written - at)];
+            if skipping {
+                match bytes.iter().position(|&b| b == b'\n') {
+                    Some(i) => { bytes = &bytes[i + 1..]; skipping = false; }
+                    None => bytes = &[],
+                }
+            }
+            feed(bytes, &mut len, &mut line);
+            at += n;
+            read += n;
+        }
+    }
+    Some(read)
 }
 
 fn trim(mut line: &[u8]) -> &[u8] {

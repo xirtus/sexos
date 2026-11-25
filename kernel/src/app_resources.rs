@@ -112,6 +112,8 @@ pub fn capture_boot_image(target:u32,pkey:u8,elf:&[u8],base:u64,stack_top:u64)->
     capture_range(app,stack_top.checked_sub(65536).ok_or("APP_STACK_RANGE")?,65536)?;
     app.captured=true;Ok(())
 }
+/// At BOOT: whether `target` is planned as a program slot (its stack is its arena's).
+pub fn is_program_slot(target:u32)->bool{boot();target!=0&&APPS.lock().iter().any(|a|a.target==target)}
 pub fn init(pager:u32,coordinator:u32,catalog:&[(u32,u64)],services:[u32;5]){
     boot();assert!(catalog.len()<=MAX_APPS);
     let pager_pd=crate::ipc::DOMAIN_REGISTRY.get(pager).expect("APP_PAGER_MISSING");

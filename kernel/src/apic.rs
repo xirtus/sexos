@@ -195,8 +195,10 @@ pub unsafe fn map_irq(irq: u8, vector: u8, dest_lapic_id: u8, physical_memory_of
     let io_apics = IO_APICS.lock();
     
     // Find the correct I/O APIC based on the Global System Interrupt (GSI) base
-    // For simplicity, we assume IRQ maps 1:1 to GSI
-    let gsi = irq as u32;
+    // An ISA IRQ (0-15) sits on the GSI a MADT source override names, else on its own number.
+    let gsi = if irq < 16 {
+        ISO_OVERRIDES.lock().iter().flatten().find(|o| o.isa_source == irq).map_or(irq as u32, |o| o.gsi)
+    } else { irq as u32 };
     let io_apic = io_apics.iter()
         .find(|io| gsi >= io.global_system_interrupt_base && gsi < io.global_system_interrupt_base + 24)
         .or_else(|| io_apics.first()) // Fallback to first
@@ -263,9 +265,19 @@ pub unsafe fn broadcast_sipi(vector: u8) {
     icr_low.write_volatile(cmd);
 }
 
-/// Initializes the LAPIC timer for pre-emptive scheduling (Vector 0x20).
-/// Calibrates against PIT channel 2 (1.193182 MHz) for correct cadence on real CPUs.
-/// Falls back to 1,000,000-count (~1ms at 100MHz) if PIT is absent or calibration fails.
+/// Initializes the LAPIC timer for pre-emptive scheduling (Vector 0x20): one tick a
+/// millisecond, at whatever rate this machine's timer counts.
+///
+/// The rate comes from, in order:
+/// 1. the core crystal clock CPUID reports (leaf 0x15/0x16) on Intel bare metal, which
+///    is what feeds the local APIC timer: exact, and needs no other timer;
+/// 2. the PIT (channel 2, 1.193182 MHz) over 10 ms: QEMU/KVM and most older PCs;
+/// 3. the TSC over 10 ms, at the rate CPUID reports, when the PIT does not count.
+///
+/// Newer Intel laptops (Tiger Lake on: the x17 R1) gate the PIT's clock off, so the
+/// PIT never counts. Without 1 and 3 the timer then fell back to a fixed 1,000,000
+/// counts, which at a 38.4 MHz crystal /16 is a tick of ~417 ms instead of 1 ms:
+/// every sleep, timeout and time slice ran ~400 times slow (x17, 2026-11-24).
 pub fn init_timer() {
     let lapic_vaddr = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire);
     if lapic_vaddr == 0 {
@@ -273,76 +285,32 @@ pub fn init_timer() {
         return;
     }
     let lapic_ptr = lapic_vaddr as *mut u32;
+    const CALIB_MS: u64 = 10;
+    // Divide by 16 (bus clock / 16)
+    unsafe { lapic_ptr.offset(0x3E0 / 4).write_volatile(0x3); }
+
+    let clocks = cpu_clocks();
+    let (per_ms, source) = if let Some(hz) = clocks.crystal_hz.filter(|_| !clocks.hypervisor) {
+        ((hz / 16 / 1000) as u32, "crystal")
+    } else if let Some(n) = unsafe { lapic_counts_over(lapic_ptr, || pit_wait(CALIB_MS)) } {
+        (n / CALIB_MS as u32, "pit")
+    } else if let Some(tsc) = clocks.tsc_hz {
+        let n = unsafe { lapic_counts_over(lapic_ptr, || tsc_wait(tsc, CALIB_MS)) };
+        (n.map_or(0, |n| n / CALIB_MS as u32), "tsc")
+    } else { (0, "none") };
+    serial_println!("[timer.source] source={} per_ms={} crystal_hz={} tsc_hz={} hypervisor={}",
+        source, per_ms, clocks.crystal_hz.unwrap_or(0), clocks.tsc_hz.unwrap_or(0), clocks.hypervisor as u8);
 
     unsafe {
-        use x86_64::instructions::port::Port;
-        use x86_64::instructions::interrupts;
-
-        // Divide by 16 (bus clock / 16)
-        lapic_ptr.offset(0x3E0 / 4).write_volatile(0x3);
-
-        // Calibrate against PIT channel 2 (1.193182 MHz)
-        const PIT_FREQ: u64 = 1_193_182;
-        const CALIB_MS: u64 = 10;
-        const PIT_COUNT_MAX: u16 = 65535;
-        let pit_count: u16 = ((PIT_FREQ * CALIB_MS) / 1000).min(PIT_COUNT_MAX as u64) as u16;
-
-        let mut pit_cmd: Port<u8> = Port::new(0x43);
-        let mut pit_ch2: Port<u8> = Port::new(0x42);
-        let mut spk: Port<u8> = Port::new(0x61);
-
-        interrupts::disable();
-
-        // Mask LAPIC timer during calibration to prevent spurious IRQ.
-        lapic_ptr.offset(0x320 / 4).write_volatile(0x10000 | 0x20); // masked, one-shot
-        // Init count to max for calibration
-        lapic_ptr.offset(0x380 / 4).write_volatile(0xFFFF_FFFF);
-        // Re-write LVT unmasked one-shot so timer actually counts for calibration
-        lapic_ptr.offset(0x320 / 4).write_volatile(0x20);
-
-        // Program PIT ch2 -> mode 0 (one-shot), lo+hi byte
-        pit_cmd.write(0xB0u8);
-        pit_ch2.write((pit_count & 0xFF) as u8);
-        pit_ch2.write(((pit_count >> 8) & 0xFF) as u8);
-
-        // Spin until PIT ch2 output pin goes high (count reached 0)
-        let mut timed_out = false;
-        for _ in 0..1_000_000 {
-            if (spk.read() & 0x20) != 0 {
-                break;
-            }
-            core::hint::spin_loop();
-        }
-        if (spk.read() & 0x20) == 0 {
-            timed_out = true;
-        }
-
-        let remaining = lapic_ptr.offset(0x390 / 4).read_volatile();
-        let elapsed = if timed_out || remaining >= 0xFFFF_FFFE {
-            0
-        } else {
-            (0xFFFF_FFFFu32).wrapping_sub(remaining).wrapping_add(1)
-        };
-
-        let ticks_per_ms: u32 = if elapsed > 0 {
-            elapsed / CALIB_MS as u32
-        } else {
-            0
-        };
-
-        interrupts::enable();
-
-        if ticks_per_ms == 0 || ticks_per_ms > 10_000_000 {
-            serial_println!("APIC: LAPIC timer calibration failed (elapsed={} pit_count={}); using fallback=1000000",
-                elapsed, pit_count);
+        if per_ms == 0 || per_ms > 10_000_000 {
+            serial_println!("APIC: LAPIC timer calibration failed (source={}); using fallback=1000000", source);
             lapic_ptr.offset(0x320 / 4).write_volatile(0x20000 | 0x20);
             lapic_ptr.offset(0x380 / 4).write_volatile(1_000_000);
         } else {
-            serial_println!("APIC: LAPIC timer calibrated: {} ticks/ms (elapsed={} over {}ms)",
-                ticks_per_ms, elapsed, CALIB_MS);
+            serial_println!("APIC: LAPIC timer calibrated: {} ticks/ms (source={})", per_ms, source);
             lapic_ptr.offset(0x320 / 4).write_volatile(0x20000 | 0x20);
-            lapic_ptr.offset(0x380 / 4).write_volatile(ticks_per_ms);
-            TIMER_COUNT.store(ticks_per_ms, core::sync::atomic::Ordering::Release);
+            lapic_ptr.offset(0x380 / 4).write_volatile(per_ms);
+            TIMER_COUNT.store(per_ms, core::sync::atomic::Ordering::Release);
         }
 
         serial_println!("APIC: LAPIC Timer initialized at Vector 0x20.");
@@ -350,8 +318,86 @@ pub fn init_timer() {
         let lvt_val = lapic_ptr.offset(0x320 / 4).read_volatile();
         let cur_cnt = lapic_ptr.offset(0x390 / 4).read_volatile();
         serial_println!("timer.init.done lapic={:#x} vector=0x20 ticks={} lvt={:#x} cur_count={}",
-            lapic_vaddr, ticks_per_ms, lvt_val, cur_cnt);
+            lapic_vaddr, per_ms, lvt_val, cur_cnt);
     }
+}
+
+/// What CPUID says about this machine's clocks.
+#[derive(Clone, Copy)]
+pub struct CpuClocks { pub crystal_hz: Option<u64>, pub tsc_hz: Option<u64>, pub hypervisor: bool }
+
+/// The core crystal clock and TSC rate, from CPUID leaves 0x15 (TSC/crystal ratio and
+/// crystal Hz) and 0x16 (base MHz), as Linux's `native_calibrate_tsc` reads them.
+/// Intel only: AMD reports neither, and keeps a counting PIT.
+pub fn cpu_clocks() -> CpuClocks {
+    use core::arch::x86_64::__cpuid;
+    let v = __cpuid(0);
+    let intel = (v.ebx, v.edx, v.ecx) == (0x756e_6547, 0x4965_6e69, 0x6c65_746e); // "GenuineIntel"
+    let hypervisor = __cpuid(1).ecx & (1 << 31) != 0;
+    if !intel || v.eax < 0x15 { return CpuClocks { crystal_hz: None, tsc_hz: None, hypervisor }; }
+    let l15 = __cpuid(0x15);
+    let (den, num) = (l15.eax as u64, l15.ebx as u64);
+    let base_hz = if v.eax >= 0x16 { (__cpuid(0x16).eax & 0xFFFF) as u64 * 1_000_000 } else { 0 };
+    let family_model = __cpuid(1).eax;
+    let model = ((family_model >> 4) & 0xF) | ((family_model >> 12) & 0xF0);
+    let family = (family_model >> 8) & 0xF;
+    let crystal_hz = if l15.ecx != 0 { Some(l15.ecx as u64) }
+        // Leaf 0x15 without the crystal: derive it from the base clock (Linux does too).
+        else if den != 0 && num != 0 && base_hz != 0 { Some(base_hz * den / num) }
+        // Skylake and Kaby Lake client parts report a ratio but no crystal: 24 MHz.
+        else if family == 6 && matches!(model, 0x4E | 0x5E | 0x8E | 0x9E) { Some(24_000_000) }
+        else { None };
+    let tsc_hz = match crystal_hz { Some(c) if den != 0 && num != 0 => Some(c * num / den), _ => (base_hz != 0).then_some(base_hz) };
+    CpuClocks { crystal_hz, tsc_hz, hypervisor }
+}
+
+/// LAPIC timer counts (divide 16) while `wait` runs, which says whether it measured
+/// its time; None when it could not.
+unsafe fn lapic_counts_over(lapic_ptr: *mut u32, wait: impl FnOnce() -> bool) -> Option<u32> {
+    use x86_64::instructions::interrupts;
+    interrupts::disable();
+    // Masked one-shot from the top: counts down without raising an interrupt.
+    lapic_ptr.offset(0x320 / 4).write_volatile(0x10000 | 0x20);
+    lapic_ptr.offset(0x380 / 4).write_volatile(0xFFFF_FFFF);
+    let ok = wait();
+    let remaining = lapic_ptr.offset(0x390 / 4).read_volatile();
+    interrupts::enable();
+    (ok && remaining < 0xFFFF_FFFE).then(|| 0xFFFF_FFFFu32.wrapping_sub(remaining).wrapping_add(1))
+}
+
+/// `ms` milliseconds by PIT channel 2 (one-shot); false if its output never went high.
+fn pit_wait(ms: u64) -> bool {
+    use x86_64::instructions::port::Port;
+    const PIT_FREQ: u64 = 1_193_182;
+    let count = ((PIT_FREQ * ms) / 1000).min(65535) as u16;
+    let mut pit_cmd: Port<u8> = Port::new(0x43);
+    let mut pit_ch2: Port<u8> = Port::new(0x42);
+    let mut spk: Port<u8> = Port::new(0x61);
+    unsafe {
+        // Gate on, speaker off.
+        let g = spk.read();
+        spk.write((g & !0x02) | 0x01);
+        pit_cmd.write(0xB0u8);
+        pit_ch2.write((count & 0xFF) as u8);
+        pit_ch2.write((count >> 8) as u8);
+        // Bounded by the TSC as well as by reads: a port read on a laptop's eSPI bus
+        // can take microseconds, and a gated PIT never answers.
+        let start = core::arch::x86_64::_rdtsc();
+        for _ in 0..1_000_000 {
+            if spk.read() & 0x20 != 0 { return true; }
+            if core::arch::x86_64::_rdtsc().wrapping_sub(start) > 2_000_000_000 { break; }
+            core::hint::spin_loop();
+        }
+    }
+    false
+}
+
+/// `ms` milliseconds by the TSC at `hz`.
+fn tsc_wait(hz: u64, ms: u64) -> bool {
+    let start = unsafe { core::arch::x86_64::_rdtsc() };
+    let until = hz / 1000 * ms;
+    while unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(start) < until { core::hint::spin_loop(); }
+    true
 }
 
 /// The periodic timer's period, microseconds (one tick).

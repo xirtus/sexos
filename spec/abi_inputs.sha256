@@ -22,7 +22,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 20511d2ef2946babfeac294a053b920b07c0ed8bcb100a0dad303b9269821025  crates/sex-pdx/src/clock_source.rs
 
-87d50c205e92bd64db9223193542ca5aa6e35daa0f8861fc2fd10050a838fd97  crates/sex-pdx/src/crash_log.rs
+3104eb235e1e1d2d3840a5ea43ef39d5aa8cc95358a9d104494d9f14ba480997  crates/sex-pdx/src/crash_log.rs
 
 5e2f7daf24d0d791f70455abfca5d3e4161eb19f3a1736d2964a4dd6305291f7  crates/sex-pdx/src/denim.rs
 
@@ -134,11 +134,11 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 99e2089130ccb63dec906a478946d6c18939b21c2554895e49fb6789033c1ada  kernel/src/app_resource_state.rs
 
-73aab903bc7eda2e0066d4aad5cb087200dab07ba82bc2f627a9923f9195d5ee  kernel/src/app_resources.rs
+a27fb46c3cc99ae69f526ec4614d3778b6a93c58b26302cc115881ab8780dcdd  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-87db3c664ff2a05ec4b6f457105a347cd5f7aee51d659ba9fb90252d943a9ffa  kernel/src/boot_memory.rs
+04fb82473ad53f912b83c0377e5f13cf4c14700fd4360d64fc6419a4f19187d4  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 
@@ -152,7 +152,7 @@ df66047e0c1003533553fe4e898692d023d3f0908ce7ee70aa989d71e6c47cc1  kernel/src/cap
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 
-9e68b4bda1c859a7ed9d4e29bf83ec696912d50571592db07e26b92141c0d8c3  kernel/src/crash_log.rs
+9a34837711796f87b9d53de4be81116561eec80b7920866af1ef4723683dacee  kernel/src/crash_log.rs
 
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 
@@ -160,7 +160,7 @@ e8be235ab6c6e1142a06a206737934a9812d100aa9762ee875ebab12fb41980d  kernel/src/fau
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-397d0c93e341f86a26cd52dcd85230846a75258faa3557a733464b0615eabefe  kernel/src/interrupts.rs
+5c71bb4661e98b57b2c53dff62ce882952d9bd96ea3c6eb2d933b3b742fa08e5  kernel/src/interrupts.rs
 
 8e81a2358674b9a9ed2ed7764e70b572f37b1e2c7399e1008b50dd92a5924bc1  kernel/src/ipc.rs
 
@@ -178,11 +178,11 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 6efe30b3285999e43a5c320c1eb4ed6efbcf4b429cbeeca10d1f323bd2c166a2  kernel/src/pci_command.rs
 
-7c5e42b259c557db66f9ac771fc4f3e6c7954d76196a93a495dbbb12003bdf8d  kernel/src/service_restart.rs
+846f8eeb0930389a8488b313c5ec43438fa2b62a947c0364f23c85981960151d  kernel/src/service_restart.rs
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 
-1d4ca5786716b7a9b0a2b77b61a32b0bb379d9de4a3d143d9888cba12ac3db80  kernel/src/syscalls/mod.rs
+32ddb44fd52b3b0d1d10ca5483b2084b3651c972281fbf427ca0804f7023d86b  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

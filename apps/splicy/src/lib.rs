@@ -204,7 +204,7 @@ impl Editor {
     }
 
     /// Stage the clean-up pass as suggestions for the editor to take or skip: earlier
-    /// takes of a repeated phrase, filler words, and long pauses. Returns how many cards
+    /// takes of a repeated phrase, doubled words, filler words, and long pauses. Returns how many cards
     /// were added. Nothing changes until one is accepted.
     pub fn suggest_cleanup(&mut self) -> usize {
         self.suggest_cleanup_with(None)
@@ -216,10 +216,11 @@ impl Editor {
     pub fn suggest_cleanup_with(&mut self, levels: Option<&Levels>) -> usize {
         let before = self.suggestions.items.len();
         let t = &self.transcript;
+        let bars = levels.map(|l| l.bars());
         let place = |first: usize, last: usize| -> Option<(SourceCut, bool)> {
-            match levels {
-                Some(l) => t.placed_cut(first, last, l).map(|p| (p.cut, p.clean())),
-                None => t.cut_words(first, last).map(|c| (c, true)),
+            match (levels, &bars) {
+                (Some(l), Some(b)) => t.placed_cut_in(first, last, l, b).map(|p| (p.cut, p.clean())),
+                _ => t.cut_words(first, last).map(|c| (c, true)),
             }
         };
         let listen = |clean: bool| if clean { "" } else { " (listen to the join first)" };
@@ -229,6 +230,13 @@ impl Editor {
                 let summary = format!("Remove the first take of \"{}\"{}", self.quote(first, last), listen(clean));
                 self.suggestions.stage(Author::Rule, &summary, alloc::vec![cut]);
             }
+        }
+        let doubled: Vec<(SourceCut, bool)> = t.doubled_words().into_iter().filter_map(|i| place(i, i)).collect();
+        if !doubled.is_empty() {
+            let clean = doubled.iter().all(|p| p.1);
+            let cuts: Vec<SourceCut> = doubled.into_iter().map(|p| p.0).collect();
+            let summary = format!("Remove {} doubled word{}{}", cuts.len(), if cuts.len() == 1 { "" } else { "s" }, listen(clean));
+            self.suggestions.stage(Author::Rule, &summary, cuts);
         }
         let placed: Vec<(SourceCut, bool)> = (0..t.words.len()).filter(|i| t.is_filler(*i)).filter_map(|i| place(i, i)).collect();
         if !placed.is_empty() {
@@ -323,6 +331,25 @@ impl Editor {
             .filter(|w| w[0].end() == w[1].at && w[0].media == w[1].media && w[0].source.end < w[1].source.start)
             .min_by_key(|w| (w[1].at - at).abs())?;
         Some((candidate[0].media, Range::new(candidate[0].source.end, candidate[1].source.start)))
+    }
+
+    /// A J cut (negative `shift`) or L cut (positive) at the picture join nearest the caret:
+    /// the sound cuts `shift` from the picture, so the next voice leads in early or the last
+    /// one carries on (after Scarlet's split edits). Returns the join's time, or why not.
+    pub fn split_edit(&mut self, shift: Micros) -> Result<Micros, sex_splice::split_edit::SplitEditError> {
+        let tl = self.timeline();
+        let at = self.caret_time().unwrap_or(0);
+        let join = tl
+            .tracks
+            .iter()
+            .find(|t| t.kind == TrackKind::Video)
+            .and_then(|t| t.clips.windows(2).filter(|w| w[0].end() == w[1].at).map(|w| w[1].at).min_by_key(|j| (j - at).abs()))
+            .ok_or(sex_splice::split_edit::SplitEditError::NoJoin)?;
+        let ops = sex_splice::split_edit::split_edit_ops(tl, join, shift)?;
+        let next = tl.apply_all(&ops).map_err(sex_splice::split_edit::SplitEditError::Edit)?;
+        let summary = format!("{} cut at {} ms", if shift < 0 { "J" } else { "L" }, join / 1000);
+        self.history.commit(&summary, next);
+        Ok(join)
     }
 
     /// Toggles audition mode between `HearJoin` and `HearRemoved`.

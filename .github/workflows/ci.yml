@@ -453,6 +453,8 @@ jobs:
         if [ -w /dev/kvm ]; then
           SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time-kvm-4"
         else echo "[boot.timeline] no usable /dev/kvm on this runner; KVM boot time skipped"; fi
+    - name: A real machine's first desktop (timer from a real clock, boot windows put away, Spindle focused)
+      run: python3 scripts/boot_windows_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-windows"
     - name: Big programs start time (#305)
       run: python3 scripts/program_start_gate.py --programs spreadeagle,kaleidoscope,assuit --runs 2 --max-ms 60000 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/big-starts"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
@@ -598,6 +600,8 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
         python3 scripts/usb_storage_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-storage"
+    - name: Two USB controllers (x17 chipset + Type-C xHCI), keyboard and stick on the second
+      run: python3 scripts/two_xhci_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-two-xhci"
     - name: Files background copy, cancel, trash and delete for good
       run: python3 scripts/files_jobs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-jobs"
     - name: Files safe eject and pulled-out sticks

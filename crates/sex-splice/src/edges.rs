@@ -38,6 +38,45 @@ pub const RUN_ON_GAP: Micros = 60_000;
 pub const QUIET_DECIBELS: i16 = -400;
 /// The floor [`Levels`] reports for digital silence.
 pub const SILENT_DECIBELS: i16 = -1200;
+/// The quiet a tight join leaves after the last kept word (its decay) and before the next
+/// word's voice: about a tenth of a second in all, as Scarlet's editor chose (2026-11-20).
+pub const AIR_AFTER_SPEECH: Micros = 50_000;
+pub const AIR_BEFORE_SPEECH: Micros = 50_000;
+/// A stretch of room tone this long after a word is room an edge can sit in.
+pub const QUIET_RUN: Micros = 60_000;
+/// Sound this close to a word's loudest, for [`STILL_SPEAKING`], is the word still speaking:
+/// a dip with that on its far side is a stop inside the word (the "p" in "subscription").
+pub const STILL_SPEAKING_BELOW: i16 = 150;
+pub const STILL_SPEAKING: Micros = 60_000;
+/// Sound within this of the level speech sits at is at speaking level, and never quieter
+/// than [`QUIETEST_SOUND`] (Scarlet's soundFloor).
+pub const SPEECH_BELOW: i16 = 120;
+pub const QUIETEST_SOUND: i16 = -450;
+/// Room tone sits no more than this over the room's own level.
+pub const ROOM_TONE_ABOVE_ROOM: i16 = 60;
+
+/// The levels an edge reads as room tone, a trough and a low point, for one recording.
+/// In a quiet studio they are Scarlet's fixed figures. Over a noisy room (a café, outdoors,
+/// a fan) the room's own noise sits above -55 dBFS, so the bars rise with the room, and stay
+/// under the level at which sound counts as speech (Scarlet, 2026-11-22: "Trim pauses and
+/// find quiet in noisy-room recordings").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bars {
+    pub room_tone: i16,
+    pub trough: i16,
+    pub low_point: i16,
+}
+
+impl Bars {
+    pub const STUDIO: Bars = Bars { room_tone: DIP_DECIBELS, trough: TROUGH_DECIBELS, low_point: LOW_POINT_DECIBELS };
+}
+
+/// Which side of a cut an edge is on: `Start` has the kept word before it, `End` after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Start,
+    End,
+}
 
 /// Loudness of a source in buckets of `step`, the first starting at `from`. Each entry is
 /// RMS level in tenths of a dB under full scale.
@@ -104,11 +143,35 @@ impl Levels {
         }
     }
 
+    /// The room's level and the level speech sits at: the quietest fiftieth and the 85th
+    /// percentile of the buckets. Needs a second of sound to read; shorter levels count as a
+    /// quiet studio.
+    pub fn bars(&self) -> Bars {
+        if self.step <= 0 || (self.db.len() as Micros) * self.step < crate::SECOND {
+            return Bars::STUDIO;
+        }
+        let mut sorted = self.db.clone();
+        sorted.sort_unstable();
+        let room = sorted[sorted.len() / 50].max(-800);
+        let speech = sorted[sorted.len() * 85 / 100];
+        let sound = (speech - SPEECH_BELOW).max(QUIETEST_SOUND).max(((speech as i32 + room as i32) / 2) as i16);
+        let room_tone = DIP_DECIBELS.max((room + ROOM_TONE_ABOVE_ROOM).min(sound - 30));
+        Bars {
+            room_tone,
+            trough: TROUGH_DECIBELS.max((room_tone + 70).min(sound - 10)),
+            low_point: LOW_POINT_DECIBELS.max((room_tone + 110).min(sound - 5)),
+        }
+    }
+
     /// A level an edge can sit at between words: room tone, or a trough deep under the
-    /// sound either side.
+    /// sound either side, under `bar`.
     pub fn is_dip(&self, i: usize, bar: i16) -> bool {
+        self.is_dip_in(&Bars::STUDIO, i, bar)
+    }
+
+    fn is_dip_in(&self, bars: &Bars, i: usize, bar: i16) -> bool {
         let db = self.db[i];
-        db <= DIP_DECIBELS || (db <= bar && self.trough_depth(i) >= TROUGH_DEPTH)
+        db <= bars.room_tone || (db <= bar && self.trough_depth(i) >= TROUGH_DEPTH)
     }
 
     /// The lowest (or loudest) bucket whose centre lies in `from..=to`.
@@ -134,14 +197,88 @@ impl Levels {
         best
     }
 
+    fn room(&self, first: usize, last: usize) -> Range {
+        Range::new(self.from + first as Micros * self.step, self.from + (last as Micros + 1) * self.step)
+    }
+
+    /// Whether `kept` sounds on at speaking level past `dip`: between the dip and where the
+    /// transcript ends the word (`Start`, the word before the cut), or from where it starts the
+    /// word to the dip (`End`). Then the dip is a stop inside the word, and an edge there cuts
+    /// the word short.
+    pub fn sounds_past(&self, dip: Range, kept: &Word, side: Side) -> bool {
+        let Some(loud) = self.extreme(kept.source.start, kept.source.end, false) else { return false };
+        let bar = self.db[loud].saturating_sub(STILL_SPEAKING_BELOW);
+        let (from, to) = match side {
+            Side::Start => (dip.end, kept.source.end),
+            Side::End => (kept.source.start, dip.start),
+        };
+        let most = ((STILL_SPEAKING + self.step / 2) / self.step).max(1);
+        let mut run = 0;
+        for i in 0..self.db.len() {
+            let at = self.centre(i);
+            if at < from {
+                continue;
+            }
+            if at > to {
+                break;
+            }
+            run = if self.db[i] >= bar { run + 1 } else { 0 };
+            if run >= most {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Runs of room tone whose centres lie in `from..=to`, in time order.
+    fn quiet_runs(&self, bars: &Bars, from: Micros, to: Micros) -> Vec<(usize, usize)> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for i in 0..self.db.len() {
+            let at = self.centre(i);
+            if at < from || self.db[i] > bars.room_tone {
+                continue;
+            }
+            if at > to {
+                break;
+            }
+            match runs.last_mut() {
+                Some(r) if r.1 + 1 == i => r.1 = i,
+                _ => runs.push((i, i)),
+            }
+        }
+        runs
+    }
+
     /// Where an edge sits between two words that run together, searching `from..=to`:
     /// the middle of the room-tone stretch around the lowest level, or a trough's floor.
     /// `boundary` is the transcript's own edge; a shallower low point within
     /// [`LOW_POINT_REACH`] of it counts. `None` when the stretch holds no dip.
     pub fn dip_between(&self, from: Micros, to: Micros, boundary: Option<Micros>) -> Option<Dip> {
+        self.dip_between_in(&self.bars(), from, to, boundary, None)
+    }
+
+    /// [`Levels::dip_between`] with the recording's [`Bars`], and, given the kept word beside
+    /// the edge, the room-tone stretch nearest that word rather than the lowest level further
+    /// off, never one the kept word sounds past (Scarlet, 2026-11-20: a cut after "cube
+    /// simulation." held on a breath; one inside "subscription" took "-tion" off).
+    pub fn dip_between_in(&self, bars: &Bars, from: Micros, to: Micros, boundary: Option<Micros>, beside: Option<(&Word, Side)>) -> Option<Dip> {
+        if let Some((kept, side)) = beside {
+            let mut runs = self.quiet_runs(bars, from, to);
+            if side == Side::End {
+                runs.reverse();
+            }
+            for (first, last) in runs {
+                let room = self.room(first, last);
+                if self.sounds_past(room, kept, side) {
+                    continue;
+                }
+                let db = self.db[first..=last].iter().copied().min().unwrap_or(0);
+                return Some(Dip { at: (self.centre(first) + self.centre(last)) / 2, db, room_tone: true, room });
+            }
+        }
         let at = self.extreme(from, to, true)?;
         let low = self.db[at];
-        let room_tone = low <= DIP_DECIBELS;
+        let room_tone = low <= bars.room_tone;
         // A trough above room tone is a dip only when its floor is inside the stretch: the
         // lowest level at the stretch's end is the wall of a trough beyond it, still in sound.
         let inside = at > 0
@@ -151,12 +288,12 @@ impl Levels {
             && self.db[at - 1] >= low
             && self.db[at + 1] >= low;
         let near = boundary.is_some_and(|b| (self.centre(at) - b).abs() <= LOW_POINT_REACH);
-        let bar = if near { LOW_POINT_DECIBELS } else { TROUGH_DECIBELS };
-        if !room_tone && !(inside && self.is_dip(at, bar)) {
+        let bar = if near { bars.low_point } else { bars.trough };
+        if !room_tone && !(inside && self.is_dip_in(bars, at, bar)) {
             return None;
         }
         // The stretch still down in it: at room tone, or within 6 dB of the trough's floor.
-        let floor = if room_tone { DIP_DECIBELS } else { low.saturating_add(60) };
+        let floor = if room_tone { bars.room_tone } else { low.saturating_add(60) };
         let (mut first, mut last) = (at, at);
         while first > 0 && self.centre(first - 1) >= from && self.db[first - 1] <= floor {
             first -= 1;
@@ -164,9 +301,32 @@ impl Levels {
         while last + 1 < self.db.len() && self.centre(last + 1) <= to && self.db[last + 1] <= floor {
             last += 1;
         }
-        let room = Range::new(self.from + first as Micros * self.step, self.from + (last as Micros + 1) * self.step);
+        let room = self.room(first, last);
+        if let Some((kept, side)) = beside {
+            if self.sounds_past(room, kept, side) {
+                return None;
+            }
+        }
         let place = if room_tone { (self.centre(first) + self.centre(last)) / 2 } else { self.centre(at) };
         Some(Dip { at: place, db: low, room_tone, room })
+    }
+
+    /// The room right beside a kept word across a pause: the first run of room tone at least
+    /// [`QUIET_RUN`] long after the word's loudest moment (`Start`), or the last one before
+    /// the next word's loudest moment (`End`), searching up to `limit`. A breath after a word
+    /// keeps the level over the room, so the room right after the word comes before it, and
+    /// the edge goes there rather than after the breath.
+    pub fn room_beside(&self, bars: &Bars, kept: &Word, side: Side, limit: Micros) -> Option<Range> {
+        let peak = self.peak_of(kept)?;
+        let (from, to) = match side {
+            Side::Start => (peak, limit),
+            Side::End => (limit, peak),
+        };
+        let mut runs = self.quiet_runs(bars, from, to);
+        if side == Side::End {
+            runs.reverse();
+        }
+        runs.into_iter().map(|(a, b)| self.room(a, b)).find(|r| r.len() >= QUIET_RUN && !self.sounds_past(*r, kept, side))
     }
 
     /// The moment a word is loudest, if the recording is loud enough there to locate it.
@@ -230,8 +390,13 @@ pub struct Dip {
 /// How one edge of a cut was placed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edge {
-    /// A pause between the words, or the end of the material: the transcript's edge is safe.
+    /// A pause between the words, or the end of the material, with no room tone measured
+    /// beside the kept word: the transcript's edge stays.
     Pause,
+    /// A pause between the words: the edge sits tight against the kept word, in the room
+    /// tone right beside it ([`AIR_AFTER_SPEECH`] after its sound, [`AIR_BEFORE_SPEECH`]
+    /// before the next voice).
+    Tight(Range),
     /// Words said in one breath; the edge moved onto the dip between them.
     Dip(Dip),
     /// Words said in one breath and no dip between them: the edge stays on the transcript's
@@ -255,32 +420,57 @@ impl PlacedCut {
 }
 
 impl Transcript {
-    /// Where the edge between kept and removed words `left` and `right` goes, given the
-    /// transcript's own `edge` there.
-    fn place_edge(&self, levels: &Levels, left: usize, right: usize, edge: Micros) -> (Micros, Edge) {
+    /// Where the edge between words `left` and `right` goes, `side` saying which of them is
+    /// kept, given the transcript's own `edge` there.
+    fn place_edge(&self, levels: &Levels, bars: &Bars, left: usize, right: usize, side: Side, edge: Micros) -> (Micros, Edge) {
         let (l, r) = (&self.words[left], &self.words[right]);
+        let (kept, removed) = match side {
+            Side::Start => (l, r),
+            Side::End => (r, l),
+        };
         if r.source.start - l.source.end >= RUN_ON_GAP {
-            return (edge, Edge::Pause);
+            // A pause: cut tight against the kept word, in the room beside it.
+            let limit = match side {
+                Side::Start => r.source.start,
+                Side::End => l.source.end,
+            };
+            return match levels.room_beside(bars, kept, side, limit) {
+                Some(room) => {
+                    let at = match side {
+                        Side::Start => (room.start + AIR_AFTER_SPEECH).min(room.end).min(r.source.start.max(room.start)),
+                        Side::End => (room.end - AIR_BEFORE_SPEECH).max(room.start).max(l.source.end.min(room.end)),
+                    };
+                    (at, Edge::Tight(room))
+                }
+                None => (edge, Edge::Pause),
+            };
         }
+        let _ = removed;
         let from = levels.peak_of(l).unwrap_or(l.source.start);
         let to = levels.peak_of(r).unwrap_or(r.source.end);
         let boundary = (l.source.end + r.source.start) / 2;
-        match levels.dip_between(from, to, Some(boundary)) {
+        match levels.dip_between_in(bars, from, to, Some(boundary), Some((kept, side))) {
             Some(d) => (d.at, Edge::Dip(d)),
             None => (edge, Edge::InSound),
         }
     }
 
-    /// [`Transcript::cut_words`], with each edge between words said in one breath moved onto
-    /// the waveform's dip between them, so the cut never clips a kept word.
+    /// [`Transcript::cut_words`], with each edge placed against the sound: tight against the
+    /// kept word across a pause, and on the waveform's dip between words said in one breath,
+    /// so the cut never clips a kept word and never holds on silence or a breath.
     pub fn placed_cut(&self, first: usize, last: usize, levels: &Levels) -> Option<PlacedCut> {
+        self.placed_cut_in(first, last, levels, &levels.bars())
+    }
+
+    /// [`Transcript::placed_cut`] with the recording's [`Bars`] read once by the caller.
+    pub fn placed_cut_in(&self, first: usize, last: usize, levels: &Levels, bars: &Bars) -> Option<PlacedCut> {
         let cut = self.cut_words(first, last)?;
         let (start, start_edge) = match first.checked_sub(1) {
-            Some(prev) => self.place_edge(levels, prev, first, cut.range.start),
+            Some(prev) => self.place_edge(levels, bars, prev, first, Side::Start, cut.range.start),
             None => (cut.range.start, Edge::Pause),
         };
         let (end, end_edge) = if last + 1 < self.words.len() {
-            self.place_edge(levels, last, last + 1, cut.range.end)
+            self.place_edge(levels, bars, last, last + 1, Side::End, cut.range.end)
         } else {
             (cut.range.end, Edge::Pause)
         };
@@ -386,5 +576,62 @@ mod tests {
         assert_eq!(p.end, Edge::InSound);
         assert!(!p.clean());
         assert_eq!(p.cut.range, Range::new(400_000, 610_000));
+    }
+
+    #[test]
+    fn across_a_pause_the_cut_goes_tight_against_the_kept_words() {
+        // "done." 0-300 ms, quiet, "um" 700-900, quiet, "next" 1300-1600. Cutting "um" leaves
+        // 50 ms after "done." and 50 ms before "next": a tenth of a second, not 1.0 s.
+        let l = levels(&[(300, -200), (400, -650), (200, -250), (400, -650), (300, -200), (400, -650)]);
+        let t = Transcript { media: 1, words: vec![word("done.", 0, 300), word("um", 700, 900), word("next", 1300, 1600)] };
+        let p = t.placed_cut(1, 1, &l).unwrap();
+        assert_eq!(t.cut_words(1, 1).unwrap().range, Range::new(700_000, 1_300_000));
+        assert_eq!(p.cut.range, Range::new(350_000, 1_250_000), "{p:?}");
+        assert_eq!(p.start, Edge::Tight(Range::new(300_000, 700_000)));
+        assert_eq!(p.end, Edge::Tight(Range::new(900_000, 1_300_000)));
+        assert!(p.clean());
+    }
+
+    #[test]
+    fn the_cut_goes_before_a_breath_after_the_last_word() {
+        // "simulation." to 300 ms, 80 ms of room, a breath at -50 dBFS for 120 ms (over the
+        // room, 30 dB under the word), then room until "and" at 900 ms.
+        let l = levels(&[(300, -200), (80, -650), (120, -500), (400, -650), (300, -200)]);
+        let t = Transcript { media: 1, words: vec![word("simulation.", 0, 300), word("and", 900, 1200)] };
+        let p = t.placed_cut(1, 1, &l).unwrap();
+        assert_eq!(p.start, Edge::Tight(Range::new(300_000, 380_000)));
+        assert_eq!(p.cut.range.start, 350_000);
+    }
+
+    #[test]
+    fn a_stop_inside_the_kept_word_is_not_where_it_ends() {
+        // "subscription" 0-500 ms by the transcript: a 40 ms stop at 240 ms (deeper than the room),
+        // then "-tion" at
+        // speaking level to 500 ms; "uh" follows in one breath, with room tone at 500-540 ms.
+        let l = levels(&[(240, -200), (40, -700), (220, -210), (40, -630), (200, -260), (200, -650)]);
+        let t = Transcript { media: 1, words: vec![word("subscription", 0, 500), word("uh", 520, 740)] };
+        let p = t.placed_cut(1, 1, &l).unwrap();
+        // The start edge sits in the room after "-tion", not the deeper stop inside the word.
+        match p.start {
+            Edge::Dip(d) => assert_eq!(d.room, Range::new(500_000, 540_000)),
+            e => panic!("{e:?}"),
+        }
+        assert_eq!(p.cut.range.start, 520_000);
+    }
+
+    #[test]
+    fn a_noisy_room_raises_the_room_tone_bar() {
+        // Two seconds over a room at -44 dBFS, speech at -30: nothing reaches -55 dBFS, but
+        // the room's own level is quiet here.
+        let quiet_studio = levels(&[(400, -300), (100, -700), (400, -300), (1100, -650)]);
+        assert_eq!(quiet_studio.bars(), Bars::STUDIO);
+        let noisy = levels(&[(700, -300), (100, -440), (700, -300), (500, -440)]);
+        let b = noisy.bars();
+        assert!(b.room_tone >= -440 && b.room_tone < -300, "{b:?}");
+        let d = noisy.dip_between_in(&b, 500_000, 900_000, None, None).unwrap();
+        assert!(d.room_tone);
+        assert_eq!(d.room, Range::new(700_000, 800_000));
+        // Too little sound to read the room from: the studio figures.
+        assert_eq!(levels(&[(400, -300), (100, -440)]).bars(), Bars::STUDIO);
     }
 }

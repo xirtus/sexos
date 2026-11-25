@@ -2430,7 +2430,12 @@ fn history_event(event:history_persistence::Event,sb:&mut Scrollback){
  use history_persistence::Outcome;
  let kind=match event.outcome{Outcome::Saved=>"saved",Outcome::Loaded=>"loaded",Outcome::Missing=>"missing",Outcome::Conflict=>"conflict",Outcome::Failed=>"failed",Outcome::Uncertain=>"uncertain",Outcome::Aborted=>"aborted"};
  sex_pdx::serial_record!("[spindle.history.receipt] target={} task={} kind={} handle={} bytes={} count={} hash={:#x} error={}",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire),kind,event.handle,event.bytes,event.count,event.hash,event.error);
- match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>sb.push(b"History I/O failed; no success receipt."),Outcome::Uncertain=>sb.push(b"History uncertain: receipt timed out."),Outcome::Aborted=>sb.push(b"History session closed; commit may remain.")}
+ match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>{
+  // Once per run: a live boot has nowhere to save history, and the line after every
+  // command buried the command's own answer (the x17 R1).
+  static SHOWN:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(false);
+  if !SHOWN.swap(true,core::sync::atomic::Ordering::Relaxed){sb.push(b"History I/O failed; history is not saved this run.")}
+ },Outcome::Uncertain=>sb.push(b"History uncertain: receipt timed out."),Outcome::Aborted=>sb.push(b"History session closed; commit may remain.")}
 }
 
 // ── Entry ──────────────────────────────────────────────────────────────────
@@ -2843,6 +2848,17 @@ pub extern "C" fn _start() -> ! {
     unsafe { content_render(&line, sb) };
 
     serial_println!("[spindle.ready]");
+    // "SexOS report to the Mac" boot entries (`autorun`): a machine whose keyboard and
+    // mouse do nothing yet still reports itself: the hardware report onto the Ventoy
+    // stick every 30 s, and a tether listener the Mac finds (tether_host.py connect --scan).
+    if hw_command::boot_word(b"autorun") {
+        sb.push(b"autorun: this boot entry reports to the Mac without typing.");
+        serial_println!("[spindle.autorun] on=1");
+        for line in [&b"hw record /media/Ventoy/sexos-report.txt"[..], b"tether listen"] {
+            let ok = dispatch(line, sb, hist, &mut ev);
+            serial_println!("[spindle.autorun.run] len={} ok={}", line.len(), ok as u8);
+        }
+    }
     let mut registration_pending=incarnation.ordinal!=0;
     let mut presentation_pending=false;let mut presentation_sent=false;
     let mut storage_owner=0u8;
@@ -2881,6 +2897,7 @@ pub extern "C" fn _start() -> ! {
             // The tether and `hw record` poll on their own clocks: draw only when they said something.
             let before=sb.total_lines;
             unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb);}
+            unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).step(sb);}
             let files_free=unsafe{!session_command::SESSION.io_busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
             hw_command::tick(sb,files_free);
             if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()}{
@@ -2889,7 +2906,7 @@ pub extern "C" fn _start() -> ! {
             }
             if sb.total_lines!=before{unsafe{content_render(&line,sb);}}
         }
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()||(*core::ptr::addr_of!(wifi_command::WIFI)).busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;

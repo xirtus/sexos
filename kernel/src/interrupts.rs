@@ -747,6 +747,15 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }
+    // A service's stack grows on touch: a not-present user read or write in its stack
+    // reserve gets a zeroed page and runs again (`service_stack`).
+    if error_code & 0b1_0101 == 0b0_0100 {
+        match crate::service_stack::commit(crate::core_local::CoreLocal::get().current_pd_ref(), fault_addr) {
+            Some(true) => return,
+            Some(false) => { serial_println!("[service.stack.overflow] pd={} addr={:#x} rip={:#x}", cur_pd, fault_addr, fault_rip); }
+            None => {}
+        }
+    }
     // A fault inside a gate call is the callee's: the caller gets PEER_DIED.
     if unsafe { crate::gate::unwind(stack_frame, 14, error_code, fault_addr) } { return; }
     let recoverable = crate::scheduler::fault_transaction::eligible_user_fault(
@@ -948,7 +957,9 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
             // IRQ1 edges), and a missing EOI leaves vector 0x21 in-service.
             // Either alone kills all future IRQ1 delivery (root cause of
             // "QEMU sendkey no PS/2 IRQ1 delivery", 2026-07-02).
-            let _ = crate::keyboard::read_scancode_raw();
+            // With the keyboard up, None means the byte is already gone (the stuck-byte
+            // poller took it); reading the empty port then could swallow the next key.
+            if !crate::keyboard::is_keyboard_ready() { let _ = crate::keyboard::read_scancode_raw(); }
             unsafe { send_eoi(); }
             return;
         }

@@ -278,6 +278,7 @@ impl Usb {
                     b.out_ring.push(at.0 as u32, (at.0 >> 32) as u32, len as u32, (trb::NORMAL << 10) | trb::IOC);
                     b.out_in_flight += 1;
                     let slot = self.dev[dev].slot;
+                    self.select(self.dev[dev].ctl);
                     self.x.doorbell(slot, out_dci);
                 }
                 _ => {}

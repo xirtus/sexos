@@ -32,6 +32,7 @@ pub mod rebase;
 pub mod restarts;
 pub mod render;
 pub mod skills;
+pub mod split_edit;
 pub mod suggest;
 pub mod transcript;
 

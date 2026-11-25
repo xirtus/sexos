@@ -155,8 +155,18 @@ fn nvme_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
     true
 }
 
+/// xHCIs leased to SexUSB at BOOT (its DMA grant grows by 1 MiB for each extra one).
+static XHCI_LEASES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub fn xhci_leases() -> u32 { XHCI_LEASES.load(core::sync::atomic::Ordering::Relaxed) }
+
 fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
     let irq_line = (dev.read_u32(0x3C) & 0xFF) as u8;
+    // Firmware may leave a controller it does not boot from (Tiger Lake's Type-C xHCI)
+    // in D3hot or with memory decoding off; its registers then read all ones.
+    let woke = crate::device_lease::wake_d0(dev);
+    let command = dev.read_u32(0x04);
+    dev.write_u32(0x04, (command & 0xFFFF) | 0x0006);
+    serial_println!("[kernel.pci.xhci.power] {:02x}:{:02x}.{} woke_d0={} command={:#06x}", dev.bus, dev.dev, dev.func, woke as u8, command & 0xFFFF);
     serial_println!("DevMgr: Discovered USB XHCI ({:02x}:{:02x}.{}) vendor={:04x} device={:04x} bar0={:#x} irq_line={:#x}",
         dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, dev.get_bar(0), irq_line);
     // Strict lease boundary: one xHCI PCI capability per driver slot.
@@ -167,6 +177,7 @@ fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
         virtio: None, class: 0, window: (0, 0),
     }));
     pd.grant(CapabilityData::Interrupt(InterruptCapData { irq: irq_line }));
+    XHCI_LEASES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     serial_println!("DevMgr: Leased XHCI to pd={} slot={}", pd.id, slot);
     true
 }
@@ -262,8 +273,9 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
     let Some((view, window)) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
         serial_println!("[kernel.cap.class.skip] kind={:?} reason=invalid_bar bar={}", kind, kind.bar()); return false;
     };
-    if kind == crate::device_lease::Kind::SerialIo && crate::device_lease::wake_d0(dev) {
-        serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind=SerialIo", dev.bus, dev.dev, dev.func);
+    // Firmware may leave a part it does not use in D3hot (its registers read all ones).
+    if matches!(kind, crate::device_lease::Kind::SerialIo | crate::device_lease::Kind::Wifi) && crate::device_lease::wake_d0(dev) {
+        serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind={:?}", dev.bus, dev.dev, dev.func, kind);
     }
     if kind == crate::device_lease::Kind::Thunderbolt {
         let ready = crate::device_lease::force_power(dev);

@@ -12,6 +12,7 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:8779db0221aab125b06bff4e13ce43265f334898ef1f5c1800e12dc129f40c4c'),  # service stacks grow on touch before the fault is parked (no wait change), 2026-11-23
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:230bcac20c18ce4eddb3b3a8232622d432edeff676b47f448b791bd48abf9615'),  # #466 (cld on entry, PKU gates) merged with #456's hot-plug tick (x17 PR sweep; union of two reviewed versions), 2026-11-21
 
 
@@ -209,6 +210,10 @@ PINS = (
     ('timed', 'servers/sexusb/src/main.rs', '09a173d46a7f99edd8c810029e767552230e343f4b9ece7d69e161fe18d7ba5a'),  # Thunderbolt unload/GO2SX on the sleep notice, waits unchanged, 2026-11-20
 
     ('timed', 'servers/sexusb/src/main.rs', '29fbd1f1d8d3cef6b20bb8920959aa1984650f57483afe0f20e787314c26576b'),  # USB audio merged with Thunderbolt (Qupid #392), 2026-11-20
+
+    ('timed', 'servers/sexusb/src/main.rs', '7f57f601ddae3841b94e199c312e44adcaf64eb6c4ee3cff1ec13595f9ba6f1f'),  # every leased xHCI driven (x17 chipset + Type-C), one quiet wait over all, 2026-11-23
+    ('timed', 'servers/sexusb/src/main.rs', '3baa507b1fa1433a8a88696c067e1e77172ae364737a2fe0b3d4f834a01b3358'),  # controllers started outside _start (64 KiB task stack), waits unchanged, 2026-11-23
+    ('timed', 'servers/sexnet/src/main.rs', '1010045b80b56ff4264494bc889894bd94b0b99ef0cf95cfa77384cc8d58f8a3'),  # _start moved to big_stack.rs (512 KiB own stack, x17 Wi-Fi overflow); waits unchanged, 2026-11-23
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 

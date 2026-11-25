@@ -265,6 +265,14 @@ fn power_up_stops_on_radio_switch_and_on_silence() {
     assert_eq!(boot.step, csr::Step::Failed(csr::Failure::AliveTimeout));
     assert!(hw.writes.contains(&(csr::CTXT_INFO_BA, 0)), "22000 series uses the old context register");
     assert!(hw.prph_writes.is_empty() || !hw.prph_writes.iter().any(|w| w.0 == csr::UREG_CPU_INIT_RUN + 0x30_0000));
+    // The firmware raises SW_ERR instead of ALIVE: reported with its cause, at once.
+    let mut hw = Chip::new();
+    let mut boot = csr::Boot::new(info, 0);
+    while { let t = hw.now; boot.advance(&mut hw, t, &layout, 0, 0) } {
+        if boot.step == csr::Step::WaitAlive { hw.regs.insert(csr::INT, csr::INT_SW_ERR); }
+        hw.now += 1000; assert!(hw.now < 2_000_000);
+    }
+    assert_eq!(boot.step, csr::Step::Failed(csr::Failure::Crashed { cause: csr::INT_SW_ERR }));
     // A device that fell off the bus reads all ones.
     let mut hw = Chip::new();
     hw.regs.insert(csr::HW_IF_CONFIG, u32::MAX);
@@ -475,6 +483,12 @@ fn authentication_and_association_frames() {
     let n = w::assoc_request(&mut buf, &bss, &STA, 3, &rsn[..rn], &[], &[]);
     let ies: Vec<u8> = w::elements(&buf[28..n]).map(|(id, _)| id).collect();
     assert_eq!(ies, [0, 1, 48, 244]);
+    // Short preamble on 2.4 GHz only (an AP that requires it answers status 19 otherwise).
+    let cap = |buf: &[u8]| u16::from_le_bytes([buf[24], buf[25]]);
+    assert_eq!(cap(&buf) & w::CAPINFO_SHORT_PREAMBLE, 0);
+    let two = w::parse_bss(&beacon(b"wpa2", 10, Some(&rsn[..rn]), false)).unwrap();
+    w::assoc_request(&mut buf, &two, &STA, 4, &rsn[..rn], &[], &[]);
+    assert_eq!(cap(&buf), 0x0001 | 0x0010 | 0x0400 | w::CAPINFO_SHORT_PREAMBLE);
     let mut resp = [0u8; 30];
     resp[0] = 0x10;
     resp[28..30].copy_from_slice(&(0xc000u16 | 5).to_le_bytes());
@@ -876,7 +890,10 @@ fn mpdu(family: devices::Family, frame: &[u8], energy: u8, channel: u8, pad: boo
     d[12..16].copy_from_slice(&3u32.to_le_bytes());
     let e = if family == devices::Family::Ax210 { 40 } else { 32 };
     d[e] = energy; d[e + 1] = 0; d[e + 2] = channel;
-    if pad { d.extend_from_slice(&frame[..24]); d.extend_from_slice(&[0, 0]); d.extend_from_slice(&frame[24..]); }
+    // The pad follows the 802.11 header, or the CCMP header of a protected frame
+    // (`iwl_mvm_create_skb`: "the padding is inserted after the IV").
+    let at = if frame[0] & 0x0c == 8 { w::data_header_len(frame).unwrap_or(24) } else { 24 } + if frame[1] & 0x40 != 0 { 8 } else { 0 };
+    if pad { d.extend_from_slice(&frame[..at]); d.extend_from_slice(&[0, 0]); d.extend_from_slice(&frame[at..]); }
     else { d.extend_from_slice(frame); }
     packet(0xc1, 0, 0, 0x80, &d)
 }

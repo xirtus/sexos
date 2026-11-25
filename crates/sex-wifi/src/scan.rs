@@ -152,6 +152,11 @@ pub struct Received<'a> {
 const MPDU_AMSDU: u8 = 0x40;
 const AMSDU_SUBFRAME_MASK: u8 = 0x7f;
 
+/// RX status security bits (`IWX_RX_MPDU_RES_STATUS_SEC_*`) and the CCMP header.
+const SEC_MASK: u32 = 7 << 8;
+const SEC_CCM: u32 = 2 << 8;
+const CCMP_HEADER: usize = 8;
+
 /// Reads an RX MPDU notification (`iwx_rx_mpdu_mq`): the descriptor, then the
 /// 802.11 frame. A padded header is joined to its body in `scratch`.
 pub fn parse_mpdu<'a>(p: &'a Packet<'_>, family: Family, scratch: &'a mut [u8; 4096]) -> Option<Received<'a>> {
@@ -166,9 +171,14 @@ pub fn parse_mpdu<'a>(p: &'a Packet<'_>, family: Family, scratch: &'a mut [u8; 4
     let energy = |e: u8| if e == 0 { -256 } else { -(e as i16) };
     let rssi = energy(ea).max(energy(eb));
     let body = &d[desc..desc + len];
-    // With the pad flag, two bytes sit between the header and the body
-    // (`iwx_rx_mpdu_mq` removes them for any frame type).
-    let header = match body[0] & 0x0c { 0 => Some(24), 8 => crate::ieee80211::data_header_len(body), _ => None };
+    // With the pad flag, two bytes sit after the header, or after the CCMP
+    // header when the firmware decrypted the frame (`iwx_rx_mpdu_mq`, and
+    // `iwl_mvm_create_skb`: "the padding is inserted after the IV"). Taking them
+    // from before the IV broke every protected QoS frame (unicast data on the x17:
+    // all dropped as malformed, so no ARP reply or TCP ever arrived).
+    let ccm = status & SEC_MASK == SEC_CCM && body[1] & 0x40 != 0;
+    let header = match body[0] & 0x0c { 0 => Some(24), 8 => crate::ieee80211::data_header_len(body), _ => None }
+        .map(|h| if ccm { h + CCMP_HEADER } else { h });
     let frame: &[u8] = match header {
         Some(h) if d[3] & MPDU_PAD != 0 => {
             if len < h + 2 { return None; }
@@ -217,6 +227,12 @@ impl Scan {
     }
 
     pub fn done(&self) -> bool { matches!(self.step, Step::Done | Step::Failed(_)) }
+    /// Starts from the networks an earlier scan found, so a rescan never shows an empty
+    /// list (nor shifts the numbers a join picks by); what it hears refreshes them.
+    pub fn keep_networks(&mut self, earlier: &Scan) {
+        self.networks = earlier.networks;
+        self.count = earlier.count;
+    }
     pub fn networks(&self) -> impl Iterator<Item = &Network> { self.networks.iter().flatten() }
 
     /// Adds or refreshes a network from a beacon or probe response.

@@ -90,6 +90,14 @@ fn distinct(keys: &[String]) -> usize {
 /// Phrases said twice within a moment, in spoken order. `keys` are [`restart_key`]s (an
 /// empty key never matches); `starts` and `ends` are each word's times.
 pub fn find_restarts(keys: &[String], starts: &[Micros], ends: &[Micros]) -> Vec<Restart> {
+    find_restarts_with(keys, starts, ends, false)
+}
+
+/// [`find_restarts`]; with `cut_off_words`, a first attempt may also stop on a word the next
+/// one says longer ("so perfect, so perfectly realistic", "we want, we wanted"): a word of
+/// three letters or more that the second saying's word starts with, when it is the last word
+/// before the second saying (Scarlet, 2026-11-20).
+pub fn find_restarts_with(keys: &[String], starts: &[Micros], ends: &[Micros], cut_off_words: bool) -> Vec<Restart> {
     let n = keys.len().min(starts.len()).min(ends.len());
     let same = |a: usize, b: usize| !keys[a].is_empty() && keys[a] == keys[b];
     let mut found = Vec::new();
@@ -107,6 +115,12 @@ pub fn find_restarts(keys: &[String], starts: &[Micros], ends: &[Micros]) -> Vec
                 let mut length = 0;
                 while i + length < j && j + length < n && same(i + length, j + length) {
                     length += 1;
+                }
+                if cut_off_words && length > 0 && i + length + 1 == j && j + length < n {
+                    let (cut, full) = (&keys[i + length], &keys[j + length]);
+                    if cut.chars().count() >= 3 && full.len() > cut.len() && full.starts_with(cut.as_str()) {
+                        length += 1;
+                    }
                 }
                 let between = j - (i + length);
                 let d = distinct(&keys[i..i + length]);
@@ -157,12 +171,33 @@ pub fn find_restarts(keys: &[String], starts: &[Micros], ends: &[Micros]) -> Vec
 }
 
 impl Transcript {
-    /// The transcript's restarts (see the module notes).
+    /// The transcript's restarts (see the module notes), a first try cut off mid-word
+    /// included, since each one goes to the editor as a card to take or skip.
     pub fn restarts(&self) -> Vec<Restart> {
         let keys: Vec<String> = self.words.iter().map(|w| restart_key(&w.text)).collect();
         let starts: Vec<Micros> = self.words.iter().map(|w| w.source.start).collect();
         let ends: Vec<Micros> = self.words.iter().map(|w| w.source.end).collect();
-        find_restarts(&keys, &starts, &ends)
+        find_restarts_with(&keys, &starts, &ends, true)
+    }
+
+    /// A word said twice straight off ("the the"), outside a restart: the index of the
+    /// first saying, which is the one to take out, so the word plays once in the cleaner
+    /// second delivery (Scarlet, 2026-11-20). Doubles that are often meant ("had had", "that
+    /// that", "no no", "bye bye") are left alone, as are doubles with a pause between.
+    pub fn doubled_words(&self) -> Vec<usize> {
+        const MEANT: &[&str] = &["had", "that", "no", "yes", "yeah", "bye", "very", "so", "really", "go", "ha", "oh", "is", "do"];
+        // Plain words, contractions not folded: "can't, can" is not a double.
+        let keys: Vec<String> = self.words.iter().map(|w| norm(&w.text).replace('\'', "")).collect();
+        (0..keys.len().saturating_sub(1))
+            .filter(|&i| {
+                !keys[i].is_empty()
+                    && keys[i] == keys[i + 1]
+                    && !MEANT.contains(&keys[i].as_str())
+                    && self.words[i + 1].source.start - self.words[i].source.end < SECOND / 2
+                    && (i + 2 >= keys.len() || keys[i + 2] != keys[i])
+                    && (i == 0 || keys[i - 1] != keys[i])
+            })
+            .collect()
     }
 
     /// The cut that removes a restart's first saying, so the second one plays.
@@ -242,6 +277,29 @@ mod tests {
             w.source.end += 20 * SECOND;
         }
         assert_eq!(t.restarts(), vec![]);
+    }
+
+    #[test]
+    fn a_first_try_cut_off_on_a_word_the_retake_says_longer() {
+        let t = said("Okay. So perfect. So perfectly realistic.");
+        assert_eq!(t.restarts(), vec![Restart { at: 1, length: 2, next: 3, again: None }]);
+        let keys: Vec<String> = t.words.iter().map(|w| restart_key(&w.text)).collect();
+        let times: Vec<Micros> = t.words.iter().map(|w| w.source.start).collect();
+        assert_eq!(find_restarts(&keys, &times, &times), vec![], "only with cut-off words");
+        // Two letters is too short to say it was cut off.
+        assert_eq!(said("so we go so we gone").restarts().len(), 1, "\"so we\" matches on its own");
+        assert_eq!(said("we want, we wanted it").restarts(), vec![Restart { at: 0, length: 2, next: 2, again: None }]);
+    }
+
+    #[test]
+    fn a_doubled_word_takes_out_the_first() {
+        assert_eq!(said("I went to the the shop").doubled_words(), vec![3]);
+        assert_eq!(said("what he had had was gone").doubled_words(), vec![]);
+        assert_eq!(said("no no no").doubled_words(), vec![]);
+        assert_eq!(said("you can't can you").doubled_words(), vec![], "a contraction is its own word here");
+        let mut t = said("to the the shop");
+        t.words[2].source.start += SECOND;
+        assert_eq!(t.doubled_words(), vec![], "a pause between is a choice");
     }
 
     #[test]

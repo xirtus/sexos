@@ -32,6 +32,14 @@ class IommuOffEntry(unittest.TestCase):
         self.assertIn('CMDLINE=safe', safe)
         self.assertEqual([l for l in safe if l != 'CMDLINE=safe'], e['SexOS'])
 
+    def test_report_entries_match_main_entry_with_autorun(self):
+        # apps/spindle reads `autorun` from the kernel's [iommu.boot_options] line.
+        e = entries((ROOT / 'limine.cfg').read_text())
+        for name, cmd in (('SexOS report to the Mac (no typing)', 'CMDLINE=autorun'),
+                          ('SexOS safe start, report to the Mac', 'CMDLINE=safe autorun')):
+            self.assertIn(cmd, e[name])
+            self.assertEqual([l for l in e[name] if l != cmd], e['SexOS'])
+
 
 if __name__ == '__main__':
     unittest.main()

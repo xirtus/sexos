@@ -306,6 +306,18 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             regs.rdx = total as u64;
             wire::OK
         }
+        wire::OP_LOG_TAIL => {
+            // The newest part of the log (the head stops at its size): for lines logged
+            // after it filled, such as a Wi-Fi join on a PC with no serial port.
+            if !may_read(caller) { return wire::DENIED; }
+            if !crate::syscalls::validate_user_bytes(buf, wire::LOG_CHUNK, true) { return wire::INVALID; }
+            let mut chunk = [0u8; wire::LOG_CHUNK];
+            let (n, written) = crate::console::log_at(arg as usize, &mut chunk);
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), buf as *mut u8, n) });
+            regs.rsi = n as u64;
+            regs.rdx = written as u64;
+            wire::OK
+        }
         wire::OP_KEEP => {
             if crate::service_restart::keep(caller, arg, buf) { wire::OK } else { wire::INVALID }
         }

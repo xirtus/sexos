@@ -23,31 +23,51 @@ enum Waiting {
     Network { index: u64, part: u64 },
     /// Passphrase part `part` sent; the join of network `index` follows the last.
     Password { index: u64, part: u64 },
+    /// Part `part` of why the last try failed (`ws::WHY`).
+    Why { part: u64 },
 }
 
 pub struct Wifi {
     waiting: Waiting,
+    /// The request now waiting (action, a, b), when it was sent and how often.
+    asked: (u64, u64, u64),
+    asked_at: u64,
+    tries: u8,
     info: ws::Info,
     bssid: [u8; 7],
     ssid: [u8; 35],
     password: [u8; ws::PASSWORD_MAX],
     password_len: usize,
+    why: [u8; ws::WHY_BYTES],
+    why_len: usize,
 }
 pub static mut WIFI: Wifi = Wifi {
     waiting: Waiting::Nothing,
+    asked: (0, 0, 0),
+    asked_at: 0,
+    tries: 0,
     info: ws::Info { channel: 0, rssi: 0, security: 0, ssid_len: 0, beacons: 0 },
     bssid: [0; 7],
     ssid: [0; 35],
     password: [0; ws::PASSWORD_MAX],
     password_len: 0,
+    why: [0; ws::WHY_BYTES],
+    why_len: 0,
 };
 
 const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | leave]";
 
-fn ask(action: u64, a: u64, b: u64) -> bool {
+fn send(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, ws::OP, action, a, b);
     status == 0
 }
+
+/// sexnet answers at once, but into this domain's single reply slot: when another
+/// service's answer still sits there (Files, for the history), the kernel refuses
+/// sexnet's and it is gone. On the x17 R1 the network list stopped after its first
+/// line. A query not answered within this many ticks (ms) is asked again.
+const RESEND_TICKS: u64 = 500;
+const RESENDS: u8 = 8;
 
 fn put(out: &mut [u8], at: &mut usize, text: &[u8]) {
     for &b in text { if *at < out.len() { out[*at] = b; *at += 1; } }
@@ -96,12 +116,16 @@ fn state_line(s: ws::State, scan: bool, join: bool, leave: bool, out: &mut [u8])
             put(out, &mut at, b").");
             if scan || join { put(out, &mut at, b" That is not possible right now."); }
         }
-        ws::JOINING => put(out, &mut at, if join {
-            b"Wi-Fi: connecting (the chip restarts first if it was busy); type wifi to see how it went." as &[u8]
-        } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
-        ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE => put(out, &mut at, if scan || join {
-            b"Wi-Fi: already joining a network." as &[u8]
-        } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
+        // Each connecting step says which one it is, so a join that stalls shows where.
+        ws::JOINING if join => put(out, &mut at,
+            b"Wi-Fi: connecting (the chip restarts first if it was busy); type wifi to see how it went."),
+        // No scan behind it: the chip is restarting or waiting to retry the network.
+        ws::JOINING if s.networks == 0 => put(out, &mut at,
+            b"Wi-Fi: connecting, step 1 of 4: restarting the chip and looking for the network (retries for about 3 minutes)."),
+        ws::JOINING => put(out, &mut at, b"Wi-Fi: connecting, step 2 of 4: tuning to the network's channel."),
+        ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE if scan || join => put(out, &mut at, b"Wi-Fi: already joining a network."),
+        ws::JOINED | ws::ASSOCIATING => put(out, &mut at, b"Wi-Fi: connecting, step 3 of 4: asking the access point to let us in."),
+        ws::HANDSHAKE => put(out, &mut at, b"Wi-Fi: connecting, step 4 of 4: checking the passphrase with the network."),
         ws::ASSOCIATED | ws::CONNECTED => put(out, &mut at, if scan {
             b"Wi-Fi: connected; scanning while connected comes later (wifi leave first)." as &[u8]
         } else if join { b"Wi-Fi: connected; that network was busy, try again." } else if s.phase == ws::CONNECTED { b"Wi-Fi: connected (WPA2); the network service now uses Wi-Fi." }
@@ -157,10 +181,46 @@ fn passphrase(args: &[u8]) -> &[u8] {
 }
 
 impl Wifi {
-    fn send_password(&self, _index: u64, part: u64) -> bool {
+    fn ask(&mut self, action: u64, a: u64, b: u64) -> bool {
+        self.asked = (action, a, b);
+        self.asked_at = sex_pdx::get_ticks();
+        self.tries = 0;
+        send(action, a, b)
+    }
+    /// Spindle's loop polls while a reply is due (it may never come; see `RESEND_TICKS`).
+    pub fn busy(&self) -> bool { self.waiting != Waiting::Nothing }
+    /// Asks again for an answer that never came. Only queries and passphrase parts are
+    /// repeated: a repeated scan, join or leave would act twice, so those just end.
+    pub fn step(&mut self, sb: &mut crate::Scrollback) {
+        if self.waiting == Waiting::Nothing { return; }
+        let now = sex_pdx::get_ticks();
+        if now.saturating_sub(self.asked_at) < RESEND_TICKS { return; }
+        let repeatable = match self.waiting {
+            Waiting::State { scan, join, leave } => !scan && !join && !leave,
+            Waiting::Network { .. } | Waiting::Password { .. } | Waiting::Why { .. } => true,
+            Waiting::Nothing => false,
+        };
+        if !repeatable || self.tries >= RESENDS {
+            if matches!(self.waiting, Waiting::Password { .. }) { self.forget(); }
+            self.waiting = Waiting::Nothing;
+            sb.push(b"Wi-Fi: no answer from the network service; type wifi to see where it is.");
+            return;
+        }
+        self.tries += 1;
+        self.asked_at = now;
+        let (action, a, b) = self.asked;
+        sex_pdx::serial_record!("[spindle.wifi.resend] action={} a={} b={} try={}", action, a, b, self.tries);
+        send(action, a, b);
+    }
+    fn send_password(&mut self, _index: u64, part: u64) -> bool {
         let from = part as usize * 7;
         let word = ws::bytes_word(&self.password[from..self.password_len.max(from)]);
-        ask(ws::PASSWORD, part | (self.password_len as u64) << 8, word)
+        self.ask(ws::PASSWORD, part | (self.password_len as u64) << 8, word)
+    }
+    /// Asks sexnet why the last try failed (`Waiting::Why`); nothing shows when none did.
+    fn ask_why(&mut self) {
+        self.why_len = 0;
+        if self.ask(ws::WHY, 0, 0) { self.waiting = Waiting::Why { part: 0 }; }
     }
     /// Spindle keeps no copy once sexnet has it.
     fn forget(&mut self) { self.password = [0; ws::PASSWORD_MAX]; self.password_len = 0; }
@@ -173,7 +233,7 @@ impl Wifi {
             (None, _, _) => (ws::STATE, 0, false, false),
             (Some(b"scan"), None, _) => (ws::SCAN, 0, true, false),
             (Some(b"leave") | Some(b"forget"), None, _) => {
-                if ask(ws::LEAVE, 0, 0) { self.waiting = Waiting::State { scan: false, join: false, leave: true }; }
+                if self.ask(ws::LEAVE, 0, 0) { self.waiting = Waiting::State { scan: false, join: false, leave: true }; }
                 else { sb.push(b"Wi-Fi: the network service is unreachable."); }
                 return;
             }
@@ -196,7 +256,7 @@ impl Wifi {
             }
             _ => { sb.push(USAGE); return; }
         };
-        if ask(action, a, 0) { self.waiting = Waiting::State { scan, join, leave: false }; } else { sb.push(b"Wi-Fi: the network service is unreachable."); }
+        if self.ask(action, a, 0) { self.waiting = Waiting::State { scan, join, leave: false }; } else { sb.push(b"Wi-Fi: the network service is unreachable."); }
     }
 
     /// A reply from sexnet. False when it was not for a `wifi` command.
@@ -213,9 +273,17 @@ impl Wifi {
                 let n = state_line(s, scan, join, leave, &mut line);
                 sb.push(&line[..n]);
                 sex_pdx::serial_record!("[spindle.wifi] phase={} networks={} scans={} channels={}", s.phase, s.networks, s.scans, s.channels);
+                // Connecting, or a try failed: why the last one failed says more than
+                // the list (the boot log may have moved past its [wifi.failed] line).
+                let trying = matches!(s.phase, ws::FAILED | ws::JOINING | ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE);
+                if trying && !leave { self.ask_why(); return true; }
                 // A scan just started has nothing finished to list yet.
-                if s.networks > 0 && !join && !(scan && s.phase == ws::SCANNING) && ask(ws::NETWORK, 0, ws::PART_INFO) {
+                if s.networks > 0 && !join && !(scan && s.phase == ws::SCANNING) && self.ask(ws::NETWORK, 0, ws::PART_INFO) {
                     self.waiting = Waiting::Network { index: 0, part: ws::PART_INFO };
+                } else if !join && !leave {
+                    // Restarting or rescanning after a refused passphrase or a given-up
+                    // rejoin: that failure still says the most.
+                    self.ask_why();
                 }
             }
             Waiting::Password { index, part } => {
@@ -225,10 +293,30 @@ impl Wifi {
                     return true;
                 }
                 self.forget();
-                if ask(ws::JOIN, index, 0) { self.waiting = Waiting::State { scan: false, join: true, leave: false }; }
+                if self.ask(ws::JOIN, index, 0) { self.waiting = Waiting::State { scan: false, join: true, leave: false }; }
+            }
+            Waiting::Why { part } => {
+                if value != ws::MISSING {
+                    let from = part as usize * 7;
+                    let n = (ws::WHY_BYTES - from.min(ws::WHY_BYTES)).min(7);
+                    ws::word_bytes(value, &mut self.why[from..from + n]);
+                    self.why_len = from + n;
+                    if part + 1 < ws::WHY_PARTS && self.ask(ws::WHY, part + 1, 0) {
+                        self.waiting = Waiting::Why { part: part + 1 };
+                        return true;
+                    }
+                }
+                let len = self.why[..self.why_len].iter().position(|&b| b == 0).unwrap_or(self.why_len);
+                if len > 0 {
+                    let mut at = 0;
+                    put(&mut line, &mut at, b"Wi-Fi: the last try failed: ");
+                    for &b in &self.why[..len] { put(&mut line, &mut at, &[if (0x20..0x7f).contains(&b) { b } else { b'?' }]); }
+                    sb.push(&line[..at]);
+                }
             }
             Waiting::Network { index, part } => {
-                if value == ws::MISSING { return true; }
+                // The list ended: then why the last try failed, if one did.
+                if value == ws::MISSING { self.ask_why(); return true; }
                 match part {
                     ws::PART_INFO => { self.info = ws::Info::of(value); self.ssid = [0; 35]; }
                     ws::PART_BSSID => ws::word_bytes(value, &mut self.bssid),
@@ -238,15 +326,15 @@ impl Wifi {
                 let ssid_len = (self.info.ssid_len as u64).min(32);
                 let last = ws::PART_SSID + (ssid_len + 6) / 7;
                 let next = part + 1;
-                if next < last.max(ws::PART_SSID) && ask(ws::NETWORK, index, next) {
+                if next < last.max(ws::PART_SSID) && self.ask(ws::NETWORK, index, next) {
                     self.waiting = Waiting::Network { index, part: next };
                     return true;
                 }
                 let n = network_line(index + 1, self.info, &self.bssid, &self.ssid[..ssid_len as usize], &mut line);
                 sb.push(&line[..n]);
-                if index + 1 < MAX_LISTED && ask(ws::NETWORK, index + 1, ws::PART_INFO) {
+                if index + 1 < MAX_LISTED && self.ask(ws::NETWORK, index + 1, ws::PART_INFO) {
                     self.waiting = Waiting::Network { index: index + 1, part: ws::PART_INFO };
-                }
+                } else { self.ask_why(); }
             }
         }
         true

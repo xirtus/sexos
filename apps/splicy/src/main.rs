@@ -390,6 +390,18 @@ mod program {
                     self.message = if self.view.vu.visible { "VU meter strip on".into() } else { "VU meter strip off".into() };
                 }
                 (_, Some(b'\\')) => self.preview_join(),
+                (_, Some(c @ (b'j' | b'l'))) => {
+                    // A quarter second: the next voice leads in early (J) or the last one carries on (L).
+                    let shift = if c == b'j' { -SECOND / 4 } else { SECOND / 4 };
+                    match self.ed.split_edit(shift) {
+                        Ok(at) => {
+                            sex_pdx::serial_record!("[splicy.split_edit] kind={} at_ms={}", c as char, at / 1000);
+                            self.message = format!("{} cut: the sound now cuts a quarter second {} the picture", if c == b'j' { "J" } else { "L" }, if c == b'j' { "before" } else { "after" });
+                            self.report();
+                        }
+                        Err(e) => self.message = format!("No split edit there: {e:?}"),
+                    }
+                }
                 (_, Some(b'=')) => {
                     let w = self.window.size().0 as i32;
                     self.view.zoom_by(self.ed.timeline(), w, 1, self.playhead);

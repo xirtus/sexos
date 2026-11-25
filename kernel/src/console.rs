@@ -54,7 +54,7 @@ impl Fb {
 
 // ── The log ring ───────────────────────────────────────────────────────────────
 
-const LOG_BYTES: usize = 64 * 1024;
+const LOG_BYTES: usize = sex_pdx::crash_log::LOG_TAIL_BYTES;
 struct Log { bytes: [u8; LOG_BYTES], written: usize }
 static LOG: Mutex<Log> = Mutex::new(Log { bytes: [0; LOG_BYTES], written: 0 });
 
@@ -66,7 +66,7 @@ pub fn log_tail(out: &mut [u8]) -> usize {
 /// The first HEAD_BYTES logged, kept whole: the start is where a PC with no serial port
 /// says what hardware it found (devices, disks, Wi-Fi), and the ring above has long
 /// moved past it by the time anyone asks. Spindle's `hw` reads it.
-const HEAD_BYTES: usize = 256 * 1024;
+const HEAD_BYTES: usize = 512 * 1024;
 struct Head { bytes: [u8; HEAD_BYTES], len: usize }
 static HEAD: Mutex<Head> = Mutex::new(Head { bytes: [0; HEAD_BYTES], len: 0 });
 
@@ -77,6 +77,17 @@ pub fn log_head(offset: usize, out: &mut [u8]) -> (usize, usize) {
     let n = out.len().min(head.len - from);
     out[..n].copy_from_slice(&head.bytes[from..from + n]);
     (n, head.len)
+}
+
+/// The log from absolute position `at` (bytes logged since boot): (bytes copied, bytes
+/// logged so far). Only the newest `LOG_BYTES` are still held; older positions copy
+/// nothing. A busy log copies nothing too: the caller asks again.
+pub fn log_at(at: usize, out: &mut [u8]) -> (usize, usize) {
+    let log = match LOG.try_lock() { Some(l) => l, None => return (0, 0) };
+    if at < log.written.saturating_sub(LOG_BYTES) || at >= log.written { return (0, log.written); }
+    let n = out.len().min(log.written - at);
+    for (i, slot) in out[..n].iter_mut().enumerate() { *slot = log.bytes[(at + i) % LOG_BYTES]; }
+    (n, log.written)
 }
 
 fn copy_tail(log: &Log, out: &mut [u8]) -> usize {
@@ -255,9 +266,14 @@ pub fn tick() {
     if let Some(mut s) = SCREEN.try_lock() { if let Some(fb) = s.fb { draw_due(&mut *s, &fb); } }
 }
 
-/// Every logged byte comes through here, from `serial::_print` and serial records.
-pub fn write(bytes: &[u8]) {
-    if STOPPING.load(Ordering::Relaxed) { return; }
+/// Lines written for every key typed or text frame drawn: they still go to the serial
+/// port (gates read them), but not into the log ring or its head, where five of them a
+/// keystroke pushed out what `hw` and crash reports are for (x17, 2026-11-24).
+const PER_KEY: [&[u8]; 6] = [b"[spindle.text.", b"[spindle.view.text]", b"[display.text.prepared]",
+    b"[display.text.committed]", b"[display.typed.released]", b"[spindle.line.edit"];
+fn per_key(bytes: &[u8]) -> bool { PER_KEY.iter().any(|p| bytes.starts_with(p)) }
+
+fn keep(bytes: &[u8]) {
     if let Some(mut log) = LOG.try_lock() {
         for &b in bytes {
             let at = log.written % LOG_BYTES;
@@ -271,6 +287,12 @@ pub fn write(bytes: &[u8]) {
         head.bytes[at..at + n].copy_from_slice(&bytes[..n]);
         head.len += n;
     }
+}
+
+/// Every logged byte comes through here, from `serial::_print` and serial records.
+pub fn write(bytes: &[u8]) {
+    if STOPPING.load(Ordering::Relaxed) { return; }
+    if !per_key(bytes) { keep(bytes); }
     if SHOWING.load(Ordering::Acquire) {
         if let Some(mut s) = SCREEN.try_lock() {
             if let Some(fb) = s.fb {
@@ -427,10 +449,12 @@ fn countdown(seconds: u32) {
 
 static TSC_PER_10MS: AtomicU64 = AtomicU64::new(0);
 fn rdtsc() -> u64 { unsafe { core::arch::x86_64::_rdtsc() } }
-/// 10 ms by the PIT, measured once against the TSC; with no PIT, a guess of 2 GHz.
+/// 10 ms by the TSC at the rate CPUID reports, else by the PIT measured once against
+/// the TSC; with neither, a guess of 2 GHz.
 fn wait_10ms() {
     let mut per = TSC_PER_10MS.load(Ordering::Relaxed);
     if per == 0 {
+        if let Some(hz) = crate::apic::cpu_clocks().tsc_hz { TSC_PER_10MS.store(hz / 100, Ordering::Relaxed); return wait_10ms(); }
         let start = rdtsc();
         per = if pit_10ms() { (rdtsc() - start).max(1) } else { 20_000_000 };
         TSC_PER_10MS.store(per, Ordering::Relaxed);
