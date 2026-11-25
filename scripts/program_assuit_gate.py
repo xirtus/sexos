@@ -158,7 +158,16 @@ def main():
   s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
   g['wait'](r'\[assuit\.spelling\] word=helo suggestions=\d+\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-spelling.ppm')})
-  q.key('esc')
+  s=len(t());press('a')
+  g['wait'](r'\[assuit\.dictionary\.added\] word=helo\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-dictionary-added.ppm')})
+  assert (a.out/'assuit-dictionary-added.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','k')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-language-prompt.ppm')})
+  assert (a.out/'assuit-proofing-language-prompt.ppm').stat().st_size>10000
+  type_line('en-GB');q.key('ret')
+  g['wait'](r'\[assuit\.proofing-language\] en-GB\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-language.ppm')})
   s=len(t());press('ctrl','shift','l')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paper-prompt.ppm')})
   assert (a.out/'assuit-paper-prompt.ppm').stat().st_size>10000

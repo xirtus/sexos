@@ -31,9 +31,22 @@ pub struct Book {
 }
 
 impl Book {
+    /// The app-owned proofing word list. The document's exact-file grant never
+    /// authorizes writing a sibling next to someone else's document.
+    pub const DICTIONARY: &'static str = "assuit-custom-dictionary.txt";
+
+    pub fn load_dictionary(&mut self, path: &Path) {
+        wordcraft_engine::proof::load_user_dictionary(path);
+        self.session.user_dict_path = Some(path.to_path_buf());
+    }
+
     /// An empty document that Ctrl+S saves to `path`.
     pub fn blank(path: &str) -> Book {
-        Book { session: Session::new(Document::new()), path: path.to_string(), edits: 0 }
+        #[allow(unused_mut)] // the SexOS build loads the app-owned dictionary below
+        let mut book = Book { session: Session::new(Document::new()), path: path.to_string(), edits: 0 };
+        #[cfg(target_os = "hermit")]
+        book.load_dictionary(Path::new(Self::DICTIONARY));
+        book
     }
 
     /// Opens a docx, doc, odt, rtf, html, md or txt file.
@@ -42,7 +55,11 @@ impl Book {
         let mut session = Session::new(doc);
         session.path = Some(path.into());
         session.dirty = false;
-        Ok(Book { session, path: path.to_string(), edits: 0 })
+        #[allow(unused_mut)] // the SexOS build loads the app-owned dictionary below
+        let mut book = Book { session, path: path.to_string(), edits: 0 };
+        #[cfg(target_os = "hermit")]
+        book.load_dictionary(Path::new(Self::DICTIONARY));
+        Ok(book)
     }
 
     /// Runs one WordCraft command, such as `text.insert` or `format.bold`.
@@ -277,6 +294,29 @@ impl Book {
     /// Replaces the selected issue with one of the engine's suggestions.
     pub fn apply_spelling(&mut self, suggestion: &str) -> Result<(), String> {
         self.run("review.applySuggestion", json!({ "text": suggestion })).map(|_| ())
+    }
+
+    /// Set the document's default proofing language and the current selection.
+    pub fn proofing_language(&mut self, input: &str) -> Result<&'static str, String> {
+        let tag = match input.trim().to_ascii_lowercase().as_str() {
+            "en-us" | "us" => "en-US",
+            "en-gb" | "uk" => "en-GB",
+            _ => return Err("Choose en-US or en-GB".into()),
+        };
+        self.run("review.language", json!({ "lang": tag, "default": true }))?;
+        Ok(tag)
+    }
+
+    /// Keep the selected issue in Assuit's app-owned dictionary.
+    pub fn add_spelling_word(&mut self, word: &str) -> Result<(), String> {
+        let path = self.session.user_dict_path.clone().ok_or("Dictionary is unavailable")?;
+        self.run("review.addToDictionary", json!({ "word": word }))?;
+        let saved = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Could not keep dictionary: {e}"))?;
+        if !saved.lines().any(|line| line.eq_ignore_ascii_case(word)) {
+            return Err("Could not keep dictionary word".into());
+        }
+        Ok(())
     }
 
     /// Words in the body, as a word processor's status bar counts them.
@@ -1022,6 +1062,42 @@ mod tests {
         assert_eq!(book.text().trim(), corrected);
         book.save().unwrap();
         assert_eq!(Book::open(&book.path).unwrap().text().trim(), corrected);
+    }
+
+    #[test]
+    fn proofing_language_survives_docx_save_and_reopen() {
+        let path = temp("proofing-language.docx");
+        let mut book = Book::blank(&path);
+        assert!(book.proofing_language("de-DE").is_err());
+        assert_eq!(book.proofing_language("uk").unwrap(), "en-GB");
+        assert_eq!(book.session.doc.styles.default_chr.lang.as_deref(), Some("en-GB"));
+        book.type_text("Colour and centre.").unwrap();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap();
+        assert_eq!(reopened.session.doc.styles.default_chr.lang.as_deref(), Some("en-GB"));
+    }
+
+    #[test]
+    fn added_word_is_kept_and_loadable_in_new_session() {
+        let path = temp("assuit-proofing-words.txt");
+        let word = "zxqassuitproofword";
+        let mut book = Book::blank(&temp("proofing-dictionary.docx"));
+        book.load_dictionary(Path::new(&path));
+        book.type_text(&format!("Hello {word} world")).unwrap();
+        book.key(&Chord { name: "Home", ctrl: true, shift: false });
+        assert_eq!(book.next_spelling_issue().unwrap().unwrap().0, word);
+        book.add_spelling_word(word).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().lines().any(|line| line == word));
+        assert!(wordcraft_engine::proof::remove_word(word));
+        assert!(!wordcraft_engine::proof::user_dictionary().contains(&word.to_string()));
+        let mut reopened = Book::blank(&temp("proofing-dictionary-reopen.docx"));
+        reopened.load_dictionary(Path::new(&path));
+        assert!(wordcraft_engine::proof::user_dictionary().contains(&word.to_string()));
+        reopened.type_text(&format!("Hello {word} world")).unwrap();
+        reopened.key(&Chord { name: "Home", ctrl: true, shift: false });
+        let next = reopened.next_spelling_issue().unwrap();
+        assert!(next.is_none(), "{next:?}");
+        wordcraft_engine::proof::remove_word(word);
     }
 
 }
