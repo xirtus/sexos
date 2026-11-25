@@ -428,6 +428,13 @@ impl Book {
         let exists = self.session.doc().ok().and_then(|d| d.wb.active()
             .map(|sheet| sheet.charts.iter().any(|chart| chart.id == id))).unwrap_or(false);
         if !exists { return Err("Choose a chart on this sheet first".into()); }
+        if input == "switch rows/columns" {
+            self.run("chart.switchRowColumn", json!({ "chart": id }))?;
+            let by_rows = self.session.doc().ok().and_then(|d| d.wb.active())
+                .and_then(|s| s.charts.iter().find(|c| c.id == id))
+                .is_some_and(|c| c.by_rows);
+            return Ok(format!("Chart series from {}", if by_rows { "rows" } else { "columns" }));
+        }
         if let Some(title) = input.strip_prefix("title ") {
             if title.is_empty() || title.chars().count() > 120 { return Err("Enter title followed by 1–120 characters".into()); }
             self.run("chart.set", json!({ "chart": id, "title": title }))?;
@@ -478,7 +485,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter type, title, legend, table on/off, x/y title, labels or gridlines".into())
+        Err("Enter type, title, legend, table on/off, x/y title, labels, gridlines or switch rows/columns".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -1048,6 +1055,33 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert!(state(&Book::open(&path).unwrap().0));
+    }
+
+    #[test]
+    fn chart_switch_rows_columns_changes_series_and_round_trips() {
+        let mut book = budget("chart-orientation.xlsx");
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        let state = |book: &Book| {
+            let c = &book.session.doc().unwrap().wb.active().unwrap().charts[0];
+            (c.by_rows, c.series.len())
+        };
+        let before = state(&book);
+        let pixels = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        book.edit_chart(id, "switch rows/columns").unwrap();
+        let after = state(&book);
+        assert_ne!(before, after, "the plotted series must be rebuilt");
+        let switched_pixels = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(pixels, switched_pixels);
+        book.undo().unwrap();
+        assert_eq!(state(&book), before);
+        book.redo().unwrap();
+        assert_eq!(state(&book), after);
+        let path = book.path.clone();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap().0;
+        assert_eq!(state(&reopened).1, after.1);
+        assert_eq!(reopened.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels, switched_pixels);
     }
 
     #[test]
