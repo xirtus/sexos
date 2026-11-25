@@ -14,6 +14,8 @@ pub struct FilterMenu {
     /// Visible result row -> original value index; checks always use original indices.
     pub results: Vec<usize>,
     pub searching: bool,
+    /// A full-range exact match beyond the bounded preview.
+    pub exact: Option<String>,
 }
 
 impl FilterMenu {
@@ -26,18 +28,26 @@ impl FilterMenu {
             _ => false,
         }).collect();
         let results = (0..values.len()).collect();
-        Self { col, values, selected: 0, checked, toggled: false, active, condition, query: String::new(), results, searching: false }
+        Self { col, values, selected: 0, checked, toggled: false, active, condition, query: String::new(), results, searching: false, exact: None }
     }
     pub fn untouched_active(&self) -> bool { self.active && !self.toggled && self.selected == 0 }
-    pub fn visible_len(&self) -> usize { self.results.len() + 1 }
+    pub fn visible_len(&self) -> usize { self.results.len() + 1 + usize::from(self.exact.is_some()) }
     pub fn value_index(&self, row: usize) -> Option<usize> { row.checked_sub(1).and_then(|n| self.results.get(n)).copied() }
     pub fn selected_value_index(&self) -> Option<usize> { self.value_index(self.selected) }
+    pub fn selected_exact(&self) -> Option<&str> {
+        if self.selected == 1 && self.results.is_empty() { self.exact.as_deref() } else { None }
+    }
+    pub fn offer_exact(&mut self, value: Option<String>) {
+        self.exact = value.filter(|_| self.results.is_empty());
+        if self.exact.is_some() { self.selected = 1; }
+    }
     pub fn push_query(&mut self, c: char) {
         if self.query.chars().count() < 64 { self.query.push(c); self.refresh(); }
     }
     pub fn pop_query(&mut self) { self.query.pop(); self.refresh(); }
     pub fn clear_query(&mut self) { self.query.clear(); self.refresh(); }
     fn refresh(&mut self) {
+        self.exact = None;
         let needle = self.query.to_lowercase();
         self.results = self.values.iter().enumerate().filter_map(|(i, v)| {
             let text = if v.is_empty() { "(blank)" } else { v };
@@ -84,5 +94,17 @@ mod tests {
         assert!(menu.checked[1] && !menu.checked[999]);
         menu.clear_query();
         assert_eq!(menu.visible_len(), 1_001);
+    }
+
+    #[test]
+    fn exact_value_outside_preview_becomes_an_applyable_row() {
+        let mut menu = FilterMenu::new(0, vec!["Item 0001".into()], FilterState::None);
+        for c in "item 1100".chars() { menu.push_query(c); }
+        assert_eq!(menu.visible_len(), 1);
+        menu.offer_exact(Some("Item 1100".into()));
+        assert_eq!(menu.visible_len(), 2);
+        assert_eq!(menu.selected_exact(), Some("Item 1100"));
+        menu.pop_query();
+        assert_eq!(menu.selected_exact(), None);
     }
 }

@@ -43,7 +43,7 @@ def main():
  elf=(ROOT/'iso_root/programs/spreadeagle').read_bytes();assert elf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('spreadeagle',elf)])
- fixtures={name:(ROOT/'apps/spreadeagle/assets'/name).read_bytes() for name in ('import-warning.ods','formula-compat.ods')}
+ fixtures={name:(ROOT/'apps/spreadeagle/assets'/name).read_bytes() for name in ('import-warning.ods','formula-compat.ods','filter-overflow.xlsx')}
  class WarningServer(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=fixtures.get(self.path.lstrip('/'))
@@ -108,6 +108,20 @@ def main():
   time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-formula-compat.ppm')})
   assert (a.out/'spreadeagle-formula-compat.ppm').stat().st_size>10000
   close(f)
+  s=len(t());run(f'fetch http://10.0.2.2:{server.server_address[1]}/filter-overflow.xlsx /data/spreadeagle/filter-overflow.xlsx')
+  g['wait'](r'\[spindle.fetch.line\] Saved \d+ bytes',s,240)
+  s=len(t());run('run spreadeagle filter-overflow.xlsx')
+  large=g['wait'](r'\[spreadeagle.open\] target=(\d+) task=(\d+) name=filter-overflow.xlsx sheets=Items\n',s,900)
+  g['focus'](SURFACE[int(large[1])]);time.sleep(.8)
+  ctrl_shift('l',r'\[spreadeagle.command\] data.filter\n')
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=1000\n')
+  s=len(t());q.key('slash');type_line('Item 1100')
+  g['wait'](r'\[spreadeagle\.filter\.search\] col=A query=Item 1100 matches=1 selected=1\n',s,180)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-overflow.ppm')})
+  assert (a.out/'spreadeagle-filter-overflow.ppm').stat().st_size>10000
+  s=len(t());q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=Item 1100\n',s,180)
+  close(large)
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|1200\|300\|150\|1650\|19800\|\|',s)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-opened.ppm')})

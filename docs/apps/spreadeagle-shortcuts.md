@@ -37,7 +37,9 @@ Enter to apply, and Esc to close the menu. Existing selected values show checked
 press / or Ctrl+F in the menu to search its values (case-insensitive). Search
 narrows the list without losing checked choices; Enter applies the highlighted
 match, and Backspace edits the query. Esc clears a query before closing the menu.
-Space still toggles a highlighted result while searching. Enter on the untouched
+Space can be typed in a search. Ctrl+Space toggles a highlighted search result.
+When the preview has no match, an exact value from the full filter range appears
+if it exists; Enter applies it. Enter on the untouched
 **All rows** row leaves an active filter in place. Move to a value and press
 Enter to replace it, or press Space on **All rows**, then
 Enter, to clear that column's filter.
