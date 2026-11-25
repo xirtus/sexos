@@ -6,6 +6,7 @@ Press it again, or Esc, to return to editing.
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+S | Save the document |
+| Ctrl+Shift+Q | After a failed close-time recovery write, explicitly discard unsaved changes and close |
 | Ctrl+Shift+E | Save As; the extension selects DOCX, ODT, RTF, HTML, Markdown, text or PDF |
 | Ctrl+P | Export the pages to PDF beside the document |
 | Ctrl+Shift+P | Enter a page range such as `1-3,5` and print it to a separate PDF |

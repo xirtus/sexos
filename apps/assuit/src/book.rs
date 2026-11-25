@@ -1217,23 +1217,30 @@ mod tests {
         for ext in ["docx", "odt"] {
             let path = temp(&format!("retry-recovery.{ext}"));
             let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_file(recovery_path(&path));
+            let recovery = recovery_path(&path);
+            let _ = std::fs::remove_file(&recovery);
+            let _ = std::fs::remove_dir(&recovery);
             let mut book = Book::blank(&path);
             book.type_text("Unsaved source with a footnote").unwrap();
             book.insert_footnote("Citation survives").unwrap();
             book.close_inserted_note();
             let mut pending = Some(15_000);
             assert!(recovery_due(pending, 15_000));
+            // A directory at the destination makes the real staged promotion fail.
+            // Remove it before the retry to model Files becoming writable again.
+            std::fs::create_dir(&recovery).unwrap();
             let mut attempts = 0;
             let error = try_recovery(&mut pending, 15_000, || {
                 attempts += 1;
-                Err("injected Files write failure".into())
+                book.write_recovery()
             }).unwrap_err();
-            assert!(error.contains("Files write failure"));
+            assert!(error.contains("Could not keep"), "{error}");
             assert_eq!(attempts, 1);
+            assert!(book.dirty(), "failed close must retain the unsaved edit");
             assert_eq!(pending, Some(15_000 + RECOVERY_RETRY_MS));
             assert!(!recovery_due(pending, 19_999));
             assert!(recovery_due(pending, 20_000));
+            std::fs::remove_dir(&recovery).unwrap();
             try_recovery(&mut pending, 20_000, || {
                 attempts += 1;
                 book.write_recovery()

@@ -65,8 +65,12 @@ pub struct Ui {
     /// The document came back with last time's unsaved changes: Esc throws them away until
     /// the next edit.
     recovered: bool,
-    /// When the document last changed without its changes being kept (ticks).
+    /// Next time an unkept edit should be copied aside (ticks).
     unkept: Option<u64>,
+    /// A close failed to keep the document; leave the window alive until retry succeeds.
+    closing_after_keep_failure: bool,
+    /// Retry the Shell decline if it was temporarily unavailable.
+    close_decline_pending: bool,
     /// The page Go To asked for, to scroll to on the next draw.
     scroll_to: Option<usize>,
     /// One read-only page fitted to the window before printing.
@@ -147,6 +151,7 @@ impl Prompt {
 const GAP: i32 = 12;
 const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"), ("Ctrl+Shift+E", "Save as / choose format"),
+    ("Ctrl+Shift+Q", "Discard after a failed close-time recovery write"),
     ("Ctrl+P", "Export PDF"), ("Ctrl+Shift+P", "Print selected pages"),
     ("Ctrl+Alt+P", "Preview pages before printing"),
     ("Ctrl+Shift+L", "Paper size and orientation"),
@@ -212,6 +217,7 @@ mod code {
     pub const K: u8 = 0x25;
     pub const D: u8 = 0x20;
     pub const A: u8 = 0x1E;
+    pub const Q: u8 = 0x10;
     pub const SLASH: u8 = 0x35;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
@@ -243,7 +249,7 @@ impl Ui {
         let palette = Palette::from_tokens(theme);
         let theme_generation = sex_app::settings::generation().unwrap_or(0);
         sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, palette.selected));
-        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), surface_size: (0, 0), find: None, picker: None, table_gallery: None, ask: None, proof: None, dictionary: None, help: false, recovered: false, unkept: None, scroll_to: None, preview_page: None }
+        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), surface_size: (0, 0), find: None, picker: None, table_gallery: None, ask: None, dictionary: None, proof: None, help: false, recovered: false, unkept: None, closing_after_keep_failure: false, close_decline_pending: false, scroll_to: None, preview_page: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -549,12 +555,31 @@ impl Ui {
 
     /// Keeps unsaved changes aside (on close, and after a quiet moment), so a crash or a
     /// closed window loses nothing: the next start opens them.
-    fn keep(&mut self) {
-        if !self.book.dirty() { self.unkept = None; return; }
+    fn keep(&mut self) -> bool {
+        if !self.book.dirty() { self.unkept = None; return true; }
         let now = sex_std::sex_pdx::get_ticks();
         match crate::book::try_recovery(&mut self.unkept, now, || self.book.write_recovery()) {
-            Ok(()) => sex_std::record(&format!("[assuit.kept] name={}", crate::book::recovery_path(&self.book.path))),
-            Err(e) => sex_std::record(&format!("[assuit.keep-failed] {e}")),
+            Ok(()) => { sex_std::record(&format!("[assuit.kept] name={}", crate::book::recovery_path(&self.book.path))); true },
+            Err(e) => { sex_std::record(&format!("[assuit.keep-failed] {e}")); false },
+        }
+    }
+
+    fn decline_failed_close(&mut self) {
+        if !self.close_decline_pending { return; }
+        let (target, task) = sex_std::identity();
+        match sex_std::sex_pdx::pdx_call_checked(
+            sex_std::sex_pdx::SLOT_SHELL,
+            sex_std::sex_pdx::app_lifecycle::OP_APP_CLOSE_DECLINED,
+            target as u64,
+            task as u64,
+            sex_std::sex_pdx::app_lifecycle::DECLINE_UNSAVED,
+        ) {
+            Ok(_) => {
+                self.close_decline_pending = false;
+                sex_std::record("[assuit.close.declined] reason=recovery-failed");
+            }
+            Err(sex_std::sex_pdx::ERR_SERVICE_NOT_READY) => {}
+            Err(e) => sex_std::record(&format!("[assuit.close.decline-failed] status={e}")),
         }
     }
 
@@ -1382,6 +1407,7 @@ impl Ui {
         self.draw(window);
         let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
         loop {
+            self.decline_failed_close();
             let now = sex_std::sex_pdx::get_ticks();
             if now >= theme_next {
                 theme_next = now.saturating_add(1000);
@@ -1397,19 +1423,38 @@ impl Ui {
             }
             let Some(event) = window.next_within(1000) else {
                 // A quiet moment after a change: keep the unsaved work safe.
-                if crate::book::recovery_due(self.unkept, sex_std::sex_pdx::get_ticks()) { self.keep(); }
+                if crate::book::recovery_due(self.unkept, sex_std::sex_pdx::get_ticks()) && self.keep() && self.closing_after_keep_failure { break; }
                 continue;
             };
             match event {
-                Event::Close => { self.keep(); break; }
+                Event::Close => {
+                    // Shell may retransmit a close while waiting for the decline.
+                    // Do not turn those repeats into unbounded Files writes.
+                    if self.closing_after_keep_failure && !crate::book::recovery_due(self.unkept, sex_std::sex_pdx::get_ticks()) {
+                        self.close_decline_pending = true;
+                        self.decline_failed_close();
+                        continue;
+                    }
+                    if self.keep() { break; }
+                    self.closing_after_keep_failure = true;
+                    self.close_decline_pending = true;
+                    self.message = "Could not keep unsaved changes. Retrying in 5 seconds; Ctrl+Shift+Q discards.".into();
+                    self.decline_failed_close();
+                    self.draw(window);
+                }
                 Event::Resize { .. } => self.draw(window),
                 Event::Key(key) => {
+                    if self.closing_after_keep_failure && key.control && key.shift && key.code == code::Q {
+                        sex_std::record("[assuit.close.discarded] reason=explicit-shortcut");
+                        break;
+                    }
                     let dirty = self.book.dirty();
                     let edits = self.book.edits;
                     if !self.clipboard_key(key, window) { self.key(key); }
                     // An edit (typing, formatting, a style, undo): keep it soon, and the
                     // brought-back changes become the user's own.
                     if self.book.edits != edits && self.book.dirty() {
+                        self.closing_after_keep_failure = false;
                         self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks().saturating_add(KEEP_AFTER_MS));
                         if key.code != code::ESC { self.recovered = false; }
                     }
