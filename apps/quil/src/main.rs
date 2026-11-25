@@ -272,31 +272,43 @@ impl App {
                 Err(_) => { self.status = String::from("Not saved."); return; }
             }
         }
-        let lazy = self.tab().ed.buf.len() as u64 > IN_MEMORY && !as_new;
-        // A big file is read from the very file we would overwrite: write beside it, then
-        // swap, then read from the new one.
-        let target = if lazy { let mut t = path.clone(); t.extend_from_slice(b".quil-save"); t } else { path.clone() };
+        let lazy = self.tab().ed.buf.len() as u64 > IN_MEMORY;
+        // Stage in Quil's own folder, where an exact file grant still permits a
+        // write. Keep the old file readable while a lazy buffer supplies chunks.
+        let target = format!("quil-save-{}", window.task).into_bytes();
+        let _ = files::direct::remove(&target);
         let result = write_buffer(&self.tab().ed.buf, &target);
         match result {
             Ok((n, h)) => {
+                if let Err(e) = files::direct::sync() {
+                    self.status = format!("Save not committed: {}", lossy(files::message(e)));
+                    return;
+                }
+                if let Err(e) = files::direct::rename(&target, &path) {
+                    self.status = format!("Save not committed ({}); draft at {}", lossy(files::message(e)), lossy(&target));
+                    return;
+                }
+                let committed = files::direct::sync();
                 if lazy {
-                    let _ = files::direct::remove(&path);
-                    if let Err(e) = files::direct::rename(&target, &path) { self.status = format!("Saved as {}: {}", lossy(&target), lossy(files::message(e))); return; }
                     let cursor = self.tab().ed.cursor();
                     let t = self.tab();
                     t.ed.buf = Buffer::new(Box::new(FileSource { path: path.clone(), len: n }));
                     t.ed.forget_history();
                     t.ed.set_cursor(cursor);
                 }
-                let _ = files::direct::sync();
+                if let Err(e) = committed {
+                    self.status = format!("Save sync failed: {}", lossy(files::message(e)));
+                    return;
+                }
                 let t = self.tab();
                 t.path = path.clone();
                 t.lang = highlight::Lang::from_path(&path);
                 t.ed.mark_saved();
                 sex_pdx::serial_record!("[quil.code.saved] path={} bytes={} hash={:016x}", lossy(&path), n, h);
+                sex_pdx::serial_record!("[quil.code.save.committed] path={} bytes={}", lossy(&path), n);
                 self.status = format!("Saved {} bytes", n);
             }
-            Err(e) => { sex_pdx::serial_record!("[quil.code.save.failed] status={}", e); self.status = lossy(files::message(e)); }
+            Err(e) => { let _ = files::direct::remove(&target); sex_pdx::serial_record!("[quil.code.save.failed] status={}", e); self.status = lossy(files::message(e)); }
         }
     }
 
