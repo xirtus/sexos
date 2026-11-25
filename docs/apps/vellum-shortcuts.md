@@ -18,7 +18,7 @@ Vellum's light, dark, and high-contrast colors.
 | Remove selected annotation | Delete in the annotation list |
 | Edit a highlight comment | Ctrl+L, select a highlight, Enter; type up to 400 characters, Enter saves or Escape cancels |
 | Edit a sticky note | Ctrl+L, select a note, Enter; edit its text, then Enter saves or Escape cancels |
-| Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; type text, Space checks a box, Up / Down chooses combo or list options, Enter commits and advances. Editable combos accept custom text (Ctrl+A clears); multi-select lists use Space to toggle the focused option |
+| Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; type text, Space checks a box, Up / Down chooses combo, list or radio options, Enter commits and advances. Space sets a radio choice. Editable combos accept custom text (Ctrl+A clears); multi-select lists use Space to toggle the focused option |
 | Edit form text at the caret | Left / Right moves one character; Home / End jumps to an edge; Backspace / Delete removes the character before / after the caret |
 | Select and replace form text | Shift+Left / Shift+Right or Shift+Home / Shift+End extends a selection; Ctrl+A selects the whole text field; typing, Backspace, or Delete replaces or removes it |
 | Place the form text caret | Click the focused text field's value in Vellum's form bar |
@@ -37,7 +37,8 @@ combo or list field, click its value in the form bar to open
 Vellum's option menu. Click a row to choose it; multi-select lists remain open
 for more toggles, and the pointer wheel scrolls long lists.
 Click a form widget on the page to focus it directly; a choice widget opens its
-menu, and a checkbox toggles. Read-only fields are skipped.
+menu, a checkbox toggles, and a radio widget sets its own option. Read-only
+fields are skipped.
 
 Typed visual signatures are markup. Signature inspection verifies exact covered
 bytes for the supported P-256/SHA-256 detached CMS shape. It does not verify

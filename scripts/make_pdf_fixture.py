@@ -134,6 +134,38 @@ def choice_document():
     return bytes(out)
 
 
+def radio_document():
+    """One radio group whose two widgets have distinct PDF on-state names."""
+    content = 'BT /F1 14 Tf 72 700 Td (Vellum radio choices) Tj ET\n'
+    on = '0 g 4 4 12 12 re f'
+    off = '0 G 1 w 0.5 0.5 19 19 re S'
+    def stream(data):
+        return f'<< /Type /XObject /Subtype /Form /BBox [0 0 20 20] /Length {len(data)} >>\nstream\n{data}\nendstream'
+    objects = {
+        1: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) >> >>',
+        2: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        3: '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [7 0 R 8 0 R] >>',
+        4: f'<< /Length {len(content)} >>\nstream\n{content}endstream',
+        5: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+        6: '<< /T (color) /FT /Btn /Ff 49152 /V /Red /Kids [7 0 R 8 0 R] >>',
+        7: '<< /Type /Annot /Subtype /Widget /Parent 6 0 R /AS /Red /Rect [72 620 92 640] /P 3 0 R /AP << /N << /Red 9 0 R /Off 10 0 R >> >> >>',
+        8: '<< /Type /Annot /Subtype /Widget /Parent 6 0 R /AS /Off /Rect [150 620 170 640] /P 3 0 R /AP << /N << /Blue 9 0 R /Off 10 0 R >> >> >>',
+        9: stream(on),
+        10: stream(off),
+    }
+    out = bytearray(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n')
+    offsets = {}
+    for num in sorted(objects):
+        offsets[num] = len(out)
+        out += f'{num} 0 obj\n{objects[num]}\nendobj\n'.encode('latin-1')
+    xref = len(out)
+    out += f'xref\n0 {len(objects) + 1}\n0000000000 65535 f \n'.encode()
+    for num in sorted(objects):
+        out += f'{offsets[num]:010} 00000 n \n'.encode()
+    out += f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+    return bytes(out)
+
+
 def advanced_choice_document():
     """Editable combo and multi-select list with paired PDF export/display values."""
     content = ('BT /F1 15 Tf 72 725 Td (Vellum advanced choices) Tj ET\n'

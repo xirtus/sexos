@@ -54,6 +54,8 @@ pub struct FieldInfo {
     pub required: bool,
     /// Widget annotations: (object, page index if known, rectangle).
     pub widgets: Vec<(ObjId, Option<usize>, [f64; 4])>,
+    /// On-state names for each widget, parallel to `widgets` (radio choices may differ).
+    pub widget_states: Vec<Vec<String>>,
 }
 
 /// A signature field, as stored. **Nothing here is cryptographically verified**: `signed` only
@@ -505,9 +507,12 @@ impl Editor {
         }).collect();
         let mut states = Vec::new();
         let mut widgets = Vec::new();
+        let mut widget_states = Vec::new();
         for w in &node.widgets {
             let wd = self.get_dict(*w).unwrap_or_default();
-            for s in self.widget_states(&wd) { if !states.contains(&s) { states.push(s); } }
+            let on = self.widget_states(&wd);
+            for s in &on { if !states.contains(s) { states.push(s.clone()); } }
+            widget_states.push(on);
             let page = wd.get(b"P").and_then(Object::as_ref).and_then(|p| self.page_index(p))
                 .or_else(|| (0..self.page_count()).find(|&i| self.annotations(i).map(|a| a.iter().any(|x| x.id.map(|i| i.0) == Some(w.0))).unwrap_or(false)));
             widgets.push((*w, page, self.lookup(&wd, b"Rect").and_then(|r| rect_of(&r)).unwrap_or_default()));
@@ -531,6 +536,7 @@ impl Editor {
             read_only: ff & FF_READONLY != 0,
             required: ff & FF_REQUIRED != 0,
             widgets,
+            widget_states,
         }
     }
 

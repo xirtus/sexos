@@ -60,11 +60,12 @@ pub fn line_rects(boxes: &[[f64; 4]]) -> Vec<[f64; 4]> {
     lines
 }
 
-/// Fields the keyboard can fill: text, checkboxes, and bounded single-choice widgets
+/// Fields the keyboard can fill: text, buttons, and bounded single-choice widgets
 /// that are not read-only and have a widget, in reading order.
 pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
     let mut out: Vec<(FieldInfo, usize, [f64; 4])> = fields.iter()
         .filter(|f| !f.read_only && (matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox | FieldKind::ComboBox { editable: true })
+            || f.kind == FieldKind::Radio && !f.states.is_empty()
             || (!f.options.is_empty() && matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { .. }))))
         .filter_map(|f| f.widgets.iter().find_map(|(_, page, rect)| page.map(|p| (f.clone(), p, *rect))))
         .collect();
@@ -77,13 +78,30 @@ pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
 
 /// Return the editable widget under a shown-page point, after crop/rotation conversion.
 pub fn field_at_shown(fields: &[(FieldInfo, usize, [f64; 4])], page: usize, info: &PageInfo, point: (f64, f64)) -> Option<usize> {
+    widget_at_shown(fields, page, info, point).map(|(field, _)| field)
+}
+
+/// Return the field and its exact widget. Radio fields need the widget's own on-state.
+pub fn widget_at_shown(fields: &[(FieldInfo, usize, [f64; 4])], page: usize, info: &PageInfo, point: (f64, f64)) -> Option<(usize, usize)> {
     fields.iter().enumerate().rev().find_map(|(index, (field, _, _))| {
-        field.widgets.iter().any(|(_, widget_page, rect)| {
-            if *widget_page != Some(page) { return false; }
+        field.widgets.iter().enumerate().find_map(|(widget, (_, widget_page, rect))| {
+            if *widget_page != Some(page) { return None; }
             let [left, top, right, bottom] = rect_to_shown(info, *rect);
-            point.0 >= left && point.0 <= right && point.1 >= top && point.1 <= bottom
-        }).then_some(index)
+            (point.0 >= left && point.0 <= right && point.1 >= top && point.1 <= bottom).then_some(widget)
+        }).map(|widget| (index, widget))
     })
+}
+
+pub fn radio_state_at(field: &FieldInfo, widget: usize) -> Option<&str> {
+    (field.kind == FieldKind::Radio).then(|| field.widget_states.get(widget))??.first().map(String::as_str)
+}
+
+/// The keyboard's radio selection follows the field's current PDF state.
+pub fn radio_choice(field: &FieldInfo) -> Option<usize> {
+    if field.kind != FieldKind::Radio { return None; }
+    let selected = match &field.value { vellum_edit::FieldValue::State(s) => Some(s.as_str()), _ => None };
+    selected.and_then(|s| field.states.iter().position(|option| option == s))
+        .or_else(|| (!field.states.is_empty()).then_some(0))
 }
 
 /// The selected option's export value, or no selection yet.
@@ -383,6 +401,31 @@ mod tests {
         let shown = rect_to_shown(&info, [400.0, 655.0, 500.0, 681.0]);
         let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
         assert_eq!(field_at_shown(&repeated, 1, &info, center), Some(0));
+    }
+
+    #[test]
+    fn radio_widgets_expose_distinct_on_states_and_save_choice() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/radio.pdf");
+        let mut ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0.kind, FieldKind::Radio);
+        assert_eq!(radio_choice(&fields[0].0), Some(0));
+        let info = ed.page_info(0).unwrap();
+        for (widget, (_, _, rect)) in fields[0].0.widgets.iter().enumerate() {
+            let shown = rect_to_shown(&info, *rect);
+            let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
+            assert_eq!(widget_at_shown(&fields, 0, &info, center), Some((0, widget)));
+            assert_eq!(radio_state_at(&fields[0].0, widget), Some(if widget == 0 { "Red" } else { "Blue" }));
+        }
+        ed.set_field("color", FieldValue::State("Blue".into())).unwrap();
+        let reopened = Editor::open(ed.save_incremental().unwrap()).unwrap();
+        let blue = &fillable(&reopened.fields().unwrap())[0].0;
+        assert_eq!(blue.value, FieldValue::State("Blue".into()));
+        assert_eq!(radio_choice(blue), Some(1));
+        let mut reopened = reopened;
+        reopened.set_field("color", FieldValue::State("Red".into())).unwrap();
+        assert_eq!(radio_choice(&fillable(&reopened.fields().unwrap())[0].0), Some(0));
     }
 
     #[test]

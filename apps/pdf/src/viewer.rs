@@ -101,9 +101,9 @@ const SHORTCUTS: &[&str] = &[
     "Text: arrows/Home/End move; Shift selects; Ctrl+A selects all",
     "Backspace/Delete or typing replaces selected form text",
     "Click the focused text value in the bar to place its caret",
-    "Space toggles; Up/Down choice, Enter selects",
+    "Space toggles boxes or sets a radio choice; Up/Down chooses",
     "Click a choice value for its pointer menu; wheel scrolls options",
-    "Click a PDF field to focus it; checkbox clicks toggle",
+    "Click a PDF field to focus; checkbox/radio clicks set it",
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
@@ -608,6 +608,8 @@ impl Viewer {
             form.fields.get(form.at).map(|(f, _, _)| {
                 let value = match f.kind {
                     FieldKind::Checkbox => if marks::toggled(f) == "Off" { "[x]  Space unticks".into() } else { "[ ]  Space ticks".into() },
+                    FieldKind::Radio => form.choice.and_then(|i| f.states.get(i)).map(|state|
+                        format!("{state}  (Up/Down choose, Space sets)")).unwrap_or_else(|| "Up/Down choose, Space sets".into()),
                     FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false } =>
                         form.choice.and_then(|i| f.options.get(i)).map(|(_, shown)| format!("{shown}  (Up/Down choose, Enter saves)"))
                             .unwrap_or_else(|| "Up/Down choose, Enter saves".into()),
@@ -996,7 +998,7 @@ impl Viewer {
         let Some(info) = self.page_info(self.page) else { return false };
         let fields = if let Some(form) = &self.form { form.fields.clone() }
             else { self.editor.as_ref().ok().map(|ed| marks::fillable(&ed.fields().unwrap_or_default())).unwrap_or_default() };
-        let Some(index) = marks::field_at_shown(&fields, self.page, &info, shown) else { return false };
+        let Some((index, widget)) = marks::widget_at_shown(&fields, self.page, &info, shown) else { return false };
         let clicked_page = self.page;
         if self.form.is_some() { self.commit_field(); }
         else {
@@ -1010,6 +1012,13 @@ impl Viewer {
                 let to = marks::toggled(&field);
                 self.set_field(&field.name, FieldValue::State(to.clone()), "checkbox", &to);
                 "checkbox"
+            }
+            FieldKind::Radio => {
+                if let Some(state) = marks::radio_state_at(&field, widget) {
+                    let state = state.to_string();
+                    self.set_field(&field.name, FieldValue::State(state.clone()), "radio", &state);
+                } else { self.status = Some("This radio option has no PDF on-state".into()); }
+                "radio"
             }
             FieldKind::ComboBox { .. } | FieldKind::ListBox { .. } => {
                 if let Some(form) = self.form.as_mut() {
@@ -1641,7 +1650,9 @@ impl Viewer {
         form.text = match &f.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
         form.caret = form.text.chars().count();
         form.anchor = None;
-        form.choice = if matches!(f.kind, FieldKind::ListBox { multi_select: true }) {
+        form.choice = if f.kind == FieldKind::Radio {
+            marks::radio_choice(&f)
+        } else if matches!(f.kind, FieldKind::ListBox { multi_select: true }) {
             marks::choice_indices(&f).first().copied().or(Some(0))
         } else { marks::choice_index(&f) };
         let choice = form.choice;
@@ -1653,6 +1664,8 @@ impl Viewer {
         sex_std::record(&format!("[pdf.field.focus] name={} index={} page={}", f.name, at + 1, shown_page + 1));
         if matches!(f.kind, FieldKind::ComboBox { .. } | FieldKind::ListBox { .. }) {
             sex_std::record(&format!("[pdf.choice.focus] name={} selected={} count={}", f.name, choice.map_or(0, |i| i + 1), f.options.len()));
+        } else if f.kind == FieldKind::Radio {
+            sex_std::record(&format!("[pdf.radio.focus] name={} selected={} count={}", f.name, choice.map_or(0, |i| i + 1), f.states.len()));
         }
     }
 
@@ -1693,7 +1706,15 @@ impl Viewer {
             Ok((before, fields)) => {
                 if let Some(before) = before { self.field_history.record(name, before, value); }
                 self.annotation_history.clear();
-                if let Some(form) = self.form.as_mut() { form.fields = fields; }
+                if let Some(form) = self.form.as_mut() {
+                    form.fields = fields;
+                    if let Some((field, _, _)) = form.fields.get(form.at) {
+                        if field.kind == FieldKind::Radio {
+                            form.choice = marks::radio_choice(field);
+                            sex_std::record(&format!("[pdf.radio.current] name={} selected={}", field.name, form.choice.map_or(0, |i| i + 1)));
+                        }
+                    }
+                }
                 self.refresh();
                 sex_std::record(&format!("[pdf.field] name={name} kind={kind} value={shown}"));
             }
@@ -1716,9 +1737,14 @@ impl Viewer {
                         form.text = match &field.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
                         form.caret = form.text.chars().count();
                         form.anchor = None;
-                        form.choice = if matches!(field.kind, FieldKind::ListBox { multi_select: true }) {
+                        form.choice = if field.kind == FieldKind::Radio {
+                            marks::radio_choice(field)
+                        } else if matches!(field.kind, FieldKind::ListBox { multi_select: true }) {
                             marks::choice_indices(field).first().copied().or(Some(0))
                         } else { marks::choice_index(field) };
+                        if field.kind == FieldKind::Radio {
+                            sex_std::record(&format!("[pdf.radio.history] name={} selected={}", field.name, form.choice.map_or(0, |i| i + 1)));
+                        }
                     }
                 }
                 self.refresh();
@@ -1759,9 +1785,19 @@ impl Viewer {
         let Some(form) = self.form.as_mut() else { return false };
         let n = form.fields.len().max(1);
         let checkbox = form.fields.get(form.at).is_some_and(|f| f.0.kind == FieldKind::Checkbox);
+        let radio = form.fields.get(form.at).is_some_and(|f| f.0.kind == FieldKind::Radio);
         let choice_kind = form.fields.get(form.at).map(|f| f.0.kind.clone());
         let choices = form.fields.get(form.at).and_then(|f| matches!(f.0.kind,
             FieldKind::ComboBox { .. } | FieldKind::ListBox { .. }).then_some(f.0.options.len()));
+        if radio && !key.control {
+            if let Some(backward) = match sex_app::nav(key) { Some(Nav::Up) => Some(true), Some(Nav::Down) => Some(false), _ => None } {
+                if let Some((f, _, _)) = form.fields.get(form.at) {
+                    form.choice = marks::step_choice(f.states.len(), form.choice, backward);
+                    sex_std::record(&format!("[pdf.radio.choice] name={} selected={} count={}", f.name, form.choice.map_or(0, |i| i + 1), f.states.len()));
+                }
+                return true;
+            }
+        }
         if let Some(count) = choices {
             if !key.control {
                 if let Some(backward) = match sex_app::nav(key) { Some(Nav::Up) => Some(true), Some(Nav::Down) => Some(false), _ => None } {
@@ -1791,7 +1827,7 @@ impl Viewer {
             self.focus(next);
             return true;
         }
-        let text_field = !checkbox && (choices.is_none() || matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })));
+        let text_field = !checkbox && !radio && (choices.is_none() || matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })));
         if text_field && !key.control {
             let length = form.text.chars().count();
             let selected = text_selection(form.anchor, form.caret);
@@ -1849,7 +1885,13 @@ impl Viewer {
             return true;
         }
         let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) else { return false };
-        if checkbox {
+        if radio {
+            if c == ' ' {
+                let Some((f, _, _)) = form.fields.get(form.at).cloned() else { return true };
+                let Some(state) = form.choice.and_then(|i| f.states.get(i)).cloned() else { return true };
+                self.set_field(&f.name, FieldValue::State(state.clone()), "radio", &state);
+            }
+        } else if checkbox {
             if c == ' ' {
                 let Some((f, _, _)) = form.fields.get(form.at).cloned() else { return true };
                 let to = marks::toggled(&f);
