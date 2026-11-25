@@ -170,6 +170,8 @@ pub const E_AGAIN: u64 = 0xFFFF_FFFF_FFFF_FFF4;
 pub const E_GONE: u64 = 0xFFFF_FFFF_FFFF_FFF5;
 /// Someone else already waits on this object.
 pub const E_BUSY: u64 = 0xFFFF_FFFF_FFFF_FFF6;
+/// The server restarted before answering; reconnect and retry idempotent calls.
+pub const E_RESTARTED: u64 = 0xFFFF_FFFF_FFFF_FFF7;
 
 /// Capability rights bits matching `kernel::capability_table::rights`.
 pub const RIGHT_READ: u32 = 1 << 0;
@@ -250,6 +252,7 @@ pub const fn encode_word_reply(label: u32, word: u64) -> Result<[u64; 4], Messag
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Received { pub badge: u64, pub words: [u64; 4] }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
 fn raw(nr: u64, op: u64, slot: u32, w: [u64; 4]) -> (u64, Received) {
     let (status, badge, a, b, c, d): (u64, u64, u64, u64, u64, u64);
@@ -272,6 +275,7 @@ fn raw(nr: u64, op: u64, slot: u32, w: [u64; 4]) -> (u64, Received) {
 
 /// One endpoint operation; a spurious wake is retried with OP_WAIT, so callers only
 /// see the real result.
+#[cfg(target_arch = "x86_64")]
 pub fn endpoint(op: u64, slot: u32, words: [u64; 4]) -> Result<Received, u64> {
     let (mut status, mut got) = raw(SYS_ENDPOINT, op, slot, words);
     while status == E_AGAIN { (status, got) = raw(SYS_ENDPOINT, OP_WAIT, slot, [0; 4]); }
@@ -279,6 +283,7 @@ pub fn endpoint(op: u64, slot: u32, words: [u64; 4]) -> Result<Received, u64> {
 }
 
 /// A call: `label` and up to three words; the answer's words come back.
+#[cfg(target_arch = "x86_64")]
 pub fn call(slot: u32, label: u32, payload: [u64; 3]) -> Result<Received, u64> {
     let info = MessageInfo::new(label, REGISTER_PAYLOAD, 0).map_err(|_| E_BADMSG)?.raw();
     endpoint(OP_CALL, slot, [info, payload[0], payload[1], payload[2]])
@@ -329,9 +334,11 @@ pub fn destroy(slot: u32) -> Result<(), u64> {
 }
 
 /// A new endpoint owned by this domain; returns its slot.
+#[cfg(target_arch = "x86_64")]
 pub fn create_endpoint() -> Result<u32, u64> { endpoint(OP_CREATE, 0, [0; 4]).map(|r| r.words[0] as u32) }
 
 /// One notification operation (E_AGAIN retried as a fresh wait).
+#[cfg(target_arch = "x86_64")]
 pub fn notify(op: u64, slot: u32, value: u64) -> Result<u64, u64> {
     loop {
         match raw(SYS_NOTIFY, op, slot, [value, 0, 0, 0]) {

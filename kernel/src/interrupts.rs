@@ -523,6 +523,8 @@ unsafe fn end_user_fault(stack_frame: &mut InterruptStackFrame, vector: u64, err
     let ctx = &mut (*current).context as *mut crate::scheduler::TaskContext;
     save_user_frame(&mut *ctx, stack_frame);
     (*current).state.exit();
+    crate::scheduler::purge_handoff_for_task(current);
+    crate::ipc_v2::syscall::teardown_task(current, sex_pdx::endpoint::E_RESTARTED);
     crate::program_workers::faulted(current);
     serial_println!("fault.kill [cpu.fault.terminal] pd={} kind={} rip={:#x} error={:#x}",
         cur_pd, fault_name(vector), stack_frame.instruction_pointer.as_u64(), error_code);
@@ -807,15 +809,21 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
                 let parked = (*current_ptr).state.park_fault(core_id);
                 if parked != crate::scheduler::task_ownership::ParkResult::Blocked {
                     (*current_ptr).state.exit();
+                    crate::scheduler::purge_handoff_for_task(current_ptr);
+                    crate::ipc_v2::syscall::teardown_task(current_ptr, sex_pdx::endpoint::E_RESTARTED);
                     serial_println!("fault.kill [paging.fault.terminal] pd={} reason=owner_not_parkable", cur_pd);
                     crate::crash_log::fault(cur_pd, 14, fault_rip, fault_addr, error_code, "page fault");
                 } else if let Err(error) = crate::ipc::pagefault::forward_page_fault(fault_addr, error_code, cur_pd as u64) {
                     (*current_ptr).state.exit();
+                    crate::scheduler::purge_handoff_for_task(current_ptr);
+                    crate::ipc_v2::syscall::teardown_task(current_ptr, sex_pdx::endpoint::E_RESTARTED);
                     serial_println!("fault.kill [paging.fault.terminal] pd={} reason=dispatch_failed status={}", cur_pd, error);
                     crate::crash_log::fault(cur_pd, 14, fault_rip, fault_addr, error_code, "page fault");
                 }
             } else {
                 (*current_ptr).state.exit();
+                crate::scheduler::purge_handoff_for_task(current_ptr);
+                crate::ipc_v2::syscall::teardown_task(current_ptr, sex_pdx::endpoint::E_RESTARTED);
                 crate::program_workers::faulted(current_ptr);
                 serial_println!("fault.kill [paging.fault.terminal] pd={} reason=ineligible error={:#x}", cur_pd, error_code);
                 crate::crash_log::fault(cur_pd, 14, fault_rip, fault_addr, error_code, "page fault");

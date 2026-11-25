@@ -204,6 +204,34 @@ impl Endpoint {
         Some(removed)
     }
 
+    /// Removes all queued callers matching `pred`, preserving the order of the rest.
+    pub fn cancel_send_if(&self, mut pred: impl FnMut(&Sender) -> bool) -> usize {
+        let guard = self.lock();
+        let queue = guard.queue();
+        let mut removed = 0;
+        let mut write = 0;
+        let old_len = queue.len;
+        for read in 0..old_len {
+            let s = queue.items[(queue.head + read) % QUEUE_DEPTH];
+            if pred(&s) {
+                removed += 1;
+            } else {
+                queue.items[(queue.head + write) % QUEUE_DEPTH] = s;
+                write += 1;
+            }
+        }
+        queue.len = write;
+        removed
+    }
+
+    /// Detaches `task` from both receiver waiter and sender queue (on exit/crash/rearm).
+    /// Returns `(was_receiver, removed_sender)`.
+    pub fn detach_task(&self, task: TaskId) -> (bool, Option<Sender>) {
+        let was_receiver = self.cancel_recv(task);
+        let removed_sender = self.cancel_send(task);
+        (was_receiver, removed_sender)
+    }
+
     /// Callers queued now (diagnostics and tests).
     pub fn queued(&self) -> usize { self.lock().queue().len }
 

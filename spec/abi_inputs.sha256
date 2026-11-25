@@ -134,7 +134,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 99e2089130ccb63dec906a478946d6c18939b21c2554895e49fb6789033c1ada  kernel/src/app_resource_state.rs
 
-a27fb46c3cc99ae69f526ec4614d3778b6a93c58b26302cc115881ab8780dcdd  kernel/src/app_resources.rs
+7f9e3f565051eac895c851e0e58ea8f3c7934e326aa0ff096a0dc4ffa75afb30  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
@@ -160,7 +160,7 @@ e8be235ab6c6e1142a06a206737934a9812d100aa9762ee875ebab12fb41980d  kernel/src/fau
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-5c71bb4661e98b57b2c53dff62ce882952d9bd96ea3c6eb2d933b3b742fa08e5  kernel/src/interrupts.rs
+9c74467bcbb8b8f0b9289fd7fc2963ff51ac8743b88c5f0da020fcfb6573c415  kernel/src/interrupts.rs
 
 8e81a2358674b9a9ed2ed7764e70b572f37b1e2c7399e1008b50dd92a5924bc1  kernel/src/ipc.rs
 
@@ -178,7 +178,7 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 070d401419064d6d3d5f20332ddc6d2e99d7f8a836171e186227db07f79f1e94  kernel/src/pci_command.rs
 
-846f8eeb0930389a8488b313c5ec43438fa2b62a947c0364f23c85981960151d  kernel/src/service_restart.rs
+c07f37e5821c73132ceabea804042d752f0e66eb3d3e19afd2c1ff3186cdfa97  kernel/src/service_restart.rs
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 

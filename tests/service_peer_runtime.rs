@@ -12,11 +12,15 @@ pub mod crash_log{pub use crate::wire::*;pub fn poll(){}pub fn service(_:u32,_:u
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/task_ownership.rs"]pub mod task_ownership;
 #[macro_export]macro_rules! serial_println{($($t:tt)*)=>{{let _=format_args!($($t)*);}};}
+pub mod endpoint{pub const E_CLOSED:u64=0xFFFF_FFFF_FFFF_FFF3;pub const E_RESTARTED:u64=0xFFFF_FFFF_FFFF_FFF7;}
+mod ipc_v2{pub mod syscall{pub fn teardown_pd(_:u32,_:u64)->usize{0}}}
 mod scheduler{
  pub use crate::task_ownership;pub struct Context{pub pd_id:u64,pub pd_ptr:*const crate::capability::ProtectionDomain,pub rip:u64,pub rsp:u64}
  pub struct Task{pub id:u32,pub context:Context,pub state:task_ownership::TaskOwnership}
  impl Task{pub fn rearm(&mut self,id:u32,entry:u64,stack:u64,pd:&crate::capability::ProtectionDomain){self.id=id;self.context=Context{pd_id:pd.id as u64,pd_ptr:pd,rip:entry,rsp:stack};self.state=task_ownership::TaskOwnership::new();}}
  pub struct Scheduler;pub static SCHEDULERS:[Scheduler;1]=[Scheduler];impl Scheduler{pub fn activate_task(&self,t:*mut Task)->bool{unsafe{(*t).state.activate()}}}pub fn unpark_thread(_: *mut Task){}
+ pub fn purge_handoff_for_task(_: *mut Task)->usize{0}
+ pub fn purge_handoff_for_pd(_: u32)->usize{0}
 }
 static REGISTRY:[AtomicPtr<capability::ProtectionDomain>;1024]=[const{AtomicPtr::new(std::ptr::null_mut())};1024];
 mod capability{

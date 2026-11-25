@@ -779,6 +779,8 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
             // Release the manifest's capacity too: a large run must not pin its heap after it ends.
             app.pages=alloc::vec::Vec::new();
             let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
+            crate::scheduler::purge_handoff_for_pd(app.target);
+            crate::ipc_v2::syscall::teardown_pd(app.target, sex_pdx::endpoint::E_CLOSED);
             while unsafe{(*target.message_ring).dequeue()}.is_some(){}
             while unsafe{(*target.signal_ring).dequeue()}.is_some(){}
             crate::ipc::messages::IpcReply::erase_queue(&mut target.incoming_replies.lock());
@@ -790,6 +792,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         // No pointer-owning control object is freed. Late refs remain valid but
         // routing is fenced, and all private-payload consumers acknowledged.
         let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).expect("APP_REGISTRY_CHANGED");
+        crate::scheduler::purge_handoff_for_pd(app.target);
         let mut messages=0;while unsafe{(*target.message_ring).dequeue()}.is_some(){messages+=1;assert!(messages<=256,"APP_DRAIN_PRODUCER");}
         let mut signals=0;while unsafe{(*target.signal_ring).dequeue()}.is_some(){signals+=1;assert!(signals<=32,"APP_SIGNAL_PRODUCER");}
         crate::ipc::messages::IpcReply::erase_queue(&mut target.incoming_replies.lock());
@@ -798,7 +801,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         // empty against the actual table; a sealed table refills only by a
         // runtime grant from a live holder. Its objects and owed replies die.
         let revoked=unsafe{(*target.cap_table).revoke_all()};
-        crate::capability_table::OBJECTS.end_incarnation(app.target);
+        crate::ipc_v2::syscall::teardown_pd(app.target, sex_pdx::endpoint::E_CLOSED);
         assert!(unsafe{(*target.cap_table).holds_none(|_|true)},"APP_CAPS_RETAINED");
         crate::serial_println!("[app.caps.revoked] target={} task={} revoked={} remaining=0",app.target,app.task,revoked);
         app.retired=true;

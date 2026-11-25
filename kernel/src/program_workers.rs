@@ -145,6 +145,7 @@ pub fn end(target: u32) {
     for w in table.workers.iter().filter(|w| w.target == target) {
         unsafe {
             if (*w.task).state.exit() {
+                crate::scheduler::purge_handoff_for_task(w.task);
                 crate::scheduler::unpark_thread(w.task);
                 crate::serial_println!("[program.worker.end] target={} run={} worker={}", target, w.run, (*w.task).id);
             }
@@ -163,6 +164,7 @@ pub fn faulted(task: *mut Task) {
     let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(target) else { return };
     let main = pd.main_task.load(Ordering::Acquire);
     if !main.is_null() && unsafe { (*main).state.exit() } {
+        crate::scheduler::purge_handoff_for_task(main);
         crate::scheduler::unpark_thread(main);
         crate::serial_println!("[program.worker.fault] target={} worker={} run_ended=1", target, unsafe { (*task).id });
     }
