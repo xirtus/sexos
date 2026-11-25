@@ -8,7 +8,7 @@ closes it. The reference works while editing a draft without discarding it.
 | Choose and open a local message | Up/Down, Enter |
 | Filter sender, subject and preview | Type; Escape clears the filter |
 | Reload local messages | Ctrl+R |
-| Cycle the local folder and its immediate child folders | Ctrl+G |
+| Cycle the local folder and nested folders (up to four levels) | Ctrl+G |
 | Start an unsent draft | Ctrl+N |
 | Edit an opened unsent draft | Ctrl+E |
 | Move between draft fields | Tab or Enter in To/Subject |
@@ -20,5 +20,6 @@ closes it. The reference works while editing a draft without discarding it.
 | Close Valentine | F11 |
 
 Valentine currently reads local `.eml` files in its Files grant. Ctrl+G cycles
-through its top level and immediate child folders; drafts save in the current
-folder. Account status explains when live mail is unavailable.
+through its top level and nested folders (up to four levels and 64 folders);
+drafts save in the current folder. Account status explains when live mail is
+unavailable.

@@ -48,9 +48,12 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(1)
   target,task,s=launch();g['wait'](r'\[valentine.loaded\] messages=0',s,60);close(target,task)
   shell('mkdir /data/valentine/Travel',r'\[spindle.fs.result\] kind=3 status=0')
+  shell('mkdir /data/valentine/Travel/2026',r'\[spindle.fs.result\] kind=3 status=0')
   m=shell(f'fetch http://10.0.2.2:{PORT}/inbox.eml /data/valentine/inbox.eml',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
   assert m[1].startswith('Saved'),m[1]
   m=shell(f'fetch http://10.0.2.2:{PORT}/inbox.eml /data/valentine/Travel/trip.eml',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
+  assert m[1].startswith('Saved'),m[1]
+  m=shell(f'fetch http://10.0.2.2:{PORT}/inbox.eml /data/valentine/Travel/2026/nested.eml',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
   assert m[1].startswith('Saved'),m[1]
   target,task,s=launch()
   g['wait'](r'\[valentine.opened\] file=inbox.eml bytes=\d+ subject=Dinner on Friday',s,60)
@@ -87,6 +90,14 @@ def main():
   s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name=Travel messages=1',s,60)
   g['wait'](r'\[valentine.opened\] file=Travel/trip.eml bytes=\d+ subject=Dinner on Friday',s,60)
   shot('valentine-folder')
+  s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name=Travel/2026 messages=1',s,60)
+  g['wait'](r'\[valentine.opened\] file=Travel/2026/nested.eml bytes=\d+ subject=Dinner on Friday',s,60)
+  shot('valentine-nested-folder')
+  nested_pixels=(a.out/'valentine-nested-folder.ppm').read_bytes()
+  assert nested_pixels.startswith(b'P6\n') and nested_pixels!=(a.out/'valentine-folder.ppm').read_bytes()
+  s=len(t());ctrl('n');keys('bob@example.org');q.key('ret');keys('nested note');q.key('ret');keys('See the itinerary.')
+  ctrl('s');g['wait'](r'\[valentine.draft.saved\] path=Travel/2026/draft-[^ ]+\.eml bytes=\d+',s,60)
+  q.key('esc')
   s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name= messages=2',s,60)
   close(target,task)
   # Let the idle composer save a draft, then cut QEMU power with the window open.
