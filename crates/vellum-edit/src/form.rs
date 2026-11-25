@@ -64,6 +64,9 @@ pub struct SignatureInfo {
     pub sub_filter: Option<String>,
     /// `/ByteRange` pairs (offset, length).
     pub byte_range: Vec<(u64, u64)>,
+    /// The stored range has exactly two non-overlapping, in-bounds spans starting at byte zero.
+    /// This checks PDF structure only; it does not verify `/Contents` or the signer's identity.
+    pub byte_range_well_formed: bool,
     /// Whether the byte range ends exactly at the end of the original file we opened, i.e. the
     /// signature covered the whole file as it was before this session's edits.
     pub covers_whole_file: bool,
@@ -114,10 +117,17 @@ impl Editor {
             if node.inh.ft.as_deref() != Some(b"Sig") { continue; }
             let v = node.inh.v.as_ref().and_then(|v| self.dict_of(v));
             let s = |k: &[u8]| v.as_ref().and_then(|d| self.lookup(d, k)).and_then(|o| o.as_str().map(decode_text));
-            let byte_range: Vec<(u64, u64)> = v.as_ref().and_then(|d| self.lookup(d, b"ByteRange")).and_then(|o| o.as_array().cloned())
-                .map(|a| a.iter().filter_map(Object::as_int).collect::<Vec<_>>().chunks_exact(2).map(|p| (p[0].max(0) as u64, p[1].max(0) as u64)).collect())
+            let parts = v.as_ref().and_then(|d| self.lookup(d, b"ByteRange")).and_then(|o| o.as_array().cloned())
+                .and_then(|a| a.iter().map(Object::as_int).collect::<Option<Vec<_>>>());
+            let byte_range: Vec<(u64, u64)> = parts.as_ref().filter(|a| a.len() == 4 && a.iter().all(|n| *n >= 0))
+                .map(|a| vec![(a[0] as u64, a[1] as u64), (a[2] as u64, a[3] as u64)])
                 .unwrap_or_default();
-            let end = byte_range.last().map(|(o, l)| o + l);
+            let byte_range_well_formed = if let [(first, len), (second, tail)] = byte_range.as_slice() {
+                *first == 0 && *len > 0 && second.checked_add(*tail).is_some_and(|end| {
+                    *second > *len && *tail > 0 && end <= self.original().len() as u64
+                })
+            } else { false };
+            let end = byte_range.last().and_then(|(o, l)| o.checked_add(*l));
             let mdp = v.as_ref().and_then(|d| self.lookup(d, b"Reference")).and_then(|r| r.as_array().cloned()).and_then(|refs| {
                 refs.iter().filter_map(|r| self.dict_of(r)).find_map(|r| {
                     if self.lookup(&r, b"TransformMethod")?.as_name()? != b"DocMDP" { return None; }
@@ -132,9 +142,10 @@ impl Editor {
                 reason: s(b"Reason"),
                 location: s(b"Location"),
                 sub_filter: v.as_ref().and_then(|d| self.lookup(d, b"SubFilter")).and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
-                covers_whole_file: end == Some(self.original().len() as u64)
-                    || end.is_some_and(|e| self.original().get(e as usize..).is_some_and(|rest| rest.iter().all(|b| crate::parse::is_white(*b)))),
+                covers_whole_file: byte_range_well_formed && (end == Some(self.original().len() as u64)
+                    || end.is_some_and(|e| self.original().get(e as usize..).is_some_and(|rest| rest.iter().all(|b| crate::parse::is_white(*b))))),
                 byte_range,
+                byte_range_well_formed,
                 mdp_permissions: mdp,
             });
         }

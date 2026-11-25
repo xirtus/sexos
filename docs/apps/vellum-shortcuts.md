@@ -17,7 +17,8 @@ Vellum's light, dark, and high-contrast colors.
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; Space checks a box |
 | Undo / redo committed form-field edits or new markup | Ctrl+Z / Ctrl+Shift+Z, before saving |
 | Place a typed visual signature | Ctrl+Shift+G |
+| Inspect stored digital signature fields and byte ranges | Ctrl+Shift+V |
 | Save edits | Ctrl+S |
 
-Typed visual signatures are markup. They do not create or verify a digital
-signature.
+Typed visual signatures are markup. Signature inspection checks that stored
+byte ranges are well formed; it does not verify CMS contents, identity, or trust.

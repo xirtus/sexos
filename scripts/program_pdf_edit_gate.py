@@ -78,6 +78,9 @@ def main():
   g['wait'](r'\[pdf\.page\] page=1 pages=1 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,900)
   launch=re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])
   sid=int(launch[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
+  s=len(t());chord('ctrl','shift','v')
+  g['wait'](r'\[pdf\.signatures\] fields=0 signed=0 malformed=0 verified=0\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signature-inspection.ppm')})
   # Find the word, highlight it.
   s=len(t());chord('ctrl','f');keys(FORM_WORD.lower());q.key('ret')
   g['wait'](rf'\[pdf\.find\] term={FORM_WORD.lower()} page=1 hits=1 index=1\n',s,600)
