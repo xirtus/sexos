@@ -2,7 +2,7 @@
 //! Valentine: a local mail viewer. It reads `.eml` files within its Files grant;
 //! account-linked IMAP/SMTP flows will be supplied by Multipass in a later slice.
 //! Enter opens a message, typing filters sender/subject/preview, Esc clears search,
-//! Ctrl+R reloads the folder, Ctrl+G cycles local folders, Up/Down chooses a message
+//! Ctrl+R reloads the folder, Ctrl+G cycles bounded local folders, Up/Down chooses a message
 //! and wheel scrolls its body.
 //! Ctrl+N starts a draft, Ctrl+E edits an unsent draft, Tab moves fields and
 //! Ctrl+S saves it; Ctrl+Z/Y undo and redo field edits. A quiet draft autosaves
@@ -35,7 +35,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Type", "Filter sender, subject and preview"),
     ("Escape", "Clear search or leave a draft, saving changes"),
     ("Ctrl+R", "Reload local mail"),
-    ("Ctrl+G", "Next local folder"),
+    ("Ctrl+G", "Next local folder, including nested folders"),
     ("Ctrl+N", "Start an unsent local draft"),
     ("Ctrl+E", "Edit an opened unsent draft"),
     ("Tab / Enter", "Move between draft fields / insert a body line"),
@@ -102,13 +102,22 @@ impl App {
         let selected = self.folders.get(self.folder).cloned().unwrap_or_default();
         let previous = self.opened.and_then(|i| self.items.get(i)).map(|item| item.name.clone());
         self.items.clear(); self.opened = None; self.mail = None;
-        if let Ok(root) = files::list(window, b"") {
-            self.folders = core::iter::once(Vec::new()).chain(root.into_iter()
-                .filter(|e| e.dir && folders::valid_name(&e.name))
-                .take(31).map(|e| e.name)).collect();
-            self.folders[1..].sort();
-            self.folder = self.folders.iter().position(|name| *name == selected).unwrap_or(0);
+        let mut discovered = vec![Vec::new()];
+        let mut scan = 0;
+        while scan < discovered.len() && discovered.len() < folders::MAX_FOLDERS {
+            let parent = discovered[scan].clone();
+            if let Ok(entries) = files::list(window, &parent) {
+                let mut children: Vec<_> = entries.into_iter().filter(|e| e.dir)
+                    .filter_map(|e| folders::child(&parent, &e.name)).collect();
+                children.sort();
+                children.truncate(folders::MAX_FOLDERS - discovered.len());
+                discovered.extend(children);
+            }
+            scan += 1;
         }
+        discovered[1..].sort();
+        self.folders = discovered;
+        self.folder = self.folders.iter().position(|name| *name == selected).unwrap_or(0);
         let folder = self.folders.get(self.folder).cloned().unwrap_or_default();
         let entries = match files::list(window, &folder) {
             Ok(entries) => entries,
@@ -256,7 +265,7 @@ impl App {
             (true, 0x31) => { self.new_draft(window); return; } // Ctrl+N
             (true, 0x12) => { self.edit_draft(); return; } // Ctrl+E
             (true, 0x13) => { self.reload(window); return; } // Ctrl+R
-            (true, 0x22) => { // Ctrl+G: next immediate child folder, wrapping through root.
+            (true, 0x22) => { // Ctrl+G: next bounded local folder, wrapping through root.
                 if self.folders.len() > 1 {
                     self.folder = (self.folder + 1) % self.folders.len();
                     self.query.clear(); self.picked = 0;

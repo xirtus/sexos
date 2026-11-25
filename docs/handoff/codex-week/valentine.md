@@ -35,5 +35,6 @@ The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
 keyboard reference for the controls that currently work.
 
 The local `.eml` viewer does not claim live mail sync or sending.
-It can now list immediate child folders within its granted local directory, and
-drafts created there stay there. Nested folder trees and account folders remain.
+It can now list nested folders within its granted local directory, bounded to
+four levels and 64 folders, and drafts created there stay there. Account-backed
+folders still require the Multipass service route.
