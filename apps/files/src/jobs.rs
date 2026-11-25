@@ -15,6 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use loom_core::journal::TransferProgress;
+use loom_core::verify::CopyVerifier;
 use sex_app::files;
 use sex_app::Window;
 use sha2::{Digest, Sha256};
@@ -30,8 +31,9 @@ pub enum Kind { Copy, Move, Delete, Sum }
 
 enum Step {
     MakeDir(Vec<u8>),
-    /// Copies `from` into `part`, then renames `part` to `to`.
-    CopyFile { from: Vec<u8>, part: Vec<u8>, to: Vec<u8>, size: u64, offset: u64, started: bool },
+    /// Copies `from` into `part`; VerifyFile promotes it only after readback.
+    CopyFile { from: Vec<u8>, part: Vec<u8>, to: Vec<u8>, size: u64, offset: u64, started: bool, verify: Option<CopyVerifier> },
+    VerifyFile { part: Vec<u8>, to: Vec<u8>, verify: Option<CopyVerifier> },
     Remove(Vec<u8>),
     Sum { path: Vec<u8>, size: u64, offset: u64 },
 }
@@ -68,6 +70,13 @@ pub struct Job {
 }
 
 fn ticks() -> u64 { sex_pdx::get_ticks() }
+
+struct StagedRead<'a>(&'a mut Window);
+impl loom_core::ReadAt for StagedRead<'_> {
+    fn read_at(&mut self, path: &[u8], offset: u64, buf: &mut [u8]) -> Option<usize> {
+        files::read_at(self.0, &at(path), offset, buf).ok()
+    }
+}
 
 /// The hidden name a file is written under until it is whole.
 fn part_name(to: &[u8]) -> Vec<u8> {
@@ -108,7 +117,8 @@ impl Job {
             if dir { self.steps.push_back(Step::MakeDir(dest)); }
             else {
                 self.total += size;
-                self.steps.push_back(Step::CopyFile { from: path, part: part_name(&dest), to: dest, size, offset: 0, started: false });
+                self.steps.push_back(Step::CopyFile { from: path, part: part_name(&dest), to: dest, size, offset: 0,
+                    started: false, verify: Some(CopyVerifier::new(size)) });
             }
         }
         self.transfer.bytes_total = self.total;
@@ -198,7 +208,7 @@ impl Job {
                 self.items_done = self.items_done.saturating_add(1);
                 self.steps.pop_front();
             }
-            Step::CopyFile { from, part, to, size, offset, started } => {
+            Step::CopyFile { from, part, to, size, offset, started, verify } => {
                 if !*started {
                     // A leftover from an earlier stopped run goes first.
                     let _ = files::remove(window, &at(part));
@@ -213,18 +223,41 @@ impl Job {
                     if n == 0 { return Err(sex_pdx::fs::IO); }
                     let wrote = files::write_at(window, &at(part), *offset, &self.buf[..n])?;
                     if wrote < n { return Err(sex_pdx::fs::NO_SPACE); }
+                    verify.as_mut().unwrap().record_source(&self.buf[..n]).map_err(|_| sex_pdx::fs::IO)?;
                     *offset += n as u64;
                     self.done += n as u64;
                 }
                 if *offset >= *size {
+                    files::sync(window)?;
+                    let next = Step::VerifyFile { part: part.clone(), to: to.clone(), verify: verify.take() };
+                    self.steps.pop_front();
+                    self.steps.push_front(next);
+                }
+            }
+            Step::VerifyFile { part, to, verify } => {
+                let staged_size = files::stat(window, &at(part))?.size;
+                if self.buf.len() != PIECE { self.buf = vec![0u8; PIECE]; }
+                let remaining = verify.as_mut().unwrap().read_next(&mut StagedRead(window), part, &mut self.buf)
+                    .map_err(|why| { sex_pdx::serial_record!("[files.app.job.verify.failed] path={} why={:?}", shown(to), why); sex_pdx::fs::IO })?;
+                if !remaining {
+                    // The stat cache may lag a write; an EOF probe rules out
+                    // extra trailing bytes independently of cached metadata.
+                    let mut extra = [0u8; 1];
+                    if files::read_at(window, &at(part), verify.as_ref().unwrap().size(), &mut extra)? != 0 {
+                        sex_pdx::serial_record!("[files.app.job.verify.failed] path={} why=Length", shown(to));
+                        return Err(sex_pdx::fs::IO);
+                    }
+                    verify.take().unwrap().finish(staged_size)
+                        .map_err(|why| { sex_pdx::serial_record!("[files.app.job.verify.failed] path={} why={:?}", shown(to), why); sex_pdx::fs::IO })?;
+                    sex_pdx::serial_record!("[files.app.job.verified] path={} bytes={}", shown(to), staged_size);
                     files::rename(window, &at(part), &at(to))?;
                     self.made.push(core::mem::take(to));
                     self.open_part = None;
                     self.items_done = self.items_done.saturating_add(1);
                     self.steps.pop_front();
-                    // The copy is whole: what is left of a move only removes the source.
-                    if self.kind == Kind::Move && !self.steps.iter().any(|s| matches!(s, Step::CopyFile { .. } | Step::MakeDir(_))) {
-                        let _ = files::sync(window);
+                    // Every staged copy is verified before a cross-disk move can remove its source.
+                    if self.kind == Kind::Move && !self.steps.iter().any(|s| matches!(s, Step::CopyFile { .. } | Step::VerifyFile { .. } | Step::MakeDir(_))) {
+                        files::sync(window)?;
                         self.committed = true;
                     }
                 }
@@ -314,7 +347,8 @@ impl Job {
         let mut bar = String::from("[");
         for i in 0..20 { bar.push(if i < filled { '#' } else { '.' }); }
         bar.push(']');
-        let verb = match self.kind { Kind::Copy => "Copying", Kind::Move => "Moving", Kind::Delete => "Deleting", Kind::Sum => "Checking" };
+        let verb = if matches!(self.steps.front(), Some(Step::VerifyFile { .. })) { "Verifying" }
+            else { match self.kind { Kind::Copy => "Copying", Kind::Move => "Moving", Kind::Delete => "Deleting", Kind::Sum => "Checking" } };
         let amount = match self.kind {
             Kind::Delete => format!("{} of {} items", self.done, self.total),
             _ => {
