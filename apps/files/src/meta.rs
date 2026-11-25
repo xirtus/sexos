@@ -110,7 +110,7 @@ impl App {
     /// After Ctrl+Y replayed a rename or trash move.
     pub(crate) fn meta_redone(&mut self, window: &mut Window, step: &Undo) {
         match step {
-            Undo::Trashed { from, to, .. } | Undo::MovedSame { from, to } | Undo::RenamedOne { from, to } => self.meta_moved(window, from, to),
+            Undo::Moved { from, to } | Undo::Trashed { from, to, .. } | Undo::MovedSame { from, to } | Undo::RenamedOne { from, to } => self.meta_moved(window, from, to),
             Undo::Renamed { dir, moves } => {
                 for (from, to) in moves.iter().rev() {
                     self.meta_moved(window, &join(dir, to), &join(dir, from));
