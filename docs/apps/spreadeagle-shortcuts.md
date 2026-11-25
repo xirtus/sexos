@@ -62,4 +62,5 @@ source cells are skipped. Editing the source updates allowed values. A small
 arrow appears on a selected cell with a choice list; click it or press Alt+Down
 to open the native menu. Use Up/Down and Enter to choose, or Esc to close. Typing a
 value outside a stop-style list leaves the cell unchanged. The rule survives
-XLSX save and reopen. Paste validation remains an open gap.
+XLSX save and reopen. Ctrl+V and Ctrl+D/R preview changes against existing
+stop-style rules and reject the whole edit if any destination value is invalid.

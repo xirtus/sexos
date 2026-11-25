@@ -4,7 +4,8 @@
 //! files. Nothing here draws or touches SexOS, so the host tests drive it directly.
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::FilterCriterion;
+use gridcraft_engine::model::{ErrorStyle, FilterCriterion};
+use std::collections::BTreeSet;
 use serde_json::{Value as Json, json};
 use std::io::Write;
 
@@ -292,6 +293,42 @@ impl Book {
         self.select(range)?;
         self.run(id, params)
     }
+    /// Preview a bulk edit against existing stop-style rules before touching the
+    /// live workbook. The engine's paste may replace rules, so the checks use
+    /// the rules that were present at the destination before the edit.
+    fn run_validated_on(&mut self, range: Range, id: &str, params: Json) -> Result<Json, String> {
+        let original = self.session.doc().map_err(|e| e.to_string())?.clone();
+        let sheet_index = original.wb.active_sheet();
+        let has_stop = original.wb.active().is_some_and(|s| s.validations.iter().any(|v| v.show_error && v.error_style == ErrorStyle::Stop));
+        if !has_stop { return self.run_on(range, id, params); }
+        let mut probe = Session::new();
+        probe.add_document(original.clone());
+        probe.clipboard = self.session.clipboard.clone();
+        probe.execute_headless("selection.set", json!({ "range": range.a1() })).map_err(|e| e.to_string())?;
+        let result = probe.execute_headless(id, params.clone()).map_err(|e| e.to_string())?;
+        let area = if id == "edit.paste" {
+            result.get("pasted").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse)
+                .ok_or("Paste did not report its destination range")?
+        } else {
+            gridcraft_engine::core::RangeRef::parse(&range.a1()).unwrap()
+        };
+        let before = original.wb.active().ok_or("No active sheet")?;
+        let after_doc = probe.doc().map_err(|e| e.to_string())?;
+        let after = after_doc.wb.active().ok_or("No active sheet")?;
+        let mut changed = BTreeSet::new();
+        changed.extend(before.cells.iter_range(area).map(|(at, _)| at));
+        changed.extend(after.cells.iter_range(area).map(|(at, _)| at));
+        let mut checked = (*after_doc.wb).clone();
+        checked.sheet_mut(sheet_index).ok_or("No active sheet")?.validations = before.validations.clone();
+        for at in changed {
+            let input = after.input_text(at);
+            if before.input_text(at) == input { continue; }
+            if let Some((rule, message)) = gridcraft_engine::cmd::data::check_validation(&checked, sheet_index, at, &input) {
+                if rule.error_style == ErrorStyle::Stop { return Err(format!("{}: {message}", at.a1())); }
+            }
+        }
+        self.run_on(range, id, params)
+    }
     /// Copies (or cuts) `range` to the workbook's clipboard; returns the copied text,
     /// tab-separated, as the system clipboard would get it.
     pub fn copy(&mut self, range: Range, cut: bool) -> Result<String, String> {
@@ -301,7 +338,7 @@ impl Book {
     /// Pastes the clipboard with its top-left corner at (`row`, `col`); a cut moves its cells.
     /// Returns the cells pasted, as A1:B2.
     pub fn paste(&mut self, row: u32, col: u32) -> Result<String, String> {
-        let r = self.run_on(Range::cell(row, col), "edit.paste", json!({}))?;
+        let r = self.run_validated_on(Range::cell(row, col), "edit.paste", json!({}))?;
         Ok(r.get("pasted").and_then(Json::as_str).unwrap_or_default().to_string())
     }
     /// Empties every cell of `range` (values and formulas; formats stay).
@@ -310,7 +347,7 @@ impl Book {
     }
     /// Copies the top row of `range` down through it (Ctrl+D), or its left column right (Ctrl+R).
     pub fn fill(&mut self, range: Range, down: bool) -> Result<(), String> {
-        self.run_on(range, if down { "edit.fillDown" } else { "edit.fillRight" }, json!({})).map(|_| ())
+        self.run_validated_on(range, if down { "edit.fillDown" } else { "edit.fillRight" }, json!({})).map(|_| ())
     }
     /// AutoSum: a SUM of the numbers above (or left of) the cell. Returns the formula.
     pub fn auto_sum(&mut self, row: u32, col: u32) -> Result<String, String> {
@@ -1412,6 +1449,40 @@ mod tests {
         let reopened = Book::open(&path).unwrap().0;
         assert_eq!(reopened.validation_choices(1, 1), Some(vec!["Food".into(), "Fun".into()]));
         assert_eq!(reopened.validation_choices(1, 2), Some(vec!["Rent".into(), "Fun".into()]));
+    }
+
+    #[test]
+    fn paste_and_fill_reject_unlisted_values_without_partial_edits() {
+        let mut book = Book::blank(&temp("validation-bulk.xlsx"));
+        book.list_validation(Range { r0: 1, c0: 0, r1: 2, c1: 0 }, "Food,Fun").unwrap();
+        book.set(1, 0, "Food").unwrap();
+        book.set(2, 0, "Fun").unwrap();
+        book.set(1, 1, "Other").unwrap();
+        book.copy(Range::cell(1, 1), false).unwrap();
+        let history = book.session.doc().unwrap().undo.len();
+        assert!(book.paste(1, 0).is_err());
+        assert_eq!(book.input(1, 0), "Food");
+        assert_eq!(book.session.doc().unwrap().undo.len(), history, "rejected paste must leave undo history intact");
+        book.set(1, 1, "Fun").unwrap();
+        book.set(2, 1, "Other").unwrap();
+        book.copy(Range { r0: 1, c0: 1, r1: 2, c1: 1 }, false).unwrap();
+        assert!(book.paste(1, 0).is_err(), "one invalid value rejects the whole block");
+        assert_eq!((book.input(1, 0), book.input(2, 0)), ("Food".into(), "Fun".into()));
+        book.copy(Range::cell(1, 1), false).unwrap();
+        book.paste(1, 0).unwrap();
+        assert_eq!(book.input(1, 0), "Fun");
+        book.undo().unwrap();
+        assert_eq!(book.input(1, 0), "Food");
+
+        book.set(1, 1, "Other").unwrap();
+        book.set(2, 1, "Fun").unwrap();
+        let area = Range { r0: 1, c0: 1, r1: 2, c1: 1 };
+        book.list_validation(Range::cell(2, 1), "Food,Fun").unwrap();
+        assert!(book.fill(area, true).is_err());
+        assert_eq!(book.input(2, 1), "Fun");
+        book.set(1, 1, "Food").unwrap();
+        book.fill(area, true).unwrap();
+        assert_eq!(book.input(2, 1), "Food");
     }
 
     #[test]
