@@ -9,6 +9,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+E | Save As; the extension selects DOCX, ODT, RTF, HTML, Markdown, text or PDF |
 | Ctrl+P | Export the pages to PDF beside the document |
 | Ctrl+Shift+P | Enter a page range such as `1-3,5` and print it to a separate PDF |
+| Ctrl+Alt+P | Open or close print preview; Left/Right or PageUp/PageDown move between pages, Ctrl+P exports PDF, Esc returns to editing |
 | Ctrl+Shift+L | Set the paper to Letter, Legal or A4, in portrait or landscape orientation |
 | Ctrl+Shift+M | Set normal, narrow, moderate, wide or mirrored margins, or enter top/bottom/left/right inches |
 | Ctrl+T | Insert a table by entering rows × columns |

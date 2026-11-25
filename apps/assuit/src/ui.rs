@@ -64,6 +64,8 @@ pub struct Ui {
     unkept: Option<u64>,
     /// The page Go To asked for, to scroll to on the next draw.
     scroll_to: Option<usize>,
+    /// One read-only page fitted to the window before printing.
+    preview_page: Option<usize>,
 }
 
 /// A one-line prompt in the status line.
@@ -118,6 +120,7 @@ const GAP: i32 = 12;
 const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"), ("Ctrl+Shift+E", "Save as / choose format"),
     ("Ctrl+P", "Export PDF"), ("Ctrl+Shift+P", "Print selected pages"),
+    ("Ctrl+Alt+P", "Preview pages before printing"),
     ("Ctrl+Shift+L", "Paper size and orientation"),
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+T", "Insert table"),
@@ -188,7 +191,7 @@ impl Ui {
         let palette = Palette::from_tokens(theme);
         let theme_generation = sex_app::settings::generation().unwrap_or(0);
         sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, palette.selected));
-        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, help: false, recovered: false, unkept: None, scroll_to: None }
+        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, help: false, recovered: false, unkept: None, scroll_to: None, preview_page: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -228,6 +231,7 @@ impl Ui {
     }
 
     pub fn draw(&mut self, window: &mut sex_app::Window) {
+        if let Some(page) = self.preview_page { return self.draw_preview(window, page); }
         let palette = self.palette;
         let (width, height) = window.size();
         let (w, h) = (width as i32, height as i32);
@@ -363,6 +367,42 @@ impl Ui {
             sex_std::record(&format!("[assuit.selection] rects={} pages={}", selection.len(), {
                 let mut p: Vec<usize> = selection.iter().map(|r| r.0 + 1).collect(); p.dedup(); p.len() }));
         }
+    }
+
+    fn draw_preview(&mut self, window: &mut sex_app::Window, requested: usize) {
+        let (width, height) = window.size();
+        let (w, h) = (width as i32, height as i32);
+        let view_h = (h - STATUS_H).max(1);
+        let pages = self.book.pages().max(1);
+        let page = requested.min(pages - 1);
+        self.preview_page = Some(page);
+        let (pw, ph) = self.book.page_size(page);
+        let scale = (((w - 2 * MARGIN).max(1) as f32 / pw.max(1.0))
+            .min((view_h - 2 * MARGIN).max(1) as f32 / ph.max(1.0))).clamp(0.1, 6.0);
+        let (paper_w, paper_h) = ((pw * scale).ceil() as i32, (ph * scale).ceil() as i32);
+        let (left, top) = ((w - paper_w) / 2, (view_h - paper_h) / 2);
+        let ready = self.picture(page, scale).is_some();
+        let mut canvas = Canvas::new(window.pixels(), width, height);
+        canvas.fill(0, 0, w, h, self.palette.desk);
+        canvas.fill(left + 2, top + 2, paper_w, paper_h, self.palette.shadow);
+        if ready {
+            if let Some((_, picture)) = &self.shown[page] {
+                canvas.blit(left, top, &picture.pixels, picture.width, (0, 0, w, view_h));
+            }
+        }
+        canvas.fill(0, view_h, w, STATUS_H, self.palette.bar_bg);
+        canvas.fill(0, view_h, w, 1, self.palette.line);
+        let status = if let Some(Ask::PrintRange(typed)) = &self.ask {
+            format!("Print pages: {typed}_   Enter exports range, Esc cancels")
+        } else if !self.message.is_empty() {
+            self.message.clone()
+        } else {
+            format!("Print preview  ·  Page {} of {}  ·  Left/Right pages  ·  Ctrl+P PDF  ·  Ctrl+Shift+P range  ·  Esc edit", page + 1, pages)
+        };
+        self.pen.text(&mut canvas, 10, view_h + (STATUS_H - self.pen.line_height()) / 2, &status, self.palette.dim, Some((0, w - 10)));
+        window.show_pixels(width, height);
+        window.title(format!("{} — Print preview", self.name).as_bytes());
+        sex_std::record(&format!("[assuit.preview] page={} pages={} width={} height={}", page + 1, pages, paper_w, paper_h));
     }
 
     fn save(&mut self) {
@@ -597,6 +637,28 @@ impl Ui {
 
     /// One key: Assuit's own (save, zoom), then WordCraft's shortcut, then typed text.
     fn key(&mut self, key: Key) {
+        if key.control && key.alt && key.code == code::P {
+            let closing = self.preview_page.is_some();
+            self.preview_page = if self.preview_page.is_some() { None } else { Some(self.book.caret().map_or(0, |c| c.page)) };
+            self.message.clear();
+            if closing { sex_std::record("[assuit.preview.closed]"); }
+            return;
+        }
+        if let Some(page) = self.preview_page {
+            if self.ask.is_some() { return self.ask_key(key); }
+            let last = self.book.pages().saturating_sub(1);
+            match (key.code, sex_app::nav(key)) {
+                (code::ESC, _) => { self.preview_page = None; sex_std::record("[assuit.preview.closed]"); },
+                (_, Some(Nav::Left)) | (_, Some(Nav::Up)) => self.preview_page = Some(page.saturating_sub(1)),
+                (_, Some(Nav::Right)) | (_, Some(Nav::Down)) => self.preview_page = Some((page + 1).min(last)),
+                (c, _) if code::page_up(c) => self.preview_page = Some(page.saturating_sub(1)),
+                (c, _) if code::page_down(c) => self.preview_page = Some((page + 1).min(last)),
+                (code::P, _) if key.control && !key.shift => self.export_pdf(),
+                (code::P, _) if key.control && key.shift => self.ask = Some(Ask::PrintRange(String::new())),
+                _ => {}
+            }
+            return;
+        }
         if key.control && key.shift && key.code == code::SLASH {
             self.help = !self.help;
             sex_std::record(&format!("[assuit.shortcuts] shown={}", self.help as u8));
@@ -774,6 +836,13 @@ impl Ui {
     /// A click puts the caret where it lands; dragging with the button held selects;
     /// the wheel scrolls.
     fn pointer(&mut self, p: Pointer) -> bool {
+        if let Some(page) = self.preview_page {
+            if let Kind::Wheel { steps } = p.kind {
+                self.preview_page = Some(if steps > 0 { page.saturating_sub(1) } else { (page + 1).min(self.book.pages().saturating_sub(1)) });
+                return true;
+            }
+            return false;
+        }
         // The style list is modal: the pages under it do not take clicks.
         if self.picker.is_some() { return false; }
         let extend = match p.kind {
