@@ -34,7 +34,10 @@ and Shields. The remaining gaps are:
 - A visible per-site settings view for Shields and stored data. This change adds a
   first view and controls. The view now counts cookies matching this host and
   local storage items and bytes in the current container. Clearing site data
-  updates those counts to zero. Permission prompts and a full settings catalog remain.
+  updates those counts to zero. Ctrl+Shift+Y now allows or blocks JavaScript for
+  the exact origin, including inline handlers and content scripts, and saves
+  the choice. Camera, microphone, notifications, and other permission prompts
+  still need browser capability hooks and a full settings catalog.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
 - Inline PDF, print to PDF, service workers, and web app installation.
 - Profile and session writes previously replaced live files in place. This slice

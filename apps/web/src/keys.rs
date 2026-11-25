@@ -109,6 +109,13 @@ impl Browser {
                 let shown = self.url.clone();
                 self.open(&shown, false);
             }
+            // Ctrl+Shift+Y: allow or block JavaScript for this exact origin.
+            0x15 if key.shift => {
+                let url = super::site_settings::target(&self.url).unwrap_or_else(|| self.url.clone());
+                self.toggle_site_scripts(&url);
+                let shown = self.url.clone();
+                self.open(&shown, false);
+            }
             0x0E if key.shift => {
                 let url = super::site_settings::target(&self.url).unwrap_or_else(|| self.url.clone());
                 self.profile.clear_site(&mut self.jar.borrow_mut(), &mut self.storage.borrow_mut(), &url);
