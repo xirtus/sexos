@@ -38,7 +38,7 @@ use draw::Face;
 use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
-use sex_calendar::history::{EventEdit, EventHistory};
+use sex_calendar::history::{EventEdit, EventHistory, ZoneHistory, ZoneState};
 use sex_calendar::conflicts;
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
@@ -65,6 +65,7 @@ pub enum Ask { Event, Alarm, Timer, Zone, Home, NewCalendar }
 pub struct App {
     pub cal: Calendar,
     event_history: EventHistory,
+    zone_history: ZoneHistory,
     pub clock: Clock,
     pub today: Date,
     pub selected: Date,
@@ -435,10 +436,12 @@ impl App {
             }
             Ask::Zone | Ask::Home => match tz::find(&text) {
                 Some(z) => {
+                    let before = ZoneState::from_clock(&self.clock);
                     if ask == Ask::Home { self.clock.home = z.name.into(); } else if !self.clock.zones.iter().any(|n| n == z.name) {
                         if self.clock.zones.is_empty() { self.clock.zones = self.clock.world().iter().map(|z| String::from(z.name)).collect(); }
                         self.clock.zones.push(z.name.into());
                     }
+                    self.zone_history.push(before, ZoneState::from_clock(&self.clock));
                     sex_pdx::serial_record!("[date.zone] zone={} home={}", z.name, (ask == Ask::Home) as u8);
                     self.status = format!("{} ({})", z.city, z.name);
                     self.save_clock(window);
@@ -493,6 +496,17 @@ impl App {
         }
         if key.control && (key.code == 0x2C || key.code == 0x15) {
             let redo = key.code == 0x15 || key.shift;
+            if self.view == View::Clock {
+                let changed = if redo { self.zone_history.redo(&mut self.clock) }
+                    else { self.zone_history.undo(&mut self.clock) };
+                if changed {
+                    self.picked = self.picked.min(self.clock_rows().saturating_sub(1));
+                    self.status = String::from(if redo { "Redid zone change." } else { "Undid zone change." });
+                    self.save_clock(window);
+                    sex_pdx::serial_record!("[date.zone.{}] home={} zones={}", if redo { "redo" } else { "undo" }, self.clock.home, self.clock.zones.len());
+                } else { self.status = String::from(if redo { "Nothing to redo in Clock." } else { "Nothing to undo in Clock." }); }
+                return;
+            }
             let changed = if redo { self.event_history.redo(&mut self.cal.events) }
                 else { self.event_history.undo(&mut self.cal.events) };
             if changed {
@@ -588,8 +602,10 @@ impl App {
                         if p < na { self.clock.alarms.remove(p); }
                         else if p < na + nt { self.clock.timers.remove(p - na); }
                         else {
+                            let before = ZoneState::from_clock(&self.clock);
                             if self.clock.zones.is_empty() { self.clock.zones = self.clock.world().iter().map(|z| String::from(z.name)).collect(); }
                             if p - na - nt < self.clock.zones.len() { self.clock.zones.remove(p - na - nt); }
+                            self.zone_history.push(before, ZoneState::from_clock(&self.clock));
                         }
                         self.picked = self.picked.min(self.clock_rows().saturating_sub(1));
                         self.save_clock(window);
@@ -673,7 +689,7 @@ pub extern "C" fn _start() -> ! {
     let palette = views::Palette::from_tokens(theme);
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
-    let mut app = App { cal, event_history: EventHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
+    let mut app = App { cal, event_history: EventHistory::default(), zone_history: ZoneHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
