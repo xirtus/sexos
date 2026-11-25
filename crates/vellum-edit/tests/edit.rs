@@ -348,6 +348,60 @@ fn detached_signature_slot_covers_exact_final_bytes() {
 }
 
 #[test]
+fn detached_cms_in_pdf_verifies_over_its_byte_range() {
+    use shibari::{Keeper, Owner};
+    use std::{fs, process::Command};
+    const SCALAR: [u8; 32] = [
+        0x15, 0xb6, 0xeb, 0x1d, 0x2f, 0xa7, 0xec, 0x84,
+        0xfc, 0x8d, 0x80, 0xef, 0x31, 0xbc, 0x5f, 0x6c,
+        0x37, 0xdb, 0x2e, 0x88, 0x87, 0x94, 0x59, 0x32,
+        0xee, 0x00, 0xc7, 0x32, 0x2c, 0x42, 0xa7, 0xce,
+    ];
+    let cert = include_bytes!("fixtures/cms-test-cert.der");
+    let owner = Owner(88);
+    let mut keeper = Keeper::new(0x9183, 1);
+    let knot = keeper.tie(owner, "PDF test key", &SCALAR).unwrap();
+    let point = keeper.p256_public_key(owner, knot).unwrap();
+    let mut source = form(Style::Table, true);
+    let old = b"/V 19 0 R";
+    let at = source.windows(old.len()).position(|w| w == old).unwrap();
+    source[at..at + old.len()].copy_from_slice(b"/V null  ");
+    let editor = Editor::open(source).unwrap();
+    let mut cms = Vec::new();
+    let signed = editor.embed_detached_signature_with("sig", 2048, |first, second| {
+        cms = vellum_edit::cms::detached_p256_sha256(first, second, cert, &point, |attrs| {
+            keeper.sign_p256_sha256(owner, knot, attrs)
+                .map_err(|_| vellum_edit::cms::CmsError::SignerRefused)
+        }).map_err(|e| Error::BadValue(format!("CMS: {e:?}")))?;
+        Ok(cms.clone())
+    }).unwrap();
+    if let Some(destination) = std::env::var_os("SEXOS_VELLUM_CMS_PDF_FIXTURE") {
+        fs::write(destination, &signed).unwrap();
+    }
+    let independent = lopdf::Document::load_mem(&signed).unwrap();
+    let acroform = independent.catalog().unwrap().get(b"AcroForm").unwrap().as_dict().unwrap();
+    let field = independent.get_dictionary(acroform.get(b"Fields").unwrap().as_array().unwrap()
+        .last().unwrap().as_reference().unwrap()).unwrap();
+    let signature = independent.get_dictionary(field.get(b"V").unwrap().as_reference().unwrap()).unwrap();
+    let contents = signature.get(b"Contents").unwrap().as_str().unwrap();
+    assert!(contents.starts_with(&cms));
+    assert!(contents[cms.len()..].iter().all(|b| *b == 0));
+    let range = &Editor::open(signed.clone()).unwrap().signatures().unwrap()[0].byte_range;
+    let mut covered = Vec::new();
+    for (offset, len) in range { covered.extend_from_slice(&signed[*offset as usize..(*offset + *len) as usize]); }
+    let path = std::env::temp_dir().join(format!("sexos-vellum-pdf-cms-{}", std::process::id()));
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("cms.der"), &cms).unwrap();
+    fs::write(path.join("covered.bin"), &covered).unwrap();
+    let verified = Command::new("openssl").args(["cms", "-verify", "-inform", "DER", "-binary", "-noverify", "-in"])
+        .arg(path.join("cms.der")).arg("-content").arg(path.join("covered.bin"))
+        .arg("-out").arg(path.join("verified.bin")).output().unwrap();
+    assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stderr));
+    assert_eq!(fs::read(path.join("verified.bin")).unwrap(), covered);
+    fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn detached_signature_slot_refuses_invalid_requests_without_editing() {
     let mut source = form(Style::Table, true);
     let old = b"/V 19 0 R";
