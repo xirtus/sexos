@@ -107,6 +107,18 @@ impl App {
             Undo::Made { .. } => {}
         }
     }
+    /// After Ctrl+Y replayed a rename or trash move.
+    pub(crate) fn meta_redone(&mut self, window: &mut Window, step: &Undo) {
+        match step {
+            Undo::Trashed { from, to, .. } => self.meta_moved(window, from, to),
+            Undo::Renamed { dir, moves } => {
+                for (from, to) in moves.iter().rev() {
+                    self.meta_moved(window, &join(dir, to), &join(dir, from));
+                }
+            }
+            _ => {}
+        }
+    }
     /// What the row of `name` in the current folder shows after it: stars and tags.
     pub(crate) fn meta_badge(&self, name: &[u8]) -> String {
         let mut s = String::new();

@@ -331,7 +331,7 @@ impl App {
             End::Done => {
                 sex_pdx::serial_record!("[files.app.archive.extracted] archive={} member={} to={} files={} bytes={}", shown(&file), if whole { "*" } else { &only }, shown(&to), writer.files, writer.bytes);
                 self.status = format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes));
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
             End::Stopped => {
                 let _ = self.remove_all(window, &part);
@@ -427,7 +427,7 @@ impl App {
             End::Done => {
                 sex_pdx::serial_record!("[files.app.archive.created] from={} to={} files={} bytes={}", shown(&path), shown(&to), files_n, sink.offset);
                 self.status = format!("Packed {} into {} ({}). Ctrl+Z takes it back.", shown(&name), shown(base(&to)), human(sink.offset));
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
             End::Stopped => {
                 let _ = files::remove(window, &at(&part));

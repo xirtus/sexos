@@ -621,6 +621,18 @@ mod tests {
         }
         assert_eq!(content[&b"a".to_vec()], "B");
         assert_eq!(content[&b"b".to_vec()], "A");
+        let renamed = content.clone();
+        let undo_moves = undo(&moves);
+        for m in &undo_moves {
+            let value = content.remove(&m.from).unwrap();
+            assert!(content.insert(m.to.clone(), value).is_none());
+        }
+        assert_eq!(content, marked, "undo restores each file, not just the names");
+        for m in undo(&undo_moves) {
+            let value = content.remove(&m.from).unwrap();
+            assert!(content.insert(m.to, value).is_none());
+        }
+        assert_eq!(content, renamed, "redo replays a cycle without overwriting");
         apply(&mut folder, &moves);
         assert_eq!(folder, existing.iter().cloned().collect());
     }
