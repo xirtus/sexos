@@ -173,6 +173,10 @@ def main():
   step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
   step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs.ppm')})
+  step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(1)
+  restored=open_files()
+  g['wait'](r'\[loom.session.loaded\] count=2 active=2 dir=/media/LOOM/docs\b',restored,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs-restored.ppm')})
   step(lambda:cs('w'),r'\[loom.tab.closed\] active=1 count=1 dir=/media/LOOM\b')
   # 1. Pack docs (the first row), browse into the zip and out, extract it.
   m=step(lambda:cs('a'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.zip files=(\d+) bytes=(\d+)',180)

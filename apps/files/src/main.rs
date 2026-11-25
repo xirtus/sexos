@@ -20,6 +20,7 @@ mod diskimg;
 mod dupes;
 mod jobs;
 mod loom;
+mod session;
 mod meta;
 mod places;
 mod rename;
@@ -187,6 +188,7 @@ impl App {
         let disk = disk_root(&self.cwd);
         self.watching = (disk != b"/" && self.status.is_empty()).then_some(disk);
         sex_pdx::serial_record!("[loom.tab.shown] active={} count={} dir={}", next + 1, self.tabs.len(), shown(&self.cwd));
+        self.session_save(window);
     }
     fn new_tab(&mut self, window: &mut Window) {
         if !self.tab_ready() { self.status = "Finish the current view before opening a tab.".into(); return; }
@@ -196,6 +198,7 @@ impl App {
         self.active_tab = self.tabs.len() - 1;
         self.cursor = 0; self.top = 0; self.load(window);
         sex_pdx::serial_record!("[loom.tab.opened] active={} count={} dir={}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
+        self.session_save(window);
     }
     fn close_tab(&mut self, window: &mut Window) {
         if !self.tab_ready() { self.status = "Finish the current view before closing a tab.".into(); return; }
@@ -209,13 +212,14 @@ impl App {
         let disk = disk_root(&self.cwd);
         self.watching = (disk != b"/" && self.status.is_empty()).then_some(disk);
         sex_pdx::serial_record!("[loom.tab.closed] active={} count={} dir={}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
+        self.session_save(window);
     }
     fn load(&mut self, window: &mut Window) {
         self.found = None;
         match files::list(window, &at(&self.cwd)) {
             Ok(mut list) => {
                 // A copy still being written (or cut short by a pulled stick) is not a file yet.
-                list.retain(|e| e.name != TRASH && e.name != meta::FILE && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
+                list.retain(|e| e.name != TRASH && e.name != meta::FILE && e.name != session::FILE && e.name != session::PREVIOUS && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
                 list.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
                 self.entries = list;
             }
@@ -1000,6 +1004,7 @@ pub extern "C" fn _start() -> ! {
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
     app.go(&mut window, start);
+    app.session_load(&mut window);
     // A locked home asks for its password first: Files opened at login unlocks it.
     if portal && files::home_state(&mut window) == Ok(sex_pdx::home_lock::STATE_LOCKED) {
         sex_pdx::serial_record!("[files.app.home] state=locked");
@@ -1037,6 +1042,7 @@ pub extern "C" fn _start() -> ! {
             Some(Event::Close) => {
                 // Nothing half-copied stays behind a closed window.
                 if let Some(job) = app.job.as_mut() { while job.finishing() { if !matches!(job.step(&mut window), Outcome::Running) { break; } } let _ = job.cancel(&mut window); }
+                app.session_save(&mut window);
                 let _ = files::sync(&mut window); sex_pdx::serial_record!("[files.app.closed]"); window.close()
             }
             Some(Event::Key(key)) => { app.key(&mut window, key); app.render(&mut window); }

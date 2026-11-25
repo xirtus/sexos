@@ -11,4 +11,7 @@ Remaining gaps:
   Ctrl+PageUp/PageDown to switch, and Ctrl+Shift+W to close.
 - Split panes and a full graphical places sidebar.
 - Broader preview types and archive creation formats.
-- Persistent tab sessions and clearer file version history.
+- Folder tabs now restore from a versioned session file under the granted
+  root, with a recoverable previous copy. An encrypted-home unlock and missing
+  removable-volume restore policy still need a full session audit.
+- Clearer file version history.
