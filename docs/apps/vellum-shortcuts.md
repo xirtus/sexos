@@ -13,6 +13,7 @@ Vellum's light, dark, and high-contrast colors.
 | Search | Ctrl+F, then Enter / Ctrl+G next, Shift previous, Escape closes |
 | Choose a highlight region | Ctrl+R, arrows move, Shift+arrows resize |
 | Highlight, add note, list annotations | Ctrl+H; Ctrl+N; Ctrl+L |
+| Select markup on the page | Click its visible area; the annotation list opens at that item |
 | Remove selected annotation | Delete in the annotation list |
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; Space checks a box |
 | Undo / redo committed form-field edits or added/deleted markup | Ctrl+Z / Ctrl+Shift+Z, before saving |

@@ -9,7 +9,9 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Editing depth:** committed form-field edits and added or deleted highlights,
   notes, and visual signatures now have bounded Ctrl+Z / Ctrl+Shift+Z histories until
   save. A deleted annotation restores its original PDF object and appearance.
-  Precise pointer selection and appearance controls remain.
+  Clicking visible markup on the page now opens the annotation list with that
+  item selected and outlined; multi-line highlights use their individual
+  quads for hit testing. Appearance controls remain.
 - **Performance and polish:** the viewer chrome now follows Settings' light,
   dark and high-contrast colors. This slice retains up to two retired rendered
   pages under a 48 MiB cache cap, so a same-zoom revisit avoids Hayro rendering.
