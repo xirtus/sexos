@@ -65,11 +65,11 @@ impl Palette {
 }
 
 struct Item { name: Vec<u8>, summary: Summary }
-struct Compose { draft: LocalDraft, path: Vec<u8>, field: u8, history: DraftHistory, changed_at: u64 }
+struct Compose { draft: LocalDraft, path: Vec<u8>, field: u8, history: DraftHistory, changed_at: u64, new_file: bool }
 impl Compose {
     fn new(draft: LocalDraft, path: Vec<u8>, saved: bool) -> Self {
         let history = DraftHistory::new(saved.then(|| draft.clone()));
-        Self { draft, path, field: 0, history, changed_at: sex_pdx::get_ticks() }
+        Self { draft, path, field: 0, history, changed_at: sex_pdx::get_ticks(), new_file: !saved }
     }
     fn dirty(&self) -> bool { self.history.dirty(&self.draft) }
     fn field_mut(&mut self) -> &mut String {
@@ -155,14 +155,26 @@ impl App {
             _ => self.status = "Could not read the full message.".into(),
         }
     }
-    fn new_draft(&mut self, window: &mut Window) {
+    fn next_draft_path(&mut self, window: &mut Window) -> Result<Vec<u8>, u8> {
         let stamp = sex_pdx::civil_time_ms().unwrap_or(sex_pdx::get_ticks());
-        let path = loop {
+        for _ in 0..1024 {
             self.next_draft = self.next_draft.wrapping_add(1);
             let name = format!("draft-{}-{}-{}.eml", stamp, window.task, self.next_draft).into_bytes();
             let path = folders::file(self.folders.get(self.folder).map(Vec::as_slice).unwrap_or(b""), &name).unwrap();
-            if files::size(window, &path).is_err() { break path; }
+            match files::file_id(window, &path) {
+                Err(sex_pdx::fs::NOT_FOUND) => return Ok(path),
+                Ok(_) => {},
+                Err(e) => return Err(e),
+            }
+        }
+        Err(sex_pdx::fs::EXISTS)
+    }
+    fn new_draft(&mut self, window: &mut Window) {
+        let path = match self.next_draft_path(window) {
+            Ok(path) => path,
+            Err(e) => { self.status = format!("Could not reserve a draft name: {}", String::from_utf8_lossy(files::message(e))); return; }
         };
+        sex_pdx::serial_record!("[valentine.draft.new] path={}", String::from_utf8_lossy(&path));
         self.compose = Some(Compose::new(LocalDraft::default(), path, false));
         self.status = "New local draft. No message is sent.".into();
     }
@@ -176,34 +188,54 @@ impl App {
     fn save_draft(&mut self, window: &mut Window) -> bool {
         let Some(compose) = &self.compose else { return true };
         let Some(raw) = compose.draft.encode() else { self.status = "Header text contains a control character.".into(); return false };
-        let path = compose.path.clone();
-        let mut stage = path.clone(); stage.extend_from_slice(b".pending");
-        let _ = files::remove(window, &stage);
-        let result = (|| {
-            files::create(window, &stage)?;
-            if files::write_at(window, &stage, 0, &raw)? != raw.len() { return Err(sex_pdx::fs::NO_SPACE); }
-            files::sync(window)?;
-            files::rename(window, &stage, &path)?;
-            files::sync(window)
-        })();
-        match result {
-            Ok(()) => {
-                if let Some(compose) = &mut self.compose { compose.history.mark_saved(&compose.draft); }
-                self.status = "Draft saved in Valentine's folder. It was not sent.".into();
-                sex_pdx::serial_record!("[valentine.draft.saved] path={} bytes={}", String::from_utf8_lossy(&path), raw.len());
-                self.reload(window);
-                if let Some(i) = self.items.iter().position(|item| item.name == path) {
-                    self.open(i, window);
-                    if let Some(row) = self.shown.iter().position(|&shown| shown == i) { self.picked = row; }
+        let new_file = compose.new_file;
+        for _ in 0..16 {
+            let path = self.compose.as_ref().unwrap().path.clone();
+            let mut stage = path.clone(); stage.extend_from_slice(b".pending");
+            // A new draft does not own a stage that another writer may already
+            // be using for this name. Let CREATE refuse it and choose anew.
+            if !new_file { let _ = files::remove(window, &stage); }
+            let mut stage_owned = false;
+            let result = (|| {
+                files::create(window, &stage)?;
+                stage_owned = true;
+                if files::write_at(window, &stage, 0, &raw)? != raw.len() { return Err(sex_pdx::fs::NO_SPACE); }
+                files::sync(window)?;
+                if new_file {
+                    let id = files::file_id(window, &stage)?;
+                    files::move_if_id(window, &stage, &path, id)?;
+                } else { files::rename(window, &stage, &path)?; }
+                files::sync(window)
+            })();
+            match result {
+                Ok(()) => {
+                    if let Some(compose) = &mut self.compose { compose.history.mark_saved(&compose.draft); compose.new_file = false; }
+                    self.status = "Draft saved in Valentine's folder. It was not sent.".into();
+                    sex_pdx::serial_record!("[valentine.draft.saved] path={} bytes={}", String::from_utf8_lossy(&path), raw.len());
+                    self.reload(window);
+                    if let Some(i) = self.items.iter().position(|item| item.name == path) {
+                        self.open(i, window);
+                        if let Some(row) = self.shown.iter().position(|&shown| shown == i) { self.picked = row; }
+                    }
+                    return true;
                 }
-                true
-            }
-            Err(e) => {
-                self.status = format!("Draft not saved: {}", String::from_utf8_lossy(files::message(e)));
-                sex_pdx::serial_record!("[valentine.draft.failed] status={}", e);
-                false
+                Err(sex_pdx::fs::EXISTS) if new_file => {
+                    if stage_owned { let _ = files::remove(window, &stage); }
+                    let next = match self.next_draft_path(window) {
+                        Ok(path) => path,
+                        Err(e) => { self.status = format!("Draft not saved: {}", String::from_utf8_lossy(files::message(e))); return false; }
+                    };
+                    self.compose.as_mut().unwrap().path = next;
+                }
+                Err(e) => {
+                    self.status = format!("Draft not saved: {}", String::from_utf8_lossy(files::message(e)));
+                    sex_pdx::serial_record!("[valentine.draft.failed] status={}", e);
+                    return false;
+                }
             }
         }
+        self.status = "Draft name was taken repeatedly; try saving again.".into();
+        false
     }
     fn compose_key(&mut self, window: &mut Window, k: sex_pdx::app_key::Key) -> bool {
         if self.compose.is_none() { return false; }
@@ -395,7 +427,10 @@ pub extern "C" fn _start() -> ! {
     loop {
         match window.next_within(1000) {
             Some(Event::Close) => {
-                if app.compose.as_ref().is_some_and(Compose::dirty) { app.save_draft(&mut window); }
+                if app.compose.as_ref().is_some_and(Compose::dirty) && !app.save_draft(&mut window) {
+                    render(&mut window, &app, &mut tiny, &mut body, &mut title);
+                    continue;
+                }
                 sex_pdx::serial_record!("[valentine.closed] target={} task={}", window.target, window.task); window.close()
             },
             Some(Event::Key(k)) => { app.status.clear(); app.key(&mut window, k); render(&mut window, &app, &mut tiny, &mut body, &mut title); },
