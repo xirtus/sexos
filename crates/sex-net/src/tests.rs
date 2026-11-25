@@ -618,3 +618,34 @@ fn queries(e:&mut Engine<'static>,now:&mut u64)->Vec<(u16,Vec<u8>)>{let mut v=Ve
   assert!(syn.is_some_and(|s|s.dst==PEER6&&s.body[13]&0x12==2),"abort={abort}: no IPv6 SYN");
  }
 }
+#[test]fn adapter_multi_frame_burst_batching_and_bounded_backpressure(){
+ let mut e=engine();
+ // Controlled engine defaults to single-frame private backpressure.
+ assert_eq!(e.burst_capacity(),1);
+ // Scale to 8-frame burst batching.
+ e.set_burst_capacity(8);
+ assert_eq!(e.burst_capacity(),8);
+ let reqs:Vec<Vec<u8>>=(0..10u8).map(|i|arp_for([10,0,2,40+i],LOCAL)).collect();
+ let slices:Vec<&[u8]>=reqs.iter().map(|v|v.as_slice()).collect();
+ // Bounded ring accepts 8 of 10 frames without overwriting earlier frames.
+ assert_eq!(e.submit_frames(&slices),Ok(8));
+ assert_eq!(e.rx_queued(),8);
+ assert!(!e.can_receive());
+ assert_eq!(e.submit_frame(&reqs[8]),Err(Error::Busy));
+ // A single advance() turn processes the entire 8-frame RX burst and emits 8 ARP replies!
+ e.advance(1);
+ assert_eq!(e.rx_queued(),0);
+ assert_eq!(e.tx_queued(),8);
+ assert_eq!(e.statistics().packets,8);
+ let mut replies=Vec::new();
+ assert_eq!(e.take_frames(&mut replies,8),8);
+ assert_eq!(e.tx_queued(),0);
+ for(i,reply)in replies.iter().enumerate(){
+  assert_eq!(&reply.bytes[20..22],&[0,2]);
+  assert_eq!(&reply.bytes[38..42],&[10,0,2,40+i as u8]);
+ }
+ // Capacity clamps cleanly to ADAPTER_MAX_BURST.
+ e.set_burst_capacity(999);
+ assert_eq!(e.burst_capacity(),ADAPTER_MAX_BURST);
+}
+
