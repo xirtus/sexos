@@ -8,7 +8,7 @@
 //! once downloaded from `about:shields`, EasyList and EasyPrivacy, kept in Files under
 //! `Web/`. Ctrl+Shift+S turns Shields off (and on again) for the shown site.
 
-use super::{text_of, Browser};
+use super::{state_file, text_of, Browser};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -17,7 +17,8 @@ use sex_shields::{Engine, Kind, Request, Verdict};
 use sex_web::sex_html;
 
 /// Sites the person turned Shields off for, one host a line.
-const OFF: &[u8] = b"Web/shields-off.tsv";
+const OFF: &str = "Web/shields-off.tsv";
+const OFF_MAX: u64 = 64 << 10;
 /// Largest list file read or downloaded (EasyList is about 2 MB).
 const LIST_MAX: usize = 16 << 20;
 /// Requests blocked lately, for `about:shields`.
@@ -57,7 +58,7 @@ impl Shields {
                 s.lists.push((name, text.len()));
             }
         }
-        if let Some(text) = read(window, OFF) { s.off = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect(); }
+        if let Some(text) = state_file::read(window, OFF, OFF_MAX) { s.off = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect(); }
         let c = s.engine.counts();
         sex_pdx::serial_record!("[web.shields.loaded] lists={} network={} cosmetic={} skipped={} off={} ticks={}", s.lists.len() + 1, c.network, c.cosmetic, c.skipped, s.off.len(), sex_pdx::get_ticks() - begun);
         s
@@ -104,6 +105,7 @@ impl Shields {
     /// Turns Shields off for `page`'s site, or on again. Returns whether they are up.
     pub fn toggle(&mut self, window: &mut Window, page: &str) -> bool {
         let Some(host) = host_of(page) else { return true };
+        let before = self.off.clone();
         let up = match self.off.iter().position(|h| *h == host) {
             Some(i) => { self.off.remove(i); true }
             None => { self.off.push(host.clone()); false }
@@ -111,7 +113,11 @@ impl Shields {
         let mut text = String::new();
         for h in &self.off { text.push_str(h); text.push('\n'); }
         let _ = files::mkdir(window, b"Web");
-        let _ = files::write(window, OFF, text.as_bytes());
+        if !state_file::replace(window, OFF, text.as_bytes()) {
+            self.off = before;
+            sex_pdx::serial_record!("[web.shields.save.failed] host={}", host);
+            return self.up(page);
+        }
         sex_pdx::serial_record!("[web.shields.toggle] up={} host={}", up as u8, host);
         up
     }

@@ -34,7 +34,9 @@ and Shields. The remaining gaps are:
 - Inline PDF, print to PDF, service workers, and web app installation.
 - Profile and session writes previously replaced live files in place. This slice
   stages and syncs each save, retains a previous copy, and recovers it after an
-  interrupted promotion. Other browser state files still need the same treatment.
+  interrupted promotion. Per-site Shields choices now use the same staged save
+  and previous-copy recovery; the QEMU gate cuts power after a toggle and checks
+  the choice on reboot. Extension settings and disposable caches still need review.
 
 Keep browser state and controls within its own capabilities. Do not add a POSIX
 filesystem or network path.

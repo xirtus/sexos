@@ -73,10 +73,14 @@ def main():
   g['wait'](loaded,s,600);g['wait'](r'\[web.console\] level=0 shields ok script ran',s,60);time.sleep(1);shot('shields-down')
   assert '[web.shields.blocked]' not in t()[s:],'blocked with Shields down'
   assert sorted(h for h in hits if h in TRACKERS)==sorted(TRACKERS),hits
-  s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
-  # The next run remembers the site is off.
+  # Cut power after the toggle's staged save. The next boot must recover the
+  # same site choice from the live or previous state file.
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'shields-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {url}');q.key('ret')
   sl=g['wait'](r'\[web.shields.loaded\] lists=\d+ network=\d+ cosmetic=\d+ skipped=\d+ off=(\d+) ',s,600);assert sl[1]=='1',sl.group(0)
+  g['wait'](loaded,s,600);shot('shields-recovered-after-powercut')
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'blocked':[(k,u) for k,_,u in blocked],'hide_rules':int(hide[1])})
  finally:g['stop']()
