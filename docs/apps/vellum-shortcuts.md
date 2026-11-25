@@ -24,6 +24,10 @@ Vellum's light, dark, and high-contrast colors.
 
 In Find, a single space can match words separated by a line break in the PDF.
 
+For a focused combo or list field, click its value in the form bar to open
+Vellum's option menu. Click a row to choose it; multi-select lists remain open
+for more toggles, and the pointer wheel scrolls long lists.
+
 Typed visual signatures are markup. Signature inspection verifies exact covered
 bytes for the supported P-256/SHA-256 detached CMS shape. It does not verify
 signer identity, certificate trust, or other CMS algorithms.

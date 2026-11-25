@@ -368,6 +368,17 @@ fn guest_advanced_choices_survive_guest_save() {
 }
 
 #[test]
+fn guest_pointer_choice_survives_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_POINTER_PDF") else { return };
+    const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/choice.pdf");
+    let saved = std::fs::read(path).unwrap();
+    assert!(saved.starts_with(PDF));
+    let fields = Editor::open(saved).unwrap().fields().unwrap();
+    assert_eq!(fields.iter().find(|f| f.name == "size").unwrap().value, FieldValue::Text("L".into()));
+    assert_eq!(fields.iter().find(|f| f.name == "team").unwrap().value, FieldValue::Text("E".into()));
+}
+
+#[test]
 fn form_fill_table() { check_form(Style::Table); }
 
 #[test]
