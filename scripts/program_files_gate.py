@@ -79,6 +79,22 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files-trash-redone.ppm')})
   step(lambda:chord('z'),r'\[files.app.undone\] left=1')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files.ppm')});time.sleep(.5)
+  # A new folder becomes the selected row; F2 renames that exact item.
+  s=len(t());chord('n');time.sleep(.3);keys('redo-folder');q.key('ret')
+  g['wait'](r'\[files.app.made\] path=/redo-folder',s,60)
+  q.key('f2');time.sleep(.3)
+  for _ in range(len('redo-folder')):q.key('backspace')
+  s=len(t());keys('renamed-folder');q.key('ret')
+  g['wait'](r'\[files.app.renamed.one\] from=/redo-folder to=/renamed-folder',s,60)
+  step(lambda:chord('z'),r'\[files.app.undone\] left=2')
+  step(lambda:chord('y'),r'\[files.app.redone\] left=0')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files-rename-redone.ppm')})
+  step(lambda:chord('z'),r'\[files.app.undone\] left=2')
+  # Only the empty folder itself is recreated, and the earlier rename stays undoable.
+  step(lambda:chord('z'),r'\[files.app.undone\] left=1')
+  step(lambda:chord('y'),r'\[files.app.redone\] left=1')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files-folder-redone.ppm')})
+  step(lambda:chord('z'),r'\[files.app.undone\] left=1')
   expect('cat /HELLO.TXT',r'\[spindle.fs.cat\] hello from fat12')
   expect('ls /.Trash',r'\[spindle.fs.result\] kind=2 status=0')
   # Jot asks for a file; the person picks one on the stick in Files.
