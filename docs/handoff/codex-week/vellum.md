@@ -25,6 +25,11 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
   shows the mode, and changing it reruns the existing query against the same
   source character spans. The default still ignores case; the guest gate
   captures the uppercase-only fixture returning no hits in Match Case mode.
+- **Unicode Find entry:** Find now accepts Shell's layout and input-method
+  characters, including dead-key accents. Backspace removes one displayed
+  grapheme. The PDF guest gate types café through the German layout and
+  captures its hit. Text normalization across different Unicode compositions
+  remains open.
 - **Save safety:** edited PDF saves overwrite the destination directly; thumbnail output can delete an existing destination on a partial write. First slice: stage and sync complete bytes, then replace through Files' rename.
   Form and markup saves now require Files' final sync after the staged rename;
   a failed sync retains unsaved edits and the recovery copy and reports the

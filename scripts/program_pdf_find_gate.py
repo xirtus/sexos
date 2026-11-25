@@ -110,6 +110,21 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-find-across-lines.ppm')})
   cross=(a.out/'pdf-find-across-lines.ppm').read_bytes()
   assert cross.startswith(b'P6\n') and cross!=(a.out/'pdf-find.ppm').read_bytes()
+  # Shell's German dead acute commits é through the same layout-aware text
+  # event used by every app. Find must keep it and reach the accented PDF word.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':k} for k in ('meta_l','ctrl','spc')],'hold-time':80})
+  g['wait'](r'\[shell.keyboard.layout\] label=DE title=German',s,30)
+  g['focus'](sid);time.sleep(.3)
+  for _ in phrase:q.key('backspace');time.sleep(.04)
+  s=len(t());keys('caf');q.key('equal');q.key('e');q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term=café page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-unicode.ppm')})
+  accented=(a.out/'pdf-find-unicode.ppm').read_bytes()
+  assert accented.startswith(b'P6\n') and accented!=cross
+  for _ in 'café':q.key('backspace');time.sleep(.04)
+  for _ in range(6):
+   q.cmd('send-key',{'keys':[{'type':'qcode','data':k} for k in ('meta_l','ctrl','spc')],'hold-time':80});time.sleep(.15)
+  g['wait'](r'\[shell.keyboard.layout\] label=US title=English \(US\)',s,30)
   s=len(t());q.key('esc');time.sleep(.3)
   # The outline: four entries; Up to the first, Enter turns to page 1.
   press('o',r'\[pdf\.outline\] shown=1 entries=4\n')

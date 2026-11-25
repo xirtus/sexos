@@ -116,4 +116,10 @@ mod tests {
         assert_eq!(hits_with_case(&pages, "lantern", false).len(), 4);
         assert_eq!(hits_with_case(&[chars("A\nB")], "A B", true), vec![Hit { page: 0, at: 0, len: 3 }]);
     }
+
+    #[test]
+    fn accented_query_finds_the_matching_pdf_text() {
+        let pages = vec![chars("The cafe is closed"), chars("A café appears here")];
+        assert_eq!(hits(&pages, "café"), vec![Hit { page: 1, at: 2, len: 4 }]);
+    }
 }
