@@ -23,10 +23,10 @@ use crate::{at, join};
 
 /// Largest side of a thumbnail, in pixels.
 pub const SIDE: usize = 112;
-const CELL_W: usize = 136;
-const CELL_H: usize = SIDE + 30;
-const HEAD: usize = 34;
-const FOOT: usize = 40;
+pub const CELL_W: usize = 136;
+pub const CELL_H: usize = SIDE + 30;
+pub const HEAD: usize = 34;
+pub const FOOT: usize = 40;
 const DIR: &[u8] = b"thumbs";
 /// Pictures larger than this are not read for a thumbnail.
 const FILE_MAX: u64 = 48 * 1024 * 1024;
@@ -326,6 +326,75 @@ impl Thumbs {
         let foot = if more > 0 { alloc::format!("{} more below.  {}", more, foot) } else { String::from(foot) };
         self.text(px, width, 10, height - FOOT + 12, width - 20, &foot, dim);
         window.show_pixels(width, height);
+    }
+
+    /// Two independent folder tabs in one pixel window. Each pane has its own
+    /// scroll row and cursor; cached previews are keyed by the full path.
+    pub fn draw_split(&mut self, window: &mut Window,
+        left: (&str, &[u8], &[Entry], usize, &mut usize),
+        right: (&str, &[u8], &[Entry], usize, &mut usize), foot: &str) {
+        let theme = sex_app::settings::theme();
+        let (bg, tile, text, dim, picked, on_picked) =
+            (theme.window & 0xFF_FFFF, theme.surface & 0xFF_FFFF, theme.text & 0xFF_FFFF,
+             theme.text_dim & 0xFF_FFFF, theme.accent & 0xFF_FFFF, theme.on_accent & 0xFF_FFFF);
+        let (width, height) = window.size();
+        if !loom_core::split::grid_fits(width, height, CELL_W, CELL_H, HEAD, FOOT) { return; }
+        let px = window.pixels();
+        let px = &mut px[..width * height];
+        px.fill(bg);
+        let half = width / 2;
+        fill(px, width, half.saturating_sub(1), 0, 2, height, dim);
+        self.split_pane(px, width, height, 0, half, left, (tile, text, dim, picked, on_picked));
+        self.split_pane(px, width, height, half, width - half, right, (tile, text, dim, picked, on_picked));
+        self.text(px, width, 10, height.saturating_sub(FOOT) + 12, width.saturating_sub(20), foot, dim);
+        window.show_pixels(width, height);
+    }
+
+    fn split_pane(&mut self, px: &mut [u32], stride: usize, height: usize,
+        pane_x: usize, pane_w: usize, pane: (&str, &[u8], &[Entry], usize, &mut usize),
+        colors: (u32, u32, u32, u32, u32)) {
+        let (head, cwd, entries, cursor, top) = pane;
+        let (tile, text, dim, picked, on_picked) = colors;
+        let cols = (pane_w.saturating_sub(16) / CELL_W).max(1);
+        let rows = Self::rows(height);
+        let row = cursor / cols;
+        if row < *top { *top = row; }
+        if row >= *top + rows { *top = row + 1 - rows; }
+        self.text(px, stride, pane_x + 10, 8, pane_w.saturating_sub(20), head, text);
+        let first = *top * cols;
+        for (i, e) in entries.iter().enumerate().skip(first).take(rows * cols) {
+            let (c, r) = ((i - first) % cols, (i - first) / cols);
+            let (x, y) = (pane_x + 8 + c * CELL_W, HEAD + r * CELL_H);
+            if x + CELL_W > pane_x + pane_w { continue; }
+            let selected = i == cursor;
+            let picture = matches!(self.made.get(&join(cwd, &e.name)), Some(Thumb::Picture { .. }));
+            let ground = if picture { PHOTO_WELL } else if selected { picked } else { tile };
+            fill(px, stride, x, y, CELL_W - 8, CELL_H - 6, if selected && picture { picked } else { ground });
+            if selected && picture { fill(px, stride, x + 2, y + 2, CELL_W - 12, CELL_H - 10, PHOTO_WELL); }
+            let (ix, iy) = (x + (CELL_W - 8 - SIDE) / 2, y + 4);
+            match self.made.get(&join(cwd, &e.name)) {
+                Some(Thumb::Picture { w, h, px: image }) => {
+                    let (ox, oy) = (ix + (SIDE - w) / 2, iy + (SIDE - h) / 2);
+                    for row in 0..*h { px[(oy + row) * stride + ox..(oy + row) * stride + ox + w].copy_from_slice(&image[row * w..row * w + w]); }
+                }
+                _ => {
+                    let icon = self.icon(sex_icons::file_for(&e.name, e.dir));
+                    let (ox, oy) = (ix + (SIDE - ICON) / 2, iy + (SIDE - ICON) / 2);
+                    for gy in 0..ICON { for gx in 0..ICON {
+                        let pixel = icon[gy * ICON + gx];
+                        if pixel >> 24 != 0 { px[(oy + gy) * stride + ox + gx] = blend(ground, pixel, pixel >> 24); }
+                    }}
+                }
+            }
+            let mut name = String::from(crate::shown(&e.name));
+            if e.dir { name.push('/'); }
+            self.text(px, stride, x + 4, y + SIDE + 6, CELL_W - 16, &name,
+                if picture { PHOTO_TEXT } else if selected { on_picked } else { text });
+        }
+        if entries.len() > first + rows * cols {
+            self.text(px, stride, pane_x + 10, height.saturating_sub(FOOT + 18), pane_w.saturating_sub(20),
+                &alloc::format!("{} more below", entries.len() - first - rows * cols), dim);
+        }
     }
 
     /// File icon `name` at `ICON` pixels, drawn on first use.

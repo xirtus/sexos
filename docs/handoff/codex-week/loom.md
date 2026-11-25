@@ -9,9 +9,12 @@ Remaining gaps:
 
 - Independent folder tabs. This change adds them with Ctrl+Shift+T to open,
   Ctrl+PageUp/PageDown to switch, and Ctrl+Shift+W to close.
-- Text-mode split panes now show two independent folder tabs side by side; the
-  active tab receives navigation keys. A graphical split grid and places sidebar
-  remain.
+- Split panes show two independent folder tabs side by side in text lists or
+  graphical tile grids. Ctrl+G changes the view; clicking either grid pane
+  focuses its tab and clicking a tile selects it. Ctrl+PageUp/PageDown changes
+  active tab by keyboard. The inactive grid pane uses previews already cached
+  from a visit there; uncached items show their SexOS file icons until focused.
+  A short or narrow window falls back to the text split list. A places sidebar remains.
 - Broader preview types and archive creation formats. ZIP and tar.zst can now
   be created from a selected file or folder; plain tar and tar.gz creation still
   need file-manager controls.
