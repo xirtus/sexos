@@ -1,0 +1,6 @@
+# Valentine atomic local attachment export — 2026-11-25
+
+- Gap: a power cut during Valentine's identity-bound direct writes could leave a partial file at the Loom-picked destination.
+- Change: Valentine hashes the decoded local attachment, starts a Files-owned stage for its exact Save picker grant, sends sequential chunks, and publishes only after Files verifies the complete SHA-256 and length. Files makes the finished file visible with a durable no-clobber SexFS commit on primary or encrypted home. Valentine aborts a failed stage; mount or home unlock cleans an abandoned stage after a crash. An existing destination remains untouched, and removable backends refuse the operation.
+- Evidence: the focused Files ticket, wrong-digest/abort and SexFS publish power-cut tests run in stacked CI. Valentine's QEMU gate now waits for staged-export traces on primary and encrypted home, checks the PDF bytes and existing-name refusal, locks and unlocks home to confirm persistence, and preserves Save picker and saved-state screenshots. Full build, QEMU and screenshot remain pending exact-head GitHub CI.
+- Limit: this handles local `.eml` attachments up to Valentine's 4 MiB message cap. Account-backed attachment streaming and live IMAP/SMTP remain separate gaps.

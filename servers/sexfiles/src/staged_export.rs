@@ -605,6 +605,81 @@ mod tests {
     }
 
     #[test]
+    fn publish_rejects_complete_but_wrong_bytes_and_abort_cleans_stage() {
+        let _lock = LOCK.lock().unwrap();
+        let disk = Disk(Rc::new(RefCell::new(vec![[0; BLOCK]; 1024])));
+        let mut fs = Fs::format(disk, memory()).unwrap();
+        super::recover(&mut fs, Volume::Primary);
+        let mut data = [0u8; 64];
+        let expected: [u8; 32] = Sha256::digest(b"original").into();
+        data[..32].copy_from_slice(&expected);
+        assert_eq!(
+            super::request(
+                &mut fs,
+                Volume::Primary,
+                1,
+                41,
+                7,
+                req(w::STAGE_BEGIN, 8, 32),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(8)
+        );
+        let ticket = u64::from_le_bytes(data[..8].try_into().unwrap());
+        let source = unsafe {
+            (*core::ptr::addr_of!(ACTIVE))[0]
+                .as_ref()
+                .unwrap()
+                .source
+                .clone()
+        };
+        data[..8].copy_from_slice(&ticket.to_le_bytes());
+        data[8..16].copy_from_slice(b"tampered");
+        assert_eq!(
+            super::request(
+                &mut fs,
+                Volume::Primary,
+                1,
+                41,
+                7,
+                req(w::STAGE_CHUNK, 0, 16),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(8)
+        );
+        assert_eq!(
+            super::request(
+                &mut fs,
+                Volume::Primary,
+                1,
+                41,
+                7,
+                req(w::STAGE_PUBLISH, ticket, 0),
+                b"/chosen",
+                &mut data
+            ),
+            Err(w::INVALID)
+        );
+        assert_eq!(fs.open(b"/chosen"), Err(Error::NotFound));
+        assert_eq!(
+            super::request(
+                &mut fs,
+                Volume::Primary,
+                1,
+                41,
+                7,
+                req(w::STAGE_ABORT, ticket, 0),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(0)
+        );
+        assert_eq!(fs.open(&source), Err(Error::NotFound));
+    }
+
+    #[test]
     fn namespace_and_sealed_image_aliases() {
         assert!(reserved(b"/.__sexfiles_staged"));
         assert!(reserved(b"//.__sexfiles_staged/file"));
