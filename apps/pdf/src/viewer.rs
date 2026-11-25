@@ -1651,8 +1651,7 @@ impl Viewer {
         form.caret = form.text.chars().count();
         form.anchor = None;
         form.choice = if f.kind == FieldKind::Radio {
-            let current = match &f.value { FieldValue::State(s) => Some(s.as_str()), _ => None };
-            current.and_then(|s| f.states.iter().position(|option| option == s)).or(Some(0))
+            marks::radio_choice(&f)
         } else if matches!(f.kind, FieldKind::ListBox { multi_select: true }) {
             marks::choice_indices(&f).first().copied().or(Some(0))
         } else { marks::choice_index(&f) };
@@ -1707,7 +1706,15 @@ impl Viewer {
             Ok((before, fields)) => {
                 if let Some(before) = before { self.field_history.record(name, before, value); }
                 self.annotation_history.clear();
-                if let Some(form) = self.form.as_mut() { form.fields = fields; }
+                if let Some(form) = self.form.as_mut() {
+                    form.fields = fields;
+                    if let Some((field, _, _)) = form.fields.get(form.at) {
+                        if field.kind == FieldKind::Radio {
+                            form.choice = marks::radio_choice(field);
+                            sex_std::record(&format!("[pdf.radio.current] name={} selected={}", field.name, form.choice.map_or(0, |i| i + 1)));
+                        }
+                    }
+                }
                 self.refresh();
                 sex_std::record(&format!("[pdf.field] name={name} kind={kind} value={shown}"));
             }
@@ -1730,9 +1737,14 @@ impl Viewer {
                         form.text = match &field.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
                         form.caret = form.text.chars().count();
                         form.anchor = None;
-                        form.choice = if matches!(field.kind, FieldKind::ListBox { multi_select: true }) {
+                        form.choice = if field.kind == FieldKind::Radio {
+                            marks::radio_choice(field)
+                        } else if matches!(field.kind, FieldKind::ListBox { multi_select: true }) {
                             marks::choice_indices(field).first().copied().or(Some(0))
                         } else { marks::choice_index(field) };
+                        if field.kind == FieldKind::Radio {
+                            sex_std::record(&format!("[pdf.radio.history] name={} selected={}", field.name, form.choice.map_or(0, |i| i + 1)));
+                        }
                     }
                 }
                 self.refresh();

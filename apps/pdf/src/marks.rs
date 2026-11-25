@@ -96,6 +96,14 @@ pub fn radio_state_at(field: &FieldInfo, widget: usize) -> Option<&str> {
     (field.kind == FieldKind::Radio).then(|| field.widget_states.get(widget))??.first().map(String::as_str)
 }
 
+/// The keyboard's radio selection follows the field's current PDF state.
+pub fn radio_choice(field: &FieldInfo) -> Option<usize> {
+    if field.kind != FieldKind::Radio { return None; }
+    let selected = match &field.value { vellum_edit::FieldValue::State(s) => Some(s.as_str()), _ => None };
+    selected.and_then(|s| field.states.iter().position(|option| option == s))
+        .or_else(|| (!field.states.is_empty()).then_some(0))
+}
+
 /// The selected option's export value, or no selection yet.
 pub fn choice_index(f: &FieldInfo) -> Option<usize> {
     let value = match &f.value {
@@ -402,6 +410,7 @@ mod tests {
         let fields = fillable(&ed.fields().unwrap());
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0.kind, FieldKind::Radio);
+        assert_eq!(radio_choice(&fields[0].0), Some(0));
         let info = ed.page_info(0).unwrap();
         for (widget, (_, _, rect)) in fields[0].0.widgets.iter().enumerate() {
             let shown = rect_to_shown(&info, *rect);
@@ -411,7 +420,12 @@ mod tests {
         }
         ed.set_field("color", FieldValue::State("Blue".into())).unwrap();
         let reopened = Editor::open(ed.save_incremental().unwrap()).unwrap();
-        assert_eq!(reopened.fields().unwrap()[0].value, FieldValue::State("Blue".into()));
+        let blue = &fillable(&reopened.fields().unwrap())[0].0;
+        assert_eq!(blue.value, FieldValue::State("Blue".into()));
+        assert_eq!(radio_choice(blue), Some(1));
+        let mut reopened = reopened;
+        reopened.set_field("color", FieldValue::State("Red".into())).unwrap();
+        assert_eq!(radio_choice(&fillable(&reopened.fields().unwrap())[0].0), Some(0));
     }
 
     #[test]

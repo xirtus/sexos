@@ -325,8 +325,16 @@ def main():
   s=len(t());click(bx+round((left+82*scale)*ui),by+round((BAR+12+162*scale)*ui))
   g['wait'](r'\[pdf\.widget\.pointer\] name=color kind=radio page=1\n',s,120)
   g['wait'](r'\[pdf\.field\] name=color kind=radio value=Red\n',s,120)
+  g['wait'](r'\[pdf\.radio\.current\] name=color selected=1\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-radio-red-pointer.ppm')})
   assert (a.out/'pdf-radio-red-pointer.ppm').stat().st_size>10000
+  # Space keeps the pointer-selected Red state. Undo/redo refreshes the
+  # focused radio choice from the field value.
+  step(lambda:q.key('spc'),r'\[pdf\.field\] name=color kind=radio value=Red\n')
+  step(lambda:chord('ctrl','z'),r'\[pdf\.radio\.history\] name=color selected=1\n')
+  step(lambda:chord('ctrl','z'),r'\[pdf\.radio\.history\] name=color selected=2\n')
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.radio\.history\] name=color selected=1\n')
+  step(lambda:q.key('spc'),r'\[pdf\.field\] name=color kind=radio value=Red\n')
   step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
   s=len(t());chord('ctrl','s')
   g['wait'](r'\[pdf\.saved\] path=@/radio\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=1 ms=\d+\n',s,300)
