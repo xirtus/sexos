@@ -27,10 +27,12 @@ pub const CONSENT_TICKS: u64 = 120_000;
 pub const TRANSFER_TICKS: u64 = 30_000;
 pub fn request(op: u64) -> bool {
     (REGISTER..=CANCEL).contains(&op)
+        || matches!(op, SAVE_BEGIN | SAVE_HEADER | SAVE_DATA | SAVE_FINISH | SAVE_ALLOW)
 }
 pub fn response(op: u64) -> bool {
     (REGISTERED..=STATUS).contains(&op)
-        || matches!(op, ORIGIN | DATA | FINISH | CANCEL | REVOKED | CANCELLED)
+        || matches!(op, ORIGIN | DATA | FINISH | CANCEL | REVOKED | CANCELLED
+            | SAVE_OFFER | SAVE_HEADER | SAVE_DATA | SAVE_COMPLETE | SAVE_APPROVED)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Subject {
@@ -203,3 +205,13 @@ pub fn identity_decode(value: u64) -> Option<(u32, usize, [u8; 3])> {
 
 pub const REVOKED: u64 = 0x3F1;
 pub const CANCELLED: u64 = 0x3F2;
+/// Browser-to-Chastity write proposal. The Shell relays one bounded transaction
+/// through its held routes; Chastity alone decides whether to store it.
+pub const SAVE_BEGIN: u64 = 0x3F3;
+pub const SAVE_OFFER: u64 = 0x3F4;
+pub const SAVE_HEADER: u64 = 0x3F5;
+pub const SAVE_DATA: u64 = 0x3F6;
+pub const SAVE_FINISH: u64 = 0x3F7;
+pub const SAVE_COMPLETE: u64 = 0x3F8;
+pub const SAVE_ALLOW: u64 = 0x3F9;
+pub const SAVE_APPROVED: u64 = 0x3FA;

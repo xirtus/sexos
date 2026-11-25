@@ -1,0 +1,7 @@
+# Kaleidoscope password write relay
+
+- Extended the existing Shell-held autofill broker with a separate browser-to-Chastity save mode. Only the Files-attested `kaleidoscope` program name in the focused live run may begin it; the registered `chastity` provider alone can finish it after receiving the exact origin and bounded credential chunks.
+- The broker checks token, provider epoch, ordered offsets, declared lengths, live run identity, focus at begin and approval, and one active transaction. It relays one secret chunk at a time through the existing zeroing outbox. A save cannot report approval before Chastity's explicit final `SAVE_ALLOW`.
+- A production-code host test covers the reverse route, impersonation, background begin, early approval, wrong epoch, overlong chunk, final transfer and provider-only approval. All 18 autofill transport tests passed in an isolated temporary Cargo target, which was removed.
+- The wire addition intentionally introduces SAVE_BEGIN through SAVE_APPROVED (0x3F3–0x3FA). Host assertions cover every save request and response classifier opcode. The ABI input hash was repinned for this exact file after reviewing the additive protocol change.
+- This is protocol groundwork: Kaleidoscope has no save command yet and Chastity does not show a save consent prompt or commit a proposal. The PR must not be described as working password saving. Full image build/QEMU run only in GitHub CI; its existing Chastity consent screenshot supplies visual integration evidence for the shared route.
