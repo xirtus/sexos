@@ -573,7 +573,7 @@ impl App {
                 self.tabs.active = i;
                 self.tabs.list[i].ed.set_cursor(at);
                 self.status = format!("Definition in {} at line {}", lossy(target_path), line + 1);
-                sex_pdx::serial_record!("[quil.lsp.definition] language={} line={} at={} tab={}", language, line + 1, at, i + 1);
+                sex_pdx::serial_record!("[quil.lsp.definition] language={} line={} at={} tab={} target={}", language, line + 1, at, i + 1, lossy(target_path));
             }
             Ok(None) => self.status = String::from("No unique declaration in the open tabs"),
             Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }

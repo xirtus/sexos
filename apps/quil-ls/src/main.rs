@@ -271,17 +271,19 @@ mod tests {
         let open = |uri, text| json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"languageId":"rust","version":1,"text":text}}});
         let ask = json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///quil/use.rs"},"position":{"line":0,"character":15}}});
         let mut input = Vec::new();
-        for value in [open("file:///quil/use.rs", "fn main() { helper(); }\n"), open("file:///quil/open/0", "fn helper() {}\n"), ask.clone()] {
+        for value in [open("file:///quil/use.rs", "fn main() { cross_helper(); }\n"),
+            open("file:///quil/open/0", "fn helper() {}\n"),
+            open("file:///quil/open/1", "fn cross_helper() {}\n"), ask.clone()] {
             input.extend(lsp::frame(&serde_json::to_vec(&value).unwrap()));
         }
         let mut output = Vec::new();
         serve(&mut BufReader::new(input.as_slice()), &mut output).unwrap();
         let mut replies = Vec::new();
         while let Some(body) = lsp::take_frame(&mut output).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
-        assert_eq!(replies.last().unwrap()["result"]["uri"], "file:///quil/open/0");
+        assert_eq!(replies.last().unwrap()["result"]["uri"], "file:///quil/open/1");
         assert_eq!(replies.last().unwrap()["result"]["range"]["start"]["character"], 3);
 
-        input.extend(lsp::frame(&serde_json::to_vec(&open("file:///quil/open/1", "fn helper() {}\n")).unwrap()));
+        input.extend(lsp::frame(&serde_json::to_vec(&open("file:///quil/open/2", "fn cross_helper() {}\n")).unwrap()));
         input.extend(lsp::frame(&serde_json::to_vec(&ask).unwrap()));
         output.clear();
         serve(&mut BufReader::new(input.as_slice()), &mut output).unwrap();

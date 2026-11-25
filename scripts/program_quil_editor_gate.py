@@ -10,8 +10,8 @@ OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
 BROKEN=b'fn main() {\n    let value = 1;\n'
 COMPLETE=b'ret'
 REFERENCE=b'fn helper() {}\nfn main() { helper(); }\n'
-CROSS_DEF=b'fn helper() {}\n'
-CROSS_USE=b'fn main() { helper(); }\n'
+CROSS_DEF=b'fn cross_helper() {}\n'
+CROSS_USE=b'fn main() { cross_helper(); }\n'
 IDENTIFIER=b'fn helper() {}\nhel'
 IDENTIFIER_DONE=b'fn helper() {}\nhelper'
 OCCURRENCES=b'foo foo foo foo\n'
@@ -174,8 +174,8 @@ def main():
   g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3',s,90)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-definition.ppm')})
   assert (a.out/'quil-lsp-definition.ppm').stat().st_size>100000
-  # The helper sees two open snapshots; the returned URI must map to the
-  # already-open declaration tab, not to a newly granted filesystem path.
+  # Earlier tabs already declare `helper`; only this peer declares
+  # `cross_helper`, so the jump must use its mapped open-tab URI.
   s=len(t());send('ctrl','p');time.sleep(.3);keys('cross-def');q.key('ret')
   g['wait'](r'\[quil.code.opened\] path=cross-def.rs ',s,60)
   s=len(t());send('ctrl','p');time.sleep(.3);keys('cross-use');q.key('ret')
@@ -183,7 +183,7 @@ def main():
   ctrl('home')
   for _ in range(15):q.key('right')
   s=len(t());send('ctrl','shift','g')
-  g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3 tab=\d+',s,90)
+  g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3 tab=\d+ target=[^\n]*cross-def.rs',s,90)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-cross-file-definition.ppm')})
   assert (a.out/'quil-lsp-cross-file-definition.ppm').stat().st_size>100000
   # Completion is a second request over the same native LSP pipe, and Enter
