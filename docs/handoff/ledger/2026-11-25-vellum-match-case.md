@@ -12,5 +12,10 @@ CI guest coverage: `program_pdf_find_gate.py` searches for the lowercase form
 of the fixture's uppercase-only word, toggles Match Case, checks zero hits,
 captures `pdf-find-match-case.ppm`, then toggles back and checks the original hit.
 
+Review follow-up: the Find bar now passes an absolute clip edge to its text
+renderer, leaving one character cell before the Case indicator. A focused
+viewer geometry test checks that a 44-letter query and cursor remain visible
+at a 680-pixel window width.
+
 Limits: this adds exact case matching for extracted text. It does not change
 PDF text extraction or multi-column reading order.

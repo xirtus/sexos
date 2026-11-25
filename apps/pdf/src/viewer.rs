@@ -267,6 +267,12 @@ fn mix(under: u32, over: u32, a: u32) -> u32 {
     ch(16) | ch(8) | ch(0)
 }
 
+/// Absolute clip edges for the Find query and its right-aligned status.
+fn find_bar_edges(width: usize, status_chars: usize) -> (usize, usize) {
+    let status_x = width.saturating_sub(8 + status_chars.saturating_mul(CW));
+    (status_x.saturating_sub(CW), status_x)
+}
+
 /// `p` seen through a coloured filter: white becomes the filter's colour, black stays.
 fn multiply(p: u32, filter: u32) -> u32 {
     let ch = |s: u32| ((((p >> s) & 0xFF) * ((filter >> s) & 0xFF)) / 255) << s;
@@ -655,10 +661,10 @@ impl Viewer {
         let status = format!("Case: {}  {}", if self.match_case { "on" } else { "off" }, status);
         let y = (bar.saturating_sub(CH)) / 2;
         let Some(letters) = self.letters.as_mut() else { return };
-        let sx = width.saturating_sub(8 + status.len() * CW);
+        let (term_right, sx) = find_bar_edges(width, status.chars().count());
         let term_x = 8 + 6 * CW;
         letters.draw(out, width, (8, y), width, "Find:", palette.dim);
-        letters.draw(out, width, (term_x, y), sx.saturating_sub(term_x + CW), &format!("{}_", self.term), palette.ink);
+        letters.draw(out, width, (term_x, y), term_right, &format!("{}_", self.term), palette.ink);
         letters.draw(out, width, (sx, y), width, &status, if self.found_none { palette.danger } else { palette.dim });
     }
 
@@ -2061,6 +2067,15 @@ fn open(name: &str) -> Result<(Vec<u8>, Pdf), String> {
 #[cfg(test)]
 mod render_cache_tests {
     use super::*;
+
+    #[test]
+    fn find_bar_keeps_a_long_query_visible_before_case_status() {
+        let term_x = 8 + 6 * CW;
+        let status = "Case: on  not found";
+        let (term_right, status_x) = find_bar_edges(680, status.chars().count());
+        assert_eq!(term_right + CW, status_x);
+        assert!(term_x + 45 * CW <= term_right, "44-letter query and cursor should fit");
+    }
 
     #[test]
     fn form_caret_edits_unicode_at_character_boundaries() {
