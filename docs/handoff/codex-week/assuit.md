@@ -3,7 +3,7 @@
 Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked against `apps/assuit` at `aea4ba33a`.
 
 - **Already present:** DOCX and ODT open/save, page layout, paragraph styles, find/replace, undo/redo, PDF export, and recovery copies. Ctrl+C/X/V publish and read text through SexOS's focused-window clipboard; the QEMU gate transfers a selected word into Jot and back. WordCraft retains rich formatting when the shared text still matches its own copy.
-- **Save safety:** ordinary save, Save As, PDF export, and recovery copies stage complete bytes and replace through Files rename. An interrupted Files rename still needs a power-cut gate.
+- **Save safety:** ordinary save, Save As, PDF export, and recovery copies stage complete bytes and replace through Files rename. A two-boot CI gate now cuts power as soon as the synced-stage / Files-promotion receipt appears during ordinary save, then reopens the actual document and accepts only the complete old or complete new version. Host serial observation cannot guarantee the cut landed inside Files' rename operation; deterministic mid-rename injection remains open.
 - **Editing UI:** table insertion (Ctrl+T), table row/column selection, insertion and deletion, merge/split cells, cell shading, DOCX table borders and named table styles (Ctrl+Shift+T), image insertion (Ctrl+Shift+I), selected-picture alt text (Ctrl+Shift+R), proportional picture width (Ctrl+Shift+O), and crop percentages (Ctrl+Shift+C) are exposed. Structural edits, shading, alt text and picture formatting have DOCX/ODT round-trip tests. ODT table borders and named table styles are refused because WordCraft drops them on save. Entering `style` in the table edit prompt now opens a native visual gallery of the document's actual DOCX table styles, with header, band and border samples. Up/Down or a click chooses a style.
 - **Writing aids:** Ctrl+Shift+Y selects the next issue and offers corrections. A adds the selected issue to Assuit's app-owned persistent dictionary. Ctrl+Shift+D lists that dictionary and adds or removes words with a durable save. Ctrl+Shift+K sets the document default and selected text's en-US or en-GB proofing language, preserved in DOCX. Ctrl+Shift+U now shows or hides WordCraft's actual continuous spelling marks on the editable page without changing the document or undo history. More proofing languages and persistent display preference across app restarts remain.
 - **Print workflow:** PDF export and a selected-page range are now available.
@@ -18,7 +18,8 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   reference is available in the app and `docs/apps/assuit-shortcuts.md`. Verified
   recovery after an interrupted run is covered by a two-boot QEMU power-cut
   gate for idle unsaved edits. This proves the recovery copy survives an abrupt
-  stop after Assuit reports it kept the edit; cutting power during a Files
-  rename is outside the gate.
+  stop after Assuit reports it kept the edit. A second two-boot gate cuts near
+  Files promotion of an ordinary save and checks that a complete document
+  survives; exact mid-rename interruption remains unproved.
 
 Each remaining feature should have a focused host test and a CI guest gate before it is claimed complete.
