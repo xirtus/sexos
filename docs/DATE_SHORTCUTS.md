@@ -10,7 +10,7 @@ keeps the help key as ordinary text until that entry is finished.
 | Any view | S | Sync a linked CalDAV account |
 | Any view | V | Review retained local CalDAV conflicts; press again for the next |
 | Conflict review | L or S, then Enter | Keep the local or server copy; Enter stages and saves the choice. A local choice is sent on the next sync. Escape cancels the choice. |
-| Calendar views | Ctrl+Z, Ctrl+Y | Undo or redo local event additions and removals; sync clears this history |
+| Calendar views | Ctrl+Z, Ctrl+Y | Undo or redo local event additions, copies and removals; sync clears this history |
 | Clock | Ctrl+Z, Ctrl+Y | Undo or redo world-zone and alarm changes in order; fired alarms and live timers are outside this history |
 | Any view | E | Export shown events to `date-export.ics` |
 | Notice showing | Shift+S | Snooze the notice for five minutes; it survives a Date restart |
@@ -21,6 +21,7 @@ keeps the help key as ordinary text until that entry is finished.
 | Month, week, day | N | Add an event to the chosen day; start with `HH:MM` for a timed event |
 | Open agenda | Up, Down | Choose an event |
 | Open agenda | Delete | Remove the chosen event |
+| Open agenda | D | Copy the chosen occurrence to tomorrow as a separate event, then open tomorrow's agenda |
 | Open agenda | A, X | Prepare accepting or declining an invitation and open a reply preview |
 | Reply preview | Enter | Queue the local reply file and update the invitation |
 | Reply preview | Escape or Ctrl+Z, then Ctrl+Y | Cancel the choice, then restore it before queueing |

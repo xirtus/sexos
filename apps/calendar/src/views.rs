@@ -51,6 +51,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("N", "New event on the selected day"),
     ("Agenda: Up/Down", "Choose an event"),
     ("Agenda: Delete", "Remove the selected event"),
+    ("Agenda: D", "Copy the selected event to tomorrow"),
     ("Agenda: A / X", "Prepare accept / decline; Enter queues, Esc cancels"),
     ("Week/Day: Left/Right", "Move one day"),
     ("Week/Day: Up/Down", "Scroll through hours"),
@@ -170,7 +171,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
             format!("{what}: {}_", app.input)
         }
         None if !app.status.is_empty() => app.status.clone(),
-        None if app.agenda => String::from("Up/Down pick, Delete removes, a/x prepares reply, Enter queues it, Esc cancels"),
+        None if app.agenda => String::from("Up/Down pick, d copies to tomorrow, Delete removes, a/x replies, Esc closes"),
         None => String::from(match app.view {
             View::Month => "Enter opens a day, n adds, v conflicts, s syncs, ? shortcuts",
             View::Week | View::Day => "Arrows move, Up/Down hours, n adds, Enter opens the day, ? shortcuts",

@@ -191,6 +191,35 @@ fn invitations_accept_and_decline() {
 }
 
 #[test]
+fn copied_occurrence_keeps_details_but_not_server_or_invitation_identity() {
+    let mut source = ics::import(INVITE).unwrap().remove(0);
+    source.calendar = 2;
+    source.location = "Studio".into();
+    source.description = "Bring notes".into();
+    source.alarms = vec![15];
+    source.rule = Rule::parse("FREQ=WEEKLY;BYDAY=FR");
+    source.exdates = vec![d(2026, 11, 27)];
+    source.rdates = vec![d(2026, 11, 28)];
+    source.href = "/dav/plan.ics".into();
+    source.etag = "server-tag".into();
+    source.state = SyncState::Modified;
+    source.conflict_source_calendar = Some(2);
+    source.conflict_source_href = source.href.clone();
+    let tomorrow = d(2026, 11, 21);
+    let copy = source.copy_occurrence_to(tomorrow, "fresh@date.sexos".into(), true);
+    assert_eq!((copy.start, copy.time, copy.title.as_str(), copy.location.as_str(), copy.description.as_str(), copy.calendar),
+        (tomorrow, source.time, "Planning", "Studio", "Bring notes", 2));
+    assert_eq!(copy.alarms, vec![15]);
+    assert_eq!(copy.uid, "fresh@date.sexos");
+    assert_eq!(copy.state, SyncState::New);
+    assert!(copy.rule.is_none() && copy.exdates.is_empty() && copy.rdates.is_empty() && copy.recurrence_id.is_none());
+    assert!(!copy.invitation && copy.organizer.is_empty() && copy.attendees.is_empty() && copy.sequence == 0);
+    assert!(copy.href.is_empty() && copy.etag.is_empty() && copy.conflict_source_calendar.is_none() && copy.conflict_source_href.is_empty());
+    assert_eq!(source.href, "/dav/plan.ics", "the source stays untouched");
+    assert_eq!(source.copy_occurrence_to(tomorrow, "local@date.sexos".into(), false).state, SyncState::Clean);
+}
+
+#[test]
 fn export_round_trips() {
     let fixture = include_str!("fixture.ics");
     let mut events = ics::import(fixture).unwrap();
