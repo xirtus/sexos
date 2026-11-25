@@ -13,7 +13,8 @@
   (300, 150, 40) and the totals still read 490 and 5880.
 * Ctrl+Shift+C adds a column chart of the selection at D1, drawn over the grid.
 * Ctrl+Shift+E on A3 (Fun) filters the region to that row (the others read `~`);
-  Ctrl+Shift+L turns the filter off and every row shows again.
+  Ctrl+Shift+O opens the native value menu; choosing Food changes the visible row,
+  then All rows restores the list. Ctrl+Shift+L turns the filter off.
 * Ctrl+Shift+F on B2 freezes the header row and the label column; Ctrl+S saves.
 * A third `run spreadeagle` finds the chart and the frozen panes kept. Ctrl+F finds "rent"
   at A4; Ctrl+C copies it and Ctrl+V pastes it into A8; Ctrl+Z takes the paste back.
@@ -105,6 +106,15 @@ def main():
   q.key('up');time.sleep(.3)
   ctrl_shift('e',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|~\|Fun\|~\|~\|~\|\|\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter.ppm')})
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=5\n')
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-menu.ppm')})
+  s=len(t());q.key('down');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=Food\n',s,120)
+  column('A',r'Item\|Food\|~\|~\|~\|~\|\|',s)
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=5\n')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=all\n',s,120)
+  column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)
   ctrl_shift('l',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|Food\|Fun\|Rent\|Total\|Per year\|\|\n')
   q.key('up');time.sleep(.3);q.key('right');time.sleep(.5)
   ctrl_shift('f',r'\[spreadeagle\.command\] view\.freezePanes\n')
