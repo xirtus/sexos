@@ -143,6 +143,18 @@ impl Book {
                 .map_err(|_| "Place the caret in a table cell first".to_string())?;
             return Ok("Changed table borders");
         }
+        if let Some(name) = action.strip_prefix("style ") {
+            let name = name.trim();
+            if name.is_empty() || name.chars().count() > 80 {
+                return Err("Enter style followed by a table style name, for example style Grid Table 1 Light".into());
+            }
+            if self.save_path().to_ascii_lowercase().ends_with(".odt") {
+                return Err("ODT named table styles do not round-trip yet; save as DOCX for this command".into());
+            }
+            self.run("table.style", json!({ "style": name }))
+                .map_err(|_| "Place the caret in a table and enter one of its available table style names".to_string())?;
+            return Ok("Applied table style");
+        }
         let (command, description) = match action.as_str() {
             "select row" => ("table.selectRow", "Selected row"),
             "select column" => ("table.selectColumn", "Selected column"),
@@ -153,7 +165,7 @@ impl Book {
             "delete row" => ("table.deleteRow", "Deleted row"),
             "delete column" => ("table.deleteColumn", "Deleted column"),
             "merge cells" => ("table.merge", "Merged selected cells"),
-            _ => return Err("Choose row/column edits, merge cells, split 2–10, shade RRGGBB, or border all/outside/inside/none".into()),
+            _ => return Err("Choose row/column edits, merge cells, split 2–10, shade RRGGBB, border all/outside/inside/none, or style NAME".into()),
         };
         self.run(command, json!({})).map_err(|_| "Place the caret in a table cell first".to_string())?;
         Ok(description)
@@ -888,6 +900,27 @@ mod tests {
             assert_eq!(styled(&book), (Some("FFE8B0".into()), ext == "docx"));
             book.save().unwrap();
             assert_eq!(styled(&Book::open(&path).unwrap()), (Some("FFE8B0".into()), ext == "docx"), "{ext} lost table styling");
+        }
+    }
+
+    #[test]
+    fn named_table_style_round_trips_in_docx_and_refuses_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("table-named-style.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.edit_table("style Grid Table 1 Light").is_err());
+            book.insert_table(2, 2).unwrap();
+            assert!(book.edit_table("style no such table style").is_err());
+            if ext == "odt" {
+                assert!(book.edit_table("style Grid Table 1 Light").unwrap_err().contains("ODT named table styles"));
+                continue;
+            }
+            book.edit_table("style Grid Table 1 Light").unwrap();
+            let style = |book: &Book| book.session.doc.body.iter().find_map(|b| b.as_table())
+                .unwrap().props.style.clone();
+            assert_eq!(style(&book).as_deref(), Some("GridTable1Light"));
+            book.save().unwrap();
+            assert_eq!(style(&Book::open(&path).unwrap()).as_deref(), Some("GridTable1Light"), "{ext} lost named table style");
         }
     }
 
