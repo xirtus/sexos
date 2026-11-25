@@ -113,6 +113,14 @@ def main():
   s=len(t());g['chord']('ctrl','y',r'\[date.alarm.redo\] alarms=1')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-alarm-redone.ppm')})
   g['chord']('ctrl','z',r'\[date.alarm.undo\] alarms=0')
+  s=len(t());q.key('r');time.sleep(.3);keys('1h Undo demo');q.key('ret')
+  g['wait'](r'\[date.timer.started\] seconds=3600 label=Undo demo',s,30)
+  s=len(t());g['chord']('ctrl','z',r'\[date.timer.undo\] timers=\d+')
+  g['wait'](r'\[date.save.committed\] file=clock.txt bytes=\d+',s,30)
+  s=len(t());g['chord']('ctrl','y',r'\[date.timer.redo\] timers=\d+')
+  g['wait'](r'\[date.save.committed\] file=clock.txt bytes=\d+',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-timer-redone.ppm')})
+  restored=(a.out/'date-timer-redone.ppm').read_bytes();assert restored.startswith(b'P6\n') and len(restored)>100000
   q.key('m');time.sleep(.3)
   # Today is the machine's clock (QEMU's RTC follows this host, in UTC).
   host=datetime.datetime.now(datetime.timezone.utc).date()

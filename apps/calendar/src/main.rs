@@ -11,7 +11,7 @@
 //! `e` export every shown event to `date-export.ics`.
 //! `v` reviews local copies kept after CalDAV conflicts; press again for the next.
 //! Ctrl+Z / Ctrl+Y undo and redo local event additions and removals until the
-//! next server sync or other calendar change.
+//! next server sync or other calendar change, and Clock zone, alarm and timer edits.
 //! Month: arrows move a day or a week, PageUp and PageDown a month, Home (or `t`)
 //! today, Enter opens the chosen day and Esc goes back, `n` adds an event (start it
 //! with `HH:MM` to give it a time). An open day: Up/Down pick, `d` copies the
@@ -880,7 +880,9 @@ impl App {
                 let (length, label) = text.split_once(' ').unwrap_or((&text, ""));
                 match clock::parse_duration(length) {
                     Some(seconds) if self.now_ms > 0 => {
+                        let before = ClockState::from_clock(&self.clock);
                         self.clock.timers.push(Timer { ends_ms: self.now_ms + seconds as u64 * 1000, seconds, label: label.trim().into() });
+                        self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Timer);
                         sex_pdx::serial_record!("[date.timer.started] seconds={} label={}", seconds, label.trim());
                         self.status = format!("Timer: {}.", clock::format_duration(seconds as u64));
                         self.save_clock(window);
@@ -983,15 +985,18 @@ impl App {
         if key.control && (key.code == 0x2C || key.code == 0x15) {
             let redo = key.code == 0x15 || key.shift;
             if self.view == View::Clock {
-                let changed = if redo { self.clock_history.redo(&mut self.clock) }
-                    else { self.clock_history.undo(&mut self.clock) };
+                let changed = if redo { self.clock_history.redo_at(&mut self.clock, now_ms()) }
+                    else { self.clock_history.undo_at(&mut self.clock, now_ms()) };
                 if let Some(kind) = changed {
                     self.picked = self.picked.min(self.clock_rows().saturating_sub(1));
-                    self.status = format!("{} {} change.", if redo { "Redid" } else { "Undid" }, if kind == ClockEditKind::Zone { "zone" } else { "alarm" });
+                    self.status = format!("{} {} change.", if redo { "Redid" } else { "Undid" }, match kind {
+                        ClockEditKind::Zone => "zone", ClockEditKind::Alarm => "alarm", ClockEditKind::Timer => "timer",
+                    });
                     self.save_clock(window);
                     match kind {
                         ClockEditKind::Zone => sex_pdx::serial_record!("[date.zone.{}] home={} zones={}", if redo { "redo" } else { "undo" }, self.clock.home, self.clock.zones.len()),
                         ClockEditKind::Alarm => sex_pdx::serial_record!("[date.alarm.{}] alarms={}", if redo { "redo" } else { "undo" }, self.clock.alarms.len()),
+                        ClockEditKind::Timer => sex_pdx::serial_record!("[date.timer.{}] timers={}", if redo { "redo" } else { "undo" }, self.clock.timers.len()),
                     }
                 } else { self.status = String::from(if redo { "Nothing to redo in Clock." } else { "Nothing to undo in Clock." }); }
                 return;
@@ -1101,7 +1106,11 @@ impl App {
                             self.clock.alarms.remove(p);
                             self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Alarm);
                         }
-                        else if p < na + nt { self.clock.timers.remove(p - na); }
+                        else if p < na + nt {
+                            let before = ClockState::from_clock(&self.clock);
+                            self.clock.timers.remove(p - na);
+                            self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Timer);
+                        }
                         else {
                             let before = ClockState::from_clock(&self.clock);
                             if self.clock.zones.is_empty() { self.clock.zones = self.clock.world().iter().map(|z| String::from(z.name)).collect(); }
