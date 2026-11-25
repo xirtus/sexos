@@ -162,6 +162,11 @@ mod tests {
     use vellum_edit::{AnnotKind, AnnotStyle, NoteIcon};
     const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
 
+    /// form1.pdf's page already carries its form widgets; these tests track markup only.
+    fn markup(editor: &Editor) -> Vec<vellum_edit::AnnotInfo> {
+        editor.annotations(0).unwrap().into_iter().filter(|a| a.subtype != "Widget").collect()
+    }
+
     fn value(editor: &Editor, name: &str) -> FieldValue {
         editor.fields().unwrap().into_iter().find(|f| f.name == name).unwrap().value
     }
@@ -262,17 +267,17 @@ mod tests {
             style: AnnotStyle { contents: Some("existing review".into()), ..AnnotStyle::default() } };
         editor.add_annotation(0, &annot).unwrap();
         let mut editor = Editor::open(editor.save_incremental().unwrap()).unwrap();
-        let original = editor.annotations(0).unwrap();
-        let removed = editor.remove_annotation(0, 0).unwrap();
+        let original = markup(&editor);
+        let removed = editor.remove_annotation(0, markup(&editor)[0].index).unwrap();
         let mut history = AnnotationHistory::default();
         history.record_delete(0, removed);
-        assert!(editor.annotations(0).unwrap().is_empty());
+        assert!(markup(&editor).is_empty());
         assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
-        assert_eq!(editor.annotations(0).unwrap(), original);
+        assert_eq!(markup(&editor), original);
         assert_eq!(history.step(&mut editor, true).unwrap(), Some(0));
-        assert!(editor.annotations(0).unwrap().is_empty());
+        assert!(markup(&editor).is_empty());
         assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
-        assert_eq!(Editor::open(editor.save_incremental().unwrap()).unwrap().annotations(0).unwrap(), original);
+        assert_eq!(markup(&Editor::open(editor.save_incremental().unwrap()).unwrap()), original);
     }
 
     #[test]
@@ -283,15 +288,15 @@ mod tests {
             style: AnnotStyle::default() };
         let id = editor.add_annotation(0, &annot).unwrap();
         history.record_add(0, annot, id);
-        let removed = editor.remove_annotation(0, 0).unwrap();
+        let removed = editor.remove_annotation(0, markup(&editor)[0].index).unwrap();
         history.record_delete(0, removed);
         history.step(&mut editor, false).unwrap();
         history.step(&mut editor, false).unwrap();
-        assert!(editor.annotations(0).unwrap().is_empty());
+        assert!(markup(&editor).is_empty());
         history.step(&mut editor, true).unwrap();
-        assert_eq!(editor.annotations(0).unwrap()[0].id, Some(id));
+        assert_eq!(markup(&editor)[0].id, Some(id));
         history.step(&mut editor, true).unwrap();
-        assert!(editor.annotations(0).unwrap().is_empty());
+        assert!(markup(&editor).is_empty());
     }
 
     #[test]
@@ -307,18 +312,18 @@ mod tests {
         editor.set_field("name", changed.clone()).unwrap();
         history.record_field("name", original.clone(), changed.clone());
         assert!(matches!(history.step(&mut editor, false).unwrap(), Some(EditStep::Field(n)) if n == "name"));
-        assert_eq!(editor.annotations(0).unwrap().len(), 1);
+        assert_eq!(markup(&editor).len(), 1);
         assert!(matches!(history.step(&mut editor, false).unwrap(), Some(EditStep::Annotation(0))));
-        assert!(editor.annotations(0).unwrap().is_empty());
+        assert!(markup(&editor).is_empty());
         assert!(matches!(history.step(&mut editor, true).unwrap(), Some(EditStep::Annotation(0))));
-        assert_eq!(editor.annotations(0).unwrap()[0].id, Some(id));
+        assert_eq!(markup(&editor)[0].id, Some(id));
         assert!(matches!(history.step(&mut editor, true).unwrap(), Some(EditStep::Field(n)) if n == "name"));
         assert_eq!(value(&editor, "name"), changed);
         let saved = editor.save_incremental().unwrap();
         assert!(saved.starts_with(FORM), "incremental save preserves the original PDF bytes");
         let reopened = Editor::open(saved).unwrap();
         assert_eq!(value(&reopened, "name"), changed);
-        let annotations = reopened.annotations(0).unwrap();
+        let annotations = markup(&reopened);
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].id, Some(id));
         assert_eq!(annotations[0].contents.as_deref(), Some("note"));
