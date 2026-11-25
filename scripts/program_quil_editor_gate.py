@@ -127,6 +127,10 @@ def main():
   g['wait'](r'\[quil.lsp.diagnostics\] language=rust count=1 first_line=1',s,90)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostics.ppm')})
   assert (a.out/'quil-lsp-diagnostics.ppm').stat().st_size>100000
+  s=len(t());q.key('ret')
+  g['wait'](r'\[quil.lsp.diagnostic.jump\] line=1 character=10 at=10',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostic-jump.ppm')})
+  assert (a.out/'quil-lsp-diagnostic-jump.ppm').stat().st_size>100000
   # The same child serves documentSymbol. The picker jumps to helper on line 2.
   s=len(t());send('ctrl','p');time.sleep(.3);keys('other');q.key('ret');time.sleep(.5)
   s=len(t());send('ctrl','shift','m')

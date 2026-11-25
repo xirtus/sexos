@@ -3,7 +3,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use quil_core::lsp::{frame, take_frame, Symbol};
+use quil_core::lsp::{frame, take_frame, Diagnostic, Symbol};
 use serde_json::{json, Value};
 use sex_app::{files::direct::relay, launch};
 use sex_pdx::console_relay as console;
@@ -15,6 +15,7 @@ pub struct Result {
     pub count: usize,
     pub first_line: Option<u32>,
     pub first: Option<String>,
+    pub items: Vec<Diagnostic>,
 }
 
 fn uri(path: &[u8]) -> String {
@@ -67,15 +68,24 @@ fn receive(
                 let list = value["params"]["diagnostics"]
                     .as_array()
                     .ok_or("Language service sent invalid diagnostics")?;
-                let first = list.first();
+                if list.len() > 16 { return Err("Language service sent too many diagnostics"); }
+                let mut items = Vec::new();
+                for item in list {
+                    let line = item["range"]["start"]["line"].as_u64().ok_or("Language service sent invalid diagnostic")?;
+                    let character = item["range"]["start"]["character"].as_u64().ok_or("Language service sent invalid diagnostic")?;
+                    let message = item["message"].as_str().ok_or("Language service sent invalid diagnostic")?;
+                    if line > u32::MAX as u64 || character > u32::MAX as u64 || message.is_empty()
+                        || message.len() > 160 || message.chars().any(char::is_control) {
+                        return Err("Language service sent invalid diagnostic");
+                    }
+                    items.push(Diagnostic { line: line as u32, character: character as u32, message: message.to_string() });
+                }
+                let first = items.first();
                 return Ok(Some(Result {
-                    count: list.len(),
-                    first_line: first
-                        .and_then(|d| d["range"]["start"]["line"].as_u64())
-                        .map(|n| n.min(u32::MAX as u64) as u32),
-                    first: first
-                        .and_then(|d| d["message"].as_str())
-                        .map(ToString::to_string),
+                    count: items.len(),
+                    first_line: first.map(|d| d.line),
+                    first: first.map(|d| d.message.clone()),
+                    items,
                 }));
             }
             if !want_diagnostics && value["id"].as_u64() == Some(1) && value.get("result").is_some()

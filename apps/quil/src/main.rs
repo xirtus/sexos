@@ -367,6 +367,7 @@ enum Focus { Editor, Tree }
 enum Overlay {
     None,
     Completion { items: Vec<String>, sel: usize, start: usize, cursor: usize, version: u64, path: Vec<u8> },
+    Diagnostics { items: Vec<quil_core::lsp::Diagnostic>, sel: usize, version: u64, path: Vec<u8> },
     Symbols { items: Vec<quil_core::lsp::Symbol>, sel: usize, version: u64, path: Vec<u8> },
     Help { scroll: usize },
     Git { changes: Vec<GitChange>, sel: usize, note: String },
@@ -572,9 +573,9 @@ impl App {
             self.status = String::from("Language check supports files up to 256 KiB");
             return;
         }
-        let (path, source) = {
+        let (path, source, version) = {
             let tab = self.tab();
-            (tab.path.clone(), tab.ed.buf.slice(0..len))
+            (tab.path.clone(), tab.ed.buf.slice(0..len), tab.ed.version())
         };
         let language = if path.ends_with(b".rs") { "rust" }
             else if path.ends_with(b".py") { "python" }
@@ -586,11 +587,19 @@ impl App {
         };
         match lsp::check(&path, language, source) {
             Ok(result) => {
-                self.status = match (result.first_line, result.first) {
+                self.status = match (result.first_line, result.first.as_deref()) {
                     (Some(line), Some(message)) => format!("LSP: {} issue(s); line {}: {}", result.count, line + 1, message),
                     _ => format!("LSP: {} issue(s)", result.count),
                 };
                 sex_pdx::serial_record!("[quil.lsp.diagnostics] language={} count={} first_line={}", language, result.count, result.first_line.map_or(0, |n| n + 1));
+                if !result.items.is_empty() {
+                    let tab = self.tab();
+                    if tab.path != path || tab.ed.version() != version {
+                        self.status = String::from("Diagnostics expired; request them again");
+                    } else {
+                        self.overlay = Overlay::Diagnostics { items: result.items, sel: 0, version, path };
+                    }
+                }
             }
             Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
         }
@@ -956,6 +965,26 @@ impl App {
         core::mem::swap(&mut take, &mut self.overlay);
         let mut keep = true;
         match &mut take {
+            Overlay::Diagnostics { items, sel, version, path } => {
+                *sel = (*sel as isize + updown).clamp(0, items.len().saturating_sub(1) as isize) as usize;
+                if enter {
+                    keep = false;
+                    let issue = items[*sel].clone();
+                    let tab = self.tab();
+                    if tab.path != *path || tab.ed.version() != *version {
+                        self.status = String::from("Diagnostics expired; request them again");
+                    } else {
+                        let bytes = tab.ed.buf.slice(0..tab.ed.buf.len());
+                        if let Ok(text) = core::str::from_utf8(&bytes) {
+                            if let Some(at) = quil_core::lsp::offset_at_position(text, issue.line as u64, issue.character as u64) {
+                                tab.ed.set_cursor(at);
+                                self.status = format!("Line {}: {}", issue.line.saturating_add(1), issue.message);
+                                sex_pdx::serial_record!("[quil.lsp.diagnostic.jump] line={} character={} at={}", issue.line.saturating_add(1), issue.character, at);
+                            } else { self.status = String::from("Language service sent an invalid diagnostic location"); }
+                        }
+                    }
+                }
+            }
             Overlay::Completion { items, sel, start, cursor, version, path } => {
                 *sel = (*sel as isize + updown).clamp(0, items.len().saturating_sub(1) as isize) as usize;
                 if enter {
@@ -1369,6 +1398,13 @@ impl App {
         let mut lines: Vec<(String, bool)> = Vec::new();
         let (title, input): (&str, String) = match &self.overlay {
             Overlay::None => return,
+            Overlay::Diagnostics { items, sel, .. } => {
+                let first = sel.saturating_sub(9);
+                for (i, issue) in items.iter().enumerate().skip(first).take(10) {
+                    lines.push((format!("{}:{}  {}", issue.line.saturating_add(1), issue.character.saturating_add(1), issue.message), i == *sel));
+                }
+                ("Quil diagnostics  ", String::from("Up/Down choose; Enter jumps; Esc closes"))
+            }
             Overlay::Completion { items, sel, .. } => {
                 for (i, item) in items.iter().enumerate() { lines.push((item.clone(), i == *sel)); }
                 ("Quil completions  ", String::from("Up/Down choose; Enter inserts; Esc closes"))

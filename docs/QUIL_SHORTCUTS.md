@@ -38,7 +38,8 @@ to delete a line. Ctrl+Z/Ctrl+Y undo and redo edits.
 
 Ctrl+Shift+J starts Quil's native language-service helper with a run-scoped pipe,
 sends the current Rust, Python or JavaScript text through LSP 3.17 JSON-RPC, and
-shows its diagnostic count and first issue in the status line. The first helper
+shows its diagnostic count and first issue in the status line. A bounded picker
+lists up to 16 issues; use Up/Down and Enter to jump, or Esc to close it. The first helper
 checks delimiter balance and trailing whitespace in UTF-8 files up to 256 KiB.
 Ctrl+Shift+Space requests up to eight same-file declaration or keyword
 completions for the typed prefix.
