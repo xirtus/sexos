@@ -413,6 +413,18 @@ impl Default for Event {
 const MAX_STEPS: u32 = 100_000;
 
 impl Event {
+    fn personal_editable(&self) -> Result<(), &'static str> {
+        if self.rule.is_some() || !self.exdates.is_empty() || !self.rdates.is_empty() || self.recurrence_id.is_some() {
+            return Err("Choose how to edit a recurring event first.");
+        }
+        if self.invitation || !self.organizer.is_empty() || !self.attendees.is_empty() {
+            return Err("An invitation needs the organizer's update.");
+        }
+        if self.uid.ends_with("-conflict") || self.conflict_source_calendar.is_some() || !self.conflict_source_href.is_empty() {
+            return Err("Resolve this conflict note before editing it.");
+        }
+        Ok(())
+    }
     pub fn all_day(start: Date, title: &str) -> Event {
         Event { start, title: title.into(), ..Event::default() }
     }
@@ -442,20 +454,24 @@ impl Event {
     /// A recurring instance or an invitation needs an explicit series/attendee
     /// decision, so Date does not silently change one on the person's behalf.
     pub fn moved_personal_to(&self, day: Date, linked: bool) -> Result<Event, &'static str> {
-        if self.rule.is_some() || !self.exdates.is_empty() || !self.rdates.is_empty() || self.recurrence_id.is_some() {
-            return Err("Choose how to move a recurring event first.");
-        }
-        if self.invitation || !self.organizer.is_empty() || !self.attendees.is_empty() {
-            return Err("An invitation needs the organizer's update.");
-        }
-        if self.uid.ends_with("-conflict") || self.conflict_source_calendar.is_some() || !self.conflict_source_href.is_empty() {
-            return Err("Resolve this conflict note before moving it.");
-        }
+        self.personal_editable()?;
         let mut moved = self.clone();
         moved.start = day;
         if !moved.href.is_empty() { moved.state = SyncState::Modified; }
         else if linked { moved.state = SyncState::New; }
         Ok(moved)
+    }
+    /// Change the title of one personal event without replacing its calendar
+    /// identity, time, reminders, or server resource.
+    pub fn retitled_personal(&self, title: &str, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 120 { return Err("Enter a title of 1–120 characters."); }
+        let mut edited = self.clone();
+        edited.title = String::from(title);
+        if !edited.href.is_empty() { edited.state = SyncState::Modified; }
+        else if linked { edited.state = SyncState::New; }
+        Ok(edited)
     }
     /// Calls `f` with each occurrence's first day that lies in `from..=to`, in order.
     /// RFC 5545: DTSTART is the first occurrence, COUNT counts before EXDATE removes
