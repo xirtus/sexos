@@ -529,7 +529,7 @@ impl Ui {
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
                 Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type/title, legend, table on/off, axes, labels, gridlines")),
                 Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
-                Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("contains/starts/ends/notcontains text or >, >=, <, <= number; Enter applies")),
+                Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("text or numeric comparison; join two with and/or; Enter applies")),
             }
         } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
