@@ -8,7 +8,8 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Writing aids:** Ctrl+Shift+Y now selects the next issue and offers correction suggestions. Dictionary management, language selection, and continuous underlines still need native controls.
 - **Print workflow:** PDF export and a selected-page range are now available.
   Letter, Legal and A4 paper with portrait/landscape orientation are now available.
-  Margin controls and print preview remain.
+  Margin presets and custom top/bottom/left/right inches are now available.
+  A separate print preview remains; the editor already shows the paginated paper.
 - **Polish:** the app now follows Settings' light, dark and high-contrast
   appearance for its page desk, status bar and style picker. A keyboard shortcut
   reference is available in the app and `docs/apps/assuit-shortcuts.md`. Verified

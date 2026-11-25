@@ -10,6 +10,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+P | Export the pages to PDF beside the document |
 | Ctrl+Shift+P | Enter a page range such as `1-3,5` and print it to a separate PDF |
 | Ctrl+Shift+L | Set the paper to Letter, Legal or A4, in portrait or landscape orientation |
+| Ctrl+Shift+M | Set normal, narrow, moderate, wide or mirrored margins, or enter top/bottom/left/right inches |
 | Ctrl+T | Insert a table by entering rows × columns |
 | Ctrl+Shift+I | Insert an image from Assuit's granted folder |
 | Ctrl+Shift+S | Choose a paragraph style |

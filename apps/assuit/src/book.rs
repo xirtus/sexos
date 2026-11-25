@@ -131,6 +131,29 @@ impl Book {
         Ok(())
     }
 
+    /// Set page margins with a named preset or top, bottom, left, right in inches.
+    /// WordCraft checks that the resulting section leaves room for text.
+    pub fn set_margins(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Choose normal, narrow, moderate, wide or mirrored; or four inch values: top bottom left right";
+        let words: Vec<_> = input.split_whitespace().collect();
+        let params = if words.len() == 1 {
+            let preset = words[0].to_ascii_lowercase();
+            if !matches!(preset.as_str(), "normal" | "narrow" | "moderate" | "wide" | "mirrored") {
+                return Err(HELP.into());
+            }
+            json!({ "preset": preset })
+        } else if words.len() == 4 {
+            let mut points = [0.0_f32; 4];
+            for (at, word) in words.iter().enumerate() {
+                let inches = word.parse::<f32>().map_err(|_| HELP.to_string())?;
+                if !inches.is_finite() || !(0.0..=10.0).contains(&inches) { return Err(HELP.into()); }
+                points[at] = inches * 72.0;
+            }
+            json!({ "top": points[0], "bottom": points[1], "left": points[2], "right": points[3] })
+        } else { return Err(HELP.into()); };
+        self.run("layout.margins", params).map(|_| ())
+    }
+
     /// Inserts a picture from a file the program can read in its granted folder.
     pub fn insert_picture(&mut self, path: &str) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("Could not read {path}: {e}"))?;
@@ -557,6 +580,30 @@ mod tests {
             let mut reopened = Book::open(&path).unwrap();
             let (w, h) = reopened.page_size(0);
             assert!(w > h && (w - 842.0).abs() < 2.0 && (h - 595.0).abs() < 2.0, "{ext}: {w} × {h}");
+        }
+    }
+
+    #[test]
+    fn margins_round_trip_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let mut book = welcome("margins.docx");
+            assert!(book.set_margins("NaN 1 1 1").is_err());
+            assert!(book.set_margins("wide extra").is_err());
+            book.set_margins("narrow").unwrap();
+            assert!((book.session.doc.last_section.margin_left - 36.0).abs() < 0.1);
+            book.set_margins("0.5 0.75 1 1.25").unwrap();
+            let section = &book.session.doc.last_section;
+            assert!((section.margin_top - 36.0).abs() < 0.1);
+            assert!((section.margin_bottom - 54.0).abs() < 0.1);
+            assert!((section.margin_left - 72.0).abs() < 0.1);
+            assert!((section.margin_right - 90.0).abs() < 0.1);
+            let (path, _) = book.save_as(&temp(&format!("margins.{ext}"))).unwrap();
+            let reopened = Book::open(&path).unwrap();
+            let section = &reopened.session.doc.last_section;
+            assert!((section.margin_top - 36.0).abs() < 0.1, "{ext}");
+            assert!((section.margin_bottom - 54.0).abs() < 0.1, "{ext}");
+            assert!((section.margin_left - 72.0).abs() < 0.1, "{ext}");
+            assert!((section.margin_right - 90.0).abs() < 0.1, "{ext}");
         }
     }
 

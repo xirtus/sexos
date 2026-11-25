@@ -80,6 +80,8 @@ enum Ask {
     PrintRange(String),
     /// Ctrl+Shift+L: paper size and orientation, for example `A4 landscape`.
     Paper(String),
+    /// Ctrl+Shift+M: a margin preset or four inch values.
+    Margins(String),
 }
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
@@ -107,6 +109,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"), ("Ctrl+Shift+E", "Save as / choose format"),
     ("Ctrl+P", "Export PDF"), ("Ctrl+Shift+P", "Print selected pages"),
     ("Ctrl+Shift+L", "Paper size and orientation"),
+    ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+S", "Apply paragraph style"),
     ("Ctrl+B / I / U", "Bold / italic / underline"),
@@ -133,6 +136,7 @@ mod code {
     pub const I: u8 = 0x17;
     pub const Y: u8 = 0x15;
     pub const L: u8 = 0x26;
+    pub const M: u8 = 0x32;
     pub const SLASH: u8 = 0x35;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
@@ -299,6 +303,7 @@ impl Ui {
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
                 Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
+                Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
             }
         } else if let Some(p) = &self.find {
             match &p.with {
@@ -390,7 +395,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::Picture(t) | Ask::PrintRange(t) | Ask::Paper(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::Picture(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -467,6 +472,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Margins(_)) {
+            match self.book.set_margins(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.margins] {typed}"));
+                    self.message = format!("Margins set to {typed}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         match self.book.save_as(&typed) {
             Ok((path, bytes)) => {
                 self.ask = None;
@@ -518,6 +535,7 @@ impl Ui {
                 (code::P, _) if !key.shift => return self.export_pdf(),
                 (code::P, _) if key.shift => { self.ask = Some(Ask::PrintRange(String::new())); return; }
                 (code::L, _) if key.shift => { self.ask = Some(Ask::Paper(String::new())); return; }
+                (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::I, _) if key.shift => { self.ask = Some(Ask::Picture(String::new())); return; }
                 (code::S, _) if key.shift => {
