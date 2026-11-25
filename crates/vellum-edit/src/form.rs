@@ -119,10 +119,58 @@ const FF_MULTISELECT: i64 = 1 << 21;
 const FF_COMB: i64 = 1 << 24;
 
 impl Editor {
+    /// A signed field or catalog certification reference needs DocMDP/FieldMDP
+    /// evaluation before ordinary form or annotation changes are permitted.
+    /// Malformed permissions fail closed.
+    pub fn signed_edit_restricted(&self) -> Result<bool, Error> {
+        let (_, catalog) = self.catalog()?;
+        let has_permission_signature = match catalog.get(b"Perms") {
+            Some(perms) => self.dict_of(perms)
+                .ok_or(Error::Malformed("bad catalog /Perms"))?
+                .0.iter().any(|(key, _)| matches!(key.as_slice(), b"DocMDP" | b"UR" | b"UR3")),
+            None => false,
+        };
+        if has_permission_signature { return Ok(true); }
+        // `field_nodes` is intentionally tolerant for display, and skips broken
+        // or overly deep branches. A mutation guard must inspect the *whole*
+        // field tree or refuse to decide: a hidden signed child is still signed.
+        let Some(form_obj) = catalog.get(b"AcroForm") else { return Ok(false); };
+        let form = self.dict_of(form_obj).ok_or(Error::Malformed("bad AcroForm"))?;
+        let fields = self.lookup(&form, b"Fields")
+            .and_then(|o| o.as_array().cloned()).ok_or(Error::Malformed("bad AcroForm fields"))?;
+        let mut pending = Vec::new();
+        for field in fields {
+            pending.push((field.as_ref().ok_or(Error::Malformed("bad AcroForm field reference"))?, 0usize, false));
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some((id, depth, inherited_sig)) = pending.pop() {
+            if depth > 32 || seen.len() >= 4096 {
+                return Err(Error::Unsupported("AcroForm field tree exceeds inspection limit"));
+            }
+            if !seen.insert(id.0) { return Err(Error::Malformed("cyclic or duplicate AcroForm field")); }
+            let field = self.get_dict(id).ok_or(Error::Malformed("bad AcroForm field"))?;
+            let is_sig = field.get(b"FT")
+                .map(|ft| self.resolve(ft).as_name() == Some(b"Sig"))
+                .unwrap_or(inherited_sig);
+            if is_sig && field.get(b"V").is_some_and(|v| *v != Object::Null) { return Ok(true); }
+            if let Some(kids) = field.get(b"Kids") {
+                let kids = self.resolve(kids).as_array().cloned()
+                    .ok_or(Error::Malformed("bad AcroForm Kids"))?;
+                for kid in kids {
+                    pending.push((kid.as_ref().ok_or(Error::Malformed("bad AcroForm kid reference"))?, depth + 1, is_sig));
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Add a visible, empty signature widget on a page. This creates no signature
     /// value or key material; a signer can later fill the field via
     /// `embed_detached_signature_with` after the document has been saved.
     pub fn add_signature_field(&mut self, page: usize, name: &str, rect: [f64; 4]) -> Result<ObjId, Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot add a field to a signed PDF".into()));
+        }
         let pid = self.page_id(page)?;
         if name.trim() != name || name.is_empty() || name.len() > 80
             || name.contains('.') || name.chars().any(char::is_control) {
@@ -133,9 +181,6 @@ impl Editor {
         }
         // Adding a widget to a signed revision requires DocMDP/FieldMDP policy
         // evaluation. Do not risk invalidating an existing signature here.
-        if self.signatures()?.iter().any(|s| s.signed) {
-            return Err(Error::BadValue("cannot add a field to a signed PDF".into()));
-        }
         let crop = self.page_info(page)?.crop_box;
         if rect.iter().any(|v| !v.is_finite()) || rect[2] - rect[0] < 12.0
             || rect[3] - rect[1] < 12.0 || rect[0] < crop[0] || rect[1] < crop[1]
@@ -272,6 +317,9 @@ impl Editor {
         reserve_bytes: usize,
         sign: impl FnOnce(&[u8], &[u8]) -> Result<Vec<u8>, Error>,
     ) -> Result<Vec<u8>, Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot add a signature to a signed PDF".into()));
+        }
         const MARKER: &[u8] = b"/ByteRange [0 9999999991 9999999992 9999999993]";
         if !(1024..=65536).contains(&reserve_bytes) {
             return Err(Error::BadValue("signature reservation must be 1–64 KiB".into()));
@@ -333,6 +381,9 @@ impl Editor {
         let info = self.field_info(node);
         if info.read_only || info.kind == FieldKind::Signature {
             return Err(Error::ReadOnly(name.into()));
+        }
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot fill fields in a signed PDF".into()));
         }
         let mut field = self.get_dict(node.id).ok_or(Error::Malformed("field vanished"))?;
         let helv = self.form_font();

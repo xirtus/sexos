@@ -91,6 +91,10 @@ fn new_signature_field_rejects_bad_placement_and_signed_document() {
     assert!(!editor.is_modified());
     let mut signed = Editor::open(form(Style::Table, true)).unwrap();
     assert!(signed.add_signature_field(0, "New", [20.0, 20.0, 80.0, 50.0]).is_err());
+    assert_eq!(signed.set_field("person.name", FieldValue::Text("changed".into())).unwrap_err(),
+        Error::BadValue("cannot fill fields in a signed PDF".into()));
+    assert_eq!(signed.embed_detached_signature_with("sig", 1024, |_, _| panic!("must not sign")),
+        Err(Error::BadValue("cannot add a signature to a signed PDF".into())));
     assert!(!signed.is_modified());
 }
 
@@ -112,13 +116,19 @@ fn signed_pdf_refuses_annotation_add_and_remove_without_changes() {
 #[test]
 fn catalog_docmdp_without_signature_field_refuses_annotations() {
     let pdf = fixtures::build(&[
-        (1, "<< /Type /Catalog /Pages 2 0 R /Perms << /DocMDP 6 0 R >> >>".into()),
+        (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> /Perms << /DocMDP 6 0 R >> >>".into()),
         (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()),
-        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>".into()),
+        (4, "<< /Type /Annot /Subtype /Widget /T (name) /FT /Tx /Rect [20 20 100 40] /F 4 /P 3 0 R >>".into()),
         (6, "<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 1 2 3] /Contents <0000> >>".into()),
     ], Style::Table, 1);
     let mut editor = Editor::open(pdf).unwrap();
     assert!(editor.signatures().unwrap().is_empty());
+    assert_eq!(editor.fields().unwrap().len(), 1);
+    assert_eq!(editor.set_field("name", FieldValue::Text("changed".into())).unwrap_err(),
+        Error::BadValue("cannot fill fields in a signed PDF".into()));
+    assert_eq!(editor.add_signature_field(0, "New", [20.0, 50.0, 80.0, 70.0]).unwrap_err(),
+        Error::BadValue("cannot add a field to a signed PDF".into()));
     let highlight = NewAnnot {
         kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
         style: AnnotStyle::default(),
@@ -127,6 +137,59 @@ fn catalog_docmdp_without_signature_field_refuses_annotations() {
     assert_eq!(editor.add_annotation(0, &highlight).unwrap_err(), expected);
     assert_eq!(editor.set_annotation_text(0, 0, "No change").unwrap_err(), expected);
     assert_eq!(editor.remove_annotation(0, 0).unwrap_err(), expected);
+    assert!(!editor.is_modified());
+}
+
+#[test]
+fn deep_signature_hidden_from_field_listing_still_refuses_edits() {
+    let mut objects = vec![
+        (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 10 0 R] >> >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+        (4, "<< /T (name) /FT /Tx /V (old) >>".into()),
+    ];
+    for id in 10..43 {
+        objects.push((id, format!("<< /T (level{id}) /Kids [{} 0 R] >>", id + 1)));
+    }
+    objects.push((43, "<< /T (signed) /FT /Sig /V 50 0 R >>".into()));
+    objects.push((50, "<< /Type /Sig /ByteRange [0 1 2 3] /Contents <0000> >>".into()));
+    let mut editor = Editor::open(fixtures::build(&objects, Style::Table, 1)).unwrap();
+    assert_eq!(editor.fields().unwrap()[0].name, "name");
+    assert!(editor.signatures().unwrap().is_empty(), "display walker stops at 32 levels");
+    assert_eq!(editor.signed_edit_restricted(),
+        Err(Error::Unsupported("AcroForm field tree exceeds inspection limit")));
+    assert_eq!(editor.set_field("name", FieldValue::Text("changed".into())),
+        Err(Error::Unsupported("AcroForm field tree exceeds inspection limit")));
+    assert!(!editor.is_modified());
+}
+
+#[test]
+fn malformed_acroform_fields_fail_closed_before_mutation() {
+    let pdf = fixtures::build(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields (broken) >> >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+    ], Style::Table, 1);
+    let mut editor = Editor::open(pdf).unwrap();
+    assert_eq!(editor.signed_edit_restricted(), Err(Error::Malformed("bad AcroForm fields")));
+    let highlight = NewAnnot { kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] }, style: AnnotStyle::default() };
+    assert_eq!(editor.add_annotation(0, &highlight), Err(Error::Malformed("bad AcroForm fields")));
+    assert!(!editor.is_modified());
+}
+
+#[test]
+fn catalog_usage_rights_signature_without_field_refuses_annotation_edit() {
+    let pdf = fixtures::build(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /Perms << /UR3 6 0 R >> >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+        (6, "<< /Type /Sig /ByteRange [0 1 2 3] /Contents <0000> >>".into()),
+    ], Style::Table, 1);
+    let mut editor = Editor::open(pdf).unwrap();
+    assert!(editor.signatures().unwrap().is_empty());
+    assert_eq!(editor.signed_edit_restricted(), Ok(true));
+    let highlight = NewAnnot { kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] }, style: AnnotStyle::default() };
+    assert_eq!(editor.add_annotation(0, &highlight), Err(Error::BadValue("cannot edit annotations in a signed PDF".into())));
     assert!(!editor.is_modified());
 }
 
@@ -140,6 +203,10 @@ fn guest_signed_pdf_refuses_annotation_edits_when_supplied() {
     };
     assert!(editor.signatures().unwrap().iter().any(|signature| signature.signed));
     assert!(matches!(editor.add_annotation(0, &highlight), Err(Error::BadValue(_))));
+    assert_eq!(editor.set_field("name", FieldValue::Text("changed".into())).unwrap_err(),
+        Error::BadValue("cannot fill fields in a signed PDF".into()));
+    assert_eq!(editor.add_signature_field(0, "Second", [20.0, 50.0, 80.0, 70.0]).unwrap_err(),
+        Error::BadValue("cannot add a field to a signed PDF".into()));
     assert!(!editor.is_modified());
 }
 
@@ -586,7 +653,7 @@ fn form_fill_table() { check_form(Style::Table); }
 fn form_fill_xref_stream() { check_form(Style::XrefStream); }
 
 #[test]
-fn signatures_are_reported_and_survive() {
+fn signatures_are_reported_and_signed_revision_stays_unchanged() {
     let orig = form(Style::Table, true);
     let mut ed = Editor::open(orig.clone()).unwrap();
     let sigs = ed.signatures().unwrap();
@@ -605,20 +672,16 @@ fn signatures_are_reported_and_survive() {
     assert!(ed.fields().unwrap().iter().any(|f| f.name == "sig" && f.kind == FieldKind::Signature));
     assert!(matches!(ed.set_field("sig", FieldValue::Empty), Err(Error::ReadOnly(_))));
 
-    ed.set_field("person.name", FieldValue::Text("Grace".into())).unwrap();
-    ed.add_annotation(0, &NewAnnot { kind: AnnotKind::Highlight { rects: vec![[10.0, 180.0, 60.0, 195.0]] }, style: style() }).unwrap();
+    assert_eq!(ed.set_field("person.name", FieldValue::Text("Grace".into())),
+        Err(Error::BadValue("cannot fill fields in a signed PDF".into())));
+    assert_eq!(ed.add_annotation(0, &NewAnnot { kind: AnnotKind::Highlight { rects: vec![[10.0, 180.0, 60.0, 195.0]] }, style: style() }),
+        Err(Error::BadValue("cannot edit annotations in a signed PDF".into())));
     let saved = ed.save_incremental().unwrap();
-    assert_incremental(&orig, &saved);
-    // The signed byte ranges are byte-identical in the new file.
-    for (o, l) in &s.byte_range {
-        let r = *o as usize..(*o + *l) as usize;
-        assert_eq!(&saved[r.clone()], &orig[r]);
-    }
-    // With a signature present we do not ask viewers to regenerate appearances.
-    assert!(!String::from_utf8_lossy(&saved[orig.len()..]).contains("NeedAppearances"));
+    assert_eq!(saved, orig);
+    assert!(!ed.is_modified());
     let re = Editor::open(saved).unwrap();
     let s2 = &re.signatures().unwrap()[0];
-    assert!(s2.signed && !s2.covers_whole_file, "the signature now covers an earlier revision only");
+    assert!(s2.signed && s2.covers_whole_file);
 }
 
 #[test]
