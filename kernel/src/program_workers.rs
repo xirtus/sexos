@@ -269,6 +269,7 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
             if crate::app_resources::live_run(pd).is_err() { return reply(regs, t::DENIED, 0); }
             unsafe {
                 (*current).context.fs_base = a;
+                crate::core_local::CoreLocal::get().last_fs_base.store(a, Ordering::Relaxed);
                 x86_64::registers::model_specific::FsBase::write(x86_64::VirtAddr::new(a));
             }
             reply(regs, t::OK, 0)
