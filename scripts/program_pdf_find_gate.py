@@ -99,7 +99,7 @@ def main():
   g['wait'](rf'\[pdf\.page\] page=1 pages={PAGES} ',s,600)
   q.key('o');time.sleep(.3)
   # Thumbnails: the strip renders the pages that fit it.
-  thumbs=press('t',r'\[pdf\.thumbs\] rendered=(\d+) cached=(\d+) first=1\n',600)
+  thumbs=press('t',r'\[pdf\.thumbs\] rendered=(\d+) cached=(\d+) first=1 ms=(\d+)\n',600)
   assert int(thumbs[1])>=2,thumbs[0]
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-thumbs.ppm')})
   q.key('t');time.sleep(.3)
@@ -110,6 +110,6 @@ def main():
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
   assert 'KERNEL PANIC' not in t() and '[std.abort]' not in t() and 'panicked' not in t()
-  print({'ok':True,'chars':int(text[1]),'text_ms':int(text[2]),'thumbs':int(thumbs[1]),'fit_pct':int(fit[1]),'zoom_pct':int(zoomed[1])})
+  print({'ok':True,'chars':int(text[1]),'text_ms':int(text[2]),'thumbs':int(thumbs[1]),'thumb_ms':int(thumbs[3]),'fit_pct':int(fit[1]),'zoom_pct':int(zoomed[1])})
  finally:g['stop']()
 if __name__=='__main__':main()

@@ -14,5 +14,8 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
   Document the cold-render latency target with a fixture and prove crash
   recovery on interrupted saves. Ctrl+Shift+/ now opens an in-app shortcut
   reference; `docs/apps/vellum-shortcuts.md` lists the active keys.
+  Thumbnail pairs now share Hayro's glyph/interpreter cache within one panel
+  draw; the QEMU fixture records cold-batch milliseconds without a runner-speed
+  threshold. A representative cold full-page latency target remains open.
 
 Each remaining feature needs a focused host test and CI guest evidence before being called complete.
