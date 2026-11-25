@@ -55,6 +55,8 @@ pub struct Ui {
     ask: Option<Ask>,
     /// Ctrl+Shift+Y's selected issue and its suggestion list.
     proof: Option<Proof>,
+    /// The app-owned custom word list and optional word being added.
+    dictionary: Option<Dictionary>,
     /// An in-app shortcut reference, opened with Ctrl+Shift+/.
     help: bool,
     /// The document came back with last time's unsaved changes: Esc throws them away until
@@ -108,6 +110,7 @@ struct Prompt {
 }
 
 struct Proof { word: String, suggestions: Vec<String>, at: usize }
+struct Dictionary { words: Vec<String>, at: usize, adding: Option<String> }
 
 impl Prompt {
     /// The text being typed into.
@@ -134,6 +137,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+G", "Go to page"), ("Ctrl+Shift+Y", "Spelling suggestions"),
     ("Ctrl+Shift+K", "Proofing language"),
+    ("Ctrl+Shift+D", "Manage custom dictionary"),
     ("Ctrl+= / - / 0", "Zoom in / out / reset"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -159,6 +163,7 @@ mod code {
     pub const L: u8 = 0x26;
     pub const M: u8 = 0x32;
     pub const K: u8 = 0x25;
+    pub const D: u8 = 0x20;
     pub const A: u8 = 0x1E;
     pub const SLASH: u8 = 0x35;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
@@ -191,7 +196,7 @@ impl Ui {
         let palette = Palette::from_tokens(theme);
         let theme_generation = sex_app::settings::generation().unwrap_or(0);
         sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, palette.selected));
-        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, help: false, recovered: false, unkept: None, scroll_to: None, preview_page: None }
+        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, dictionary: None, help: false, recovered: false, unkept: None, scroll_to: None, preview_page: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -314,6 +319,24 @@ impl Ui {
                 }
             }
         }
+        if let Some(dict) = &self.dictionary {
+            let row = self.pen.line_height() + 8;
+            let shown = dict.words.len().min(8);
+            let (bw, bh) = ((w - 2 * MARGIN).min(420).max(1), 67 + row * shown as i32);
+            let (bx, by) = ((w - bw) / 2, ((view_h - bh) / 2).max(0));
+            canvas.fill(bx + 3, by + 3, bw, bh, palette.shadow);
+            canvas.fill(bx, by, bw, bh, palette.bar_bg);
+            canvas.frame(bx, by, bw, bh, palette.line);
+            self.pen.text(&mut canvas, bx + 10, by + 8, "Assuit custom dictionary", palette.ink, Some((bx, bw - 20)));
+            let first = dict.at.saturating_sub(shown.saturating_sub(1));
+            for (slot, word) in dict.words.iter().skip(first).take(shown).enumerate() {
+                let y = by + 31 + slot as i32 * row;
+                if first + slot == dict.at { canvas.fill(bx + 4, y - 2, bw - 8, row, palette.selected); }
+                self.pen.text(&mut canvas, bx + 10, y, word, if first + slot == dict.at { palette.on_selected } else { palette.ink }, Some((bx, bw - 20)));
+            }
+            let footer = match &dict.adding { Some(word) => format!("Add: {word}_   Enter saves, Esc cancels"), None => String::from("A add  ·  Delete remove  ·  Esc close") };
+            self.pen.text(&mut canvas, bx + 10, by + bh - 26, &footer, palette.dim, Some((bx, bw - 20)));
+        }
         canvas.fill(0, view_h, w, STATUS_H, palette.bar_bg);
         canvas.fill(0, view_h, w, 1, palette.line);
         let pages = self.places.len();
@@ -346,6 +369,8 @@ impl Ui {
                     format!("Find: {}{a}   Replace with: {with}{b}   {said}", p.what)
                 }
             }
+        } else if let Some(dict) = &self.dictionary {
+            format!("Custom dictionary: {} words   {}", dict.words.len(), self.message)
         } else if let Some(proof) = &self.proof {
             if proof.suggestions.is_empty() {
                 format!("Spelling: {}. No suggestion; A adds to dictionary, Ctrl+Shift+Y next, Esc closes", proof.word)
@@ -668,6 +693,17 @@ impl Ui {
             if key.code == code::ESC { self.help = false; }
             return;
         }
+        if key.control && key.shift && key.code == code::D && self.ask.is_none() && self.find.is_none() && self.picker.is_none() && self.proof.is_none() {
+            if self.dictionary.is_some() { self.dictionary = None; }
+            else {
+                let words = self.book.dictionary_words();
+                sex_std::record(&format!("[assuit.dictionary.open] words={}", words.len()));
+                self.dictionary = Some(Dictionary { words, at: 0, adding: None });
+            }
+            self.message.clear();
+            return;
+        }
+        if self.dictionary.is_some() { return self.dictionary_key(key); }
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
         if self.picker.is_some() { return self.picker_key(key); }
@@ -734,6 +770,56 @@ impl Ui {
             Ok(None) => self.message = "Spelling and grammar check complete".into(),
             Err(e) => self.message = e,
         }
+    }
+
+    fn dictionary_key(&mut self, key: Key) {
+        let Some(mut dict) = self.dictionary.take() else { return };
+        if let Some(typed) = &mut dict.adding {
+            match key.code {
+                code::ESC => { dict.adding = None; self.message.clear(); }
+                code::BACKSPACE => { typed.pop(); self.message.clear(); }
+                code::ENTER => {
+                    let word = typed.trim().to_string();
+                    if !word.is_empty() {
+                        match self.book.add_spelling_word(&word) {
+                            Ok(()) => {
+                                dict.words = self.book.dictionary_words();
+                                dict.at = dict.words.iter().position(|w| w.eq_ignore_ascii_case(&word)).unwrap_or(0);
+                                dict.adding = None;
+                                self.invalidate();
+                                sex_std::record(&format!("[assuit.dictionary.manager.added] word={word}"));
+                                self.message = format!("Added {word}");
+                            }
+                            Err(e) => self.message = e,
+                        }
+                    }
+                }
+                _ => if !key.control && typed.chars().count() < 64 {
+                    if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { typed.push(ch); self.message.clear(); }
+                },
+            }
+        } else {
+            match (key.code, sex_app::nav(key)) {
+                (code::ESC, _) => { self.message.clear(); return; }
+                (code::A, _) if !key.control => { dict.adding = Some(String::new()); self.message.clear(); }
+                (_, Some(Nav::Up)) => dict.at = dict.at.saturating_sub(1),
+                (_, Some(Nav::Down)) => dict.at = (dict.at + 1).min(dict.words.len().saturating_sub(1)),
+                (_, Some(Nav::Delete)) => if let Some(word) = dict.words.get(dict.at).cloned() {
+                    match self.book.remove_spelling_word(&word) {
+                        Ok(()) => {
+                            dict.words = self.book.dictionary_words();
+                            dict.at = dict.at.min(dict.words.len().saturating_sub(1));
+                            self.invalidate();
+                            sex_std::record(&format!("[assuit.dictionary.manager.removed] word={word}"));
+                            self.message = format!("Removed {word}");
+                        }
+                        Err(e) => self.message = e,
+                    }
+                },
+                _ => {}
+            }
+        }
+        self.dictionary = Some(dict);
     }
 
     fn proof_key(&mut self, key: Key) {
@@ -844,7 +930,7 @@ impl Ui {
             return false;
         }
         // The style list is modal: the pages under it do not take clicks.
-        if self.picker.is_some() { return false; }
+        if self.picker.is_some() || self.dictionary.is_some() { return false; }
         let extend = match p.kind {
             Kind::Wheel { steps } => { self.scroll -= steps as i32 * 60; return true; }
             Kind::Down { button: 0 } => false,
