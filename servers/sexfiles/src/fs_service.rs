@@ -1279,8 +1279,7 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             if r.offset != 0 || len == 0 || len > data.len() { return Err(Error::Name); }
             let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
             own[..len].copy_from_slice(&data[..len]);
-            let id = fs.create(path, now)?;
-            if fs.write(id, 0, &own[..len], now)? != len { return Err(Error::NoSpace); }
+            let id = fs.create_with_data(path, &own[..len], now)?;
             fs.commit()?;
             data[..8].copy_from_slice(&id.to_le_bytes());
             Ok(8)
@@ -1288,8 +1287,7 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         w::REMOVE => { fs.remove_path(path)?; fs.commit()?; Ok(0) }
         w::REMOVE_IF_ID => {
             if r.offset == 0 || r.length != 0 { return Err(Error::Name); }
-            if fs.open(path)?.id != r.offset { return Err(Error::Stale); }
-            fs.remove_path(path)?;
+            fs.remove_path_if_id(path, r.offset)?;
             fs.commit()?;
             Ok(0)
         }

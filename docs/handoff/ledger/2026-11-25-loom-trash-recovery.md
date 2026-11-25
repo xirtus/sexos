@@ -20,6 +20,8 @@ unconfirmed state. The QEMU gate plants a stranded note, then checks that the
 new trash entry takes a different name and the old note keeps its contents.
 A move request that fails after reaching Files is treated as uncertain: its
 note remains for recovery, while earlier confirmed moves are rolled back.
+The focused SexFS host regression checks complete note bytes after remount,
+an existing-name refusal, and refusal to remove a replacement by the old ID.
 
 The Files jobs QEMU gate asserts that the note-sync record precedes the
 successful trash record and continues to restore and checksum the item.
