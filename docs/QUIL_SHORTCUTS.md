@@ -28,7 +28,7 @@ to scroll, and Esc or Ctrl+Shift+/ to close the reference. The command palette
 | Check current file through Quil Language Service | Ctrl+Shift+J | Ctrl+Shift+J |
 | Request Quil Language Service completion | Ctrl+Shift+Space | Ctrl+Shift+Space |
 | Show document symbols | Ctrl+Shift+M | Ctrl+Shift+M |
-| Go to a declaration in the open file | Ctrl+Shift+G | Ctrl+Shift+G |
+| Go to a declaration in an open tab | Ctrl+Shift+G | Ctrl+Shift+G |
 | Describe a declaration in the open file | Ctrl+Shift+H | Ctrl+Shift+H |
 
 Default editing also supports Ctrl+Shift+Up for a cursor above, Ctrl+Shift+I

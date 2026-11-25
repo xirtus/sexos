@@ -15,7 +15,7 @@
 //! native LSP diagnostic helper through a run-scoped pipe.
 //! Ctrl+Shift+Space requests bounded keyword completions from the same helper.
 //! Ctrl+Shift+M opens a document outline returned by the helper.
-//! Ctrl+Shift+G follows an unambiguous declaration in the same file.
+//! Ctrl+Shift+G follows an unambiguous declaration in this or another open tab.
 #![no_std]
 #![no_main]
 
@@ -544,18 +544,38 @@ impl App {
             else if path.ends_with(b".js") { "javascript" }
             else { self.status = String::from("Definitions support .rs, .py and .js"); return; };
         let Ok(source) = core::str::from_utf8(&source) else { self.status = String::from("Definitions need UTF-8 text"); return; };
-        match lsp::definition(&path, language, source, cursor) {
-            Ok(Some((line, character))) => {
-                let tab = self.tab();
-                if tab.path != path || tab.ed.version() != version || tab.ed.cursor() != cursor {
+        let mut peers = Vec::new();
+        let mut total = source.len();
+        for tab in &self.tabs.list {
+            if tab.path == path || tab.path.is_empty() || !tab.path.ends_with(match language { "rust" => b".rs", "python" => b".py", _ => b".js" }) { continue; }
+            let n = tab.ed.buf.len();
+            if n > 256 * 1024 || total + n > 512 * 1024 || peers.len() == 8 { continue; }
+            let bytes = tab.ed.buf.slice(0..n);
+            let Ok(text) = core::str::from_utf8(&bytes) else { continue; };
+            peers.push(lsp::Peer { path: tab.path.clone(), text: String::from(text), version: tab.ed.version() });
+            total += n;
+        }
+        match lsp::definition(&path, language, source, cursor, &peers) {
+            Ok(Some((target, line, character))) => {
+                let current = self.tab();
+                if current.path != path || current.ed.version() != version || current.ed.cursor() != cursor {
                     self.status = String::from("Definition expired; request it again");
-                } else if let Some(at) = quil_core::lsp::offset_at_position(source, line as u64, character as u64) {
-                    tab.ed.set_cursor(at);
-                    self.status = format!("Definition at line {}", line + 1);
-                    sex_pdx::serial_record!("[quil.lsp.definition] language={} line={} at={}", language, line + 1, at);
-                } else { self.status = String::from("Language service sent an invalid definition"); }
+                    return;
+                }
+                let (target_path, target_text, target_version) = if target == 0 { (&path, source, version) }
+                    else if let Some(peer) = peers.get(target - 1) { (&peer.path, peer.text.as_str(), peer.version) }
+                    else { self.status = String::from("Language service returned an unknown tab"); return; };
+                let Some(at) = quil_core::lsp::offset_at_position(target_text, line as u64, character as u64) else {
+                    self.status = String::from("Language service sent an invalid definition"); return;
+                };
+                let Some(i) = self.tabs.find(target_path) else { self.status = String::from("Definition tab closed; request it again"); return; };
+                if self.tabs.list[i].ed.version() != target_version { self.status = String::from("Definition changed; request it again"); return; }
+                self.tabs.active = i;
+                self.tabs.list[i].ed.set_cursor(at);
+                self.status = format!("Definition in {} at line {}", lossy(target_path), line + 1);
+                sex_pdx::serial_record!("[quil.lsp.definition] language={} line={} at={} tab={} target={}", language, line + 1, at, i + 1, lossy(target_path));
             }
-            Ok(None) => self.status = String::from("No unique declaration in this file"),
+            Ok(None) => self.status = String::from("No unique declaration in the open tabs"),
             Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
         }
     }

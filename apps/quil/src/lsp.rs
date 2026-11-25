@@ -18,6 +18,10 @@ pub struct Result {
     pub items: Vec<Diagnostic>,
 }
 
+/// One already-open tab snapshot; the child receives text through its pipe,
+/// never a Files grant. `version` lets the UI reject a stale jump.
+pub struct Peer { pub path: Vec<u8>, pub text: String, pub version: u64 }
+
 fn uri(path: &[u8]) -> String {
     let mut out = String::from("file:///quil/");
     for &b in path.rsplit(|&b| b == b'/').next().unwrap_or(b"untitled") {
@@ -202,7 +206,9 @@ fn receive_symbols(deadline: u64, rx: &mut Vec<u8>) -> core::result::Result<Vec<
     Err("Language symbols timed out")
 }
 
-fn receive_definition(deadline: u64, rx: &mut Vec<u8>, expected_uri: &str) -> core::result::Result<Option<(u32, u32)>, &'static str> {
+fn peer_uri(index: usize) -> String { format!("file:///quil/open/{index}") }
+
+fn receive_definition(deadline: u64, rx: &mut Vec<u8>, expected_uri: &str, peer_count: usize) -> core::result::Result<Option<(usize, u32, u32)>, &'static str> {
     while sex_pdx::get_ticks() < deadline {
         let (_, bytes) = relay::take_at(0).map_err(|_| "Language service output failed")?;
         if rx.len() + bytes.len() > quil_core::lsp::MAX_BODY + 1024 { return Err("Language service output is too large"); }
@@ -212,12 +218,16 @@ fn receive_definition(deadline: u64, rx: &mut Vec<u8>, expected_uri: &str) -> co
             if value["id"].as_u64() != Some(2) { continue; }
             let result = &value["result"];
             if result.is_null() { return Ok(None); }
-            if result["uri"].as_str() != Some(expected_uri) { return Err("Language definition left the open file"); }
+            let returned = result["uri"].as_str().ok_or("Language definition has no document")?;
+            let target = if returned == expected_uri { 0 } else {
+                (0..peer_count).find(|&index| returned == peer_uri(index)).map(|index| index + 1)
+                    .ok_or("Language definition left the open tabs")?
+            };
             let start = &result["range"]["start"];
             let line = start["line"].as_u64().ok_or("Language service sent invalid definition")?;
             let character = start["character"].as_u64().ok_or("Language service sent invalid definition")?;
             if line > u32::MAX as u64 || character > u32::MAX as u64 { return Err("Language service sent invalid definition"); }
-            return Ok(Some((line as u32, character as u32)));
+            return Ok(Some((target, line as u32, character as u32)));
         }
         sex_pdx::sched_yield();
     }
@@ -259,12 +269,15 @@ fn symbols_inner(path: &[u8], language: &str, text: &str) -> core::result::Resul
     receive_symbols(deadline, &mut rx)
 }
 
-fn definition_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<(u32, u32)>, &'static str> {
+fn definition_inner(path: &[u8], language: &str, text: &str, cursor: usize, peers: &[Peer]) -> core::result::Result<Option<(usize, u32, u32)>, &'static str> {
     let (line, character) = completion_position(text, cursor).ok_or("Language definition cursor is invalid")?;
     let (_, mut rx, deadline) = begin(path, language, text)?;
     let name = uri(path);
+    for (index, peer) in peers.iter().enumerate() {
+        send(json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":peer_uri(index),"languageId":language,"version":1,"text":peer.text}}}), deadline)?;
+    }
     send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":name.as_str()},"position":{"line":line,"character":character}}}), deadline)?;
-    receive_definition(deadline, &mut rx, &name)
+    receive_definition(deadline, &mut rx, &name, peers.len())
 }
 
 fn hover_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<String>, &'static str> {
@@ -314,10 +327,13 @@ pub fn symbols(path: &[u8], language: &str, text: &str) -> core::result::Result<
     result
 }
 
-/// Requests a definition in the exact open document. Other-file locations are refused.
-pub fn definition(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<(u32, u32)>, &'static str> {
+/// Requests an unambiguous declaration from this snapshot or bounded open tabs.
+pub fn definition(path: &[u8], language: &str, text: &str, cursor: usize, peers: &[Peer]) -> core::result::Result<Option<(usize, u32, u32)>, &'static str> {
     if text.len() > 256 * 1024 { return Err("Language definition supports files up to 256 KiB"); }
-    let result = definition_inner(path, language, text, cursor);
+    if peers.len() > 8 || text.len() + peers.iter().map(|peer| peer.text.len()).sum::<usize>() > 512 * 1024 {
+        return Err("Too many open documents for language definition");
+    }
+    let result = definition_inner(path, language, text, cursor, peers);
     cleanup();
     result
 }

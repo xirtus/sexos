@@ -10,6 +10,8 @@ OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
 BROKEN=b'fn main() {\n    let value = 1;\n'
 COMPLETE=b'ret'
 REFERENCE=b'fn helper() {}\nfn main() { helper(); }\n'
+CROSS_DEF=b'fn cross_helper() {}\n'
+CROSS_USE=b'fn main() { cross_helper(); }\n'
 IDENTIFIER=b'fn helper() {}\nhel'
 IDENTIFIER_DONE=b'fn helper() {}\nhelper'
 OCCURRENCES=b'foo foo foo foo\n'
@@ -26,7 +28,7 @@ GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
 GIT_HEAD=b'ref: refs/heads/quil/demo\n'
 UNTRACKED=b'Quil work note\n'
 assert bytes.fromhex(GIT_ID)==INDEX[52:72]
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/occurrences.rs':OCCURRENCES,'/raw.rs':RAW,'/raw-multiline.rs':RAW_MULTILINE,'/raw-scroll.rs':RAW_SCROLL,'/fstring.py':PY_FSTRING,'/interpolation.py':PY_INTERP,'/template.js':JS_TEMPLATE,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/cross-def.rs':CROSS_DEF,'/cross-use.rs':CROSS_USE,'/identifier.rs':IDENTIFIER,'/occurrences.rs':OCCURRENCES,'/raw.rs':RAW,'/raw-multiline.rs':RAW_MULTILINE,'/raw-scroll.rs':RAW_SCROLL,'/fstring.py':PY_FSTRING,'/interpolation.py':PY_INTERP,'/template.js':JS_TEMPLATE,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -76,7 +78,7 @@ def main():
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','identifier.rs','occurrences.rs','raw.rs','fstring.py','interpolation.py','template.js'):
+  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','cross-def.rs','cross-use.rs','identifier.rs','occurrences.rs','raw.rs','fstring.py','interpolation.py','template.js'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   m=expect(f'fetch http://10.0.2.2:{PORT}/untracked /data/quil/notes.txt',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   line('mkdir /data/quil/.git')
@@ -172,6 +174,18 @@ def main():
   g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3',s,90)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-definition.ppm')})
   assert (a.out/'quil-lsp-definition.ppm').stat().st_size>100000
+  # Earlier tabs already declare `helper`; only this peer declares
+  # `cross_helper`, so the jump must use its mapped open-tab URI.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('cross-def');q.key('ret')
+  g['wait'](r'\[quil.code.opened\] path=cross-def.rs ',s,60)
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('cross-use');q.key('ret')
+  g['wait'](r'\[quil.code.opened\] path=cross-use.rs ',s,60)
+  ctrl('home')
+  for _ in range(15):q.key('right')
+  s=len(t());send('ctrl','shift','g')
+  g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3 tab=\d+ target=[^\n]*cross-def.rs',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-cross-file-definition.ppm')})
+  assert (a.out/'quil-lsp-cross-file-definition.ppm').stat().st_size>100000
   # Completion is a second request over the same native LSP pipe, and Enter
   # replaces the prefix in the editor's undoable document.
   s=len(t());send('ctrl','p');time.sleep(.3);keys('complete');q.key('ret');time.sleep(.5)

@@ -40,8 +40,11 @@ Remaining gaps:
   opens a keyboard picker that jumps to a declaration. The helper recognizes
   basic Rust, Python and JavaScript declaration heads; full syntax and
   reference resolution remain gaps. Ctrl+Shift+G now asks the helper for an
-  unambiguous declaration in the same file and jumps to it. Cross-file and
-  semantic definition resolution remain gaps. Completion now also offers up to
+  unambiguous declaration in the same file and jumps to it. It now sends up to
+  eight other open same-language tab snapshots to that helper and follows one
+  unique declaration in a peer tab, with exact URI and revision checks. Closed
+  files, import/scope semantics, and full language-server resolution remain gaps.
+  Completion now also offers up to
   eight distinct declaration names from the open Rust, Python, or JavaScript
   snapshot before keywords. Scope, import, member, and cross-file completion
   still need a fuller language service.
