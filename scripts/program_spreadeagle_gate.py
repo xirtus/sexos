@@ -157,6 +157,7 @@ def main():
   wd=g['wait'](r'\[spreadeagle\.width\] col=A width=(\d+)\n',s,60)
   assert int(wd[1])>wa+30,(wa,wd[0])
   s=len(t());g['chord']('ctrl','pgdn',r'\[spreadeagle\.column\] sheet=Notes col=A text=Welcome to Spreadeagle, the SexOS spreadsheet\.\|')
+  g['chord']('ctrl','pgup',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
   g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
   close(o)
   # The previous close was orderly. This time no close or Ctrl+S is sent: only the
