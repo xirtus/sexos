@@ -30,3 +30,9 @@
   otherwise the region stays one screen (as before) split in half pages, and a
   window bigger than a half shows `WHOLE` (page 2), painted in place. 512 MB gates
   ran out of program memory with doubled regions (Qupid `no_memory`).
+
+## Later review (Andreas, 2026-11-25)
+
+- Qupid's Kodi add-on path is marked for later review, not part of this change. This
+  change only made the Kodi gate fit in 512 MB again (half pages); the add-on itself
+  (sources, playback through Kodi plug-ins) gets its own review later.
