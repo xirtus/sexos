@@ -27,6 +27,7 @@ use sex_mail::message::{self, Message};
 use sex_mail::local_attachments;
 use sex_pdx::app_pointer::Kind;
 use sex_theme::Tokens;
+use sha2::{Digest, Sha256};
 
 const MAX_MAIL: u64 = 4 << 20;
 const MAX_LIST: usize = 200;
@@ -265,30 +266,34 @@ impl App {
             Err(sex_pdx::fs::DENIED) => { self.status = "Attachment save cancelled in Loom.".into(); return; },
             Err(e) => { self.status = format!("Loom could not choose a location: {}", String::from_utf8_lossy(files::message(e))); return; },
         };
-        // Files returns the new identity in CREATE's reply, so a replacement
-        // between requests cannot receive any attachment bytes.
-        let id = match files::create_with_id(window, path) {
-            Ok(id) => id,
+        let hash: [u8; 32] = Sha256::digest(&chosen.data).into();
+        let ticket = match files::stage_begin(window, path, chosen.data.len() as u64, &hash) {
+            Ok(ticket) => ticket,
             Err(e) => {
-            if e == sex_pdx::fs::EXISTS {
-                sex_pdx::serial_record!("[valentine.attachment.exists] path={}", String::from_utf8_lossy(path));
-            }
-            self.status = if e == sex_pdx::fs::EXISTS { "That file already exists; choose another name in Loom.".into() }
-                else { format!("Attachment not saved: {}", String::from_utf8_lossy(files::message(e))) };
-            return;
+                if e == sex_pdx::fs::EXISTS {
+                    sex_pdx::serial_record!("[valentine.attachment.exists] path={}", String::from_utf8_lossy(path));
+                }
+                self.status = if e == sex_pdx::fs::EXISTS { "That file already exists; choose another name in Loom.".into() }
+                    else { format!("Attachment not saved: {}", String::from_utf8_lossy(files::message(e))) };
+                return;
             }
         };
-        let saved = files::write_if_id(window, path, id, 0, &chosen.data)
-            .and_then(|n| if n == chosen.data.len() { files::sync(window) } else { Err(sex_pdx::fs::NO_SPACE) });
+        sex_pdx::serial_record!("[valentine.attachment.staged] path={} bytes={}", String::from_utf8_lossy(path), chosen.data.len());
+        let saved = files::stage_chunk(window, path, ticket, &chosen.data)
+            .and_then(|n| if n == chosen.data.len() { files::stage_publish(window, path, ticket) } else { Err(sex_pdx::fs::NO_SPACE) });
         match saved {
             Ok(()) => {
                 self.status = format!("Saved {} ({} bytes).", String::from_utf8_lossy(&suggestion), chosen.data.len());
                 sex_pdx::serial_record!("[valentine.attachment.saved] path={} bytes={}", String::from_utf8_lossy(path), chosen.data.len());
             }
             Err(e) => {
-                let cleanup = files::remove_if_id(window, path, id);
-                self.status = if cleanup.is_ok() { format!("Attachment save failed: {}; incomplete file removed", String::from_utf8_lossy(files::message(e))) }
-                    else { format!("Attachment save failed: {}; incomplete file may remain", String::from_utf8_lossy(files::message(e))) };
+                let cleanup = files::stage_abort(window, path, ticket);
+                if e == sex_pdx::fs::EXISTS {
+                    sex_pdx::serial_record!("[valentine.attachment.exists] path={}", String::from_utf8_lossy(path));
+                }
+                self.status = if e == sex_pdx::fs::EXISTS { "That file already exists; choose another name in Loom.".into() }
+                    else if cleanup.is_ok() { format!("Attachment save failed: {}; temporary copy removed", String::from_utf8_lossy(files::message(e))) }
+                    else { format!("Attachment save failed: {}; restart to clear the temporary copy", String::from_utf8_lossy(files::message(e))) };
                 sex_pdx::serial_record!("[valentine.attachment.failed] status={} cleanup_status={}", e, cleanup.err().unwrap_or(0));
             }
         }

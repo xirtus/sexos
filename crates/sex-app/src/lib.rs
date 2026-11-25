@@ -1272,6 +1272,38 @@ pub mod files {
         if expected_id == 0 { return Err(w::NAME); }
         request(window, w::REMOVE_IF_ID, path, expected_id, 0).map(|_| ())
     }
+    /// Start a Files-owned staged save for this exact granted destination.
+    /// The returned ticket is bound to this run and path; no destination is
+    /// visible until `stage_publish` has durably committed every byte.
+    pub fn stage_begin(window: &mut Window, path: &[u8], size: u64, sha256: &[u8; 32]) -> Result<u64, Error> {
+        exchange(Some(window), w::STAGE_BEGIN, path, size, 32,
+            |d| d[..32].copy_from_slice(sha256),
+            |_, d| u64::from_le_bytes(d[..8].try_into().unwrap()))
+    }
+    /// Send sequential bytes to Files' private stage, never to the final name.
+    pub fn stage_chunk(window: &mut Window, path: &[u8], ticket: u64, data: &[u8]) -> Result<usize, Error> {
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::IO_MAX - 8);
+            let piece = &data[done..done + n];
+            let wrote = exchange(Some(&mut *window), w::STAGE_CHUNK, path, done as u64, (n + 8) as u64,
+                |d| { d[..8].copy_from_slice(&ticket.to_le_bytes()); d[8..8 + n].copy_from_slice(piece); },
+                |value, _| value as usize)?;
+            done += wrote;
+            if wrote != n { return Err(w::NO_SPACE); }
+        }
+        Ok(done)
+    }
+    /// Publish only when Files has the declared length and SHA-256, refusing any
+    /// existing destination in the same checked SexFS commit.
+    pub fn stage_publish(window: &mut Window, path: &[u8], ticket: u64) -> Result<(), Error> {
+        request(window, w::STAGE_PUBLISH, path, ticket, 0).map(|_| ())
+    }
+    /// Discard only this run's stage. Files also removes abandoned stages at mount
+    /// or home unlock after a crash.
+    pub fn stage_abort(window: &mut Window, path: &[u8], ticket: u64) -> Result<(), Error> {
+        request(window, w::STAGE_ABORT, path, ticket, 0).map(|_| ())
+    }
     pub fn truncate(window: &mut Window, path: &[u8], len: u64) -> Result<(), Error> { request(window, w::TRUNCATE, path, len, 0).map(|_| ()) }
     /// Moves or renames. Between two disks Files answers `OTHER_DISK`: copy, then remove.
     pub fn rename(window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), Error> {

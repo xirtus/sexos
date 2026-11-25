@@ -9979,6 +9979,7 @@ dependencies = [
  "sex-mail",
  "sex-pdx",
  "sex-theme",
+ "sha2 0.10.9",
 ]
 
 [[package]]

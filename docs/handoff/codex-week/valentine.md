@@ -38,8 +38,10 @@ Remaining gaps:
 
 Files now has staging tickets on primary SexFS and unlocked encrypted home,
 with a private namespace, sequential checked chunks, a complete-size/digest
-gate, no-clobber publish, and mount or unlock cleanup. Valentine does not use
-the ticket yet, so atomic attachment export remains a gap.
+gate, no-clobber publish, and mount or unlock cleanup. Valentine's local
+attachment export now uses the ticket, so a power cut cannot expose a partial
+destination. The 4 MiB local message cap still limits attachment size, and
+removable filesystems fail closed until they can offer the same guarantee.
 
 The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
 keyboard reference for the controls that currently work.
