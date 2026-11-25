@@ -77,7 +77,9 @@ to give it a file name. Confirming Close Tab or Quit discards its draft.
 Ctrl+Shift+V reads `.git/index` and `.git/HEAD` inside the opened project's Files grant and
 compares tracked files with the index. The panel marks modified, deleted,
 conflicted, or too-large-to-check files and shows the current branch or detached
-HEAD when valid. Right opens a read-only line diff for a
+HEAD when valid. `N` marks a bounded file outside the index; Git ignore rules
+are not evaluated, so these are candidates rather than definitive untracked
+status. Right opens a read-only line diff for a
 modified or deleted UTF-8 file whose indexed blob is loose; Up/Down scroll it.
 The diff is bounded to 64 KiB and 300 lines per side. Enter opens an existing file.
 In the tracked-changes panel, S stages one modified tracked UTF-8 file up to 64 KiB.
