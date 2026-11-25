@@ -21,3 +21,4 @@ sha2 = { version = "0.10.9", default-features = false, features = ["force-soft-c
 [target.'cfg(target_os = "hermit")'.dependencies]
 sex-std = { path = "../../crates/sex-std" }
 sex-office = { path = "../../crates/sex-office" }
+sex-theme = { path = "../../crates/sex-theme" }

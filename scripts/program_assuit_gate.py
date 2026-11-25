@@ -34,6 +34,7 @@ def main():
  def opened():
   s=len(t());g['focus'](153);time.sleep(.5);type_line('run assuit');q.key('ret')
   o=g['wait'](r'\[assuit\.open\] target=(\d+) task=(\d+) name=welcome\.docx pages=1\n',s,900)
+  g['wait'](r'\[assuit\.theme\] mode=Light accent=d6336c',s,60)
   m=g['wait'](r'\[assuit\.page\] page=1 pages=1 width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
   assert int(m[3])>3000,f'page 1 looks empty: {m[0]}'
   g['focus'](SURFACE[int(o[1])]);time.sleep(.8)
@@ -48,6 +49,8 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   o=opened()
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-opened.ppm')})
+  shot=(a.out/'assuit-opened.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>10000,'Light theme desk missing'
   s=len(t());q.key('end');type_line(' today')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today\n',s,300)
   s=len(t());press('shift','home')

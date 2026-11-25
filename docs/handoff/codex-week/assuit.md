@@ -7,6 +7,8 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Editing UI:** table insertion (Ctrl+T) and image insertion (Ctrl+Shift+I) are exposed and have DOCX/ODT round-trip tests. Table editing and picture formatting still need visible controls.
 - **Writing aids:** Ctrl+Shift+Y now selects the next issue and offers correction suggestions. Dictionary management, language selection, and continuous underlines still need native controls.
 - **Print workflow:** PDF export exists, but page range, paper settings, and print preview are missing.
-- **Polish:** the app needs a full shortcut reference, light/dark theme, and verified crash recovery after an interrupted save.
+- **Polish:** the app now follows Settings' light, dark and high-contrast
+  appearance for its page desk, status bar and style picker. It still needs a
+  full shortcut reference and verified recovery after an interrupted save.
 
 Each remaining feature should have a focused host test and a CI guest gate before it is claimed complete.
