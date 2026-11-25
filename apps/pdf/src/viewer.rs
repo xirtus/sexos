@@ -1432,7 +1432,10 @@ impl Viewer {
                 self.status = Some(format!("Highlighted in {color_name} at {opacity_name}. Ctrl+S saves."));
                 sex_std::record(&format!("[pdf.annotate] kind=highlight page={} rects={n} from={from} annots={}", page + 1, self.annotation_count()));
             }
-            Err(e) => self.status = Some(format!("Could not highlight: {e}")),
+            Err(e) => {
+                sex_std::record(&format!("[pdf.annotate.refused] action=highlight reason={e}"));
+                self.status = Some(format!("Could not highlight: {e}"));
+            }
         }
     }
 

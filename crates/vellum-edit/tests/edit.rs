@@ -94,6 +94,33 @@ fn new_signature_field_rejects_bad_placement_and_signed_document() {
     assert!(!signed.is_modified());
 }
 
+#[test]
+fn signed_pdf_refuses_annotation_add_and_remove_without_changes() {
+    let mut editor = Editor::open(form(Style::Table, true)).unwrap();
+    assert!(editor.signatures().unwrap().iter().any(|signature| signature.signed));
+    let highlight = NewAnnot {
+        kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
+        style: AnnotStyle::default(),
+    };
+    let expected = Error::BadValue("cannot edit annotations in a signed PDF".into());
+    assert_eq!(editor.add_annotation(0, &highlight).unwrap_err(), expected);
+    assert_eq!(editor.remove_annotation(0, 0).unwrap_err(), expected);
+    assert!(!editor.is_modified());
+}
+
+#[test]
+fn guest_signed_pdf_refuses_annotation_edits_when_supplied() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_SIGNED_PDF") else { return };
+    let mut editor = Editor::open(std::fs::read(path).unwrap()).unwrap();
+    let highlight = NewAnnot {
+        kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
+        style: AnnotStyle::default(),
+    };
+    assert!(editor.signatures().unwrap().iter().any(|signature| signature.signed));
+    assert!(matches!(editor.add_annotation(0, &highlight), Err(Error::BadValue(_))));
+    assert!(!editor.is_modified());
+}
+
 fn lopdf_annots(saved: &[u8]) -> Vec<lopdf::Dictionary> {
     let doc = lopdf::Document::load_mem(saved).expect("lopdf loads the update");
     let pages = doc.get_pages();
