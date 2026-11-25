@@ -5,8 +5,8 @@ use sex_pdx::notify as n;
 
 static NEXT_TICKET: AtomicU32 = AtomicU32::new(1);
 
-/// Bell's disposition of one due notice. A timeout is uncertain: Bell may
-/// have kept it and the caller may retry after a crash.
+/// Bell's disposition of one due notice after Shell has handled it. A timeout
+/// is uncertain: Shell may have queued it and the caller may retry.
 pub fn post_confirmed(summary: &[u8], body: &[u8], urgency: u8) -> n::Disposition {
     let Some((text, len)) = n::compose(summary, body) else { return n::Disposition::Retry };
     let ticket = NEXT_TICKET.fetch_add(1, Ordering::Relaxed);

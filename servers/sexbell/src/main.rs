@@ -251,6 +251,13 @@ fn post_assembler(caller: u32) -> &'static mut sex_pdx::notify::Assembler {
     &mut all[i].1
 }
 
+#[derive(Clone, Copy)]
+struct PendingPresentation { identity: sex_pdx::notify::Presentation, since: u64 }
+/// Date gets an accepted receipt only after Shell has handled this event.
+/// One slot keeps the cross-service ordering unambiguous; another confirmed
+/// sender gets Retry and may ask again after the first receipt or timeout.
+static mut PENDING_PRESENTATION: Option<PendingPresentation> = None;
+
 // ── Mute List ────────────────────────────────────────────────────────
 
 /// Static mute list of sender PDs. Muted senders' NOTIFY is rejected.
@@ -665,6 +672,13 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        if let Some(pending) = unsafe { PENDING_PRESENTATION } {
+            if sex_pdx::get_ticks().saturating_sub(pending.since) >= 5_000 {
+                unsafe { PENDING_PRESENTATION = None; }
+                sex_pdx::serial_record!("[bell.post.presentation.timeout] event_id={} ticket={}",
+                    pending.identity.event_id, pending.identity.ticket);
+            }
+        }
         match msg.type_id {
             OP_BELL_NOTIFY => {
                 // ── Parse fixed numeric fields from IpcCall args ──────
@@ -1463,6 +1477,28 @@ pub extern "C" fn _start() -> ! {
                 sound::listen(msg.caller_pd as u32);
             }
 
+            sex_pdx::notify::OP_NOTIFICATION_HANDLED => {
+                if msg.caller_pd != 3 { continue; }
+                let Some(pending) = (unsafe { PENDING_PRESENTATION }) else { continue };
+                let Some(disposition) = pending.identity.accepts_ack(msg.arg0, msg.arg1, msg.arg2) else {
+                    sex_pdx::serial_record!("[bell.post.presentation.reject] reason=stale_identity");
+                    continue;
+                };
+                let identity = pending.identity;
+                if sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(true, |run| run.task != identity.bell_task) {
+                    sex_pdx::serial_record!("[bell.post.presentation.reject] reason=ended_bell_task");
+                    continue;
+                }
+                unsafe { PENDING_PRESENTATION = None; }
+                sex_pdx::serial_record!("[bell.post.presentation] event_id={} ticket={} handled={} muted={}",
+                    identity.event_id, identity.ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                    (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+                sex_pdx::serial_record!("[bell.post.receipt] caller_pd={} ticket={} accepted={} muted={}",
+                    identity.sender, identity.ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                    (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+                pdx_reply(identity.sender, sex_pdx::notify::receipt(identity.ticket, disposition));
+            }
+
             sex_pdx::notify::OP_BELL_POST | sex_pdx::notify::OP_BELL_POST_CONFIRMED => {
                 // A notification with text, a chunk at a time, from the
                 // kernel-named caller. Policy runs once the text is whole.
@@ -1499,6 +1535,18 @@ pub extern "C" fn _start() -> ! {
                     acknowledge(sex_pdx::notify::Disposition::Retry);
                     continue;
                 }
+                let bell_task = if confirmed {
+                    if (unsafe { PENDING_PRESENTATION }).is_some() {
+                        acknowledge(sex_pdx::notify::Disposition::Retry);
+                        continue;
+                    }
+                    let task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
+                    if task == 0 || caller > u16::MAX as u32 {
+                        acknowledge(sex_pdx::notify::Disposition::Retry);
+                        continue;
+                    }
+                    task
+                } else { 0 };
                 let urgency = text.urgency;
                 let lane = apply_policy_lane(caller, match urgency { sex_pdx::notify::URGENCY_CRITICAL => LANE_NOW, sex_pdx::notify::URGENCY_LOW => LANE_LATER, _ => LANE_SOON });
                 let pushed = unsafe { BELL_QUEUE.push(caller, 0, urgency, lane, urgency, apply_policy_privacy(caller, 0), 0, 0, 0, 0, 0) };
@@ -1508,15 +1556,25 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 };
                 bump_generation();
-                // Accepted means Bell kept the event. Shell presentation may
-                // follow later; a lost receipt can still cause a retry.
-                acknowledge(sex_pdx::notify::Disposition::Accepted);
+                if confirmed {
+                    let Some(identity) = sex_pdx::notify::Presentation::new(event_id, ticket, caller, bell_task) else {
+                        acknowledge(sex_pdx::notify::Disposition::Retry);
+                        continue;
+                    };
+                    unsafe { PENDING_PRESENTATION = Some(PendingPresentation { identity, since: sex_pdx::get_ticks() }); }
+                }
                 if lane == LANE_NOW && sound::chime() {
                     sex_pdx::serial_record!("[bell.sound.chime] event_id={}", event_id);
                 }
                 // Hand it to the Shell with Bell's id and the true sender.
-                let delivered = sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
+                let announced = !confirmed || sex_pdx::pdx_call(sex_pdx::SLOT_SHELL,
+                    sex_pdx::notify::OP_NOTIFICATION_BEGIN, event_id, ticket as u64, caller as u64).0 == 0;
+                let delivered = announced && sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
                     .all(|(w, a, b)| sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::notify::OP_NOTIFICATION, w, a, b).0 == 0);
+                if confirmed && !delivered {
+                    unsafe { PENDING_PRESENTATION = None; }
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
+                }
                 sex_pdx::serial_record!("[bell.post.ok] caller_pd={} event_id={} lane={} len={} delivered={}",
                     caller, event_id, lane, text.len, delivered as u8);
             }
