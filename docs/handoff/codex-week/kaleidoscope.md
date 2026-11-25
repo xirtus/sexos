@@ -8,8 +8,9 @@ and Shields. The remaining gaps are:
   link. A failed stream clears the progress bar and removes its hidden partial
   file, so retry can take the original name. Completed public downloads now have
   a bounded, staged history with source URL and size that survives restart;
-  private-tab addresses stay out of the stored history. Pause/resume and
-  cancellation while a synchronous transfer is active remain open.
+  private-tab addresses stay out of the stored history. Escape now cancels a
+  synchronous transfer, removes its hidden partial file, and offers a retry.
+  Pause/resume while a transfer is active remains open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an

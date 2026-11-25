@@ -7,6 +7,7 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | --- | --- |
 | Address, reload, find, bookmark | Ctrl+L, Ctrl+R, Ctrl+F, Ctrl+D |
 | Downloads, reader view | Ctrl+J, Ctrl+Shift+R |
+| Stop an active download | Esc |
 | Zoom in, out, reset | Ctrl+=, Ctrl+-, Ctrl+0 |
 | New, close, next, previous tab | Ctrl+T, Ctrl+W, Ctrl+PageDown, Ctrl+PageUp |
 | Select tab 1–8, last tab | Ctrl+1–8, Ctrl+9 |
@@ -20,6 +21,8 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 The reader view shortcut returns to the source page when used in reader view.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
+Esc stops the active download, removes its hidden partial file, and shows a
+retry link in the downloads panel.
 The Chastity request requires a visible, unambiguous same-origin login form.
 Saving additionally requires current username and password values. Chastity must
 approve and store the proposal before Kaleidoscope reports a saved password.
