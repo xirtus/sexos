@@ -51,6 +51,26 @@ pub use sex_web::download_history::Record as Done;
 pub struct Failure { pub name: String, pub url: String, pub why: String }
 
 impl Browser {
+    /// Escape stops an active transfer. Close is delivered to the normal loop
+    /// after cleanup; other input is held in order (at most one small queue).
+    fn download_cancel_requested(&mut self) -> bool {
+        let Some(event) = self.window.poll() else { return false };
+        match event {
+            sex_app::Event::Key(key) if key.code == 0x01 && !key.control => true,
+            sex_app::Event::Close => {
+                self.download_events.clear();
+                self.download_events.push(sex_app::Event::Close);
+                true
+            }
+            sex_app::Event::Pointer(p) if matches!(p.kind, sex_pdx::app_pointer::Kind::Move) => false,
+            other @ (sex_app::Event::Key(_) | sex_app::Event::Pointer(_)) if self.download_events.len() < 32 => {
+                self.download_events.push(other);
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Load the person's finished transfers before the first page opens. A private
     /// window never calls this, and private-tab records are excluded from saves.
     pub(super) fn load_downloads(&mut self) {
@@ -127,6 +147,7 @@ impl Browser {
             return Err(b"Can't save in Downloads.");
         }
         sex_pdx::serial_record!("[web.download.start] path={} url={}", path, url);
+        let mut cancelled = false;
         let result = (|| -> Result<(u64, u64), &'static [u8]> {
         let began = sex_pdx::get_ticks();
         let mut wrote: u64 = 0;
@@ -135,6 +156,11 @@ impl Browser {
         let mut shown_at = 0u64;
         let mut streamed = false;
         loop {
+            if self.download_cancel_requested() {
+                ex.cancel(&mut self.window);
+                cancelled = true;
+                return Err(b"Download cancelled.");
+            }
             let done = match ex.poll(&mut self.window) { Ok(d) => d, Err(e) => return Err(net::message(e)) };
             if let Some(t) = ex.stream(&mut chunk) {
                 streamed = true;
@@ -151,7 +177,7 @@ impl Browser {
             let now = sex_pdx::get_ticks();
             if now >= shown_at + 250 {
                 shown_at = now;
-                self.download_status = Some(match total { Some(t) if t > 0 => alloc::format!("Downloading {}%  {}", wrote * 100 / t, name), _ => alloc::format!("Downloading {} KB  {}", wrote >> 10, name) });
+                self.download_status = Some(match total { Some(t) if t > 0 => alloc::format!("Downloading {}%  {}  ·  Esc cancels", wrote * 100 / t, name), _ => alloc::format!("Downloading {} KB  {}  ·  Esc cancels", wrote >> 10, name) });
                 self.draw();
                 sex_pdx::serial_record!("[web.download.progress] bytes={} total={}", wrote, total.map_or(-1, |t| t as i64));
             }
@@ -185,6 +211,12 @@ impl Browser {
             }
             Err(why) => {
                 let _ = files::remove(&mut self.window, part.as_bytes());
+                if cancelled {
+                    let clean = files::size(&mut self.window, part.as_bytes()).is_err();
+                    sex_pdx::serial_record!("[web.download.cancelled] path={} cleaned={}", path, clean as u8);
+                    self.failed_download(name, url, why);
+                    return Ok(());
+                }
                 self.failed_download(name, url, why);
                 Err(why)
             }
