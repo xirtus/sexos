@@ -174,7 +174,7 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
 }
 
 #[derive(Clone, Debug)]
-struct FilterCondition { field: u32, operator: String, value: String, data_type: String, items: Vec<String>, case_sensitive: bool }
+struct FilterCondition { field: u32, operator: String, value: String, data_type: String, items: Vec<String>, case_sensitive: bool, regex_enabled: bool }
 #[derive(Clone, Debug)]
 enum FilterExpr { Condition(FilterCondition), And(Vec<FilterExpr>), Or(Vec<FilterExpr>) }
 
@@ -216,6 +216,13 @@ fn filter_condition(c: &FilterCondition) -> Option<FilterCriterion> {
         "begins" => "beginsWith", "ends" => "endsWith", "contains" => "contains", "!contains" => "notContains",
         _ => return None,
     };
+    // ODF enables regular expressions for string comparisons by default.
+    // GridCraft's custom filter compares literal text, so only plain values
+    // can be imported while that setting is active.
+    if c.data_type == "text" && c.regex_enabled && c.value.bytes().any(|b| matches!(b,
+        b'.' | b'^' | b'$' | b'*' | b'+' | b'?' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'|' | b'\\')) {
+        return None;
+    }
     let numeric_value = c.value.parse::<f64>().is_ok_and(f64::is_finite);
     // GridCraft infers numeric comparisons from the criterion, whereas ODF's
     // data-type is authoritative. Numeric equality would also match text "2"
@@ -266,6 +273,7 @@ fn filter_criteria(expr: FilterExpr, width: u32) -> Option<Vec<(u32, FilterCrite
 }
 
 fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<String>), String> {
+    let regex_enabled = odf_regex_enabled(xml)?;
     let mut reader = quick_xml::Reader::from_str(xml);
     let mut in_ranges = false;
     // Address, buttons, has filter, expressions, and whether ODF semantics
@@ -300,7 +308,7 @@ fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<St
                         condition = Some(FilterCondition { field: attr(e, b"field-number").and_then(|v| v.parse().ok()).unwrap_or(u32::MAX),
                             operator: attr(e, b"operator").unwrap_or_default(), value: attr(e, b"value").unwrap_or_default(),
                             data_type: attr(e, b"data-type").unwrap_or_else(|| "text".into()),
-                            items: Vec::new(), case_sensitive: attr(e, b"case-sensitive").as_deref() == Some("true") });
+                            items: Vec::new(), case_sensitive: attr(e, b"case-sensitive").as_deref() == Some("true"), regex_enabled });
                     }
                     b"filter-set-item" if condition.is_some() => if let Some(c) = &mut condition {
                         c.items.push(attr(e, b"value").unwrap_or_default());
@@ -316,6 +324,20 @@ fn read_filters(xml: &str, names: &[String]) -> Result<(Vec<FoundFilter>, Vec<St
         if matches!(event, Event::End(ref e) if e.local_name().as_ref() == b"database-ranges") { in_ranges = false; }
     }
     Ok((found, warnings))
+}
+
+fn odf_regex_enabled(xml: &str) -> Result<bool, String> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut enabled = true; // ODF 1.3 table:use-regular-expressions default.
+    loop {
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Start(ref e) | Event::Empty(ref e) if e.local_name().as_ref() == b"calculation-settings" => {
+                enabled = !matches!(attr(e, b"use-regular-expressions").as_deref(), Some("false" | "0"));
+            }
+            Event::Eof => return Ok(enabled),
+            _ => {},
+        }
+    }
 }
 
 fn finish_filter_element(name: &[u8], current: &mut Option<(String, bool, bool, Vec<FilterExpr>, bool)>, groups: &mut Vec<(bool, Vec<FilterExpr>)>,
@@ -952,8 +974,13 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     let data_styles: String = std::iter::once(data_styles.to_string()).chain(places.iter().map(|d| format!(
         "<number:percentage-style style:name=\"P{d}\"><number:number number:decimal-places=\"{d}\" number:min-decimal-places=\"{d}\" number:min-integer-digits=\"1\"/><number:text>%</number:text></number:percentage-style>"))).collect();
     let filters = odf_filters(wb)?;
+    // ODF defaults regex comparisons on; GridCraft's exported filter values
+    // are literal. Keep the saved filter's comparison meaning explicit.
+    let filter_calculation_settings = if filters.is_empty() { "" } else {
+        "<table:calculation-settings table:use-regular-expressions=\"false\" table:use-wildcards=\"false\"/>"
+    };
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{data_styles}{styles}</office:automatic-styles><office:body><office:spreadsheet><table:content-validations>{validation_defs}</table:content-validations>{body}{filters}</office:spreadsheet></office:body></office:document-content>");
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{data_styles}{styles}</office:automatic-styles><office:body><office:spreadsheet>{filter_calculation_settings}<table:content-validations>{validation_defs}</table:content-validations>{body}{filters}</office:spreadsheet></office:body></office:document-content>");
     let styles_xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles><style:default-style style:family=\"table-cell\"/><style:style style:name=\"Default\" style:family=\"table-cell\"/></office:styles></office:document-styles>");
     let meta = format!(
@@ -1063,6 +1090,39 @@ mod tests {
         assert!(odf_filter_condition(&mut output, 0, &FilterCriterion::Custom {
             a: ("=".into(), "2".into()), b: None, and: true,
         }).unwrap_err().contains("save as XLSX"));
+    }
+
+    #[test]
+    fn regex_setting_controls_literal_text_filter_import_and_export() {
+        let filter = r#"<table:database-ranges><table:database-range table:target-range-address="$Sheet1.$A$1:$Sheet1.$A$3"
+            table:display-filter-buttons="true"><table:filter><table:filter-condition table:field-number="0"
+            table:operator="=" table:value="A.B" table:data-type="text"/></table:filter>
+            </table:database-range></table:database-ranges>"#;
+        let xml = |setting: &str| format!("<office:document-content><office:body><office:spreadsheet>{setting}{filter}</office:spreadsheet></office:body></office:document-content>");
+        let (filters, warnings) = read_filters(&xml(""), &["Sheet1".into()]).unwrap();
+        assert!(filters.is_empty());
+        assert_eq!(warnings.len(), 1);
+        let setting = "<table:calculation-settings table:use-regular-expressions=\"false\"/>";
+        let (filters, warnings) = read_filters(&xml(setting), &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(filters[0].criteria, vec![(0, FilterCriterion::Custom {
+            a: ("=".into(), "A.B".into()), b: None, and: true,
+        })]);
+
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute_headless("cell.set", serde_json::json!({ "cell": "A1", "input": "Name" })).unwrap();
+        session.execute_headless("cell.set", serde_json::json!({ "cell": "A2", "input": "A.B" })).unwrap();
+        session.execute_headless("data.filter", serde_json::json!({ "range": "A1:A2" })).unwrap();
+        session.execute_headless("data.filterBy", serde_json::json!({ "column": "A", "custom": { "op": "=", "value": "A.B" } })).unwrap();
+        let bytes = write(&session.doc().unwrap().wb).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut content = String::new();
+        archive.by_name("content.xml").unwrap().read_to_string(&mut content).unwrap();
+        assert!(content.contains("table:use-regular-expressions=\"false\""));
+        let (saved, warnings) = read_filters(&content, &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(saved[0].criteria, filters[0].criteria);
     }
 
     fn zip_parts(parts: &[(&str, &str)]) -> Vec<u8> {
