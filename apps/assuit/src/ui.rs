@@ -315,7 +315,7 @@ impl Ui {
                 Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
-                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge cells, split 2–10, shade RRGGBB, border all/outside/inside/none")),
+                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge/split, shade RRGGBB, border kind, style NAME")),
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
                 Ask::PictureAlt(alt) => format!("Picture description: {alt}_   {}", said("Describe the selected picture for readers who cannot see it")),
                 Ask::PictureWidth(width) => format!("Picture width: {width}_   {}", said("Inches, 0.1 to 20; proportions stay the same")),
