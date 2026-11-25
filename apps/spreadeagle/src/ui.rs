@@ -102,6 +102,8 @@ enum Ask {
     Lines { insert: bool },
     /// Ctrl+Shift+M: C, L, B or P picks a chart for the current selection.
     Chart,
+    /// Ctrl+Shift+K or C in the value menu: a comparison for this column.
+    FilterCondition { col: u32, text: Vec<char> },
 }
 
 struct FilterMenu { col: u32, values: Vec<String>, selected: usize, checked: Vec<bool>, toggled: bool }
@@ -121,6 +123,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
     ("Ctrl+Shift+A / D", "Sort ascending / descending"),
     ("Ctrl+Shift+L / E / O", "Filter / by cell / choose values; Space marks"),
+    ("Ctrl+Shift+K", "Filter current column by condition"),
     ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
@@ -167,6 +170,7 @@ mod code {
     pub const I: u8 = 0x17;
     pub const U: u8 = 0x16;
     pub const O: u8 = 0x18;
+    pub const K: u8 = 0x25;
     pub const F2: u8 = 0x3C;
     pub const SLASH: u8 = 0x35;
     pub const H: u8 = 0x23;
@@ -496,6 +500,7 @@ impl Ui {
                 Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
+                Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("contains/starts/ends/notcontains text or >, >=, <, <= number; Enter applies")),
             }
         } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
@@ -512,7 +517,7 @@ impl Ui {
                 }
             }
         } else if let Some(menu) = &self.filter_menu {
-            format!("Filter {}: Up/Down chooses, Space marks, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
+            format!("Filter {}: Up/Down chooses, Space marks, C condition, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
         } else if self.message.is_empty() {
             format!("{}{}  Ctrl+S save  Ctrl+Shift+S save as  Ctrl+P PDF  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+=/- insert/delete  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
@@ -644,6 +649,24 @@ impl Ui {
                 }
                 false
             }
+            Ask::FilterCondition { col, text } => {
+                let col = *col;
+                match key.code {
+                    code::BACKSPACE => { text.pop(); self.message.clear(); return false; }
+                    code::ENTER => {}
+                    _ => {
+                        if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { text.push(ch); self.message.clear(); }
+                        return false;
+                    }
+                }
+                let typed = text.iter().collect::<String>();
+                let at = self.selection();
+                let done = self.book.filter_by_condition(at, col, &typed);
+                if done.is_ok() { self.ask = None; }
+                let changed = self.command("data.filterBy", done, format!("Filter {}: {typed}", column_name(col)));
+                if changed { sex_std::record(&format!("[spreadeagle.filter.condition] col={} rule={typed}", column_name(col))); }
+                changed
+            }
             Ask::SaveAs(text) | Ask::GoTo(text) => {
                 match key.code {
                     code::BACKSPACE => { text.pop(); self.message.clear(); return false; }
@@ -748,6 +771,12 @@ impl Ui {
     fn filter_menu_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         if key.code == code::ESC { self.filter_menu = None; return false; }
         if key.code == code::ENTER { return self.apply_filter_menu(); }
+        if key.code == code::C && !key.control {
+            let col = self.filter_menu.take().unwrap().col;
+            self.ask = Some(Ask::FilterCondition { col, text: Vec::new() });
+            sex_std::record(&format!("[spreadeagle.filter.condition-prompt] col={}", column_name(col)));
+            return false;
+        }
         if let Some(menu) = &mut self.filter_menu {
             if key.code == code::SPACE && !key.control {
                 menu.toggled = true;
@@ -827,6 +856,7 @@ impl Ui {
                 code::S if key.shift => Some(Ask::SaveAs(self.name.chars().collect())),
                 code::G => Some(Ask::GoTo(Vec::new())),
                 code::M if key.shift => { sex_std::record("[spreadeagle.chart.choose]"); Some(Ask::Chart) },
+                code::K if key.shift => { sex_std::record(&format!("[spreadeagle.filter.condition-prompt] col={}", column_name(self.col))); Some(Ask::FilterCondition { col: self.col, text: Vec::new() }) },
                 code::EQUALS if key.shift => Some(Ask::Lines { insert: true }),
                 code::MINUS => Some(Ask::Lines { insert: false }),
                 code::P => { self.export_pdf(); return false; }
