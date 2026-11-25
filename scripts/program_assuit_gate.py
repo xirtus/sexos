@@ -265,6 +265,15 @@ def main():
   assert numbered.startswith(b'P6\n') and numbered!=prompt,'List edit did not change the document view'
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','right')
+  g['wait'](r'\[assuit\.list-level\] level=2\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-list-level-key-deeper.ppm')})
+  deeper=(a.out/'assuit-list-level-key-deeper.ppm').read_bytes()
+  assert deeper.startswith(b'P6\n') and deeper!=numbered,'List-level key did not change the page'
+  s=len(t());press('ctrl','alt','left')
+  g['wait'](r'\[assuit\.list-level\] level=1\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-list-level-key-shallower.ppm')})
+  assert (a.out/'assuit-list-level-key-shallower.ppm').stat().st_size>10000
   # The second item must move to a nested list level on the rendered page.
   s=len(t());press('ctrl','alt','l');type_line('level 2');q.key('ret')
   g['wait'](r'\[assuit\.list\] action=level 2\n',s,120)
