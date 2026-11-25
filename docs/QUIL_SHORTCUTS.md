@@ -28,6 +28,7 @@ to scroll, and Esc or Ctrl+Shift+/ to close the reference. The command palette
 | Check current file through Quil Language Service | Ctrl+Shift+J | Ctrl+Shift+J |
 | Request Quil Language Service completion | Ctrl+Shift+Space | Ctrl+Shift+Space |
 | Show document symbols | Ctrl+Shift+M | Ctrl+Shift+M |
+| Go to a declaration in the open file | Ctrl+Shift+G | Ctrl+Shift+G |
 
 Default editing also supports Ctrl+Shift+Up for a cursor above, Ctrl+Shift+I
 for a cursor on each selected line, Ctrl+G for next match, Ctrl+L for a line,
@@ -47,7 +48,13 @@ Ctrl+Shift+M asks the same service for document symbols and opens an outline.
 Use Up/Down and Enter to jump to a declaration; Esc closes it. The bounded
 first service recognizes Rust functions, structs, enums, traits, modules and
 implementations; Python functions and classes; and JavaScript functions and
-classes. It does not parse full language syntax or resolve references.
+classes. It does not parse full language syntax or resolve semantic references.
+
+Ctrl+Shift+G sends a `textDocument/definition` request for the one cursor. The
+bundled helper follows an identifier to a unique declaration head in the same
+open file. It refuses ambiguous names and other-file locations. Imports,
+scopes, member references and full semantic definition lookup still need a
+language server with broader analysis.
 
 Vim mode keeps the default Ctrl shortcuts for application commands. Esc enters
 normal mode, `i` enters insert mode, `dd` deletes a line, `u` undoes, `/` searches,

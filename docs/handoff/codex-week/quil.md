@@ -18,7 +18,9 @@ Remaining gaps:
   Ctrl+Shift+M now requests bounded document symbols from that same child and
   opens a keyboard picker that jumps to a declaration. The helper recognizes
   basic Rust, Python and JavaScript declaration heads; full syntax and
-  reference resolution remain gaps.
+  reference resolution remain gaps. Ctrl+Shift+G now asks the helper for an
+  unambiguous declaration in the same file and jumps to it. Cross-file and
+  semantic definition resolution remain gaps.
 - Ctrl+Shift+V shows tracked modified, deleted and conflicted files from a
   checked Git index in the project's Files grant. Right shows a bounded,
   read-only line diff against an authenticated loose Git blob for UTF-8 files.

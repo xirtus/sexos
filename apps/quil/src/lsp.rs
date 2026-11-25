@@ -192,6 +192,28 @@ fn receive_symbols(deadline: u64, rx: &mut Vec<u8>) -> core::result::Result<Vec<
     Err("Language symbols timed out")
 }
 
+fn receive_definition(deadline: u64, rx: &mut Vec<u8>, expected_uri: &str) -> core::result::Result<Option<(u32, u32)>, &'static str> {
+    while sex_pdx::get_ticks() < deadline {
+        let (_, bytes) = relay::take_at(0).map_err(|_| "Language service output failed")?;
+        if rx.len() + bytes.len() > quil_core::lsp::MAX_BODY + 1024 { return Err("Language service output is too large"); }
+        rx.extend_from_slice(&bytes);
+        while let Some(body) = take_frame(rx)? {
+            let value: Value = serde_json::from_slice(&body).map_err(|_| "Language service sent invalid JSON")?;
+            if value["id"].as_u64() != Some(2) { continue; }
+            let result = &value["result"];
+            if result.is_null() { return Ok(None); }
+            if result["uri"].as_str() != Some(expected_uri) { return Err("Language definition left the open file"); }
+            let start = &result["range"]["start"];
+            let line = start["line"].as_u64().ok_or("Language service sent invalid definition")?;
+            let character = start["character"].as_u64().ok_or("Language service sent invalid definition")?;
+            if line > u32::MAX as u64 || character > u32::MAX as u64 { return Err("Language service sent invalid definition"); }
+            return Ok(Some((line as u32, character as u32)));
+        }
+        sex_pdx::sched_yield();
+    }
+    Err("Language definition timed out")
+}
+
 fn complete_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Vec<String>, &'static str> {
     let (line, character) = completion_position(text, cursor).ok_or("Language completion cursor is invalid")?;
     let (_, mut rx, deadline) = begin(path, language, text)?;
@@ -203,6 +225,14 @@ fn symbols_inner(path: &[u8], language: &str, text: &str) -> core::result::Resul
     let (_, mut rx, deadline) = begin(path, language, text)?;
     send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":uri(path)}}}), deadline)?;
     receive_symbols(deadline, &mut rx)
+}
+
+fn definition_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<(u32, u32)>, &'static str> {
+    let (line, character) = completion_position(text, cursor).ok_or("Language definition cursor is invalid")?;
+    let (_, mut rx, deadline) = begin(path, language, text)?;
+    let name = uri(path);
+    send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":name.as_str()},"position":{"line":line,"character":character}}}), deadline)?;
+    receive_definition(deadline, &mut rx, &name)
 }
 
 fn cleanup() {
@@ -241,6 +271,14 @@ pub fn complete(path: &[u8], language: &str, text: &str, cursor: usize) -> core:
 pub fn symbols(path: &[u8], language: &str, text: &str) -> core::result::Result<Vec<Symbol>, &'static str> {
     if text.len() > 256 * 1024 { return Err("Language symbols support files up to 256 KiB"); }
     let result = symbols_inner(path, language, text);
+    cleanup();
+    result
+}
+
+/// Requests a definition in the exact open document. Other-file locations are refused.
+pub fn definition(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<(u32, u32)>, &'static str> {
+    if text.len() > 256 * 1024 { return Err("Language definition supports files up to 256 KiB"); }
+    let result = definition_inner(path, language, text, cursor);
     cleanup();
     result
 }
