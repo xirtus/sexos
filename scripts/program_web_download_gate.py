@@ -14,6 +14,10 @@ def fnv(b):
  return h
 class Handler(http.server.BaseHTTPRequestHandler):
  broken_requests=0
+ resume_ranges=[]
+ close_ranges=[]
+ changed_calls=0
+ changed_ranges=[]
  def do_GET(self):
   if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path.startswith('/files/big.bin'):
@@ -43,6 +47,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
    body=bytes(range(256))*4
    self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Length',str(len(body)));self.end_headers()
    self.wfile.write(body if Handler.broken_requests>1 else body[:256]);self.close_connection=True;return
+  if self.path=='/files/resume.bin':
+   body=DATA[:2*1024*1024];range_=self.headers.get('Range')
+   if range_:
+    Handler.resume_ranges.append((range_,self.headers.get('If-Range')))
+    at=int(range_.removeprefix('bytes=').removesuffix('-'))
+    self.send_response(206);self.send_header('Content-Range',f'bytes {at}-{len(body)-1}/{len(body)}');piece=body[at:]
+   else:self.send_response(200);piece=body[:65536]
+   self.send_header('ETag','"resume-v1"');self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Length',str(len(body) if not range_ else len(piece)));self.end_headers();self.wfile.write(piece);self.close_connection=True;return
+  if self.path=='/files/close.bin':
+   body=DATA[:4*1024*1024];range_=self.headers.get('Range')
+   if range_:
+    Handler.close_ranges.append((range_,self.headers.get('If-Range')))
+    at=int(range_.removeprefix('bytes=').removesuffix('-'))
+    self.send_response(206);self.send_header('Content-Range',f'bytes {at}-{len(body)-1}/{len(body)}');piece=body[at:]
+   else:self.send_response(200);piece=body
+   self.send_header('ETag','"close-v1"');self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Length',str(len(piece)));self.end_headers()
+   try:
+    for i in range(0,len(piece),1<<16):
+     self.wfile.write(piece[i:i+(1<<16)]);self.wfile.flush()
+     if not range_:time.sleep(.04)
+   except (BrokenPipeError,ConnectionResetError):pass
+   self.close_connection=True;return
+  if self.path=='/files/change.bin':
+   body=b'B'*(1024*1024);range_=self.headers.get('Range');Handler.changed_calls+=1
+   if range_:
+    Handler.changed_ranges.append((range_,self.headers.get('If-Range')))
+    at=int(range_.removeprefix('bytes=').removesuffix('-'))
+    self.send_response(206);self.send_header('Content-Range',f'bytes {at}-{len(body)-1}/{len(body)}');piece=body[at:]
+   else:self.send_response(200);piece=b'A'*65536 if Handler.changed_calls==1 else body
+   self.send_header('ETag','"change-v1"' if Handler.changed_calls==1 else '"change-v2"');self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Length',str(len(body) if not range_ else len(piece)));self.end_headers();self.wfile.write(piece);self.close_connection=True;return
   self.send_response(404);self.end_headers()
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
@@ -135,6 +169,40 @@ def main():
   g['wait'](r'\[web.download.panel\] done=5 failed=0',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-history-reopened.ppm')})
   assert (a.out/'browser-download-history-reopened.ppm').stat().st_size>10000
+  # A validated hidden part survives this browser process and resumes by Range.
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/resume.bin');q.key('ret')
+  g['wait'](r'\[web.download.resume.kept\] path=Downloads/resume.bin bytes=65536\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.resume.loaded\] count=1',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-resumable.ppm')})
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/resume.bin');q.key('ret')
+  g['wait'](r'\[web.download.resume\] path=Downloads/resume.bin offset=65536 total=2097152',s,300)
+  m=g['wait'](r'\[web.download.done\] path=Downloads/resume.bin bytes=2097152 ticks=\d+ fnv=([0-9a-f]+)',s,300)
+  assert int(m[1],16)==fnv(DATA[:2*1024*1024]) and Handler.resume_ranges==[('bytes=65536-','"resume-v1"')],Handler.resume_ranges
+  # Closing a live, validated transfer also keeps a hidden part for restart.
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/close.bin');q.key('ret')
+  g['wait'](r'\[web.download.progress\] bytes=\d+ total=4194304',s,300)
+  s=len(t());q.key('f11')
+  kept=g['wait'](r'\[web.download.resume.kept\] path=Downloads/close.bin bytes=(\d+)\n',s,120)
+  assert 0<int(kept[1])<4194304,kept[0]
+  g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.resume.loaded\] count=1',s,300)
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/close.bin');q.key('ret')
+  resumed=g['wait'](r'\[web.download.resume\] path=Downloads/close.bin offset=(\d+) total=4194304',s,300)
+  assert int(resumed[1])==int(kept[1]),(resumed[0],kept[0])
+  m=g['wait'](r'\[web.download.done\] path=Downloads/close.bin bytes=4194304 ticks=\d+ fnv=([0-9a-f]+)',s,300)
+  assert int(m[1],16)==fnv(DATA[:4*1024*1024]) and len(Handler.close_ranges)==1 and Handler.close_ranges[0][1]=='"close-v1"',Handler.close_ranges
+  # A changed ETag must discard the old bytes and fetch the new object whole.
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/change.bin');q.key('ret')
+  g['wait'](r'\[web.download.resume.kept\] path=Downloads/change.bin bytes=65536\n',s,300)
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/change.bin');q.key('ret')
+  g['wait'](r'\[web.download.resume.restart\] reason=range_response',s,300)
+  m=g['wait'](r'\[web.download.done\] path=Downloads/change.bin bytes=1048576 ticks=\d+ fnv=([0-9a-f]+)',s,300)
+  assert int(m[1],16)==fnv(b'B'*(1024*1024)) and Handler.changed_ranges==[('bytes=65536-','"change-v1"')],Handler.changed_ranges
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-resumed.ppm')})
+  assert (a.out/'browser-download-resumable.ppm').stat().st_size>10000 and (a.out/'browser-download-resumed.ppm').stat().st_size>10000
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fnv':m.group(0)})
  finally:g['stop']()

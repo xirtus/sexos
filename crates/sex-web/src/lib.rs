@@ -25,6 +25,7 @@ pub mod reader;
 pub mod download_history;
 pub mod download_pause;
 pub mod download_promotion;
+pub mod download_resume;
 pub mod autofill_policy;
 pub mod session;
 pub use sex_image::Image;
