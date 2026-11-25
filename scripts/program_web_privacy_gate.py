@@ -10,6 +10,7 @@ the same test server through a small relay."""
 import argparse,http.server,os,shutil,sys,threading,time
 from pathlib import Path
 from urllib.parse import unquote
+from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 reqs=[]
 class Handler(http.server.BaseHTTPRequestHandler):

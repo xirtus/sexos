@@ -8,3 +8,5 @@ page action can toggle settings just by linking to an `about:` URL.
 
 The browser privacy QEMU gate exercises the page and both controls and captures
 `site-settings.png`. Full build and QEMU verification run in GitHub CI.
+The gate imports Pillow's `Image` before converting the QEMU PPM capture to PNG;
+the first CI run reached that conversion and failed on the missing import.
