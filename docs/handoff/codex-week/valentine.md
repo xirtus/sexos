@@ -19,9 +19,10 @@ Remaining gaps:
   service and a capability-safe flow handoff do not exist yet.
 - JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
-- Search across accounts, conversation view, filters, signatures, keyboard
-  undo. Local drafts now save through staged replacement
-  and recover from the `.eml` file, but account-backed send and sync remain.
+- Search across accounts, conversation view, filters, and signatures.
+  Draft fields now support bounded Ctrl+Z/Ctrl+Y history, including changes after
+  save. Local drafts save through staged replacement and recover from the `.eml`
+  file, but account-backed send and sync remain.
 
 The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
 keyboard reference for the controls that currently work.

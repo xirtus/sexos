@@ -5,7 +5,8 @@
 //! Ctrl+R reloads the folder, Ctrl+G cycles local folders, Up/Down chooses a message
 //! and wheel scrolls its body.
 //! Ctrl+N starts a draft, Ctrl+E edits an unsent draft, Tab moves fields and
-//! Ctrl+S saves it. A quiet draft autosaves after three seconds.
+//! Ctrl+S saves it; Ctrl+Z/Y undo and redo field edits. A quiet draft autosaves
+//! after three seconds.
 //! Ctrl+Shift+/ opens the offline keyboard reference; Escape closes it.
 #![no_std]
 #![no_main]
@@ -20,7 +21,7 @@ use draw::{clip, Canvas, Face};
 use sex_app::{files, settings, Event, Window};
 use sex_mail::inbox::Summary;
 use sex_mail::local_folders as folders;
-use sex_mail::draft::LocalDraft;
+use sex_mail::draft::{DraftEdit, DraftHistory, LocalDraft};
 use sex_mail::message::{self, Message};
 use sex_pdx::app_pointer::Kind;
 use sex_theme::Tokens;
@@ -39,6 +40,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+E", "Edit an opened unsent draft"),
     ("Tab / Enter", "Move between draft fields / insert a body line"),
     ("Ctrl+S", "Save the draft in Valentine's folder"),
+    ("Ctrl+Z / Ctrl+Y", "Undo / redo a draft edit"),
     ("Ctrl+M", "Show mail account status"),
     ("Mouse wheel", "Scroll the opened message"),
     ("F11", "Close the Valentine window"),
@@ -63,8 +65,13 @@ impl Palette {
 }
 
 struct Item { name: Vec<u8>, summary: Summary }
-struct Compose { draft: LocalDraft, path: Vec<u8>, field: u8, dirty: bool, changed_at: u64 }
+struct Compose { draft: LocalDraft, path: Vec<u8>, field: u8, history: DraftHistory, changed_at: u64 }
 impl Compose {
+    fn new(draft: LocalDraft, path: Vec<u8>, saved: bool) -> Self {
+        let history = DraftHistory::new(saved.then(|| draft.clone()));
+        Self { draft, path, field: 0, history, changed_at: sex_pdx::get_ticks() }
+    }
+    fn dirty(&self) -> bool { self.history.dirty(&self.draft) }
     fn field_mut(&mut self) -> &mut String {
         match self.field { 0 => &mut self.draft.to, 1 => &mut self.draft.subject, _ => &mut self.draft.body }
     }
@@ -147,7 +154,7 @@ impl App {
             let path = folders::file(self.folders.get(self.folder).map(Vec::as_slice).unwrap_or(b""), &name).unwrap();
             if files::size(window, &path).is_err() { break path; }
         };
-        self.compose = Some(Compose { draft: LocalDraft::default(), path, field: 0, dirty: true, changed_at: sex_pdx::get_ticks() });
+        self.compose = Some(Compose::new(LocalDraft::default(), path, false));
         self.status = "New local draft. No message is sent.".into();
     }
     fn edit_draft(&mut self) {
@@ -155,7 +162,7 @@ impl App {
         let Some(draft) = self.mail.as_ref().and_then(LocalDraft::from_message) else {
             self.status = "Only unsent drafts can be edited.".into(); return;
         };
-        self.compose = Some(Compose { draft, path: self.items[i].name.clone(), field: 0, dirty: false, changed_at: sex_pdx::get_ticks() });
+        self.compose = Some(Compose::new(draft, self.items[i].name.clone(), true));
     }
     fn save_draft(&mut self, window: &mut Window) -> bool {
         let Some(compose) = &self.compose else { return true };
@@ -172,7 +179,7 @@ impl App {
         })();
         match result {
             Ok(()) => {
-                if let Some(compose) = &mut self.compose { compose.dirty = false; }
+                if let Some(compose) = &mut self.compose { compose.history.mark_saved(&compose.draft); }
                 self.status = "Draft saved in Valentine's folder. It was not sent.".into();
                 sex_pdx::serial_record!("[valentine.draft.saved] path={} bytes={}", String::from_utf8_lossy(&path), raw.len());
                 self.reload(window);
@@ -193,22 +200,37 @@ impl App {
         if self.compose.is_none() { return false; }
         if k.control && k.code == 0x1f { self.save_draft(window); return true; } // Ctrl+S
         if k.code == 0x01 { // Escape keeps a changed draft before leaving.
-            if self.compose.as_ref().is_some_and(|c| c.dirty) && !self.save_draft(window) { return true; }
+            if self.compose.as_ref().is_some_and(Compose::dirty) && !self.save_draft(window) { return true; }
             self.compose = None; return true;
         }
         let c = self.compose.as_mut().unwrap();
+        if k.control && (k.code == 0x2c || k.code == 0x15) {
+            let (action, changed) = if k.code == 0x2c {
+                ("undo", c.history.undo(&mut c.draft))
+            } else { ("redo", c.history.redo(&mut c.draft)) };
+            if changed { c.changed_at = sex_pdx::get_ticks(); }
+            sex_pdx::serial_record!("[valentine.draft.{}] changed={} dirty={}", action, changed as u8, c.dirty() as u8);
+            return true;
+        }
+        let mut changed = false;
         match k.code {
             0x0f => c.field = (c.field + 1) % 3,
             0x1c if c.field < 2 => c.field += 1,
-            0x1c => { if c.draft.body.len() < 128 << 10 { c.draft.body.push('\n'); c.dirty = true; } },
-            0x0e => { c.field_mut().pop(); c.dirty = true; },
+            0x1c => if c.draft.body.len() < 128 << 10 {
+                changed = c.history.edit(&mut c.draft, DraftEdit::Insert { field: c.field, ch: '\n' });
+            },
+            0x0e => if let Some(ch) = c.field_mut().chars().last() {
+                changed = c.history.edit(&mut c.draft, DraftEdit::Delete { field: c.field, ch });
+            },
             _ if !k.control => if let Some(ch) = k.char().filter(|ch| !ch.is_control()) {
                 let max = if c.field == 2 { 128 << 10 } else { 1024 };
-                if c.field_mut().len() < max { c.field_mut().push(ch); c.dirty = true; }
+                if c.field_mut().len() + ch.len_utf8() <= max {
+                    changed = c.history.edit(&mut c.draft, DraftEdit::Insert { field: c.field, ch });
+                }
             },
             _ => {},
         }
-        if c.dirty { c.changed_at = sex_pdx::get_ticks(); }
+        if changed { c.changed_at = sex_pdx::get_ticks(); }
         true
     }
     fn key(&mut self, window: &mut Window, k: sex_pdx::app_key::Key) {
@@ -364,7 +386,7 @@ pub extern "C" fn _start() -> ! {
     loop {
         match window.next_within(1000) {
             Some(Event::Close) => {
-                if app.compose.as_ref().is_some_and(|c| c.dirty) { app.save_draft(&mut window); }
+                if app.compose.as_ref().is_some_and(Compose::dirty) { app.save_draft(&mut window); }
                 sex_pdx::serial_record!("[valentine.closed] target={} task={}", window.target, window.task); window.close()
             },
             Some(Event::Key(k)) => { app.status.clear(); app.key(&mut window, k); render(&mut window, &app, &mut tiny, &mut body, &mut title); },
@@ -382,7 +404,7 @@ pub extern "C" fn _start() -> ! {
             },
             Some(Event::Resize { .. }) => render(&mut window, &app, &mut tiny, &mut body, &mut title),
             None => {
-                let due = app.compose.as_ref().is_some_and(|c| c.dirty && sex_pdx::get_ticks().saturating_sub(c.changed_at) >= 3000);
+                let due = app.compose.as_ref().is_some_and(|c| c.dirty() && sex_pdx::get_ticks().saturating_sub(c.changed_at) >= 3000);
                 if due { app.save_draft(&mut window); render(&mut window, &app, &mut tiny, &mut body, &mut title); }
                 if app.theme_poll() { render(&mut window, &app, &mut tiny, &mut body, &mut title); }
             },

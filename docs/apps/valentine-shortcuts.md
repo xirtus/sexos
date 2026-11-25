@@ -14,6 +14,7 @@ closes it. The reference works while editing a draft without discarding it.
 | Move between draft fields | Tab or Enter in To/Subject |
 | Insert a line in the draft body | Enter |
 | Save a draft | Ctrl+S; Escape also saves changes before leaving |
+| Undo or redo a draft edit | Ctrl+Z / Ctrl+Y |
 | Show account status | Ctrl+M |
 | Scroll an opened message | Mouse wheel |
 | Close Valentine | F11 |
