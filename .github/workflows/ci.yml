@@ -680,6 +680,8 @@ jobs:
           ${{ runner.temp }}/sexos-files-eject/*.log
           ${{ runner.temp }}/sexos-files-loom/*.ppm
           ${{ runner.temp }}/sexos-files-loom/*.log
+          ${{ runner.temp }}/sexos-files-home/*.ppm
+          ${{ runner.temp }}/sexos-files-home/*.log
           ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power
