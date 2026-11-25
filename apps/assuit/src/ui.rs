@@ -803,7 +803,7 @@ impl Ui {
         self.message.clear();
         if key.code == code::U && key.control && key.shift {
             let enabled = !self.book.proofing_marks();
-            match self.book.set_proofing_marks(enabled) {
+            match self.book.set_proofing_preference(Book::PROOFING_PREFERENCE, enabled) {
                 Ok(()) => {
                     self.invalidate();
                     self.message = format!("Spelling marks {}", if enabled { "shown" } else { "hidden" });

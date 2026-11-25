@@ -51,6 +51,11 @@ fn main() {
             std::process::exit(1);
         }
     };
+    match book.restore_proofing_preference(book::Book::PROOFING_PREFERENCE) {
+        Ok(saved) => sex_std::record(&format!("[assuit.proofing.preference] enabled={} source={}",
+            book.proofing_marks() as u8, if saved.is_some() { "saved" } else { "default" })),
+        Err(e) => sex_std::record(&format!("[assuit.proofing.preference.error] {e}")),
+    }
     let (target, task) = sex_std::identity();
     sex_std::record(&format!("[assuit.open] target={target} task={task} name={name} pages={}", book.pages()));
     let window = sex_std::window();

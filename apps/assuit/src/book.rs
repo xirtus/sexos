@@ -44,6 +44,7 @@ impl Book {
     /// The app-owned proofing word list. The document's exact-file grant never
     /// authorizes writing a sibling next to someone else's document.
     pub const DICTIONARY: &'static str = "assuit-custom-dictionary.txt";
+    pub const PROOFING_PREFERENCE: &'static str = "assuit-proofing-marks.txt";
 
     pub fn load_dictionary(&mut self, path: &Path) {
         wordcraft_engine::proof::load_user_dictionary(path);
@@ -404,6 +405,37 @@ impl Book {
     pub fn set_proofing_marks(&mut self, enabled: bool) -> Result<(), String> {
         let result = self.run("file.options", json!({ "checkSpelling": enabled }))?;
         if result["checkSpelling"] != enabled { return Err("Proofing view did not change".into()); }
+        Ok(())
+    }
+
+    /// An app-owned view choice, independent of the opened document and its undo history.
+    /// Missing means WordCraft's default (marks visible); malformed data is refused.
+    pub fn restore_proofing_preference(&mut self, path: &str) -> Result<Option<bool>, String> {
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("Could not read proofing preference: {e}")),
+        };
+        let mut bytes = Vec::new();
+        file.take(8).read_to_end(&mut bytes).map_err(|e| format!("Could not read proofing preference: {e}"))?;
+        let enabled = match bytes.as_slice() {
+            b"on\n" => true,
+            b"off\n" => false,
+            _ => return Err("Proofing preference is invalid".into()),
+        };
+        self.set_proofing_marks(enabled)?;
+        Ok(Some(enabled))
+    }
+
+    /// Commit the new choice before reporting success. A failed write restores the
+    /// previous page view; the document bytes and undo history stay unchanged.
+    pub fn set_proofing_preference(&mut self, path: &str, enabled: bool) -> Result<(), String> {
+        let old = self.proofing_marks();
+        self.set_proofing_marks(enabled)?;
+        if let Err(e) = replace_file(path, if enabled { b"on\n" } else { b"off\n" }) {
+            let _ = self.set_proofing_marks(old);
+            return Err(format!("Could not keep proofing preference: {e}"));
+        }
         Ok(())
     }
 
@@ -1386,6 +1418,34 @@ mod tests {
         assert_eq!(book.draw(0, 2.0).unwrap().pixels, with_marks);
         assert_eq!(book.text(), text);
         assert_eq!(book.edits, edits);
+    }
+
+    #[test]
+    fn proofing_preference_survives_restart_and_failed_write_rolls_back() {
+        let path = temp("proofing-pref.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut book = Book::blank(&temp("proofing-pref.docx"));
+        book.type_text("Hello helo world").unwrap();
+        let text = book.text();
+        let edits = book.edits;
+        assert_eq!(book.restore_proofing_preference(&path).unwrap(), None);
+        book.set_proofing_preference(&path, false).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"off\n");
+        assert!(!book.proofing_marks());
+        assert_eq!(book.text(), text);
+        assert_eq!(book.edits, edits);
+        let mut restarted = Book::blank(&temp("proofing-restarted.docx"));
+        assert_eq!(restarted.restore_proofing_preference(&path).unwrap(), Some(false));
+        assert!(!restarted.proofing_marks());
+        assert!(restarted.set_proofing_preference(&temp("missing/pref"), true).is_err());
+        assert!(!restarted.proofing_marks(), "failed write must not change the view");
+        restarted.set_proofing_preference(&path, true).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"on\n");
+        let mut again = Book::blank(&temp("proofing-again.docx"));
+        assert_eq!(again.restore_proofing_preference(&path).unwrap(), Some(true));
+        std::fs::write(&path, b"nope\n").unwrap();
+        assert!(again.restore_proofing_preference(&path).is_err());
+        assert!(again.proofing_marks(), "invalid saved value must keep the current view");
     }
 
     #[test]

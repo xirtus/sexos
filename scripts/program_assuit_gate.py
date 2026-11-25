@@ -32,8 +32,10 @@ def main():
  def type_line(line):
   for k in line:
    q.key({' ':'spc','.':'dot'}.get(k,k));time.sleep(.05)
- def opened():
+ def opened(proofing=None):
   s=len(t());g['focus'](153);time.sleep(.5);type_line('run assuit');q.key('ret')
+  if proofing is not None:
+   g['wait'](rf'\[assuit\.proofing\.preference\] enabled={proofing} source=saved\n',s,120)
   o=g['wait'](r'\[assuit\.open\] target=(\d+) task=(\d+) name=welcome\.docx pages=1\n',s,900)
   g['wait'](r'\[assuit\.theme\] mode=Light accent=d6336c',s,60)
   m=g['wait'](r'\[assuit\.page\] page=1 pages=1 width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
@@ -75,8 +77,16 @@ def main():
   type_line('1');q.key('ret')
   selected=g['wait'](r'\[assuit\.pdf-range\] pages=1 name=welcome\.pages\.pdf bytes=(\d+)\n',s,300)
   assert int(selected[1])>500,f'page-range PDF is too small: {selected[0]}'
+  s=len(t());press('ctrl','shift','u')
+  g['wait'](r'\[assuit\.proofing\.marks\] enabled=0\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-preference-saved.ppm')})
+  assert (a.out/'assuit-proofing-preference-saved.ppm').stat().st_size>10000
   close(o)
-  o=opened()
+  o=opened(0)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-preference-restored.ppm')})
+  assert (a.out/'assuit-proofing-preference-restored.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','u')
+  g['wait'](r'\[assuit\.proofing\.marks\] enabled=1\n',s,120)
   s=len(t());q.key('end');press('shift','1')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today!\n',s,300)
   # Find, then copy the match.
