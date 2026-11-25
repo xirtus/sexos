@@ -167,6 +167,13 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
   s=open_files()
   g['wait'](r'\[files.app.meta.loaded\] root=/media/LOOM records=0',s,10)
+  # F3 previews a text file without starting its editor or interpreting controls.
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  q.key('down')  # folders precede files; alpha.txt is the next row.
+  step(lambda:q.key('f3'),r'\[files.app.preview.opened\] path=/media/LOOM/docs/alpha.txt lines=40 truncated=0')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'text-preview.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.preview.closed\]')
+  step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM count=3\b')
   # 1. Pack docs (the first row), browse into the zip and out, extract it.
   m=step(lambda:cs('a'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.zip files=(\d+) bytes=(\d+)',180)
   assert int(m[1])==3,m[0];result['zip_bytes']=int(m[2])

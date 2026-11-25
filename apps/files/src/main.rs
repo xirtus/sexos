@@ -52,6 +52,7 @@ const ENTER: u8 = 0x1C;
 const BACKSPACE: u8 = 0x0E;
 const ESC: u8 = 0x01;
 const F2: u8 = 0x3C;
+const F3: u8 = 0x3D;
 const F5: u8 = 0x3F;
 // Letters, PS/2 set 1, used with Ctrl.
 const KEY_C: u8 = 0x2E;
@@ -128,6 +129,7 @@ struct App {
     loom: loom::Loom,
     /// A file Enter opened, until its program has started (or couldn't).
     opening: Option<(u32, Vec<u8>)>,
+    preview: Option<(Vec<u8>, loom_core::preview::TextPreview)>,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -234,7 +236,39 @@ impl App {
     fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
+    fn preview_open(&mut self, window: &mut Window) {
+        let Some(e) = self.entries.get(self.cursor) else { return };
+        if e.dir { self.status = "Select a text file for F3 preview.".into(); return; }
+        let path = join(&self.cwd, &e.name);
+        let max = loom_core::preview::MAX_BYTES;
+        let mut bytes = vec![0; (e.size as usize).min(max)];
+        let n = match files::read(window, &at(&path), &mut bytes) {
+            Ok(n) => n,
+            Err(err) => { self.status = format!("Couldn't preview {}: {}.", shown(&e.name), shown(files::message(err))); return; }
+        };
+        bytes.truncate(n);
+        match loom_core::preview::TextPreview::parse(&bytes, e.size > max as u64) {
+            Some(preview) => {
+                sex_pdx::serial_record!("[files.app.preview.opened] path={} lines={} truncated={}", shown(&path), preview.len(), preview.truncated as u8);
+                self.preview = Some((path, preview));
+            }
+            None => self.status = "F3 preview opens UTF-8 text only; use Enter for this file.".into(),
+        }
+    }
+
     fn render(&mut self, window: &mut Window) {
+        if let Some((path, preview)) = &self.preview {
+            if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; }
+            let mut t = format!("Loom  Preview: {}\n\n", shown(path));
+            for (i, line) in preview.page().iter().enumerate() {
+                t.push_str(&format!("{:>5}  {}\n", preview.offset + i + 1, line));
+            }
+            t.push_str(&format!("\nLines {}-{} of {}{}  Up/Down scroll  Home/End jump  Esc close\n",
+                preview.offset + 1, (preview.offset + preview.page().len()).min(preview.len()), preview.len(),
+                if preview.truncated { "  (first 32 KiB)" } else { "" }));
+            window.show(t.as_bytes());
+            return;
+        }
         if self.loom_render(window) { return; }
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
             let mut head = format!("Files  {}", shown(&self.cwd));
@@ -288,7 +322,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  F3 text preview  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -784,6 +818,22 @@ impl App {
         if before && !again && self.confirm.is_some() { self.confirm = None; self.status = "Kept.".into(); }
     }
     fn key_inner(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
+        if self.preview.is_some() {
+            if matches!(key.code, ESC | F3) {
+                self.preview = None;
+                sex_pdx::serial_record!("[files.app.preview.closed]");
+                return;
+            }
+            let preview = &mut self.preview.as_mut().unwrap().1;
+            match sex_app::nav(key) {
+                Some(Nav::Up) => preview.up(),
+                Some(Nav::Down) => preview.down(),
+                Some(Nav::Home) => preview.first(),
+                Some(Nav::End) => preview.last(),
+                _ => {}
+            }
+            return;
+        }
         if let Some((_, text)) = self.input.as_mut() {
             match key.code {
                 ENTER => self.finish_input(window),
@@ -901,6 +951,7 @@ impl App {
             }
             (ESC, _) => if self.found.is_some() { self.load(window); } else if self.question.is_some() && !confirming { self.answer(window, None); },
             (F2, _) => if let Some(p) = self.selected() { let name = base(&p).to_vec(); self.input = Some((Input::Rename(p), name)); },
+            (F3, _) if self.question.is_none() && self.job.is_none() => self.preview_open(window),
             (F5, _) => self.load(window),
             _ => {}
         }
@@ -923,6 +974,7 @@ static OPENS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Loom");
+    let _ = window.want_keys(sex_pdx::app_key::DESKTOP_KEYS);
     // The folder the person gave: `@/` is everything.
     let mut args = [0u8; w::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
@@ -934,7 +986,7 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, preview: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
