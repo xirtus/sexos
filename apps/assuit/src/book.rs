@@ -312,6 +312,24 @@ impl Book {
         self.run("layout.margins", params).map(|_| ())
     }
 
+    /// Apply a line-height multiple and points before/after the current paragraph
+    /// (or every selected paragraph). These are document properties, not view zoom.
+    pub fn set_paragraph_spacing(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter line multiple (0.5–3), space before and after (0–72 pt), for example 1.5 0 8";
+        let words: Vec<_> = input.split_whitespace().collect();
+        if words.len() != 3 { return Err(HELP.into()); }
+        let mut values = [0.0_f32; 3];
+        for (at, word) in words.iter().enumerate() {
+            values[at] = word.parse::<f32>().map_err(|_| HELP.to_string())?;
+            if !values[at].is_finite() { return Err(HELP.into()); }
+        }
+        if !(0.5..=3.0).contains(&values[0]) || !(0.0..=72.0).contains(&values[1])
+            || !(0.0..=72.0).contains(&values[2]) { return Err(HELP.into()); }
+        self.run("para.lineSpacing", json!({ "value": values[0] }))?;
+        self.run("para.spacing", json!({ "before": values[1], "after": values[2] }))?;
+        Ok(())
+    }
+
     /// Inserts a picture from a file the program can read in its granted folder.
     pub fn insert_picture(&mut self, path: &str) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("Could not read {path}: {e}"))?;
@@ -971,6 +989,28 @@ mod tests {
             assert!((section.margin_bottom - 54.0).abs() < 0.1, "{ext}");
             assert!((section.margin_left - 72.0).abs() < 0.1, "{ext}");
             assert!((section.margin_right - 90.0).abs() < 0.1, "{ext}");
+        }
+    }
+
+    #[test]
+    fn paragraph_spacing_round_trips_in_docx_and_odt() {
+        use wordcraft_engine::doc::props::LineSpacing;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("paragraph-spacing.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("A paragraph with deliberate spacing.").unwrap();
+            for bad in ["1.5 8", "NaN 0 8", "4 0 8", "1.5 -1 8", "1.5 0 100"] {
+                assert!(book.set_paragraph_spacing(bad).is_err(), "{bad}");
+            }
+            book.set_paragraph_spacing("1.5 6 12").unwrap();
+            let spacing = |b: &Book| {
+                let p = b.session.doc.body.iter().find_map(|block| block.as_para()).unwrap();
+                (p.props.line_spacing, p.props.space_before, p.props.space_after)
+            };
+            assert_eq!(spacing(&book), (Some(LineSpacing::Multiple(1.5)), Some(6.0), Some(12.0)));
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert_eq!(spacing(&reopened), spacing(&book), "{ext} lost paragraph spacing");
         }
     }
 

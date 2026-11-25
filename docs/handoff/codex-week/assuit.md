@@ -9,6 +9,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   `header off` for the row at the caret. WordCraft repeats consecutive leading
   header rows when a table spans pages. A host test checks the row property and
   DOCX/ODT persistence. Marking a non-leading row alone cannot make it repeat.
+- **Paragraph spacing:** WordCraft stores line spacing and paragraph space
+  before/after, but Assuit currently has no native control for these common
+  document edits. This slice adds a bounded paragraph-spacing prompt and checks
+  DOCX/ODT save and reopen. More advanced exact/at-least line heights remain.
 - **List editing:** WordCraft can create bullet and numbered lists, but Assuit
   exposes no native way to choose numbered formats, remove a list, or restart
   numbering. This slice adds a bounded list prompt for those document edits and
