@@ -20,7 +20,10 @@ Remaining gaps:
 - JMAP, offline cache and conflict handling, folders, flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
 - Search across accounts, conversation view, filters, signatures, keyboard
-  shortcut reference and undo. Local drafts now save through staged replacement
+  undo. Local drafts now save through staged replacement
   and recover from the `.eml` file, but account-backed send and sync remain.
+
+The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
+keyboard reference for the controls that currently work.
 
 The local `.eml` viewer does not claim live mail sync or sending.
