@@ -143,6 +143,35 @@ fn highlight_on_table_file_renders_and_round_trips() {
 }
 
 #[test]
+fn colored_highlight_renders_and_survives_incremental_save() {
+    let original = simple(Style::Table);
+    let mut editor = Editor::open(original.clone()).unwrap();
+    let color = [0.45, 0.9, 0.45];
+    editor.add_annotation(0, &NewAnnot {
+        kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
+        style: AnnotStyle { color, ..Default::default() },
+    }).unwrap();
+    let saved = editor.save_incremental().unwrap();
+    assert_incremental(&original, &saved);
+    let reopened = Editor::open(saved.clone()).unwrap();
+    assert_eq!(reopened.annotations(0).unwrap()[0].color, Some(color));
+    let highlighted = px(&render(&saved), 135.0, 165.0);
+    assert!(highlighted[1] > highlighted[0] && highlighted[1] > highlighted[2],
+        "green highlight renders green: {highlighted:?}");
+}
+
+#[test]
+fn guest_highlight_color_survives_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_COLOR_PDF") else { return };
+    let saved = std::fs::read(path).unwrap();
+    let editor = Editor::open(saved).unwrap();
+    let highlights: Vec<_> = editor.annotations(0).unwrap().into_iter()
+        .filter(|annot| annot.subtype == "Highlight").collect();
+    assert_eq!(highlights.len(), 1);
+    assert_eq!(highlights[0].color, Some([0.45, 0.9, 0.45]));
+}
+
+#[test]
 fn every_kind_on_xref_stream_file() {
     let orig = simple(Style::XrefStream);
     let mut ed = Editor::open(orig.clone()).unwrap();

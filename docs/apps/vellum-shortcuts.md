@@ -13,6 +13,7 @@ Vellum's light, dark, and high-contrast colors.
 | Search | Ctrl+F, then Enter / Ctrl+G next, Shift previous, Escape closes |
 | Choose a highlight region | Ctrl+R, then drag across the page; arrows move and Shift+arrows resize; Enter highlights |
 | Highlight, add note, list annotations | Ctrl+H; Ctrl+N; Ctrl+L |
+| Choose highlight color | Ctrl+Shift+H cycles yellow, green, pink, blue; the choice applies to found text and selected regions |
 | Remove selected annotation | Delete in the annotation list |
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; type text, Space checks a box, Up / Down chooses combo or list options, Enter commits and advances. Editable combos accept custom text (Ctrl+A clears); multi-select lists use Space to toggle the focused option |
 | Edit form text at the caret | Left / Right moves one character; Home / End jumps to an edge; Backspace / Delete removes the character before / after the caret |
