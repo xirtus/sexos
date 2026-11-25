@@ -80,6 +80,8 @@ pub struct Ui {
     resizing: Option<(u32, i32, i32, i32)>,
     /// The Save As, Go To or insert/delete prompt, while it is open.
     ask: Option<Ask>,
+    /// Value picker opened from an AutoFilter header button or Ctrl+Shift+O.
+    filter_menu: Option<FilterMenu>,
     /// An in-app shortcut reference, opened with Ctrl+Shift+/.
     help: bool,
     /// The workbook came back with last time's unsaved changes: Esc throws them away until
@@ -102,6 +104,12 @@ enum Ask {
     Chart,
 }
 
+struct FilterMenu { col: u32, values: Vec<String>, selected: usize }
+
+const FILTER_MENU_W: i32 = 230;
+const FILTER_MENU_ROW: i32 = 23;
+const FILTER_MENU_VISIBLE: usize = 8;
+
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
 const KEEP_AFTER_MS: u64 = 15_000;
 const SHORTCUTS: &[(&str, &str)] = &[
@@ -112,7 +120,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
     ("Ctrl+Shift+A / D", "Sort ascending / descending"),
-    ("Ctrl+Shift+L / E", "Filter / filter by cell"),
+    ("Ctrl+Shift+L / E / O", "Filter / by cell / choose value"),
     ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
@@ -157,6 +165,7 @@ mod code {
     pub const B: u8 = 0x30;
     pub const I: u8 = 0x17;
     pub const U: u8 = 0x16;
+    pub const O: u8 = 0x18;
     pub const F2: u8 = 0x3C;
     pub const SLASH: u8 = 0x35;
     pub const H: u8 = 0x23;
@@ -189,7 +198,7 @@ impl Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
-            ask: None, help: false, recovered: false, unkept: None,
+            ask: None, filter_menu: None, help: false, recovered: false, unkept: None,
         }
     }
 
@@ -501,6 +510,8 @@ impl Ui {
                     format!("Find: {what}{a}   Replace with: {with}{b}   {said}")
                 }
             }
+        } else if let Some(menu) = &self.filter_menu {
+            format!("Filter {}: Up/Down chooses, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
         } else if self.message.is_empty() {
             format!("{}{}  Ctrl+S save  Ctrl+Shift+S save as  Ctrl+P PDF  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+=/- insert/delete  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
@@ -510,6 +521,23 @@ impl Ui {
         let sw = self.pen.measure(&status);
         let sx = (w - sw - 10).max(tx + 16);
         self.pen.text(&mut canvas, sx, ty0 + (TABS_H - self.pen.line_height()) / 2, &status, palette.dim, Some((sx, w - sx)));
+        if let Some(menu) = &self.filter_menu {
+            let (mx, my) = self.filter_menu_rect(menu.col, w, h);
+            let count = (menu.values.len() + 1).min(FILTER_MENU_VISIBLE);
+            let mh = 26 + count as i32 * FILTER_MENU_ROW;
+            canvas.fill(mx + 3, my + 3, FILTER_MENU_W, mh, palette.grid);
+            canvas.fill(mx, my, FILTER_MENU_W, mh, palette.bar_bg);
+            canvas.frame(mx, my, FILTER_MENU_W, mh, palette.grid);
+            self.pen.text(&mut canvas, mx + 8, my + 5, &format!("{}: choose value", column_name(menu.col)), palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
+            let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
+            for slot in 0..count {
+                let index = first + slot;
+                let label = if index == 0 { "All rows" } else { &menu.values[index - 1] };
+                let y = my + 25 + slot as i32 * FILTER_MENU_ROW;
+                if index == menu.selected { canvas.fill(mx + 3, y, FILTER_MENU_W - 6, FILTER_MENU_ROW, palette.head_on); }
+                self.pen.text(&mut canvas, mx + 9, y + 3, if label.is_empty() { "(blank)" } else { label }, if index == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, FILTER_MENU_W - 18)));
+            }
+        }
         if self.help {
             let row = self.pen.line_height() + 6;
             let bw = (w - 2 * PAD).min(540).max(0);
@@ -679,6 +707,49 @@ impl Ui {
         }
     }
 
+    fn filter_menu_rect(&self, col: u32, width: i32, height: i32) -> (i32, i32) {
+        let header = self.book.filter_range().map_or(0, |r| r.bounds().0);
+        let x = (self.col_x(col) + self.book.col_width(col) as i32 - 17)
+            .clamp(ROW_HEAD_W, (width - FILTER_MENU_W).max(ROW_HEAD_W));
+        let y = self.row_y(header) + self.book.row_height(header) as i32;
+        (x, y.clamp(BAR_H + HEAD_H, (height - TABS_H - 26 - FILTER_MENU_ROW * FILTER_MENU_VISIBLE as i32).max(BAR_H + HEAD_H)))
+    }
+
+    fn open_filter_menu(&mut self, col: u32) {
+        let Some(range) = self.book.filter_range() else {
+            self.message = "Turn the filter on with Ctrl+Shift+L first".into();
+            return;
+        };
+        let (_, left, _, right) = range.bounds();
+        if !(left..=right).contains(&col) { return; }
+        let values = self.book.filter_choices(col);
+        sex_std::record(&format!("[spreadeagle.filter.menu] col={} values={}", column_name(col), values.len()));
+        self.filter_menu = Some(FilterMenu { col, values, selected: 0 });
+    }
+
+    fn apply_filter_menu(&mut self) -> bool {
+        let Some(menu) = self.filter_menu.take() else { return false };
+        let value = menu.selected.checked_sub(1).map(|i| menu.values[i].clone());
+        let label = value.as_deref().unwrap_or("all");
+        let done = self.book.filter_by(self.selection(), menu.col, value.as_deref());
+        let changed = self.command("data.filterBy", done, format!("Filter {}: {label}", column_name(menu.col)));
+        if changed { sex_std::record(&format!("[spreadeagle.filter.choice] col={} value={label}", column_name(menu.col))); }
+        changed
+    }
+
+    fn filter_menu_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        if key.code == code::ESC { self.filter_menu = None; return false; }
+        if key.code == code::ENTER { return self.apply_filter_menu(); }
+        if let Some(menu) = &mut self.filter_menu {
+            match sex_app::nav(key) {
+                Some(Nav::Up) => menu.selected = menu.selected.saturating_sub(1),
+                Some(Nav::Down) => menu.selected = (menu.selected + 1).min(menu.values.len()),
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Ctrl+Shift shortcuts: sort, filter, freeze, chart.
     fn data_key(&mut self, code: u8) -> bool {
         let sel = self.selection();
@@ -691,6 +762,7 @@ impl Ui {
             }
             code::L => {
                 let done = self.book.toggle_filter(sel);
+                self.filter_menu = None;
                 let on = self.book.filter_range().is_some();
                 self.command("data.filter", done, if on { "Filter on: Ctrl+Shift+E shows only rows like the cursor's cell".into() } else { "Filter off".into() })
             }
@@ -699,6 +771,7 @@ impl Ui {
                 let done = self.book.filter_by(sel, col, Some(&value));
                 self.command("data.filterBy", done, format!("Showing rows where {} is {value}", column_name(col)))
             }
+            code::O => { self.open_filter_menu(col); false }
             code::F => {
                 let at = if self.book.frozen().is_none() && (row, col) != (0, 0) { Some((row, col)) } else { None };
                 let done = self.book.freeze(at);
@@ -731,6 +804,7 @@ impl Ui {
         let (row, col) = (self.row as i64, self.col as i64);
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
+        if self.filter_menu.is_some() { return self.filter_menu_key(key); }
         if self.recovered && key.code == code::ESC && !key.control && self.edit.is_none() {
             return self.discard_recovered();
         }
@@ -747,7 +821,7 @@ impl Ui {
             if let Some(ask) = ask { self.message.clear(); self.ask = Some(ask); return false; }
         }
         if key.control {
-            if key.shift && self.edit.is_none() && matches!(key.code, code::A | code::D | code::E | code::F | code::L | code::C) {
+            if key.shift && self.edit.is_none() && matches!(key.code, code::A | code::D | code::E | code::F | code::L | code::C | code::O) {
                 return self.data_key(key.code);
             }
             if key.shift && self.edit.is_none() && (code::digit(key.code).is_some() || key.code == code::GRAVE) {
@@ -981,6 +1055,20 @@ impl Ui {
                 if self.row >= fr && self.row < self.top { self.row = self.top; }
             }
             Kind::Down { button: 0 } => {
+                if let Some(col) = self.filter_menu.as_ref().map(|menu| menu.col) {
+                    let (mx, my) = self.filter_menu_rect(col, window.size().0 as i32, height as i32);
+                    if x >= mx && x < mx + FILTER_MENU_W && y >= my + 25 {
+                        let slot = ((y - my - 25) / FILTER_MENU_ROW) as usize;
+                        let menu = self.filter_menu.as_mut().unwrap();
+                        let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
+                        let index = first + slot;
+                        if slot < FILTER_MENU_VISIBLE && index <= menu.values.len() {
+                            menu.selected = index;
+                            if self.apply_filter_menu() { self.record_column(); }
+                        }
+                    } else { self.filter_menu = None; }
+                    return;
+                }
                 if y >= height as i32 - TABS_H {
                     let mut tx = 8;
                     for (i, sheet) in self.book.sheets().iter().enumerate() {
@@ -995,6 +1083,18 @@ impl Ui {
                     if let Some(&(c, _, cw)) = self.cols.iter().find(|c| (x - (c.1 + c.2)).abs() <= 3) {
                         self.resizing = Some((c, x, cw, cw));
                         return;
+                    }
+                }
+                if let Some(range) = self.book.filter_range() {
+                    let (header, left, _, right) = range.bounds();
+                    if let Some(&(_, ry, rh)) = self.rows.iter().find(|r| r.0 == header) {
+                        if let Some(&(c, cx, cw)) = self.cols.iter().find(|c| (left..=right).contains(&c.0) && x >= c.1 + c.2 - 17 && x < c.1 + c.2 - 3) {
+                            let by = ry + (rh - 14) / 2;
+                            if y >= by && y < by + 14 && x >= cx + cw - 17 {
+                                self.open_filter_menu(c);
+                                return;
+                            }
+                        }
                     }
                 }
                 let (Some(&(c, ..)), Some(&(r, ..))) = (self.cols.iter().find(|c| x >= c.1 && x < c.1 + c.2), self.rows.iter().find(|r| y >= r.1 && y < r.1 + r.2)) else { return };

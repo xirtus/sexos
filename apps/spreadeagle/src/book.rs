@@ -267,6 +267,20 @@ impl Book {
         Some(Range { r0: r.start.row, c0: r.start.col, r1: r.end.row, c1: r.end.col })
     }
 
+    /// Distinct displayed values under an AutoFilter header, including rows currently hidden
+    /// by that filter. The cap keeps opening a menu bounded on very large sheets.
+    pub fn filter_choices(&self, col: u32) -> Vec<String> {
+        let Some(range) = self.filter_range() else { return Vec::new() };
+        let (top, left, bottom, right) = range.bounds();
+        if !(left..=right).contains(&col) { return Vec::new() }
+        let mut values = std::collections::BTreeSet::new();
+        for row in top.saturating_add(1)..=bottom.min(top.saturating_add(10_000)) {
+            values.insert(self.shown(row, col).text);
+            if values.len() >= 1_000 { break; }
+        }
+        values.into_iter().collect()
+    }
+
     /// Turns the AutoFilter on (over the region around `at`) or off.
     pub fn toggle_filter(&mut self, at: Range) -> Result<(), String> {
         self.select(at)?;
@@ -699,10 +713,14 @@ mod tests {
         let mut book = budget("filter.xlsx");
         assert!(book.filter_range().is_none());
         book.filter_by(Range::cell(2, 0), 0, Some("Food")).unwrap();
+        assert_eq!(book.filter_choices(0), ["Food", "Fun", "Rent"]);
         assert_eq!(book.filter_range(), Some(Range { r0: 0, c0: 0, r1: 3, c1: 1 }));
         let heights: Vec<u32> = (0..4).map(|r| book.row_height(r)).collect();
         assert!(heights[0] > 0 && heights[2] > 0, "{heights:?}");
         assert_eq!((heights[1], heights[3]), (0, 0), "{heights:?}");
+        let choice = book.filter_choices(0)[0].clone();
+        book.filter_by(Range::cell(2, 0), 0, Some(&choice)).unwrap();
+        assert_eq!((book.row_height(1), book.row_height(2) > 0), (0, true));
         book.filter_by(Range::cell(2, 0), 0, None).unwrap();
         assert!((0..4).all(|r| book.row_height(r) > 0));
         book.toggle_filter(Range::cell(2, 0)).unwrap();
