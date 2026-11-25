@@ -103,10 +103,13 @@ def main():
   s=len(t());chord('ctrl','shift','v')
   g['wait'](r'\[pdf\.signatures\] fields=0 signed=0 malformed=0 verified=0 content_intact=0 content_changed=0 unsupported=0\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signature-inspection.ppm')})
-  # Find the word, highlight it.
+  # Choose green, then find the word and keep this colored highlight through save.
+  step(lambda:chord('ctrl','shift','h'),r'\[pdf\.highlight\.color\] name=green\n')
   s=len(t());chord('ctrl','f');keys(FORM_WORD.lower());q.key('ret')
   g['wait'](rf'\[pdf\.find\] term={FORM_WORD.lower()} page=1 hits=1 index=1\n',s,600)
   hl=step(lambda:chord('ctrl','h'),r'\[pdf\.annotate\] kind=highlight page=1 rects=1 from=find annots=1\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-highlight-green.ppm')})
+  assert (a.out/'pdf-highlight-green.ppm').stat().st_size>10000
   q.key('esc');time.sleep(.3)
   # A sticky note, typed.
   s=len(t());chord('ctrl','n');keys(NOTE);q.key('ret')
@@ -418,6 +421,8 @@ def main():
  assert saved_path and saved_path.startswith('@/'),saved_path
  out_pdf=a.out/'form-saved.pdf';subprocess.run([str(extractor),str(disk),saved_path[1:],str(out_pdf)],check=True)
  data=out_pdf.read_bytes();assert data.startswith(FORM) and len(data)>len(FORM)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_highlight_color_survives_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_COLOR_PDF':str(out_pdf)},check=True)
  update=data[len(FORM):]
  for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/Subtype /FreeText',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
  assert NOTE.encode() in update and NAME.encode() in update
