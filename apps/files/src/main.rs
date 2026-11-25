@@ -78,6 +78,7 @@ const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
+    TrashedBatch(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>),
     /// A batch rename in `dir`: the moves that take it back, in order.
     Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
@@ -92,6 +93,7 @@ struct App {
     cwd: Vec<u8>,
     entries: Vec<Entry>,
     cursor: usize,
+    selection_anchor: Option<usize>,
     top: usize,
     tabs: Vec<FolderTab>,
     active_tab: usize,
@@ -245,6 +247,7 @@ impl App {
             }
         }
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
+        self.selection_anchor = None;
         sex_pdx::serial_record!("[files.app.list] dir={} count={}", shown(&self.cwd), self.entries.len());
         self.thumbs.folder(&self.cwd, &self.entries);
     }
@@ -290,7 +293,26 @@ impl App {
         true
     }
     fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
-    fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
+    fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; self.selection_anchor = None; } }
+    fn selection(&self) -> Option<core::ops::RangeInclusive<usize>> {
+        loom_core::selection::rows(self.selection_anchor, self.cursor, self.entries.len())
+    }
+    fn selected_paths(&self) -> Vec<Vec<u8>> {
+        self.selection().into_iter().flatten().filter_map(|i| self.entries.get(i))
+            .map(|e| join(&self.cwd, &e.name)).collect()
+    }
+    fn move_selection(&mut self, to: usize, extend: bool) {
+        let old = self.cursor;
+        self.cursor = to.min(self.entries.len().saturating_sub(1));
+        self.selection_anchor = if extend && !self.thumbs.on && !self.entries.is_empty() {
+            Some(self.selection_anchor.unwrap_or(old))
+        } else { None };
+        if extend {
+            let count = self.selection().map(|r| r.count()).unwrap_or(0);
+            sex_pdx::serial_record!("[files.app.selection] count={} first={} last={}", count,
+                self.selection().map(|r| *r.start()).unwrap_or(0), self.selection().map(|r| *r.end()).unwrap_or(0));
+        }
+    }
 
     /// A pair of live folder listings. Navigation remains in the active tab; the
     /// existing Ctrl+PageUp/PageDown changes which tab receives the keys.
@@ -305,7 +327,9 @@ impl App {
         if self.cursor < self.top { self.top = self.cursor; }
         if self.cursor >= self.top + ROWS { self.top = self.cursor + 1 - ROWS; }
         let left: Vec<String> = self.entries.iter().enumerate().skip(self.top).take(ROWS)
-            .map(|(i, e)| format!("{} {}{}", if i == self.cursor { ">" } else { " " }, shown(&e.name), if e.dir { "/" } else { "" }))
+            .map(|(i, e)| format!("{}{} {}{}", if i == self.cursor { ">" } else { " " },
+                if self.selection().is_some_and(|r| r.contains(&i)) && self.selection_anchor.is_some() { "*" } else { " " },
+                shown(&e.name), if e.dir { "/" } else { "" }))
             .collect();
         let right: Vec<String> = match files::list(window, &at(&other_tab.cwd)) {
             Ok(mut entries) => {
@@ -354,6 +378,9 @@ impl App {
         }
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
         t.push_str(&format!("Loom [{}/{}]  {}{}\n", self.active_tab + 1, self.tabs.len(), shown(&self.cwd), space));
+        if let Some(count) = self.selection_anchor.and_then(|_| self.selection().map(|r| r.count())) {
+            t.push_str(&format!("{count} selected  ·  Delete moves them to trash  ·  Ctrl+Z restores the batch\n"));
+        }
         if self.tabs.len() > 1 {
             t.push_str("Tabs:");
             for (i, tab) in self.tabs.iter().enumerate() {
@@ -374,7 +401,8 @@ impl App {
         if self.cursor < self.top { self.top = self.cursor; }
         if self.cursor >= self.top + ROWS { self.top = self.cursor + 1 - ROWS; }
         for (i, e) in self.entries.iter().enumerate().skip(self.top).take(ROWS) {
-            let mark = if i == self.cursor { "> " } else { "  " };
+            let marked = self.selection_anchor.is_some() && self.selection().is_some_and(|r| r.contains(&i));
+            let mark = match (i == self.cursor, marked) { (true, true) => ">*", (true, false) => "> ", (false, true) => " *", (false, false) => "  " };
             let mut from = match self.origins.get(i) { Some(Some(o)) => format!("   from {}", shown(o)), _ => String::new() };
             from.push_str(&self.loom_badge(&e.name));
             if e.dir { t.push_str(&format!("{}{}/{}\n", mark, shown(&e.name), from)); } else { t.push_str(&format!("{}{}   {}{}\n", mark, shown(&e.name), human(e.size), from)); }
@@ -599,6 +627,8 @@ impl App {
         }
     }
     fn trash(&mut self, window: &mut Window) {
+        let chosen = self.selected_paths();
+        if chosen.len() > 1 { self.trash_many(window, &chosen); return; }
         let Some(path) = self.selected() else { return };
         let root = disk_root(&path);
         let (trash, info) = (join(&root, TRASH), join(&root, INFO));
@@ -620,8 +650,66 @@ impl App {
             Err(e) => self.status = format!("Couldn't move to the trash: {}.", shown(files::message(e))),
         }
     }
+    /// Move a contiguous selection as one recoverable action. If any move or
+    /// origin note fails, put the already moved items back before returning.
+    fn trash_many(&mut self, window: &mut Window, paths: &[Vec<u8>]) {
+        if base(&self.cwd) == TRASH { self.status = "Use Shift+Delete for permanent deletion from trash.".into(); return; }
+        let root = disk_root(&self.cwd);
+        let (trash, info) = (join(&root, TRASH), join(&root, INFO));
+        if let Err(e) = files::mkdir(window, &at(&trash)).or_else(|e| if e == w::EXISTS { Ok(()) } else { Err(e) }) {
+            self.status = format!("Couldn't open trash: {}.", shown(files::message(e))); return;
+        }
+        if let Err(e) = files::mkdir(window, &at(&info)).or_else(|e| if e == w::EXISTS { Ok(()) } else { Err(e) }) {
+            self.status = format!("Couldn't open trash notes: {}.", shown(files::message(e))); return;
+        }
+        let mut moved = Vec::new();
+        let result = (|| -> Result<(), u8> {
+            for from in paths {
+                let to = self.free_name(window, &trash, base(from), "trashed");
+                files::rename(window, &at(from), &at(&to))?;
+                let note = join(&info, base(&to));
+                moved.push((from.clone(), to, note));
+                files::write(window, &at(&moved.last().unwrap().2), from)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let mut rollback_ok = true;
+            for (from, to, note) in moved.iter().rev() {
+                rollback_ok &= files::rename(window, &at(to), &at(from)).is_ok();
+                let _ = files::remove(window, &at(note));
+            }
+            self.status = format!("Batch trash failed: {}.{}", shown(files::message(e)),
+                if rollback_ok { " No items moved." } else { " Some items need restoring from trash." });
+            self.load(window);
+            return;
+        }
+        for (from, to, _) in &moved { self.meta_moved(window, from, to); }
+        sex_pdx::serial_record!("[files.app.trashed.batch] count={}", moved.len());
+        self.status = format!("Moved {} items to trash. Ctrl+Z restores them together.", moved.len());
+        self.undo.push(Undo::TrashedBatch(moved));
+        let _ = files::sync(window);
+        self.load(window);
+    }
+
+    fn undo_trash_batch(&mut self, window: &mut Window, items: &[(Vec<u8>, Vec<u8>, Vec<u8>)]) -> Result<(), u8> {
+        let mut restored: Vec<(&Vec<u8>, &Vec<u8>)> = Vec::new();
+        for (from, to, _) in items.iter().rev() {
+            if let Err(e) = files::rename(window, &at(to), &at(from)) {
+                for (back, original) in restored.iter().rev() { let _ = files::rename(window, &at(back), &at(original)); }
+                return Err(e);
+            }
+            restored.push((from, to));
+        }
+        for (_, _, note) in items { let _ = files::remove(window, &at(note)); }
+        Ok(())
+    }
     /// Shift+Del: removes the selected item for good, after a second Shift+Del.
     fn delete_forever(&mut self, window: &mut Window) {
+        if self.selection_anchor.is_some() && self.selected_paths().len() > 1 {
+            self.status = "Permanent deletion currently takes one item. Move the selection to trash with Delete.".into();
+            return;
+        }
         let Some(path) = self.selected() else { return };
         let ask = Confirm::DeleteForever(path.clone());
         if self.confirm.as_ref() != Some(&ask) {
@@ -702,6 +790,7 @@ impl App {
         let result = match &step {
             Undo::Moved { from, to } => self.move_path(window, to, from),
             Undo::Trashed { from, to, info } => self.move_path(window, to, from).map(|_| { let _ = files::remove(window, &at(info)); }),
+            Undo::TrashedBatch(items) => self.undo_trash_batch(window, items),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
             Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
@@ -927,6 +1016,9 @@ impl App {
                 KEY_W if key.shift => self.close_tab(window),
                 0x49 => { let next = (self.active_tab + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(window, next); }
                 0x51 => { let next = (self.active_tab + 1) % self.tabs.len(); self.show_tab(window, next); }
+                KEY_C | KEY_X if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+                    self.status = "Copy and cut currently take one item. Delete moves the selection to trash together.".into();
+                }
                 KEY_C | KEY_X => if let Some(p) = self.selected() {
                     let cut = key.code == KEY_X;
                     self.status = format!("{} {}: Ctrl+V pastes it.", if cut { "Cut" } else { "Copied" }, shown(base(&p)));
@@ -959,6 +1051,7 @@ impl App {
                     Err(e) => self.status = format!("Home: {}.", shown(sex_pdx::home_lock::message(e))),
                 },
                 KEY_G => {
+                    self.selection_anchor = None;
                     self.thumbs.on = !self.thumbs.on;
                     sex_pdx::serial_record!("[files.app.grid] on={} dir={}", self.thumbs.on as u8, shown(&self.cwd));
                     if self.thumbs.on { self.thumbs.folder(&self.cwd, &self.entries); }
@@ -987,10 +1080,10 @@ impl App {
             }
         }
         match (key.code, sex_app::nav(key)) {
-            (_, Some(Nav::Up)) => self.cursor = self.cursor.saturating_sub(1),
-            (_, Some(Nav::Down)) => self.cursor = (self.cursor + 1).min(self.entries.len().saturating_sub(1)),
-            (_, Some(Nav::Home)) => self.cursor = 0,
-            (_, Some(Nav::End)) => self.cursor = self.entries.len().saturating_sub(1),
+            (_, Some(Nav::Up)) => self.move_selection(self.cursor.saturating_sub(1), key.shift),
+            (_, Some(Nav::Down)) => self.move_selection(self.cursor + 1, key.shift),
+            (_, Some(Nav::Home)) => self.move_selection(0, key.shift),
+            (_, Some(Nav::End)) => self.move_selection(self.entries.len().saturating_sub(1), key.shift),
             (_, Some(Nav::Delete)) if key.shift => self.delete_forever(window),
             (_, Some(Nav::Delete)) => self.trash(window),
             (ENTER, _) => {
@@ -1018,6 +1111,9 @@ impl App {
                 }
             }
             (ESC, _) => if self.found.is_some() { self.load(window); } else if self.question.is_some() && !confirming { self.answer(window, None); },
+            (F2, _) if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+                self.status = "F2 renames one item. Ctrl+Shift+R previews batch rename.".into();
+            }
             (F2, _) => if let Some(p) = self.selected() { let name = base(&p).to_vec(); self.input = Some((Input::Rename(p), name)); },
             (F5, _) => self.load(window),
             _ => {}
@@ -1051,7 +1147,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);

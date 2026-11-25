@@ -27,6 +27,7 @@ pub mod glob;
 pub mod hash;
 pub mod journal;
 pub mod rename;
+pub mod selection;
 pub mod session;
 pub mod split;
 pub mod tags;

@@ -100,6 +100,7 @@ impl App {
     pub(crate) fn meta_undone(&mut self, window: &mut Window, step: &Undo) {
         match step {
             Undo::Moved { from, to } | Undo::Trashed { from, to, .. } => self.meta_moved(window, to, from),
+            Undo::TrashedBatch(items) => for (from, to, _) in items { self.meta_moved(window, to, from); },
             Undo::Copied { to } => self.meta_removed(window, to),
             Undo::Renamed { dir, moves } => {
                 for (f, t) in moves.iter() { self.meta_moved(window, &join(dir, f), &join(dir, t)); }
