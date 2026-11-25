@@ -20,3 +20,7 @@ filesystem or network path.
 
 The existing browser controls now have an offline in-app shortcut page and a
 matching keyboard reference in `docs/apps/kaleidoscope-shortcuts.md`.
+
+Reader view now extracts the article from the currently shown DOM. It keeps
+script-added text and avoids a second request for a page that may have changed
+or required a sign-in. Direct `about:reader?url=` addresses still fetch once.

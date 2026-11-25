@@ -79,7 +79,23 @@ impl Browser {
                 let url = self.url.clone();
                 match url.strip_prefix("about:reader?url=") {
                     Some(page) => { let page = super::extensions::decode(page); self.open(&page, true) }
-                    None if url.starts_with("http") => self.open(&alloc::format!("about:reader?url={}", encode(&url)), true),
+                    None if url.starts_with("http") => {
+                        // Use the DOM the person is actually reading. A second fetch
+                        // can return different text or lose authenticated state.
+                        let article = sex_web::reader::article(&self.doc.get().dom, &url);
+                        let page = match article {
+                            Some(a) => {
+                                sex_pdx::serial_record!("[web.reader] words={} title={} url={}", a.words, a.title, url);
+                                sex_web::reader::page(&a, &url)
+                            }
+                            None => {
+                                sex_pdx::serial_record!("[web.reader] words=0 url={}", url);
+                                super::message_page("No reader view", "This page has no article to show on its own.", &url)
+                            }
+                        };
+                        self.reader_pending = Some((url.clone(), page));
+                        self.open(&alloc::format!("about:reader?url={}", encode(&url)), true);
+                    }
                     None => {}
                 }
             }
