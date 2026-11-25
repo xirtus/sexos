@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded undo/redo for committed form-field edits. Annotation changes clear it.
-use vellum_edit::{Editor, Error, FieldValue};
+//! Bounded undo/redo for committed form fields and new annotations.
+use vellum_edit::{Editor, Error, FieldValue, NewAnnot, ObjId};
 
 const LIMIT: usize = 32;
 
@@ -9,6 +9,40 @@ struct Change { name: String, before: FieldValue, after: FieldValue }
 
 #[derive(Default)]
 pub struct FieldHistory { undo: Vec<Change>, redo: Vec<Change> }
+
+#[derive(Clone)]
+struct AddedAnnotation { page: usize, annot: NewAnnot, id: ObjId }
+
+#[derive(Default)]
+pub struct AnnotationHistory { undo: Vec<AddedAnnotation>, redo: Vec<AddedAnnotation> }
+
+impl AnnotationHistory {
+    pub fn clear(&mut self) { self.undo.clear(); self.redo.clear(); }
+    pub fn has_step(&self, redo: bool) -> bool { !(if redo { &self.redo } else { &self.undo }).is_empty() }
+
+    pub fn record_add(&mut self, page: usize, annot: NewAnnot, id: ObjId) {
+        if self.undo.len() == LIMIT { self.undo.remove(0); }
+        self.undo.push(AddedAnnotation { page, annot, id });
+        self.redo.clear();
+    }
+
+    /// Undo removes only the annotation this history created, identified by PDF object id.
+    /// Redo creates a fresh appearance and remembers its new object id.
+    pub fn step(&mut self, editor: &mut Editor, redo: bool) -> Result<Option<usize>, Error> {
+        let Some(mut change) = (if redo { self.redo.last() } else { self.undo.last() }).cloned() else { return Ok(None) };
+        if redo {
+            change.id = editor.add_annotation(change.page, &change.annot)?;
+            self.redo.pop(); self.undo.push(change.clone());
+        } else {
+            let index = editor.annotations(change.page)?.into_iter()
+                .find(|a| a.id == Some(change.id)).map(|a| a.index)
+                .ok_or(Error::NoSuchAnnotation(usize::MAX))?;
+            editor.delete_annotation(change.page, index)?;
+            self.undo.pop(); self.redo.push(change.clone());
+        }
+        Ok(Some(change.page))
+    }
+}
 
 impl FieldHistory {
     pub fn clear(&mut self) { self.undo.clear(); self.redo.clear(); }
@@ -33,6 +67,7 @@ impl FieldHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vellum_edit::{AnnotKind, AnnotStyle, NoteIcon};
     const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
 
     fn value(editor: &Editor, name: &str) -> FieldValue {
@@ -72,5 +107,25 @@ mod tests {
         editor.set_field("name", after.clone()).unwrap();
         history.record("name", before, after);
         assert!(history.step(&mut editor, true).unwrap().is_none());
+    }
+
+    #[test]
+    fn added_annotations_undo_redo_on_real_pdf() {
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        let mut history = AnnotationHistory::default();
+        let annot = NewAnnot { kind: AnnotKind::Note { at: (60.0, 80.0), icon: NoteIcon::Comment },
+            style: AnnotStyle { contents: Some("review".into()), ..AnnotStyle::default() } };
+        let base = editor.annotations(0).unwrap().len();
+        let id = editor.add_annotation(0, &annot).unwrap();
+        history.record_add(0, annot.clone(), id);
+        assert_eq!(editor.annotations(0).unwrap().len(), base + 1);
+        assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
+        assert_eq!(Editor::open(editor.save_incremental().unwrap()).unwrap().annotations(0).unwrap().len(), base);
+        assert_eq!(history.step(&mut editor, true).unwrap(), Some(0));
+        assert_eq!(Editor::open(editor.save_incremental().unwrap()).unwrap().annotations(0).unwrap().len(), base + 1);
+        assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
+        let id = editor.add_annotation(0, &annot).unwrap();
+        history.record_add(0, annot, id);
+        assert!(!history.has_step(true), "a new annotation clears redo");
     }
 }
