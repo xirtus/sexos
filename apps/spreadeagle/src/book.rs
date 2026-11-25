@@ -346,7 +346,7 @@ impl Book {
     pub fn save_path(&self) -> String {
         let lower = self.path.to_ascii_lowercase();
         match [".xls", ".xlsb", ".slk"].iter().find(|e| lower.ends_with(*e)) {
-            Some(e) => format!("{}.xlsx", &self.path[..self.path.len() - e.len()]),
+            Some(_) => self.beside("xlsx"),
             None => self.path.clone(),
         }
     }
@@ -368,7 +368,13 @@ impl Book {
     /// The file beside this one with extension `ext` (`report.xlsx` -> `report.pdf`).
     pub fn beside(&self, ext: &str) -> String {
         let name_at = self.path.rfind('/').map_or(0, |i| i + 1);
-        let stem = match self.path[name_at..].rfind('.') { Some(dot) if dot > 0 => &self.path[..name_at + dot], _ => &self.path[..] };
+        let own = self.path.starts_with("@/");
+        let stem = match self.path[name_at..].rfind('.') {
+            Some(dot) if dot > 0 && own => &self.path[name_at..name_at + dot],
+            Some(dot) if dot > 0 => &self.path[..name_at + dot],
+            _ if own => &self.path[name_at..],
+            _ => &self.path[..],
+        };
         format!("{stem}.{ext}")
     }
 
@@ -484,7 +490,12 @@ pub const LAST_ROW: u32 = 1_048_575;
 pub const LAST_COL: u32 = 16_383;
 
 /// Where unsaved changes to `path` are kept: `report.ods` -> `report.ods.recovered.xlsx`.
-pub fn recovery_path(path: &str) -> String { format!("{path}.recovered.xlsx") }
+pub fn recovery_path(path: &str) -> String {
+    if path.starts_with("@/") {
+        let hash = path.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+        format!("spreadeagle-recovered-{hash:016x}.xlsx")
+    } else { format!("{path}.recovered.xlsx") }
+}
 
 /// Write a complete file beside the destination before Files replaces its name.
 fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -496,7 +507,8 @@ fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     let mut staged = None;
     for _ in 0..16 {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("{path}.spreadeagle-{n}.tmp");
+        let name = if path.starts_with("@/") { format!("spreadeagle-{n}.tmp") }
+            else { format!("{path}.spreadeagle-{n}.tmp") };
         match OpenOptions::new().write(true).create_new(true).open(&name) {
             Ok(file) => { staged = Some((name, file)); break; }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
@@ -834,6 +846,16 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"new complete workbook");
         assert_eq!(std::fs::read(&stale).unwrap(), b"stale staging data");
         std::fs::remove_file(stale).unwrap();
+    }
+
+    #[test]
+    fn exact_file_grant_uses_own_folder_for_export_and_recovery() {
+        let book = Book::blank("@/documents/budget.xls");
+        assert_eq!(book.save_path(), "budget.xlsx");
+        assert_eq!(book.beside("pdf"), "budget.pdf");
+        let kept = recovery_path("@/documents/budget.ods");
+        assert!(kept.starts_with("spreadeagle-recovered-") && kept.ends_with(".xlsx"));
+        assert_eq!(kept, recovery_path("@/documents/budget.ods"));
     }
 
     #[test]
