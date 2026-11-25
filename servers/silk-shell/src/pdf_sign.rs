@@ -9,9 +9,9 @@ struct Run { row: u32, task: u32 }
 #[derive(Clone, Copy)]
 struct Signer { run: Run, certificate_bytes: usize }
 #[derive(Clone, Copy)]
-struct Request { client: Run, signer: Run, len: usize, next: usize, finished: bool }
+struct Request { client: Run, signer: Run, len: usize, next: usize, meta_len: usize, meta_next: usize, finished: bool }
 #[derive(Clone, Copy)]
-struct Pending { client: Run, signer: Run, op: u64, arg: usize, since: u64, canceled: bool }
+struct Pending { client: Run, signer: Run, op: u64, arg: usize, meta_len: usize, since: u64, canceled: bool }
 static mut SIGNER: Option<Signer> = None;
 static mut REQUEST: Option<Request> = None;
 static mut PENDING: Option<Pending> = None;
@@ -102,7 +102,7 @@ unsafe fn send(client: Run, signer: Run, op: u64, arg: usize, a: u64, b: u64, c:
     let Some(slot) = route(signer) else { return false };
     let (status, _) = crate::pdx_call(slot, op, a, b, c);
     if status != 0 { return false; }
-    PENDING = Some(Pending { client, signer, op, arg, since: sex_pdx::get_ticks(), canceled: false });
+    PENDING = Some(Pending { client, signer, op, arg, meta_len: 0, since: sex_pdx::get_ticks(), canceled: false });
     true
 }
 
@@ -129,7 +129,8 @@ unsafe fn reply(msg: &PdxMessage) -> bool {
     let value = msg.arg0;
     if value == 0 {
         match pending.op {
-            p::BEGIN => REQUEST = Some(Request { client: pending.client, signer: pending.signer, len: pending.arg, next: 0, finished: false }),
+            p::BEGIN => REQUEST = Some(Request { client: pending.client, signer: pending.signer, len: pending.arg, next: 0, meta_len: pending.meta_len, meta_next: 0, finished: false }),
+            p::META => if let Some(mut request) = REQUEST { request.meta_next += 1; REQUEST = Some(request); },
             p::CHUNK => if let Some(mut request) = REQUEST { request.next += 1; REQUEST = Some(request); },
             p::FINISH => if let Some(mut request) = REQUEST { request.finished = true; REQUEST = Some(request); },
             _ => {},
@@ -144,7 +145,7 @@ pub unsafe fn receive(msg: &PdxMessage) -> bool {
     expire_pending(sex_pdx::get_ticks());
     if reply(msg) { return true; }
     let op = msg.type_id;
-    if !(p::REGISTER..=p::END).contains(&op) { return false; }
+    if !(p::REGISTER..=p::META).contains(&op) { return false; }
     // A dead client or signer cannot complete its queued call. Release the
     // broker reservation when the next protocol message reaches Shell.
     if PENDING.is_some_and(|r| !live(r.client) || !live(r.signer)) {
@@ -192,15 +193,21 @@ pub unsafe fn receive(msg: &PdxMessage) -> bool {
             send(caller, signer.run, op, 0, msg.arg1, 0, 0),
         p::POINT if msg.arg1 < p::POINT_BYTES.div_ceil(8) as u64 =>
             send(caller, signer.run, op, 0, msg.arg1, 0, 0),
-        p::BEGIN if msg.arg1 > 0 && msg.arg1 <= p::MAX_ATTRS as u64 && REQUEST.is_none() => {
-            let ok = send(caller, signer.run, op, msg.arg1 as usize, caller.row as u64, msg.arg1, caller.task as u64);
+        p::BEGIN if msg.arg1 > 0 && msg.arg1 <= p::MAX_ATTRS as u64 && REQUEST.is_none()
+            && p::decode_metadata_lengths(msg.arg2).is_some() => {
+            let ok = send(caller, signer.run, op, msg.arg1 as usize, caller.row as u64, msg.arg1, msg.arg2);
+            if ok { if let Some(mut pending) = PENDING { pending.meta_len = p::decode_metadata_lengths(msg.arg2).unwrap().0 + p::decode_metadata_lengths(msg.arg2).unwrap().1; PENDING = Some(pending); } }
             if ok { sex_pdx::serial_record!("[pdf.sign.request] client={} signer={} attrs={}", caller.row, signer.run.row, msg.arg1); }
             ok
         }
-        p::CHUNK if REQUEST.is_some_and(|r| r.client == caller && r.signer == signer.run && !r.finished
-            && r.next == msg.arg1 as usize && r.next * 8 < r.len) =>
+        p::META if REQUEST.is_some_and(|r| r.client == caller && r.signer == signer.run && !r.finished
+            && r.meta_next == msg.arg1 as usize && r.meta_next * 8 < r.meta_len && r.next == 0) =>
             send(caller, signer.run, op, msg.arg1 as usize, msg.arg1, msg.arg2, 0),
-        p::FINISH if REQUEST.is_some_and(|r| r.client == caller && r.signer == signer.run && !r.finished && r.next == r.len.div_ceil(8)) =>
+        p::CHUNK if REQUEST.is_some_and(|r| r.client == caller && r.signer == signer.run && !r.finished
+            && r.meta_next == r.meta_len.div_ceil(8) && r.next == msg.arg1 as usize && r.next * 8 < r.len) =>
+            send(caller, signer.run, op, msg.arg1 as usize, msg.arg1, msg.arg2, 0),
+        p::FINISH if REQUEST.is_some_and(|r| r.client == caller && r.signer == signer.run && !r.finished
+            && r.meta_next == r.meta_len.div_ceil(8) && r.next == r.len.div_ceil(8)) =>
             send(caller, signer.run, op, 0, 0, 0, 0),
         p::STATUS if REQUEST.is_some_and(|r| r.client == caller && r.signer == signer.run && r.finished) =>
             send(caller, signer.run, op, 0, 0, 0, 0),
