@@ -15,7 +15,7 @@ use sex_theme::Tokens;
 use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, ContentIntegrity, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
 
 use crate::marks;
-use crate::history::{AnnotationHistory, FieldHistory};
+use crate::history::{EditHistory, EditStep};
 use crate::search::{self, Hit};
 use crate::text::{self, PageText};
 use crate::zoom::{self, Zoom};
@@ -355,8 +355,7 @@ struct Viewer {
     /// Last complete copy kept for this open document; unchanged redraws do not
     /// write it again.
     recovery_fingerprint: Option<(usize, u64)>,
-    field_history: FieldHistory,
-    annotation_history: AnnotationHistory,
+    edit_history: EditHistory,
     highlight_color: usize,
     highlight_opacity: usize,
     /// The region Ctrl+R chose: shown points `[left, top, right, bottom]` on the page.
@@ -1116,8 +1115,7 @@ impl Viewer {
         if self.comment.is_some() { self.comment_key(key); return true; }
         if ctrl(KEY_Z) {
             self.commit_field();
-            if self.annotation_history.has_step(key.shift) { self.annotation_history_step(key.shift); }
-            else { self.field_history_step(key.shift); }
+            self.history_step(key.shift);
             return true;
         }
         if ctrl(KEY_G) && key.shift {
@@ -1218,8 +1216,7 @@ impl Viewer {
         let Some(name) = name else { self.status = Some("Too many signature fields".into()); return };
         match editor.add_signature_field(page, &name, rect) {
             Ok(_) => {
-                self.field_history.clear();
-                self.annotation_history.clear();
+                self.edit_history.clear();
                 self.region = None;
                 self.region_drag = None;
                 self.refresh();
@@ -1352,8 +1349,7 @@ impl Viewer {
         self.clear_page_cache();
         self.thumbs = vec![None; self.pages()];
         self.texts = None;
-        self.field_history.clear();
-        self.annotation_history.clear();
+        self.edit_history.clear();
         self.recovered_pending = false;
         self.recovery_fingerprint = None;
         let _ = std::fs::remove_file(recovery::path(&path));
@@ -1461,8 +1457,7 @@ impl Viewer {
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(id) => {
-                self.field_history.clear();
-                self.annotation_history.record_add(page, annot, id);
+                self.edit_history.record_add(page, annot, id);
                 self.region = None;
                 self.region_drag = None;
                 self.refresh();
@@ -1498,8 +1493,7 @@ impl Viewer {
                 let Some(editor) = self.editor() else { return };
                 match editor.set_annotation_text(page, index, &text) {
                     Ok(before) => {
-                        self.field_history.clear();
-                        self.annotation_history.record_comment(page, index, before.unwrap_or_default(), text.clone());
+                        self.edit_history.record_comment(page, index, before.unwrap_or_default(), text.clone());
                         self.load_annots(false);
                         self.status = Some(format!("{kind} text saved. Ctrl+S saves the PDF."));
                         if kind == "Note" {
@@ -1553,8 +1547,7 @@ impl Viewer {
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(id) => {
-                self.field_history.clear();
-                self.annotation_history.record_add(page, annot, id);
+                self.edit_history.record_add(page, annot, id);
                 self.region = None;
                 self.region_drag = None;
                 self.refresh();
@@ -1586,8 +1579,7 @@ impl Viewer {
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(id) => {
-                self.field_history.clear();
-                self.annotation_history.record_add(page, annot, id);
+                self.edit_history.record_add(page, annot, id);
                 self.region = None;
                 self.region_drag = None;
                 self.refresh();
@@ -1628,8 +1620,7 @@ impl Viewer {
                 let Some(editor) = self.editor() else { return true };
                 match editor.remove_annotation(page, a.index) {
                     Ok(removed) => {
-                        self.field_history.clear();
-                        self.annotation_history.record_delete(page, removed);
+                        self.edit_history.record_delete(page, removed);
                         self.refresh();
                         self.load_annots(false);
                         sex_std::record(&format!("[pdf.annotate] kind=delete page={} was={} annots={}", page + 1, a.subtype, self.annotation_count()));
@@ -1739,8 +1730,7 @@ impl Viewer {
         };
         match result {
             Ok((before, fields)) => {
-                if let Some(before) = before { self.field_history.record(name, before, value); }
-                self.annotation_history.clear();
+                if let Some(before) = before { self.edit_history.record_field(name, before, value); }
                 if let Some(form) = self.form.as_mut() {
                     form.fields = fields;
                     if let Some((field, _, _)) = form.fields.get(form.at) {
@@ -1757,14 +1747,14 @@ impl Viewer {
         }
     }
 
-    fn field_history_step(&mut self, redo: bool) {
+    fn history_step(&mut self, redo: bool) {
         self.commit_field();
         let result = match self.editor.as_mut() {
-            Ok(editor) => self.field_history.step(editor, redo),
+            Ok(editor) => self.edit_history.step(editor, redo),
             Err(why) => { self.status = Some(format!("This file cannot be edited: {why}")); return; }
         };
         match result {
-            Ok(Some(name)) => {
+            Ok(Some(EditStep::Field(name))) => {
                 let fields = self.editor.as_ref().ok().map(|e| marks::fillable(&e.fields().unwrap_or_default())).unwrap_or_default();
                 if let Some(form) = self.form.as_mut() {
                     form.fields = fields;
@@ -1786,26 +1776,15 @@ impl Viewer {
                 self.status = Some(format!("{} form field {name}. Ctrl+S saves.", if redo { "Redid" } else { "Undid" }));
                 sex_std::record(&format!("[pdf.field.history] action={} name={name}", if redo { "redo" } else { "undo" }));
             }
-            Ok(None) => self.status = Some(format!("No form field edit to {}", if redo { "redo" } else { "undo" })),
-            Err(e) => self.status = Some(format!("Could not {} form field: {e}", if redo { "redo" } else { "undo" })),
-        }
-    }
-
-    fn annotation_history_step(&mut self, redo: bool) {
-        let result = match self.editor.as_mut() {
-            Ok(editor) => self.annotation_history.step(editor, redo),
-            Err(why) => { self.status = Some(format!("This file cannot be edited: {why}")); return; }
-        };
-        match result {
-            Ok(Some(page)) => {
+            Ok(Some(EditStep::Annotation(page))) => {
                 self.refresh();
                 if self.panel == Panel::Annots { self.load_annots(false); }
                 self.status = Some(format!("{} markup change. Ctrl+S saves.", if redo { "Redid" } else { "Undid" }));
                 sex_std::record(&format!("[pdf.annotate.history] action={} page={} annots={}",
                     if redo { "redo" } else { "undo" }, page + 1, self.annotation_count()));
             }
-            Ok(None) => self.status = Some(format!("No markup change to {}", if redo { "redo" } else { "undo" })),
-            Err(e) => self.status = Some(format!("Could not {} markup: {e}", if redo { "redo" } else { "undo" })),
+            Ok(None) => self.status = Some(format!("No edit to {}", if redo { "redo" } else { "undo" })),
+            Err(e) => self.status = Some(format!("Could not {} edit: {e}", if redo { "redo" } else { "undo" })),
         }
     }
 
@@ -1989,8 +1968,7 @@ impl Viewer {
         self.recovery_fingerprint = None;
         let _ = std::fs::remove_file(recovery::path(&path));
         let _ = sex_std::sex_app::files::direct::sync();
-        self.field_history.clear();
-        self.annotation_history.clear();
+        self.edit_history.clear();
         self.pdf = pdf;
         self.clear_page_cache();
         self.thumbs = vec![None; self.pages()];
@@ -2237,7 +2215,7 @@ pub fn main() {
         finding: false, match_case: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
-        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), highlight_color: 0, highlight_opacity: 0, region: None, region_drag: None, note: None, comment: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
+        edit_history: EditHistory::default(), highlight_color: 0, highlight_opacity: 0, region: None, region_drag: None, note: None, comment: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
         status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };

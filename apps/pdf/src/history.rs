@@ -23,6 +23,62 @@ enum AnnotationChange {
 #[derive(Default)]
 pub struct AnnotationHistory { undo: Vec<AnnotationChange>, redo: Vec<AnnotationChange> }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Kind { Field, Annotation }
+
+/// One edit timeline across forms and markup. The two payload stacks stay bounded,
+/// while this order stack decides which kind Ctrl+Z and Ctrl+Shift+Z visit next.
+#[derive(Default)]
+pub struct EditHistory {
+    fields: FieldHistory,
+    annotations: AnnotationHistory,
+    undo: Vec<Kind>,
+    redo: Vec<Kind>,
+}
+
+pub enum EditStep { Field(String), Annotation(usize) }
+
+impl EditHistory {
+    pub fn clear(&mut self) { self.fields.clear(); self.annotations.clear(); self.undo.clear(); self.redo.clear(); }
+    fn record(&mut self, kind: Kind) {
+        if self.undo.len() == LIMIT { self.undo.remove(0); }
+        self.undo.push(kind);
+        self.redo.clear();
+        self.fields.redo.clear();
+        self.annotations.redo.clear();
+    }
+    pub fn record_field(&mut self, name: &str, before: FieldValue, after: FieldValue) {
+        if before == after { return; }
+        self.fields.record(name, before, after);
+        self.record(Kind::Field);
+    }
+    pub fn record_add(&mut self, page: usize, annot: NewAnnot, id: ObjId) {
+        self.annotations.record_add(page, annot, id);
+        self.record(Kind::Annotation);
+    }
+    pub fn record_delete(&mut self, page: usize, removed: RemovedAnnot) {
+        self.annotations.record_delete(page, removed);
+        self.record(Kind::Annotation);
+    }
+    pub fn record_comment(&mut self, page: usize, index: usize, before: String, after: String) {
+        if before == after { return; }
+        self.annotations.record_comment(page, index, before, after);
+        self.record(Kind::Annotation);
+    }
+    pub fn step(&mut self, editor: &mut Editor, redo: bool) -> Result<Option<EditStep>, Error> {
+        let Some(kind) = (if redo { &self.redo } else { &self.undo }).last().copied() else { return Ok(None) };
+        let step = match kind {
+            Kind::Field => self.fields.step(editor, redo)?.map(EditStep::Field),
+            Kind::Annotation => self.annotations.step(editor, redo)?.map(EditStep::Annotation),
+        };
+        if step.is_some() {
+            if redo { self.redo.pop(); self.undo.push(kind); }
+            else { self.undo.pop(); self.redo.push(kind); }
+        }
+        Ok(step)
+    }
+}
+
 impl AnnotationHistory {
     pub fn clear(&mut self) { self.undo.clear(); self.redo.clear(); }
     pub fn has_step(&self, redo: bool) -> bool { !(if redo { &self.redo } else { &self.undo }).is_empty() }
@@ -236,5 +292,41 @@ mod tests {
         assert_eq!(editor.annotations(0).unwrap()[0].id, Some(id));
         history.step(&mut editor, true).unwrap();
         assert!(editor.annotations(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn field_and_markup_share_one_undo_order_and_branch() {
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        let mut history = EditHistory::default();
+        let annot = NewAnnot { kind: AnnotKind::Note { at: (60.0, 80.0), icon: NoteIcon::Comment },
+            style: AnnotStyle { contents: Some("note".into()), ..Default::default() } };
+        let id = editor.add_annotation(0, &annot).unwrap();
+        history.record_add(0, annot, id);
+        let original = value(&editor, "name");
+        let changed = FieldValue::Text("Ada".into());
+        editor.set_field("name", changed.clone()).unwrap();
+        history.record_field("name", original.clone(), changed.clone());
+        assert!(matches!(history.step(&mut editor, false).unwrap(), Some(EditStep::Field(n)) if n == "name"));
+        assert_eq!(editor.annotations(0).unwrap().len(), 1);
+        assert!(matches!(history.step(&mut editor, false).unwrap(), Some(EditStep::Annotation(0))));
+        assert!(editor.annotations(0).unwrap().is_empty());
+        assert!(matches!(history.step(&mut editor, true).unwrap(), Some(EditStep::Annotation(0))));
+        assert_eq!(editor.annotations(0).unwrap()[0].id, Some(id));
+        assert!(matches!(history.step(&mut editor, true).unwrap(), Some(EditStep::Field(n)) if n == "name"));
+        assert_eq!(value(&editor, "name"), changed);
+        let saved = editor.save_incremental().unwrap();
+        assert!(saved.starts_with(FORM), "incremental save preserves the original PDF bytes");
+        let reopened = Editor::open(saved).unwrap();
+        assert_eq!(value(&reopened, "name"), changed);
+        let annotations = reopened.annotations(0).unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].id, Some(id));
+        assert_eq!(annotations[0].contents.as_deref(), Some("note"));
+        history.step(&mut editor, false).unwrap();
+        let branch = FieldValue::Text("Grace".into());
+        editor.set_field("name", branch.clone()).unwrap();
+        history.record_field("name", original, branch.clone());
+        assert!(history.step(&mut editor, true).unwrap().is_none(), "new edit clears both redo kinds");
+        assert_eq!(value(&editor, "name"), branch);
     }
 }

@@ -205,6 +205,14 @@ def main():
   # Shell keeps Tab (it moves focus between windows): Ctrl+Down is the next field.
   s=len(t());chord('ctrl','down')
   g['wait'](rf'\[pdf\.field\] name=name kind=text value={NAME}\n',s);g['wait'](r'\[pdf\.field\.focus\] name=agree index=2 page=1\n',s)
+  # Form and markup edits must share one timeline: undo the name, then the
+  # previous note-text edit; redo both in the same order.
+  step(lambda:chord('ctrl','z'),r'\[pdf\.field\.history\] action=undo name=name\n')
+  step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=2\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-mixed-undo.ppm')})
+  assert (a.out/'pdf-mixed-undo.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.field\.history\] action=redo name=name\n')
   step(lambda:q.key('spc'),r'\[pdf\.field\] name=agree kind=checkbox value=Yes\n')
   step(lambda:chord('ctrl','z'),r'\[pdf\.field\.history\] action=undo name=agree\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-form-undone.ppm')})
