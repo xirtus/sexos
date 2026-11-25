@@ -22,6 +22,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+M | Choose a column, line, bar or pie chart for the selection |
 | Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `type line`, `title text`, `clear title`, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
 | Ctrl+Shift+I | Search the function catalog by name, category or description; Up/Down chooses, Enter inserts `=NAME()` with the caret between the parentheses, Esc closes |
+| Ctrl+Shift+U | Toggle wrapped text in the selected cells; automatic row heights grow to show the lines |
 | Ctrl+Shift+W | Review warnings from importing the current workbook |
 | Ctrl+PageUp, Ctrl+PageDown | Previous or next sheet |
 

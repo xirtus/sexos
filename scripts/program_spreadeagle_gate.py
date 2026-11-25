@@ -7,6 +7,7 @@
   (B5 =SUM(B2:B4) = 1650, B6 =B5*12 = 19800).
 * Typing 40 into B2 and Enter recalculates: B5 490, B6 5880.
 * Ctrl+S writes the xlsx; Ctrl+P writes welcome.pdf beside it; the window closes.
+* Ctrl+Shift+U wraps a selected cell, grows its row and draws lines in a screenshot.
 * A second `run spreadeagle` reads the saved file back: B2 is 40 and the formulas still give
   490 and 5880, so GridCraft's writer and reader round-trip on SexOS.
 * Shift+arrows select A1:B4; Ctrl+Shift+D sorts it by column B, Z to A, under its header
@@ -142,6 +143,25 @@ def main():
   s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','p')),(False,('p','ctrl')))for x in ks]})
   pdf=g['wait'](r'\[spreadeagle\.pdf\] name=welcome\.pdf bytes=(\d+)\n',s,300)
   assert int(pdf[1])>500,f'PDF is too small: {pdf[0]}'
+  s=len(t());g['chord']('ctrl','g');type_line('A9');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=A9 cell=A9\n',s,120)
+  s=len(t());type_line('Quarterly planning notes for our team');q.key('ret')
+  g['wait'](r'\[spreadeagle\.set\] cell=A9 input=Quarterly planning notes for our team\n',s,120)
+  q.key('up');time.sleep(.3)
+  wrapped=ctrl_shift('u',r'\[spreadeagle\.wrap\] range=A9 on=1 row_height=(\d+) cell_y=(\d+)\n')
+  assert int(wrapped[1])>20,wrapped[0]
+  time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-wrapped-cell.ppm')})
+  shot=(a.out/'spreadeagle-wrapped-cell.ppm').read_bytes()
+  header=re.match(rb'P6\s+(\d+)\s+(\d+)\s+255\s',shot)
+  assert header and len(shot)>10000,'missing wrapped-cell screenshot'
+  width=int(header[1]);height=int(header[2]);start=header.end()
+  tile=current_tile(t(),SURFACE[int(o[1])]);wa=int(re.findall(r'\[spreadeagle\.columns\] A=(\d+) B=\d+\n',t())[-1])
+  left=tile[0]+8+48+5;top=tile[1]+36+int(wrapped[2])+4
+  def ink(y0,y1):
+   return sum(1 for y in range(top+y0,min(top+y1,height)) for x in range(left,min(left+wa-10,width))
+              if max(shot[start+3*(y*width+x):start+3*(y*width+x)+3])<140)
+  assert ink(0,14)>10 and ink(16,30)>10,'wrapped text did not paint two visible lines'
+  g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
   close(o)
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|40\|300\|150\|490\|5880\|\|',s)

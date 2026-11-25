@@ -4,7 +4,7 @@
 //! Spreadeagle reads the formulas, fonts and widths itself ([`extras`]), turning OpenFormula
 //! (`of:=SUM([.B2:.B4])`) into the spelling the engine takes (`=SUM(B2:B4)`), and writes
 //! whole .ods files ([`write`]): every sheet's values, formulas, dates, percentages, bold,
-//! italic, underline and column widths.
+//! italic, underline, wrapped text and column widths.
 //! Format reference: ODF 1.3 part 3 section 9.1 (tables), 16 (styles) and part 4 (OpenFormula).
 use quick_xml::events::{BytesStart, Event};
 use gridcraft_engine::core::Value;
@@ -26,6 +26,7 @@ pub struct Extras {
     pub sheet_names: Vec<String>,
     pub formulas: Vec<Found>,
     pub fonts: Vec<Styled>,
+    pub wraps: Vec<(usize, u32, u32)>,
     pub widths: Vec<(usize, u32, f32)>,
     /// Percentages with other than two decimal places (GridCraft imports `0.00%`): sheet,
     /// row, column, format code.
@@ -47,6 +48,7 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
     let mut out = Extras::default();
     // Automatic styles: cell styles' fonts and column styles' widths, by name.
     let mut fonts: std::collections::HashMap<String, (bool, bool, bool)> = Default::default();
+    let mut wraps: std::collections::HashSet<String> = Default::default();
     let mut widths: std::collections::HashMap<String, f32> = Default::default();
     let mut style: Option<String> = None;
     let mut column = 0u32;
@@ -73,6 +75,9 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
                         let italic = attr(e, b"font-style").is_some_and(|s| s == "italic" || s == "oblique");
                         let underline = attr(e, b"text-underline-style").is_some_and(|u| u != "none");
                         if bold || italic || underline { fonts.insert(name.clone(), (bold, italic, underline)); }
+                    }
+                    b"table-cell-properties" => if let Some(name) = &style {
+                        if attr(e, b"wrap-option").as_deref() == Some("wrap") { wraps.insert(name.clone()); }
                     }
                     b"table-column-properties" => if let (Some(name), Some(w)) = (&style, attr(e, b"column-width").as_deref().and_then(length_px)) {
                         widths.insert(name.clone(), w);
@@ -108,10 +113,15 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
                                 for (r, c) in cells() { out.percents.push((s, r, c, code.clone())); }
                             }
                         }
-                        if let (Some(s), Some(font)) = (sheet, style_name.and_then(|n| fonts.get(&n).copied())) {
+                        if let (Some(s), Some(font)) = (sheet, style_name.as_ref().and_then(|n| fonts.get(n).copied())) {
                             // A styled run of empty cells repeated down the sheet is not worth a million commands.
                             if u64::from(row_repeat) * u64::from(repeat) <= 4096 {
                                 for (r, c) in cells() { out.fonts.push(Styled { sheet: s, row: r, col: c, font }); }
+                            }
+                        }
+                        if let (Some(s), Some(name)) = (sheet, style_name.as_ref()) {
+                            if wraps.contains(name) && u64::from(row_repeat) * u64::from(repeat) <= 4096 {
+                                for (r, c) in cells() { out.wraps.push((s, r, c)); }
                             }
                         }
                         col = col.saturating_add(repeat);
@@ -406,7 +416,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
 
-    let mut cell_styles: BTreeMap<(bool, bool, bool, Kind), String> = BTreeMap::new();
+    let mut cell_styles: BTreeMap<(bool, bool, bool, bool, Kind), String> = BTreeMap::new();
     let mut col_styles: BTreeMap<u32, String> = BTreeMap::new();
     let mut body = String::new();
     for sheet in &wb.sheets {
@@ -440,9 +450,10 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
                 let cell = sheet.cell(at);
                 let style = wb.styles.get(sheet.style_id(at));
                 let font = (style.font.bold, style.font.italic, style.font.underline != Underline::None);
+                let wrap = style.align.wrap;
                 let value = sheet.value(at);
                 let formula = cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text));
-                if matches!(value, Value::Empty) && formula.is_none() && font == (false, false, false) { continue; }
+                if matches!(value, Value::Empty) && formula.is_none() && font == (false, false, false) && !wrap { continue; }
                 let blanks = c - next_col;
                 if blanks > 0 { let _ = write!(row, "<table:table-cell table:number-columns-repeated=\"{blanks}\"/>"); }
                 next_col = c + 1;
@@ -453,9 +464,9 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
                     _ => Kind::Plain,
                 };
                 let mut open = String::from("<table:table-cell");
-                if font != (false, false, false) || kind != Kind::Plain {
+                if font != (false, false, false) || wrap || kind != Kind::Plain {
                     let n = cell_styles.len();
-                    let name = cell_styles.entry((font.0, font.1, font.2, kind)).or_insert_with(|| format!("ce{}", n + 1));
+                    let name = cell_styles.entry((font.0, font.1, font.2, wrap, kind)).or_insert_with(|| format!("ce{}", n + 1));
                     let _ = write!(open, " table:style-name=\"{name}\"");
                 }
                 if let Some(f) = &formula { let _ = write!(open, " table:formula=\"{}\"", escape(&to_odf(f))); }
@@ -498,9 +509,10 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     for (px, name) in &col_styles {
         let _ = write!(styles, "<style:style style:name=\"{name}\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"{:.4}in\"/></style:style>", *px as f32 / 96.0);
     }
-    for ((bold, italic, underline, kind), name) in &cell_styles {
+    for ((bold, italic, underline, wrap, kind), name) in &cell_styles {
         let data = match kind { Kind::Date => " style:data-style-name=\"N1\"".to_string(), Kind::Percent(d) => format!(" style:data-style-name=\"P{d}\""), Kind::Plain => String::new() };
         let _ = write!(styles, "<style:style style:name=\"{name}\" style:family=\"table-cell\" style:parent-style-name=\"Default\"{data}>");
+        if *wrap { styles.push_str("<style:table-cell-properties fo:wrap-option=\"wrap\"/>"); }
         if *bold || *italic || *underline {
             styles.push_str("<style:text-properties");
             if *bold { styles.push_str(" fo:font-weight=\"bold\" style:font-weight-asian=\"bold\" style:font-weight-complex=\"bold\""); }
@@ -524,7 +536,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
         "<number:date-style style:name=\"N1\"><number:year number:style=\"long\"/><number:text>-</number:text>",
         "<number:month number:style=\"long\"/><number:text>-</number:text><number:day number:style=\"long\"/></number:date-style>",
         "");
-    let mut places: Vec<u8> = cell_styles.keys().filter_map(|k| if let Kind::Percent(d) = k.3 { Some(d) } else { None }).collect();
+    let mut places: Vec<u8> = cell_styles.keys().filter_map(|k| if let Kind::Percent(d) = k.4 { Some(d) } else { None }).collect();
     places.sort_unstable();
     places.dedup();
     let data_styles: String = std::iter::once(data_styles.to_string()).chain(places.iter().map(|d| format!(

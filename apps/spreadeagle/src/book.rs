@@ -37,6 +37,37 @@ impl Range {
     }
 }
 
+/// Lines that fit a cell's text width, capped by the visible row height. Explicit
+/// line breaks stay separate; a long word breaks at a character boundary.
+pub fn wrap_lines(text: &str, width: i32, max_lines: usize, measure: impl Fn(&str) -> i32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let max_lines = max_lines.max(1);
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let joined = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if measure(&joined) <= width { line = joined; continue; }
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+                if lines.len() == max_lines { return lines; }
+            }
+            for ch in word.chars() {
+                let mut next = line.clone(); next.push(ch);
+                if !line.is_empty() && measure(&next) > width {
+                    lines.push(std::mem::take(&mut line));
+                    if lines.len() == max_lines { return lines; }
+                }
+                line.push(ch);
+            }
+        }
+        if !line.is_empty() || paragraph.is_empty() {
+            lines.push(line);
+            if lines.len() == max_lines { return lines; }
+        }
+    }
+    lines
+}
+
 /// A chart's place on the grid: its anchor cell, the offset into it and its size, in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placed { pub id: u32, pub row: u32, pub col: u32, pub dx: i32, pub dy: i32, pub width: i32, pub height: i32 }
@@ -130,6 +161,10 @@ impl Book {
             }
             i = end;
         }
+        for &(s, row, col) in &extras.wraps {
+            if s != sheet { self.activate(s)?; sheet = s; }
+            self.set_wrap(Range::cell(row, col), true)?;
+        }
         for (s, row, col, code) in &extras.percents {
             if *s != sheet { self.activate(*s)?; sheet = *s; }
             self.run("home.numberFormat", json!({ "range": Range::cell(*row, *col).a1(), "format": code }))?;
@@ -194,6 +229,15 @@ impl Book {
         let Some(sheet) = d.wb.active() else { return (false, false, false) };
         let f = &d.wb.styles.get(sheet.style_id(CellRef::new(row, col))).font;
         (f.bold, f.italic, f.underline != gridcraft_engine::model::Underline::None)
+    }
+    pub fn wrapped(&self, row: u32, col: u32) -> bool {
+        let Ok(d) = self.session.doc() else { return false };
+        let Some(sheet) = d.wb.active() else { return false };
+        d.wb.styles.get(sheet.style_id(CellRef::new(row, col))).align.wrap
+    }
+    /// Wrap every cell in `range`; GridCraft also grows automatic row heights.
+    pub fn set_wrap(&mut self, range: Range, on: bool) -> Result<(), String> {
+        self.run_on(range, "home.wrapText", json!({ "range": range.a1(), "on": on })).map(|_| ())
     }
 
     /// Runs `id` on `range`, as the command would run on cells dragged over.
@@ -1014,6 +1058,36 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(Book::open(&path).unwrap().0.row_height(0), 72);
+    }
+
+    #[test]
+    fn wrapped_cell_grows_row_undoes_and_round_trips() {
+        assert_eq!(wrap_lines("one two three", 7, 3, |s| s.len() as i32), ["one two", "three"]);
+        assert_eq!(wrap_lines("abcdefgh", 3, 3, |s| s.len() as i32), ["abc", "def", "gh"]);
+        assert_eq!(wrap_lines("alpha\nbeta", 8, 3, |s| s.len() as i32), ["alpha", "beta"]);
+        assert_eq!(wrap_lines("abcdefgh", 2, 1, |s| s.len() as i32), ["ab"]);
+        for ext in ["xlsx", "ods"] {
+            let mut book = Book::blank(&temp(&format!("wrap.{ext}")));
+            book.set(0, 0, "Quarterly planning notes for our team").unwrap();
+            book.set_col_width(0, 72).unwrap();
+            let original = book.row_height(0);
+            book.set_wrap(Range::cell(0, 0), true).unwrap();
+            assert!(book.wrapped(0, 0), "{ext}");
+            assert!(book.row_height(0) > original, "{ext}: {} <= {original}", book.row_height(0));
+            book.undo().unwrap();
+            assert!(!book.wrapped(0, 0), "{ext}");
+            book.redo().unwrap();
+            assert!(book.wrapped(0, 0), "{ext}");
+            let path = book.path.clone();
+            book.save().unwrap();
+            let (again, _) = Book::open(&path).unwrap();
+            assert!(again.wrapped(0, 0), "{ext}");
+            assert_eq!(again.input(0, 0), "Quarterly planning notes for our team");
+            if ext == "ods" {
+                let raw = std::fs::read(&path).unwrap();
+                assert!(crate::ods::extras(&raw).unwrap().wraps.contains(&(0, 0, 0)));
+            }
+        }
     }
 
     #[test]
