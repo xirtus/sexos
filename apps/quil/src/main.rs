@@ -1349,7 +1349,7 @@ impl App {
         let find = self.find.clone();
         let mut spans = Vec::new();
         let mut line = t.top;
-        let mut in_comment = false;
+        let mut syntax_state = highlight::State::Normal;
         let mut cells: Vec<(usize, usize, char, u32, u32)> = Vec::new();
         let mut cursors: Vec<(usize, usize)> = Vec::new();
         for r in 0..rows {
@@ -1364,7 +1364,7 @@ impl App {
                 let label = match first_line { Some(n) => format!("{:>5} ", n + r + 1), None => String::from("    ? ") };
                 self.p.text(tc, y, gutter, &label, if is_cur { palette.fg } else { palette.dim }, palette.bg);
             }
-            in_comment = highlight::line(lang, &bytes, in_comment, &mut spans);
+            syntax_state = highlight::line_state(lang, &bytes, syntax_state, &mut spans);
             // Find matches on this line, for highlighting.
             let hits: Vec<usize> = if find.len() >= 2 { project::matches(&bytes, &Query { needle: find.clone(), fold_case: true, whole_word: false }) } else { Vec::new() };
             let mut dc = 0usize;
