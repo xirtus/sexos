@@ -668,6 +668,7 @@ impl Broker {
             Effect::SaveComplete => {
                 t.phase = Phase::Consent;
                 t.waiting = false;
+                t.deadline = now.saturating_add(CONSENT_TICKS);
                 return;
             }
             Effect::Done => {

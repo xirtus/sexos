@@ -3,12 +3,21 @@
 //! Kaleidoscope's profile or logged from the returned credentials.
 use super::Browser;
 use alloc::string::String;
-use sex_app::autofill::{Client, Error};
+use sex_app::autofill::{Client, Error, SaveClient};
 use sex_web::autofill_policy::{self, Login, Refusal};
 use sex_web::sex_html::{self, style::Display};
 
 pub(super) struct Pending {
     client: Client,
+    origin: String,
+    owner: u64,
+    tab: usize,
+    username: usize,
+    password: usize,
+    cancelled: bool,
+}
+pub(super) struct PendingSave {
+    client: SaveClient,
     origin: String,
     owner: u64,
     tab: usize,
@@ -39,7 +48,7 @@ fn ready(browser: &Browser) -> Result<Login, Refusal> {
 
 impl Browser {
     pub(super) fn request_autofill(&mut self) {
-        if self.autofill.is_some() {
+        if self.autofill.is_some() || self.password_save.is_some() {
             self.status = Some("Finish the current password request first");
             self.draw();
             return;
@@ -75,6 +84,101 @@ impl Browser {
         self.status = Some("Approve the password request in Chastity");
         sex_pdx::serial_record!("[web.autofill.requested] tab={}", self.active);
         self.draw();
+    }
+
+    pub(super) fn request_password_save(&mut self) {
+        if self.autofill.is_some() || self.password_save.is_some() {
+            self.status = Some("Finish the current password request first");
+            self.draw();
+            return;
+        }
+        if let Err(reason) = ready(self) {
+            self.status = Some(match reason {
+                Refusal::Insecure | Refusal::Address => "Passwords require an HTTPS page",
+                Refusal::Frame => "Passwords cannot save from an embedded page",
+                Refusal::UnsafeAction => "This form does not submit safely to this site",
+                _ => "No eligible login form is visible",
+            });
+            sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", reason);
+            self.draw();
+            return;
+        }
+        let captured = match autofill_policy::save_login(&self.doc.get_ref().dom, &self.url, self.in_frame.is_some()) {
+            Ok(captured) => captured,
+            Err(reason) => {
+                self.status = Some("Enter a username and password in the visible form");
+                sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", reason);
+                self.draw();
+                return;
+            }
+        };
+        let client = match SaveClient::request(&self.window, &captured.origin, &captured.username, &captured.password, sex_pdx::get_ticks()) {
+            Ok(client) => client,
+            Err(why) => {
+                self.status = Some("Password save request unavailable");
+                sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", why);
+                self.draw();
+                return;
+            }
+        };
+        self.password_save = Some(PendingSave {
+            client, origin: captured.origin.clone(), owner: self.doc.get_ref().owner(), tab: self.active,
+            username: captured.username_node, password: captured.password_node, cancelled: false,
+        });
+        self.status = Some("Waiting for Chastity to review the save request");
+        sex_pdx::serial_record!("[web.password_save.requested] tab={}", self.active);
+        self.draw();
+    }
+
+    pub(super) fn cancel_password_save(&mut self) {
+        if let Some(p) = self.password_save.as_mut() {
+            if !p.cancelled {
+                p.client.cancel();
+                p.cancelled = true;
+                sex_pdx::serial_record!("[web.password_save.cancelled] reason=page_changed");
+            }
+        }
+    }
+
+    pub(super) fn poll_password_save(&mut self) {
+        let Some(mut pending) = self.password_save.take() else { return; };
+        let valid = !pending.cancelled && pending.tab == self.active
+            && pending.owner == self.doc.get_ref().owner()
+            && ready(self).is_ok_and(|pair| pair.origin == pending.origin
+                && pair.username == pending.username && pair.password == pending.password)
+            && {
+                let values = &self.doc.get_ref().dom.values;
+                values.get(&pending.username).zip(values.get(&pending.password))
+                    .is_some_and(|(u, p)| pending.client.matches(u, p))
+            };
+        if !valid && !pending.cancelled {
+            pending.client.cancel();
+            pending.cancelled = true;
+            sex_pdx::serial_record!("[web.password_save.cancelled] reason=identity_or_values_changed");
+        }
+        match pending.client.poll(sex_pdx::get_ticks()) {
+            None => { if pending.client.active() { self.password_save = Some(pending); } }
+            Some(Err(why)) => {
+                if !pending.cancelled {
+                    self.status = Some(match why {
+                        Error::Locked | Error::Unavailable => "Unlock Chastity to review password saves",
+                        Error::Declined => "Password save declined",
+                        _ => "Password save request expired or failed",
+                    });
+                    sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", why);
+                    self.draw();
+                }
+                if why == Error::Stale { pending.cancelled = true; }
+                if pending.client.active() { self.password_save = Some(pending); }
+            }
+            Some(Ok(())) => {
+                if valid {
+                    self.status = Some("Password saved in Chastity");
+                    sex_pdx::serial_record!("[web.password_save.approved]");
+                    self.draw();
+                }
+            }
+        }
     }
 
     pub(super) fn cancel_autofill(&mut self) {

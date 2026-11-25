@@ -14,7 +14,10 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | Vertical tabs, split view, group, side panel | Ctrl+Shift+,, Ctrl+Shift+\\, Ctrl+Shift+G, Ctrl+Shift+B |
 | Site settings, Shields, clear site data | Ctrl+Shift+E, Ctrl+Shift+S, Ctrl+Shift+Backspace |
 | Request Chastity fill for a visible HTTPS login | Ctrl+Shift+K |
+| Ask Chastity to review saving a visible HTTPS login | Ctrl+Shift+U |
 | Keyboard reference | Ctrl+Shift+/ |
 
 The reader view shortcut returns to the source page when used in reader view.
 The Chastity request requires a visible, unambiguous same-origin login form.
+Saving additionally requires current username and password values. Chastity must
+approve and store the proposal before Kaleidoscope reports a saved password.

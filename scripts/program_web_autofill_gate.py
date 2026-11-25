@@ -113,12 +113,18 @@ def main():
   click_allow(vault,prompt[1]);g['wait'](rf'\[chastity.autofill.approved\] token={prompt[1]}',s,60)
   g['wait'](r'\[web.autofill.filled\] fields=2',s,120)
   g['focus'](browser);time.sleep(.5);g['q'].cmd('screendump',{'filename':str(out/'browser-password-filled.ppm')})
+  # Save is an explicit browser proposal. The current Chastity runtime has no
+  # save consent handler yet, so receipt must never be reported as persistence.
+  s=len(g['text']());chord('ctrl','shift','u');g['wait'](r'\[web.password_save.requested\]',s,60)
+  time.sleep(.5);g['q'].cmd('screendump',{'filename':str(out/'browser-password-save-request.ppm')})
+  assert '[web.password_save.approved]' not in g['text']()[s:]
+  chord('ctrl','t');g['wait'](r'\[web.password_save.cancelled\] reason=page_changed',s,60)
   deadline=time.monotonic()+120
   while not posts and time.monotonic()<deadline:time.sleep(.2)
   assert posts==[True],'HTTPS form did not receive the approved credential pair'
   text=g['text']();assert SECRET not in text and MASTER not in text,'secret appeared in serial output'
   assert '[web.fatal]'not in text and 'KERNEL PANIC'not in text
-  print({'ok':True,'cancelled_on_tab_switch':True,'cancelled_on_navigation':True,'approved_fill':True,'same_origin_post':True,'secret_serial_leak':False})
+  print({'ok':True,'cancelled_on_tab_switch':True,'cancelled_on_navigation':True,'approved_fill':True,'save_requested_then_cancelled':True,'same_origin_post':True,'secret_serial_leak':False})
  finally:
   if g:g['stop']()
 if __name__=='__main__':main()
