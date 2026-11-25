@@ -273,6 +273,12 @@ def main():
   time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-doughnut-design.ppm')})
   shot=(a.out/'spreadeagle-doughnut-design.ppm').read_bytes()
   assert len(shot)>10000 and shot!=(a.out/'spreadeagle-chart-presentation.ppm').read_bytes()
+  ctrl_shift('q',r'\[spreadeagle\.chart\.edit-prompt\] id=\d+ at=D1\n')
+  s=len(t());type_line('style 5');q.key('ret')
+  g['wait'](r'\[spreadeagle\.chart\.edit\] id=\d+ action=style 5\n',s,120)
+  time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart-style-5.ppm')})
+  styled=(a.out/'spreadeagle-chart-style-5.ppm').read_bytes()
+  assert len(styled)>10000 and styled!=shot
   s=len(t());g['chord']('ctrl','g');type_line('B4');q.key('ret')
   g['wait'](r'\[spreadeagle\.goto\] place=B4 cell=B4\n',s,120)
   s=len(t());q.key('left');column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)

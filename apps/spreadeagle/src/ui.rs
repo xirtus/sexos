@@ -601,7 +601,7 @@ impl Ui {
                 Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, D doughnut, Esc cancels", self.selection().a1()),
-                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("remove 2, data A1:B4, switch, type/title, hole, angle")),
+                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("remove 2, data A1:B4, switch, type/style/title, hole, angle")),
                 Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("above/below average, top 2, bottom 50%, = or <> text")),
                 Ask::ValidationList { range, text } => format!("Choices for {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("comma list or =D2:D20; blank clears")),
