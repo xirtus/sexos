@@ -307,8 +307,7 @@ impl Book {
         probe.execute_headless("selection.set", json!({ "range": range.a1() })).map_err(|e| e.to_string())?;
         let result = probe.execute_headless(id, params.clone()).map_err(|e| e.to_string())?;
         let area = if id == "edit.paste" {
-            result.get("pasted").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse)
-                .ok_or("Paste did not report its destination range")?
+            Self::paste_area(range, &result)?
         } else {
             gridcraft_engine::core::RangeRef::parse(&range.a1()).unwrap()
         };
@@ -329,6 +328,17 @@ impl Book {
         }
         self.run_on(range, id, params)
     }
+    fn paste_area(at: Range, result: &Json) -> Result<gridcraft_engine::core::RangeRef, String> {
+        if let Some(range) = result.get("pasted").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) {
+            return Ok(range);
+        }
+        let rows = result.get("rows").and_then(Json::as_u64).ok_or("Paste did not report its rows")?;
+        let cols = result.get("cols").and_then(Json::as_u64).ok_or("Paste did not report its columns")?;
+        if rows == 0 || cols == 0 { return Err("Clipboard has no cells".into()); }
+        let start = CellRef::new(at.r0, at.c0);
+        let end = start.offset(rows as i64 - 1, cols as i64 - 1).ok_or("Pasted text does not fit on the sheet")?;
+        Ok(gridcraft_engine::core::RangeRef::new(start, end))
+    }
     /// Copies (or cuts) `range` to the workbook's clipboard; returns the copied text,
     /// tab-separated, as the system clipboard would get it.
     pub fn copy(&mut self, range: Range, cut: bool) -> Result<String, String> {
@@ -339,7 +349,17 @@ impl Book {
     /// Returns the cells pasted, as A1:B2.
     pub fn paste(&mut self, row: u32, col: u32) -> Result<String, String> {
         let r = self.run_validated_on(Range::cell(row, col), "edit.paste", json!({}))?;
-        Ok(r.get("pasted").and_then(Json::as_str).unwrap_or_default().to_string())
+        Ok(Self::paste_area(Range::cell(row, col), &r)?.a1())
+    }
+    /// Pastes tab-separated text from another program, with the same stop-rule
+    /// preflight as an in-workbook paste.
+    pub fn paste_text(&mut self, row: u32, col: u32, text: &str) -> Result<String, String> {
+        // Force the text path even when its bytes equal an earlier internal copy.
+        let clipboard = self.session.clipboard.take();
+        let result = self.run_validated_on(Range::cell(row, col), "edit.paste", json!({ "text": text }));
+        self.session.clipboard = clipboard;
+        let r = result?;
+        Ok(Self::paste_area(Range::cell(row, col), &r)?.a1())
     }
     /// Empties every cell of `range` (values and formulas; formats stay).
     pub fn clear_range(&mut self, range: Range) -> Result<(), String> {
@@ -1483,6 +1503,25 @@ mod tests {
         book.set(1, 1, "Food").unwrap();
         book.fill(area, true).unwrap();
         assert_eq!(book.input(2, 1), "Food");
+    }
+
+    #[test]
+    fn external_text_paste_obeys_stop_rules_for_every_cell() {
+        let mut book = Book::blank(&temp("validation-text-paste.xlsx"));
+        let area = Range { r0: 1, c0: 0, r1: 2, c1: 0 };
+        book.list_validation(area, "Food,Fun").unwrap();
+        book.set(1, 0, "Fun").unwrap();
+        book.set(2, 0, "Food").unwrap();
+        let before = book.session.doc().unwrap().undo.len();
+        assert!(book.paste_text(1, 0, "Food\nOther").is_err());
+        assert_eq!((book.input(1, 0), book.input(2, 0)), ("Fun".into(), "Food".into()));
+        assert_eq!(book.session.doc().unwrap().undo.len(), before);
+        assert_eq!(book.paste_text(1, 0, "Food\nFun").unwrap(), "A2:A3");
+        assert_eq!((book.input(1, 0), book.input(2, 0)), ("Food".into(), "Fun".into()));
+        book.copy(Range::cell(1, 0), false).unwrap();
+        book.paste_text(2, 0, "Food\n").unwrap();
+        assert_eq!(book.input(2, 0), "Food");
+        assert!(book.validation_choices(2, 0).is_some(), "plain paste keeps destination validation");
     }
 
     #[test]
