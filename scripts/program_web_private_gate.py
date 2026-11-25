@@ -123,7 +123,20 @@ def main():
   # The container's cookies reach its own folder; the private box's never do.
   m=g['wait'](r'\[web.jarbox.saved\] box=1 cookies=(\d+) origins=(\d+)',0,60);assert m[1]=='1' and m[2]=='1',m[0]
   text=t();assert '[web.jarbox.saved] box=private' not in text
-  assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
+  # A private window launched from Spindle crosses input logging, history,
+  # session restore and browser startup. Its URL must stay out of serial.
+  g['focus'](153);time.sleep(.5);s=len(t())
+  keys(f'run +net kaleidoscope --private {base}/private-canary/{PRIVATE_SENTINEL}?key={PRIVATE_SENTINEL}');q.key('ret')
+  g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120)
+  g['wait'](loaded,s,300);time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'web-private-launch-redacted.ppm')})
+  assert (a.out/'web-private-launch-redacted.ppm').stat().st_size>100000
+  g['focus'](153);undo_start=len(t());q.key('esc');q.key('u')
+  g['wait'](r'\[spindle.line.edit.ok\] op=undo len=0',undo_start,30)
+  launch_trace=t()[s:]
+  assert PRIVATE_SENTINEL not in launch_trace,'private launch contents reached serial diagnostics'
+  assert '[spindle.history.push]' not in launch_trace,'private launch entered command history'
+  text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,**{k:v for k,v in results.items()}})
  finally:g['stop']()
 if __name__=='__main__':main()

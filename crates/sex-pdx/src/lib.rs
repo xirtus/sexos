@@ -32,6 +32,7 @@ pub mod trust_policy;
 pub use sex_trust_config as trust_config;
 pub mod entropy_seed;
 pub mod spindle_history;
+pub mod private_launch;
 pub mod spindle_probe;
 pub mod spindle_view;
 pub mod spindle_status;
