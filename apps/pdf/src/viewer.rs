@@ -184,6 +184,8 @@ struct Viewer {
     region: Option<[f64; 4]>,
     /// A sticky note being typed.
     note: Option<String>,
+    /// A typed visual signature; it is markup, not a cryptographic signature.
+    signature: Option<String>,
     form: Option<Form>,
     /// The current page's annotations, while Ctrl+L lists them.
     annots: Vec<AnnotInfo>,
@@ -334,7 +336,7 @@ impl Viewer {
     }
 
     fn bar_shown(&self) -> bool {
-        self.finding || self.note.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
+        self.finding || self.note.is_some() || self.signature.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
     }
 
     fn draw_bar(&mut self, out: &mut [u32], width: usize, bar: usize) {
@@ -342,7 +344,9 @@ impl Viewer {
         fill(out, width, (0, bar - 1, width, 1), ACCENT);
         let y = (bar.saturating_sub(CH)) / 2;
         // Editing has the bar before find: what is typed goes where the bar says.
-        let editing = if let Some(note) = &self.note {
+        let editing = if let Some(signature) = &self.signature {
+            Some(("Visual signature:".to_string(), format!("{signature}_"), "Enter places, Escape cancels; not digital".to_string()))
+        } else if let Some(note) = &self.note {
             Some(("Note:".to_string(), format!("{note}_"), "Enter adds it, Escape cancels".to_string()))
         } else if let Some(form) = &self.form {
             form.fields.get(form.at).map(|(f, _, _)| {
@@ -591,6 +595,11 @@ impl Viewer {
     /// An editing key; true when it was one (and the window should be drawn again).
     fn edit_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         let ctrl = |code: u8| key.control && key.code == code;
+        if self.signature.is_some() { self.signature_key(key); return true; }
+        if ctrl(KEY_G) && key.shift {
+            if self.editor().is_some() { self.signature = Some(String::new()); }
+            return true;
+        }
         if ctrl(KEY_S) { self.save(); return true; }
         if ctrl(KEY_H) { self.highlight(); return true; }
         if ctrl(KEY_R) {
@@ -723,6 +732,50 @@ impl Viewer {
             _ => if let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
                 if text.chars().count() < 400 { text.push(c); }
             },
+        }
+    }
+
+    fn signature_key(&mut self, key: sex_std::sex_pdx::app_key::Key) {
+        let Some(name) = self.signature.as_mut() else { return };
+        match key.code {
+            ESCAPE => self.signature = None,
+            ENTER => {
+                let name = self.signature.take().unwrap_or_default();
+                if !name.trim().is_empty() { self.add_signature(name.trim().to_string()); }
+            }
+            BACKSPACE => { name.pop(); }
+            _ => if let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
+                if name.chars().count() < 80 { name.push(c); }
+            },
+        }
+    }
+
+    /// Places clearly labelled visible markup. It does not make a CMS signature.
+    fn add_signature(&mut self, name: String) {
+        let Some(info) = self.page_info(self.page) else { let _ = self.editor(); return };
+        let (w, h) = self.pdf.pages().get(self.page).map_or((612.0, 792.0), |p| p.render_dimensions());
+        let shown = self.region.unwrap_or([w as f64 * 0.2, h as f64 * 0.78, w as f64 * 0.7, h as f64 * 0.84]);
+        let rect = marks::rect_to_user(&info, shown);
+        let annot = NewAnnot {
+            kind: AnnotKind::FreeText { rect, text: name.clone(), font_size: 20.0 },
+            style: AnnotStyle {
+                color: [0.08, 0.18, 0.42],
+                author: Some(name.clone()),
+                contents: Some(format!("Visual signature: {name}")),
+                date: Some(now_date()),
+                ..AnnotStyle::default()
+            },
+        };
+        let page = self.page;
+        let Some(editor) = self.editor() else { return };
+        match editor.add_annotation(page, &annot) {
+            Ok(_) => {
+                self.region = None;
+                self.refresh();
+                self.status = Some("Visual signature placed. Ctrl+S saves; no digital signature".into());
+                sex_std::record(&format!("[pdf.sign.visual] page={} chars={} annots={}", page + 1, name.chars().count(), self.annotation_count()));
+            }
+            Err(e) => self.status = Some(format!("Could not place visual signature: {e}")),
         }
     }
 
@@ -998,7 +1051,7 @@ pub fn main() {
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
-        path: name, editor, region: None, note: None, form: None, annots: Vec::new(), status: None,
+        path: name, editor, region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
     };
     viewer.draw(window);
     loop {
