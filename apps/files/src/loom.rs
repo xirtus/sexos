@@ -3,7 +3,8 @@
 //! and the few calls Files makes into them for keys, drawing and background work.
 //!
 //! Keys: Enter on an archive browses into it, Ctrl+Shift+X extracts, Ctrl+Shift+A packs
-//! a zip, Ctrl+Shift+M packs tar.zst; Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
+//! a zip, Ctrl+Shift+M packs tar.zst, Ctrl+Shift+F chooses an archive format;
+//! Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
 //! Ctrl+Shift+D finds duplicates; Ctrl+U maps disk usage; Ctrl+Shift+C compares folders.
 //! Enter on a disk or CD image (`.iso`, `.img`, `.qcow2`, `.vhd(x)`, `.vmdk`, ...) browses it
 //! the same way, its partitions as folders (see `diskimg`). Ctrl+Shift+P lists network
@@ -28,10 +29,11 @@ const KEY_U: u8 = 0x16;
 const KEY_O: u8 = 0x18;
 const KEY_P: u8 = 0x19;
 const KEY_M: u8 = 0x32;
+const KEY_F: u8 = 0x21;
 /// `1`..`5` are 0x02..0x06; `0` is 0x0B.
 const KEY_0: u8 = 0x0B;
 
-pub enum Mode { None, Rename(rename::State), Dupes(dupes::State), Usage(usage::State), Actions(actions::Palette) }
+pub enum Mode { None, Rename(rename::State), Dupes(dupes::State), Usage(usage::State), Actions(actions::Palette), ArchiveFormat }
 pub enum Prompt { Tags(Vec<u8>), Compare }
 
 pub struct Loom {
@@ -86,6 +88,18 @@ impl App {
             Mode::Dupes(_) => { self.dupes_key(window, key); return true; }
             Mode::Usage(_) => { self.usage_key(window, key); return true; }
             Mode::Actions(_) => { self.actions_key(window, key); return true; }
+            Mode::ArchiveFormat => {
+                self.loom.mode = Mode::None;
+                match key.code {
+                    0x02 => self.make_zip(window),
+                    0x03 => self.make_tar(window),
+                    0x04 => self.make_tar_gz(window),
+                    0x05 => self.make_tar_zst(window),
+                    ESC => self.status = String::from("Kept the files as they were."),
+                    _ => { self.loom.mode = Mode::ArchiveFormat; self.status = String::from("Choose 1 to 4, or Esc."); }
+                }
+                return true;
+            }
             Mode::None => {}
         }
         if self.loom.inside.is_some() { return self.archive_key(window, key); }
@@ -103,6 +117,12 @@ impl App {
                 },
                 KEY_A => self.make_zip(window),
                 KEY_M => self.make_tar_zst(window),
+                KEY_F => if self.selected_paths().len() == 1 {
+                    self.loom.mode = Mode::ArchiveFormat;
+                    self.status.clear();
+                    sex_pdx::serial_record!("[files.app.archive.format] selected={}", shown(&self.selected().unwrap()));
+                }
+                    else { self.status = String::from("Choose one file or folder to pack."); },
                 KEY_X => self.extract_any(window),
                 KEY_O => self.actions_open(window),
                 KEY_P => self.places_open(window),
@@ -146,6 +166,7 @@ impl App {
         let text = match self.loom.mode {
             Mode::Rename(_) => self.rename_render(),
             Mode::Actions(_) => self.actions_render(),
+            Mode::ArchiveFormat => Some(String::from("Loom · Pack as\n\n1  ZIP\n2  TAR\n3  TAR.GZ\n4  TAR.ZST\n\nChoose 1 to 4, or Esc to return.\n")),
             Mode::Dupes(_) => {
                 let mut t = self.dupes_render().unwrap_or_default();
                 if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
@@ -156,7 +177,7 @@ impl App {
         };
         let Some(mut t) = text else { return false };
         if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; }
-        if matches!(self.loom.mode, Mode::Rename(_)) && !self.status.is_empty() { t.push('\n'); t.push_str(&self.status); t.push('\n'); }
+        if matches!(self.loom.mode, Mode::Rename(_) | Mode::ArchiveFormat) && !self.status.is_empty() { t.push('\n'); t.push_str(&self.status); t.push('\n'); }
         window.show(t.as_bytes());
         true
     }

@@ -26,6 +26,7 @@ open prompt determine which keys act. F11 closes the window.
 | Switch tabs; show or hide split view | Ctrl+Page Up/Down; Ctrl+Shift+\ |
 | Browse an archive; extract it | Enter; Ctrl+Shift+X |
 | Create ZIP or tar.zst from the selection | Ctrl+Shift+A; Ctrl+Shift+M |
+| Pick an archive format: ZIP, TAR, TAR.GZ or TAR.ZST | Ctrl+Shift+F, then 1 through 4 |
 | Batch rename with preview | Ctrl+Shift+R |
 | Compare folders; find duplicates | Ctrl+Shift+C; Ctrl+Shift+D |
 | Rate from zero to five stars; edit tags | Ctrl+0 through Ctrl+5; Ctrl+Shift+G |
@@ -46,6 +47,10 @@ the new items. Plain arrows clear marks; Ctrl+arrows preserve them. In the
 graphical grid, click focuses a tile and Ctrl+click toggles it. Batch drag of
 marked tiles remains open.
 Ctrl+Shift+R opens the batch rename preview.
+Ctrl+Shift+F packs one selected file or folder beside it. Choose 1 for ZIP,
+2 for TAR, 3 for TAR.GZ or 4 for TAR.ZST; Escape cancels the picker. A partial
+archive stays hidden and is removed on cancellation or failure. Ctrl+Z removes
+the finished archive.
 In split grid view, a click in either pane focuses that folder. Clicking a tile
 also selects it; Ctrl+Page Up/Down changes the active folder from the keyboard.
 Local Places lists only folders available through this Loom window's Files grant.
