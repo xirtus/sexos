@@ -40,7 +40,7 @@ pub struct Fetched { pub uid: u32, pub flags: Vec<String>, pub size: u32, pub bo
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event { Exists(u32), Expunge(u32), Flags(u32) }
 
-pub struct Client<C: Conn> { io: Lines<C>, tag: u32, pub capabilities: Vec<String>, pub authenticated: bool }
+pub struct Client<C: Conn> { io: Lines<C>, tag: u32, tag_prefix: &'static str, pub capabilities: Vec<String>, pub authenticated: bool }
 
 /// Quote a string as an IMAP quoted string.
 pub fn quote(s: &str) -> String {
@@ -53,7 +53,7 @@ pub fn quote(s: &str) -> String {
 impl<C: Conn> Client<C> {
     /// Read the greeting.
     pub fn connect(conn: C) -> Result<Self> {
-        let mut c = Self { io: Lines::new(conn), tag: 0, capabilities: Vec::new(), authenticated: false };
+        let mut c = Self { io: Lines::new(conn), tag: 0, tag_prefix: "v", capabilities: Vec::new(), authenticated: false };
         let g = c.read_response()?;
         match g.word(0).as_deref() {
             Some("OK") => {}
@@ -61,6 +61,14 @@ impl<C: Conn> Client<C> {
             _ => return Err(Error::Refused(g.rest())),
         }
         Ok(c)
+    }
+
+    /// Resume the IMAP stream after a trusted account service completed SASL.
+    /// There is no second greeting: Multipass keeps the TLS flow and hands it to
+    /// Valentine only after authentication. The flow must already be selected
+    /// for this person's mail account; no password crosses this constructor.
+    pub fn resume_authenticated(conn: C) -> Self {
+        Self { io: Lines::new(conn), tag: 0, tag_prefix: "r", capabilities: Vec::new(), authenticated: true }
     }
 
     pub fn into_conn(self) -> C { self.io.conn }
@@ -88,7 +96,7 @@ impl<C: Conn> Client<C> {
         Ok(Response { tag: String::from_utf8_lossy(tag).into_owned(), tokens })
     }
 
-    fn next_tag(&mut self) -> String { self.tag += 1; format!("v{}", self.tag) }
+    fn next_tag(&mut self) -> String { self.tag += 1; format!("{}{}", self.tag_prefix, self.tag) }
 
     /// Send a command; collect untagged responses until its tagged reply.
     pub fn command(&mut self, cmd: &str) -> Result<Vec<Response>> {
