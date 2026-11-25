@@ -4,7 +4,8 @@
 to-do to skip, weekly/daily/monthly/yearly repeats with COUNT, UNTIL and INTERVAL),
 opens on today's date by the machine's clock, moves by month and day from the keyboard,
 shows a day's events with repeats expanded onto it, adds a quick event with `n`, keeps
-it in its own folder and finds it again on its next run."""
+it in its own folder and finds it again on its next run. A final two-boot phase
+cuts QEMU power after an event save and checks the same disk after reboot."""
 import argparse,calendar,datetime,http.server,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -123,7 +124,25 @@ def main():
   s0=len(t());target,task,sid,_,s=start(' @cal.ics')
   g['wait'](r'\[calendar.loaded\] events=7\n',s0,60);g['wait'](r'\[calendar.imported\] events=6 added=0\n',s,60)
   close(target,task)
+  target,task,sid,today,s=start('')
+  g['wait'](r'\[calendar.loaded\] events=7\n',s,60)
+  s=len(t());q.key('n');time.sleep(.3);keys('10:20 power cut');q.key('ret')
+  g['wait'](rf'\[calendar.added\] date={today} when=10:20-11:20 title=power cut\n',s,60)
+  g['wait'](r'\[calendar.saved\] events=8 ',s,60)
+  g['wait'](r'\[date.save.committed\] file=events.txt bytes=\d+',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-before-powercut.ppm')})
+  assert 'KERNEL PANIC' not in t() and '[calendar.fatal]' not in t()
+  g['stop']()  # No Close event reaches Date after the completed staged save.
+  g=boot(a.iso,disk,a.out,'date-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  target,task,sid,_,s=start('')
+  g['wait'](r'\[calendar.loaded\] events=8\n',s,60)
+  s=len(t());q.key('ret')
+  g['wait'](rf'\[calendar.day\] date={today} events=\d+\n',s,60)
+  g['wait'](rf'\[calendar.event\] date={today} when=10:20-11:20 title=power cut\n',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-after-powercut.ppm')})
+  close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
-  print({'ok':True,'today':str(today),'months_moved':months})
+  print({'ok':True,'today':str(today),'months_moved':months,'powercut_event':True})
  finally:g['stop']()
 if __name__=='__main__':main()
