@@ -134,6 +134,25 @@ impl Book {
         }
     }
 
+    /// Apply a web or mail link to selected text, or insert its URL (or an
+    /// optional following label) at the caret. WordCraft keeps the link style.
+    pub fn insert_hyperlink(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter an https://, http:// or mailto: address; optionally follow it with display text";
+        let mut parts = input.trim().splitn(2, ' ');
+        let url = parts.next().unwrap_or("");
+        let label = parts.next().map(str::trim).filter(|s| !s.is_empty());
+        let destination = ["https://", "http://", "mailto:"].iter().find_map(|scheme| url.strip_prefix(scheme));
+        if url.len() > 2048 || destination.is_none_or(str::is_empty)
+            || url.chars().any(|c| c.is_whitespace() || c.is_control())
+            || label.is_some_and(|s| s.chars().count() > 200 || s.chars().any(char::is_control)) {
+            return Err(HELP.into());
+        }
+        let mut params = json!({ "url": url });
+        if let Some(label) = label { params["text"] = json!(label); }
+        self.run("insert.link", params)?;
+        Ok(())
+    }
+
     /// Plain text for SexOS's shared clipboard. WordCraft also retains its
     /// formatted fragment so a same-document paste can preserve styling.
     pub fn copy_text(&mut self) -> Result<String, String> {
@@ -1315,6 +1334,37 @@ mod tests {
             book.save().unwrap();
             let reopened = Book::open(&path).unwrap();
             assert!(note(&reopened).contains("Source one updated"), "{ext} lost footnote text or link");
+        }
+    }
+
+    #[test]
+    fn hyperlinks_style_selection_and_round_trip() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("hyperlinks.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Visit Assuit").unwrap();
+            for bad in ["", "https://", "file:///private", "javascript:alert", "https://example.org\nInjected"] {
+                assert!(book.insert_hyperlink(bad).is_err(), "{bad}");
+            }
+            book.key(&Chord { name: "Home", ctrl: false, shift: true });
+            let links = |b: &Book| b.session.doc.body.iter().filter_map(|block| block.as_para())
+                .flat_map(|p| &p.runs).filter_map(|run| run.props.link.clone()).collect::<Vec<_>>();
+            book.insert_hyperlink("https://example.org").unwrap();
+            assert!(links(&book).contains(&"https://example.org".to_string()));
+            assert_eq!(book.text(), "Visit Assuit", "selected text stays visible");
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert!(links(&book).is_empty(), "one undo removes the link styling");
+            book.insert_hyperlink("https://example.org").unwrap();
+            book.key(&Chord { name: "End", ctrl: false, shift: false });
+            book.type_text(" ").unwrap();
+            book.insert_hyperlink("mailto:help@example.org Contact").unwrap();
+            assert!(book.text().contains("Contact"));
+            assert!(links(&book).contains(&"mailto:help@example.org".to_string()));
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert!(links(&reopened).contains(&"https://example.org".to_string()), "{ext} lost web link");
+            assert!(links(&reopened).contains(&"mailto:help@example.org".to_string()), "{ext} lost mail link");
+            assert!(reopened.text().contains("Contact"), "{ext} lost display label");
         }
     }
 

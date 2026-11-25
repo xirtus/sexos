@@ -22,6 +22,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   through a bounded prompt. The note remains editable on the page; Esc returns
   to the body caret. DOCX/ODT round trips are covered. Endnotes and note
   management controls remain.
+- **Hyperlinks:** Ctrl+K now opens a native URL prompt for selected text or a
+  new display label. Web and mail links are bounded, undoable, and covered by
+  DOCX/ODT round trips. Editing and removing existing links remain.
 - **Page numbering:** WordCraft can insert dynamic page fields in a header or
   footer, but Assuit has no native control for it. This slice exposes bounded
   top/bottom and left/center/right choices, checks the visible page and

@@ -107,6 +107,8 @@ enum Ask {
     Indents(String),
     /// Ctrl+Shift+N: text for a linked footnote at the body caret.
     Footnote(String),
+    /// Ctrl+K: address and optional display text for a hyperlink.
+    Link(String),
     /// Ctrl+Shift+K: document proofing language.
     Language(String),
 }
@@ -144,6 +146,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+S", "Paragraph line multiple or exact/minimum height"),
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
+    ("Ctrl+K", "Link selected text or insert a labeled link"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
@@ -421,6 +424,7 @@ impl Ui {
                 Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("multiple 1.5 0 8, exact 18 0 8, or minimum 18 0 8")),
                 Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
                 Ask::Footnote(note) => format!("Footnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
+                Ask::Link(link) => format!("Link: {link}_   {}", said("Enter a web or mail address; optional display text follows a space")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
@@ -559,7 +563,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Link(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -769,6 +773,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Link(_)) {
+            match self.book.insert_hyperlink(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record("[assuit.link.insert]");
+                    self.message = "Inserted link".into();
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if matches!(ask, Ask::Language(_)) {
             match self.book.proofing_language(&typed) {
                 Ok(tag) => {
@@ -929,6 +945,7 @@ impl Ui {
                 (code::S, _) if key.alt => { self.ask = Some(Ask::Spacing(String::new())); return; }
                 (code::I, _) if key.alt && !key.shift => { self.ask = Some(Ask::Indents(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
+                (code::K, _) if !key.alt => { self.ask = Some(Ask::Link(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }
                 (code::I, _) if key.shift => { self.ask = Some(Ask::Picture(String::new())); return; }
