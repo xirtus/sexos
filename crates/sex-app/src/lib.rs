@@ -1313,6 +1313,62 @@ pub mod files {
     /// What the picker asks the person for.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Pick { Open, Save, Folder }
+    /// One pending picker question, scoped by Files to this run. A second
+    /// `pick_begin` replaces the first question for the same run.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct PickTicket(u32);
+
+    fn pick_progress(reply: Result<usize, Error>, out: &[u8]) -> Result<Option<usize>, Error> {
+        match reply {
+            Ok(len) if len >= 2 && len <= out.len() && out.starts_with(b"@/") => Ok(Some(len)),
+            Ok(_) => Err(w::INVALID),
+            Err(w::PENDING) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(test)]
+    mod pick_progress_tests {
+        use super::*;
+
+        #[test]
+        fn pending_question_stays_pending_and_a_grant_completes_it() {
+            assert_eq!(pick_progress(Err(w::PENDING), b""), Ok(None));
+            assert_eq!(pick_progress(Ok(10), b"@/home/a.pdf"), Ok(Some(10)));
+        }
+
+        #[test]
+        fn cancelled_or_malformed_answers_never_look_like_grants() {
+            assert_eq!(pick_progress(Err(w::DENIED), b""), Err(w::DENIED));
+            assert_eq!(pick_progress(Ok(0), b""), Err(w::INVALID));
+            assert_eq!(pick_progress(Ok(5), b"/home/a.pdf"), Err(w::INVALID));
+            assert_eq!(pick_progress(Ok(50), b"@/home/a.pdf"), Err(w::INVALID));
+        }
+    }
+
+    /// Starts an open/save/folder question without waiting for the person.
+    /// The caller may continue handling its own messages, then call `pick_poll`.
+    pub fn pick_begin(window: &mut Window, mode: Pick, suggestion: &[u8]) -> Result<PickTicket, Error> {
+        let n = suggestion.len().min(w::PICK_HINT_MAX);
+        let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
+        exchange(Some(window), w::PICK, b"", 0, n as u64, |r| {
+            r[0] = code;
+            r[1..1 + n].copy_from_slice(&suggestion[..n]);
+        }, |ticket, _| PickTicket(ticket))
+    }
+
+    /// Checks one question without waiting. `Ok(None)` means the picker is
+    /// still open; `Ok(Some(path))` is a new `@/path` grant for this run. A
+    /// cancelled question returns `DENIED`. A completed ticket is consumed.
+    pub fn pick_poll<'a>(window: &mut Window, ticket: PickTicket, out: &'a mut [u8; w::PATH_BYTES]) -> Result<Option<&'a [u8]>, Error> {
+        let reply = exchange(Some(window), w::PICKED, b"", ticket.0 as u64, 0, |_| {}, |len, d| {
+            let len = (len as usize).min(w::PATH_BYTES).min(d.len());
+            out[..len].copy_from_slice(&d[..len]);
+            len
+        });
+        pick_progress(reply, out).map(|len| len.map(|len| &out[..len]))
+    }
+
     /// Asks the person to choose a file (or a folder, or where to save) in the Files
     /// app, and waits. The answer is a path this run may now use, `@/...`, kept in `out`.
     /// Closing the window meanwhile cancels. Errors: DENIED when the person cancelled.
@@ -1326,14 +1382,9 @@ pub mod files {
         })
     }
     pub fn pick<'a>(window: &mut Window, mode: Pick, suggestion: &[u8], out: &'a mut [u8; w::PATH_BYTES]) -> Result<&'a [u8], Error> {
-        let n = suggestion.len().min(w::PICK_HINT_MAX);
-        let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
-        let ticket = exchange(Some(&mut *window), w::PICK, b"", 0, n as u64, |r| {
-            r[0] = code;
-            r[1..1 + n].copy_from_slice(&suggestion[..n]);
-        }, |ticket, _| ticket)?;
+        let ticket = pick_begin(window, mode, suggestion)?;
         loop {
-            let picked = exchange(Some(&mut *window), w::PICKED, b"", ticket as u64, 0, |_| {}, |len, d| {
+            let picked = exchange(Some(&mut *window), w::PICKED, b"", ticket.0 as u64, 0, |_| {}, |len, d| {
                 let len = (len as usize).min(w::PATH_BYTES).min(d.len());
                 out[..len].copy_from_slice(&d[..len]);
                 len
