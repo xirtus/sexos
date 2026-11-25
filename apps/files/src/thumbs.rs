@@ -326,6 +326,33 @@ impl Thumbs {
         window.show_pixels(width, height);
     }
 
+    /// The selected picture, fitted to the window when F3 opened it. Alpha is
+    /// blended over Loom's dark picture surface; resize crops the centered
+    /// picture until it is reopened at the new size.
+    pub fn preview(&mut self, window: &mut Window, path: &[u8], iw: usize, ih: usize, image: &[u32]) {
+        let (width, height) = window.size();
+        let px = window.pixels();
+        let px = &mut px[..width * height];
+        px.fill(BG);
+        let room_w = width.saturating_sub(32);
+        let room_h = height.saturating_sub(80);
+        let draw_w = iw.min(room_w);
+        let draw_h = ih.min(room_h);
+        let x = 16 + (room_w - draw_w) / 2;
+        let y = 36 + (room_h - draw_h) / 2;
+        let sx = (iw - draw_w) / 2;
+        let sy = (ih - draw_h) / 2;
+        for row in 0..draw_h {
+            for col in 0..draw_w {
+                let p = image[(sy + row) * iw + sx + col];
+                px[(y + row) * width + x + col] = blend(BG, p, p >> 24);
+            }
+        }
+        self.text(px, width, 10, 8, width.saturating_sub(20), &alloc::format!("Loom  Preview: {}", crate::shown(path)), TEXT);
+        self.text(px, width, 10, height.saturating_sub(28), width.saturating_sub(20), "F3 or Esc closes  Then Enter opens the picture in its app", DIM);
+        window.show_pixels(width, height);
+    }
+
     /// File icon `name` at `ICON` pixels, drawn on first use.
     fn icon(&mut self, name: &'static str) -> &[u32] {
         self.icons.entry(name).or_insert_with(|| {
