@@ -45,7 +45,7 @@ impl Range {
 
 /// Lines that fit a cell's text width, capped by the visible row height. Explicit
 /// line breaks stay separate; a long word breaks at a character boundary.
-pub fn wrap_lines(text: &str, width: i32, max_lines: usize, measure: impl Fn(&str) -> i32) -> Vec<String> {
+pub fn wrap_lines(text: &str, width: i32, max_lines: usize, mut measure: impl FnMut(&str) -> i32) -> Vec<String> {
     let mut lines = Vec::new();
     let max_lines = max_lines.max(1);
     for paragraph in text.split('\n') {

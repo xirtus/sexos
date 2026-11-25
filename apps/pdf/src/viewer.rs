@@ -59,6 +59,7 @@ const CACHE_BYTES: usize = 48 << 20;
 const ESCAPE: u8 = 0x01;
 const BACKSPACE: u8 = 0x0E;
 const ENTER: u8 = 0x1C;
+const KEY_A: u8 = 0x1E;
 const KEY_F: u8 = 0x21;
 const KEY_G: u8 = 0x22;
 const KEY_D: u8 = 0x20;
@@ -646,8 +647,8 @@ impl Viewer {
                     FieldKind::ComboBox { editable: true } => form.choice.and_then(|i| f.options.get(i))
                         .map(|(_, shown)| format!("{shown}  (type or Up/Down choose)"))
                         .unwrap_or_else(|| format!("{}  (type or Up/Down choose)", text_display(&form.text, form.caret, form.anchor))),
-                    FieldKind::ListBox { multi_select: true } => form.choice.and_then(|i| f.options.get(i))
-                        .map(|(_, shown)| format!("{} {shown}  (Space toggles, Up/Down moves)",
+                    FieldKind::ListBox { multi_select: true } => form.choice.and_then(|i| f.options.get(i).map(|o| (i, o)))
+                        .map(|(i, (_, shown))| format!("{} {shown}  (Space toggles, Up/Down moves)",
                             if marks::choice_indices(f).contains(&i) { "[x]" } else { "[ ]" }))
                         .unwrap_or_else(|| "Up/Down moves, Space toggles".into()),
                     _ => text_display(&form.text, form.caret, form.anchor),
@@ -1110,11 +1111,12 @@ impl Viewer {
             return false;
         }
         if y < bar && x < width.saturating_mul(2) / 3 {
+            let name = field.name.clone();
             if let Some(form) = self.form.as_mut() {
                 form.popup = true;
                 form.popup_top = form.choice.unwrap_or(0).min(count.saturating_sub(menu.3));
             }
-            sex_std::record(&format!("[pdf.choice.menu] name={} count={count}", field.name));
+            sex_std::record(&format!("[pdf.choice.menu] name={name} count={count}"));
             return true;
         }
         false
@@ -1936,10 +1938,10 @@ impl Viewer {
             BACKSPACE if choices.is_some() => return true,
             _ => {}
         }
-        if matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) && key.control && key.code == sex_std::sex_pdx::app_key::A {
+        if matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) && key.control && key.code == KEY_A {
             form.text.clear(); form.caret = 0; form.anchor = None; form.choice = None; return true;
         }
-        if text_field && key.control && key.code == sex_std::sex_pdx::app_key::A {
+        if text_field && key.control && key.code == KEY_A {
             form.anchor = Some(0); form.caret = form.text.chars().count();
             sex_std::record(&format!("[pdf.form.selection] start=0 end={} chars={}", form.caret, form.caret));
             return true;

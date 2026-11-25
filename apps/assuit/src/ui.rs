@@ -1099,7 +1099,7 @@ impl Ui {
                     return;
                 }
                 (code::K, _) if !key.alt => {
-                    let current = if self.book.session.sel.is_collapsed() {
+                    let current = if self.book.selection_collapsed() {
                         self.book.select_hyperlink_at_caret()
                     } else {
                         self.book.selected_hyperlink_target()

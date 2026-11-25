@@ -95,6 +95,8 @@ impl Book {
     }
 
     /// Runs one WordCraft command, such as `text.insert` or `format.bold`.
+    /// True when the caret has no extended selection.
+    pub fn selection_collapsed(&self) -> bool { self.session.sel.is_collapsed() }
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let before = self.session.rev();
         let r = self.session.run(id, &params).map_err(|e| format!("{e:?}"))?;
