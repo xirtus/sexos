@@ -15,6 +15,56 @@ struct Pending { client: Run, signer: Run, op: u64, arg: usize, since: u64, canc
 static mut SIGNER: Option<Signer> = None;
 static mut REQUEST: Option<Request> = None;
 static mut PENDING: Option<Pending> = None;
+/// Exact Vellum runs certified by Files at load time. A recycled row never inherits it.
+struct ApprovedRuns([Option<Run>; 64]);
+impl ApprovedRuns {
+    const fn new() -> Self { Self([None; 64]) }
+    fn bind(&mut self, run: Run, approved: bool) {
+        for entry in &mut self.0 { if entry.is_some_and(|old| old.row == run.row) { *entry = None; } }
+        if approved {
+            if let Some(entry) = self.0.iter_mut().find(|entry| entry.is_none()) { *entry = Some(run); }
+        }
+    }
+    fn retire(&mut self, run: Run) {
+        for entry in &mut self.0 { if *entry == Some(run) { *entry = None; } }
+    }
+    fn contains(&self, run: Run) -> bool { self.0.contains(&Some(run)) }
+}
+static mut APPROVED: ApprovedRuns = ApprovedRuns::new();
+
+pub unsafe fn bind_approved(row: u32, task: u32, approved: bool) {
+    APPROVED.bind(Run { row, task }, approved);
+    sex_pdx::serial_record!("[pdf.sign.image] row={} task={} approved={}", row, task, approved as u8);
+}
+
+pub unsafe fn retire(row: u32, task: u32) {
+    APPROVED.retire(Run { row, task });
+}
+
+fn approved(run: Run) -> bool {
+    unsafe { APPROVED.contains(run) && live(run) }
+}
+
+#[cfg(test)]
+mod approved_tests {
+    use super::*;
+    #[test]
+    fn reused_row_does_not_inherit_identity() {
+        let mut runs = ApprovedRuns::new();
+        let old = Run { row: 57, task: 101 };
+        let new = Run { row: 57, task: 102 };
+        runs.bind(old, true);
+        assert!(runs.contains(old));
+        runs.bind(new, false);
+        assert!(!runs.contains(old));
+        assert!(!runs.contains(new));
+        runs.bind(new, true);
+        runs.retire(old);
+        assert!(runs.contains(new));
+        runs.retire(new);
+        assert!(!runs.contains(new));
+    }
+}
 
 unsafe fn expire_pending(now: u64) {
     if let Some(mut pending) = PENDING {
@@ -120,6 +170,11 @@ pub unsafe fn receive(msg: &PdxMessage) -> bool {
         return true;
     }
     let Some((caller, signer)) = selected(msg) else { sex_pdx::pdx_reply(msg.caller_pd, p::REFUSED); return true };
+    if op == p::BEGIN && !approved(caller) {
+        sex_pdx::serial_record!("[pdf.sign.denied] reason=unapproved_image row={} task={}", caller.row, caller.task);
+        sex_pdx::pdx_reply(caller.row, p::REFUSED);
+        return true;
+    }
     if op == p::END {
         if let Some(mut pending) = PENDING {
             if pending.client == caller && pending.signer == signer.run {

@@ -3,6 +3,15 @@
 use crate::backends::diskfs::DiskFs;
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 use sex_pdx::program_store as store;
+use sha2::{Digest, Sha256};
+mod approved_vellum { include!(concat!(env!("OUT_DIR"), "/vellum_pin.rs")); }
+
+fn matches_pin(image: &[u8], expected_len: usize, expected_hash: [u8; 32]) -> bool {
+    expected_len != 0 && image.len() == expected_len && Sha256::digest(image).as_slice() == expected_hash.as_slice()
+}
+fn approved_image(image: &[u8]) -> bool {
+    matches_pin(image, approved_vellum::LENGTH, approved_vellum::SHA256)
+}
 const BLOCK_BYTES: usize = sex_pdx::BLOCK_MAX_XFER as usize;
 fn read(lba: u64, bytes: u64, out: &mut [u8], buf_va: u64) -> Result<(), u32> {
     if DiskFs::diskfs_block_read(lba * store::SECTOR as u64, bytes, sex_pdx::SLOT_BUF_LEND) != 0 { return Err(store::IO); }
@@ -15,14 +24,21 @@ static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; s
 pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
     // the store's program NAME, still with its arguments.
-    match try_load(name,true,requester) { Ok(len) => store::loaded(len), Err(error) => { crate::fs_service::load_failed(); store::failed(error) } }
+    let shell_epoch = sex_pdx::crash_log::peer_state(6).ok()
+        .filter(|peer| peer.live()).map_or(0, |peer| peer.epoch);
+    let files_epoch = sex_pdx::crash_log::self_epoch().unwrap_or(0);
+    match try_load(name,true,requester,shell_epoch,files_epoch) {
+        Ok((len, approved, generation)) => store::loaded_with_generation(len, generation, approved),
+        Err(error) => { crate::fs_service::load_failed(); store::failed(error) }
+    }
 }
 /// Image bytes only: never consume an unrelated prepared ticket or loaded latch.
 pub fn load_unbound(name:[u64;2])->u64 {
-    match try_load(name,false,0) { Ok(len)=>store::loaded(len),Err(error)=>store::failed(error) }
+    match try_load(name,false,0,0,0) { Ok((len,_,_))=>store::loaded(len),Err(error)=>store::failed(error) }
 }
-fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u32> {
-    let _writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
+fn try_load(mut name: [u64; 2], remember:bool, requester: u32, shell_epoch:u64, files_epoch:u64) -> Result<(u32, bool, u32), u32> {
+    if remember && (shell_epoch == 0 || files_epoch == 0) { return Err(store::IMAGE_BUSY); }
+    let mut writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
     if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
@@ -39,7 +55,11 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
         else { crate::fs_service::read_named_unbound(&bytes[..len], image) }
     };
     match found {
-        crate::fs_service::Program::Loaded(len) => return Ok(len),
+        crate::fs_service::Program::Loaded(len) => {
+            let approved = remember && approved_image(&image[..len as usize]);
+            let generation = if remember { writer.seal_ordinary(shell_epoch, files_epoch).ok_or(store::IMAGE_BUSY)? } else { 0 };
+            return Ok((len, approved, generation));
+        },
         crate::fs_service::Program::Failed(error) => return Err(error),
         crate::fs_service::Program::Absent if name[0] == store::TICKET => match store_name {
             Some(packed) => name = packed,
@@ -83,5 +103,24 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
     let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
     if remember { crate::fs_service::loaded_from_store(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
-    Ok(entry.len)
+    let approved = remember && approved_image(&image[..entry.len as usize]);
+    let generation = if remember { writer.seal_ordinary(shell_epoch, files_epoch).ok_or(store::IMAGE_BUSY)? } else { 0 };
+    Ok((entry.len, approved, generation))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn renamed_or_replaced_file_cannot_gain_image_identity() {
+        let approved = b"approved Vellum image";
+        let hash: [u8; 32] = Sha256::digest(approved).into();
+        assert!(matches_pin(approved, approved.len(), hash));
+        // Files hashes the bytes copied into IMAGE, regardless of the requested name.
+        let mut hostile = approved.to_vec();
+        hostile[0] ^= 1;
+        assert!(!matches_pin(&hostile, approved.len(), hash));
+        assert!(!matches_pin(b"approved Vellum image!", approved.len(), hash));
+        assert!(!matches_pin(approved, 0, hash));
+    }
 }

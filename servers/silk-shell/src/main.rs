@@ -17773,10 +17773,54 @@ fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
     program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY))
 }
 static mut PROGRAM_READING: bool = false;
+/// Files certified the bytes in the image region for this pending load only.
+static mut PROGRAM_APPROVED_VELLUM: bool = false;
+/// The Files incarnation present before this load was requested.
+static mut PROGRAM_FILES_EPOCH: u64 = 0;
+fn program_files_epoch() -> u64 {
+    sex_pdx::crash_log::peer_state(sex_pdx::program_store::SHELL_ROUTE_SLOT).ok()
+        .filter(|peer| peer.live()).map_or(0, |peer| peer.epoch)
+}
+fn image_approval_after_copy(certified:bool,generation:u32,requested_epoch:u64,copied_epoch:u64)->bool {
+    certified && generation!=0 && requested_epoch!=0 && copied_epoch==requested_epoch
+}
+/// A transiently unavailable post-copy observation must not strand Files' image lease.
+/// Files validates its own epoch, so this fallback cannot release a restarted Files.
+fn image_consume_epoch(requested_epoch:u64,copied_epoch:u64)->u64 {
+    if copied_epoch==0 { requested_epoch } else { copied_epoch }
+}
+#[cfg(test)]
+mod image_approval_tests {
+    use super::{image_approval_after_copy,image_consume_epoch};
+    #[test]
+    fn files_restart_between_reply_and_copy_cannot_certify_run() {
+        assert!(image_approval_after_copy(true,7,20,20));
+        assert!(!image_approval_after_copy(true,7,20,21));
+        assert!(!image_approval_after_copy(true,7,20,0));
+        assert!(!image_approval_after_copy(true,0,20,20));
+        assert!(!image_approval_after_copy(false,7,20,20));
+    }
+    #[test]
+    fn transient_unknown_uses_request_epoch_only_for_lease_receipt() {
+        assert_eq!(image_consume_epoch(20,0),20);
+        assert!(!image_approval_after_copy(true,7,20,0));
+        assert_eq!(image_consume_epoch(20,21),21);
+        assert!(!image_approval_after_copy(true,7,20,21));
+        assert_eq!(image_consume_epoch(0,0),0);
+    }
+}
+fn program_image_consumed(generation:u32,files_epoch:u64) {
+    if generation != 0 && files_epoch != 0 {
+        let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,
+            sex_pdx::program_store::OP_IMAGE_CONSUMED,generation as u64,files_epoch,0);
+    }
+}
 /// Background copies still to start from the file Files last read, and its length.
 static mut RECORD_SPAWN_LEFT: u64 = 0;
 static mut RECORD_SPAWN_WANTED: u64 = 0;
 static mut RECORD_SPAWN_LEN: u64 = 0;
+static mut RECORD_SPAWN_GENERATION: u32 = 0;
+static mut RECORD_SPAWN_FILES_EPOCH: u64 = 0;
 /// A few at a time, so starting thousands never stalls the desktop.
 unsafe fn record_spawn_poll(){
     use sex_pdx::program_store as store;
@@ -17785,10 +17829,15 @@ unsafe fn record_spawn_poll(){
     if status!=0||made==0{
         sex_pdx::serial_record!("[shell.records.spawn.ended] left={} status={} live={}",RECORD_SPAWN_LEFT,status,live);
         program_refused(if status==0{store::NO_MORE_RECORDS}else{store::NOT_A_PROGRAM});
-        RECORD_SPAWN_LEFT=0;return;
+        RECORD_SPAWN_LEFT=0;
+        program_image_consumed(core::mem::take(&mut RECORD_SPAWN_GENERATION),core::mem::take(&mut RECORD_SPAWN_FILES_EPOCH));
+        return;
     }
     RECORD_SPAWN_LEFT-=made;
-    if RECORD_SPAWN_LEFT==0{sex_pdx::serial_record!("[shell.records.spawned] live={}",live);}
+    if RECORD_SPAWN_LEFT==0{
+        program_image_consumed(core::mem::take(&mut RECORD_SPAWN_GENERATION),core::mem::take(&mut RECORD_SPAWN_FILES_EPOCH));
+        sex_pdx::serial_record!("[shell.records.spawned] live={}",live);
+    }
 }
 /// A run started from a file, waiting to tell Files where it runs.
 static mut PROGRAM_BIND_PENDING: bool = false;
@@ -17797,6 +17846,8 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    let approved=unsafe{core::mem::take(&mut PROGRAM_APPROVED_VELLUM)};
+    unsafe{pdf_sign::bind_approved(target,task,approved);}
     unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
@@ -17891,6 +17942,7 @@ unsafe fn launch_started(target:u32,task:u32,network:bool){
 /// A run ended: what it started is no longer its to end, and its starter hears how it
 /// ended once its status is in, or the grace for it has passed.
 unsafe fn launch_ended(target:u32,task:u32){
+    pdf_sign::retire(target,task);
     for slot in NETWORK_RUNS.iter_mut().chain(HIDDEN_RUNS.iter_mut()){if *slot==Some((target,task)){*slot=None;}}
     for slot in PLACED_RUNS.iter_mut(){if slot.is_some_and(|p|p.0==target&&p.1==task){*slot=None;}}
     session_tell(sex_pdx::session_restore::ENDED,target,task,0);
@@ -17978,6 +18030,8 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
             if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
             // Files loads a program's ticket only for the program that prepared it.
+            PROGRAM_FILES_EPOCH=program_files_epoch();
+            if PROGRAM_FILES_EPOCH==0{refuse(store::IMAGE_BUSY,"files_unavailable");return true}
             let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,caller as u64);
             if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
             PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));LAUNCH_HIDDEN=flags&store::RUN_HIDDEN!=0;
@@ -18021,6 +18075,8 @@ unsafe fn attached_stop(caller:u32,target:u64){
 unsafe fn program_start_own(name:[u64;2])->bool{
     use sex_pdx::program_store as store;
     if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||LAUNCH_ASKER.is_some()||RECORD_SPAWN_WANTED!=0||program_free_row().is_none(){return false}
+    PROGRAM_FILES_EPOCH=program_files_epoch();
+    if PROGRAM_FILES_EPOCH==0{return false}
     PROGRAM_READING=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,name[0],name[1],0).0==0;
     PROGRAM_NETWORK=false;PROGRAM_LAUNCHER=None;PROGRAM_TICKET=0;PROGRAM_SCENE=None;
     PROGRAM_READING
@@ -18030,13 +18086,19 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
     if matches!(msg.type_id,store::OP_RECORDS_STOP|store::OP_RECORDS_CENSUS){
         if !app_catalog::is_spindle(msg.caller_pd){return true}
-        if msg.type_id==store::OP_RECORDS_STOP{RECORD_SPAWN_LEFT=0;let _=store::record_call(store::RECORD_STOP,msg.arg0,0);}
+        if msg.type_id==store::OP_RECORDS_STOP{
+            RECORD_SPAWN_LEFT=0;
+            let _=store::record_call(store::RECORD_STOP,msg.arg0,0);
+            program_image_consumed(core::mem::take(&mut RECORD_SPAWN_GENERATION),core::mem::take(&mut RECORD_SPAWN_FILES_EPOCH));
+        }
         else{let _=store::record_call(store::RECORD_CENSUS,0,0);}
         return true;
     }
     if msg.type_id==store::OP_SPAWN {
         if !app_catalog::is_spindle(msg.caller_pd){return true}
         if PROGRAM_READING||restricted_routes::busy()||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
+        PROGRAM_FILES_EPOCH=program_files_epoch();
+        if PROGRAM_FILES_EPOCH==0{sex_pdx::serial_record!("[shell.records.denied] reason=files_unavailable");return true}
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
@@ -18054,6 +18116,8 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
+        PROGRAM_FILES_EPOCH=program_files_epoch();
+        if PROGRAM_FILES_EPOCH==0{reader_glue::refuse_other(store::IMAGE_BUSY);return true}
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
         // A terminal's run reaches the network only when the terminal asks (`ssh`) and the
@@ -18066,23 +18130,34 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         return true;
     }
     if !PROGRAM_READING||msg.caller_pd!=11||msg.type_id!=1{return false}
-    let Some(result)=store::decode_reply(msg.arg0)else{return false};
+    let Some(result)=store::decode_attested_reply(msg.arg0)else{return false};
     PROGRAM_READING=false;
+    PROGRAM_APPROVED_VELLUM=false;
+    let requested_epoch=core::mem::take(&mut PROGRAM_FILES_EPOCH);
     if RECORD_SPAWN_WANTED!=0{
         match result{
-            Ok(len)=>{RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;},
+            Ok((len,_,generation))=>{
+                RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;
+                RECORD_SPAWN_GENERATION=generation;RECORD_SPAWN_FILES_EPOCH=image_consume_epoch(requested_epoch,program_files_epoch());
+            },
             Err(error)=>{sex_pdx::serial_record!("[shell.records.denied] reason=store error={}",error);program_refused(error);},
         }
         RECORD_SPAWN_WANTED=0;
         return true;
     }
-    let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
-    let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true};
+    let (len,approved,generation)=match result{Ok(v)=>v,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
+    let Some((row,slot,state))=program_free_row()else{
+        program_image_consumed(generation,image_consume_epoch(requested_epoch,program_files_epoch()));
+        sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true
+    };
     launcher_focus_discard();
     let loaded=a::load_program(slot,len);
+    let copied_epoch=program_files_epoch();
+    program_image_consumed(generation,image_consume_epoch(requested_epoch,copied_epoch));
     if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);program_refused(store::NOT_A_PROGRAM);return true}
+    PROGRAM_APPROVED_VELLUM=image_approval_after_copy(approved,generation,requested_epoch,copied_epoch);
     if state==a::ACTIVATION_READY{
-        let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
+        let Ok(active)=a::activation(slot,true)else{PROGRAM_APPROVED_VELLUM=false;sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
         program_bind(active.successor,active.task);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
@@ -18097,13 +18172,13 @@ unsafe fn program_rebirth_poll(){
     match a::rebirth(slot){
         Ok(active) if active.state==a::ACTIVATION_ACTIVE=>{
             PROGRAM_REBIRTH=None;
-            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{return};
+            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{PROGRAM_BIND_PENDING=false;PROGRAM_APPROVED_VELLUM=false;return};
             sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
             if core::mem::take(&mut PROGRAM_BIND_PENDING){program_bind(active.successor,active.task);}
             launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         },
         Ok(_)|Err(a::RETRY)=>{},
-        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
+        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;PROGRAM_APPROVED_VELLUM=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
     }
 }
 unsafe fn open_browser_in_active_scene()->bool{

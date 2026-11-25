@@ -162,6 +162,16 @@ manifest = "apps/sexdrive/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexdrive"
 dest_artifact = "iso_root/apps/sexdrive"
 
+# PDF: the first ordinary std app, hayro rendering pages into the window.
+[[stage]]
+id = "build_pdf"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/pdf/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/pdf"
+dest_artifact = "iso_root/programs/vellum"
+
 [[stage]]
 id = "build_silk_shell"
 action = "cargo_manifest"
@@ -258,7 +268,7 @@ rustflags = ""
 [[stage]]
 id = "build_sexfiles"
 action = "cargo_manifest"
-consumed_inputs = ["iso_root/programs/moanplug"]
+consumed_inputs = ["iso_root/programs/moanplug", "iso_root/programs/vellum"]
 manifest = "servers/sexfiles/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexfiles"
 dest_artifact = "iso_root/servers/sexfiles"
@@ -763,16 +773,6 @@ target = "x86_64-sex-app.json"
 manifest = "apps/gossip/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/gossip"
 dest_artifact = "iso_root/programs/gossip"
-
-# PDF: the first ordinary std app, hayro rendering pages into the window.
-[[stage]]
-id = "build_pdf"
-action = "cargo_manifest"
-target = "x86_64-sex-std.json"
-build_std = "std,panic_abort"
-manifest = "apps/pdf/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/pdf"
-dest_artifact = "iso_root/programs/vellum"
 
 # Shibari: the separate, RAM-only PDF signing window. The key is entered here.
 [[stage]]
