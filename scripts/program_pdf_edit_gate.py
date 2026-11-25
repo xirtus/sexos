@@ -16,11 +16,12 @@ and the thumbnail's header, size and white paper are right."""
 import argparse,http.server,io,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from install_program import install
-from make_pdf_fixture import form_document,choice_document,FORM_WORD
+from make_pdf_fixture import form_document,choice_document,advanced_choice_document,FORM_WORD
 ROOT=Path(__file__).resolve().parents[1]
 FORM=form_document()
 CHOICE=choice_document()
-FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE}
+ADVANCED=advanced_choice_document()
+FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE,'/advanced-choice.pdf':ADVANCED}
 FILES['/certificate.der']=(ROOT/'crates/vellum-edit/tests/fixtures/cms-test-cert.der').read_bytes()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
@@ -182,6 +183,40 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-choice-reopened.ppm')})
   assert (a.out/'pdf-choice-reopened.ppm').stat().st_size>10000
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # Editable combo text and multi-select list values survive a guest save.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/advanced-choice.pdf advanced-choice.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @advanced-choice.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=advanced-choice\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  step(lambda:chord('ctrl','e'),r'\[pdf\.form\] fields=2 first=project\n')
+  g['wait'](r'\[pdf\.choice\.focus\] name=project selected=0 count=3\n',s,120)
+  chord('ctrl','a');keys('Orbit')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[pdf\.field\] name=project kind=editable-choice value=Orbit\n',s,120)
+  g['wait'](r'\[pdf\.choice\.focus\] name=teams selected=1 count=3\n',s,120)
+  step(lambda:q.key('down'),r'\[pdf\.choice\] name=teams selected=2 count=3 display=Engineering\n')
+  step(lambda:q.key('spc'),r'\[pdf\.field\] name=teams kind=multi-choice value=3 selected\n')
+  step(lambda:q.key('up'),r'\[pdf\.choice\] name=teams selected=1 count=3 display=Accounting\n')
+  step(lambda:q.key('spc'),r'\[pdf\.field\] name=teams kind=multi-choice value=2 selected\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-advanced-choice-fields.ppm')})
+  assert (a.out/'pdf-advanced-choice-fields.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.save\.synced\] path=@/advanced-choice\.pdf bytes=\d+\n',s,300)
+  g['wait'](r'\[pdf\.saved\] path=@/advanced-choice\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=2 ms=\d+\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  s=len(t());line('run vellum @advanced-choice.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=advanced-choice\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  s=len(t());chord('ctrl','e')
+  g['wait'](r'\[pdf\.choice\.focus\] name=project selected=0 count=3\n',s,120)
+  step(lambda:chord('ctrl','down'),r'\[pdf\.choice\.focus\] name=teams selected=2 count=3\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-advanced-choice-reopened.ppm')})
+  assert (a.out/'pdf-advanced-choice-reopened.ppm').stat().st_size>10000
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # This fixture was signed by vellum-edit::cms in the host test above. The
   # guest opens those exact bytes and shows its deliberately unverified status.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/cms-signed.pdf cms-signed.pdf')
@@ -297,6 +332,10 @@ def main():
  subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/signature-field.pdf',str(signed_pdf)],check=True)
  signed_data=signed_pdf.read_bytes()
  assert signed_data.startswith(FORM) and b'/ByteRange' in signed_data[len(FORM):] and b'/Contents <' in signed_data[len(FORM):]
+ advanced_pdf=a.out/'advanced-choice-saved.pdf'
+ subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/advanced-choice.pdf',str(advanced_pdf)],check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_advanced_choices_survive_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_ADVANCED_PDF':str(advanced_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_verifies_independently_when_supplied','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_SIGNED_PDF':str(signed_pdf)},check=True)
  checked='bytes'

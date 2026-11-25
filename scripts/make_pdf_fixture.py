@@ -131,6 +131,33 @@ def choice_document():
     return bytes(out)
 
 
+def advanced_choice_document():
+    """Editable combo and multi-select list with paired PDF export/display values."""
+    content = ('BT /F1 15 Tf 72 725 Td (Vellum advanced choices) Tj ET\n'
+               'BT /F1 12 Tf 72 670 Td (Project:) Tj ET\n'
+               'BT /F1 12 Tf 72 600 Td (Teams:) Tj ET\n')
+    objects = {
+        1: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>',
+        2: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        3: '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R 7 0 R] >>',
+        4: f'<< /Length {len(content)} >>\nstream\n{content}endstream',
+        5: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+        6: '<< /Type /Annot /Subtype /Widget /T (project) /FT /Ch /Ff 393216 /Opt [[(S) (Small)] [(M) (Medium)] [(L) (Large)]] /V (Custom) /DA (/Helv 12 Tf 0 g) /Rect [140 655 340 681] /F 4 /P 3 0 R >>',
+        7: '<< /Type /Annot /Subtype /Widget /T (teams) /FT /Ch /Ff 2097152 /Opt [[(A) (Accounting)] [(E) (Engineering)] [(D) (Design)]] /V [(A) (D)] /I [0 2] /DA (/Helv 12 Tf 0 g) /Rect [140 540 340 618] /F 4 /P 3 0 R >>',
+    }
+    out = bytearray(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n')
+    offsets = {}
+    for num in sorted(objects):
+        offsets[num] = len(out)
+        out += f'{num} 0 obj\n{objects[num]}\nendobj\n'.encode('latin-1')
+    xref = len(out)
+    out += f'xref\n0 {len(objects) + 1}\n0000000000 65535 f \n'.encode()
+    for num in sorted(objects):
+        out += f'{offsets[num]:010} 00000 n \n'.encode()
+    out += f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+    return bytes(out)
+
+
 if __name__ == '__main__':
     target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / 'tests/fixtures/pdf/find10.pdf'
     target.parent.mkdir(parents=True, exist_ok=True)
