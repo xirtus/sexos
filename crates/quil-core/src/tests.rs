@@ -613,6 +613,24 @@ fn rust_inline_raw_strings_keep_comment_markers_inside_string() {
 }
 
 #[test]
+fn rust_multiline_raw_string_carries_hash_delimiter_across_lines() {
+    let mut out = Vec::new();
+    let state = highlight::line_state(Lang::Rust, b"let text = br##\" // /*", highlight::State::Normal, &mut out);
+    assert_eq!(state, highlight::State::RustRawString(2));
+    assert_eq!(*out.last().unwrap(), (11, 22, Kind::String));
+    let state = highlight::line_state(Lang::Rust, b"fn fake() {} \"# still raw", state, &mut out);
+    assert_eq!(state, highlight::State::RustRawString(2));
+    assert_eq!(out, [(0, b"fn fake() {} \"# still raw".len(), Kind::String)]);
+    let state = highlight::line_state(Lang::Rust, b"close\"##; fn real() {}", state, &mut out);
+    assert_eq!(state, highlight::State::Normal);
+    assert_eq!(out[0], (0, 8, Kind::String));
+    assert!(out.contains(&(10, 12, Kind::Keyword)));
+    let state = highlight::line_state(Lang::Rust, b"// comment", state, &mut out);
+    assert_eq!(state, highlight::State::Normal);
+    assert_eq!(out, [(0, 10, Kind::Comment)]);
+}
+
+#[test]
 fn python_inline_f_string_prefixes_are_colored_with_the_string() {
     let text = b"label = f\"#value\"; path = rf'//name'; other = Fr\"ok\"";
     let mut out = Vec::new();
