@@ -575,8 +575,8 @@ impl Ui {
                 Ask::GoTo(place) => format!("Go to: {}_   {}", place.iter().collect::<String>(), said("a cell like B7, B7:D9 or Sheet2!B7; Enter goes, Esc closes")),
                 Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
-                Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
-                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type/title, legend, table on/off, axes, labels, gridlines")),
+                Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, D doughnut, Esc cancels", self.selection().a1()),
+                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type/title, hole, angle, legend, table, axes, labels")),
                 Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("text or numeric comparison; join two with and/or; Enter applies")),
             }
@@ -764,7 +764,7 @@ impl Ui {
             Ask::Chart => {
                 if key.control { return false; }
                 let kind = match key.code {
-                    code::C => "column", code::L => "line", code::B => "bar", code::P => "pie",
+                    code::C => "column", code::L => "line", code::B => "bar", code::P => "pie", code::D => "doughnut",
                     _ => return false,
                 };
                 self.ask = None;

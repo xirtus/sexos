@@ -19,8 +19,8 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+L, Ctrl+Shift+E, Ctrl+Shift+O | Toggle filter; show rows matching the selected cell; choose column values or All rows |
 | Ctrl+Shift+K | Filter the current column by `contains text`, `starts text`, `ends text`, `notcontains text`, or a numeric rule such as `> 200` or `<= 40`; join two comparisons with `and` or `or`, for example `>= 40 and <= 200` |
 | Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert a column chart |
-| Ctrl+Shift+M | Choose a column, line, bar or pie chart for the selection |
-| Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `type line`, `title text`, `clear title`, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
+| Ctrl+Shift+M | Choose a column, line, bar, pie or doughnut chart for the selection |
+| Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `type doughnut`, `title text`, `clear title`, `hole 10`–`hole 90` on doughnuts, `angle 0`–`angle 359` on pie or doughnut, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
 | Ctrl+Shift+I | Search the function catalog by name, category or description; Up/Down chooses, Enter inserts `=NAME()` with the caret between the parentheses, Esc closes |
 | Ctrl+Shift+U | Toggle wrapped text in the selected cells; automatic row heights grow to show the lines |
 | Ctrl+Shift+W | Review warnings from importing the current workbook |

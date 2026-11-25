@@ -505,8 +505,8 @@ impl Book {
 
     /// Insert one of the chart types offered by the native grid.
     pub fn add_chart_kind(&mut self, range: Range, row: u32, col: u32, kind: &str) -> Result<(), String> {
-        if !matches!(kind, "column" | "line" | "bar" | "pie") {
-            return Err("Choose column, line, bar or pie".into());
+        if !matches!(kind, "column" | "line" | "bar" | "pie" | "doughnut") {
+            return Err("Choose column, line, bar, pie or doughnut".into());
         }
         self.select(range)?;
         let at = CellRef::new(row, col).a1();
@@ -533,9 +533,9 @@ impl Book {
     /// Change an existing chart through GridCraft's undoable command.
     pub fn edit_chart(&mut self, id: u32, input: &str) -> Result<String, String> {
         let input = input.trim();
-        let exists = self.session.doc().ok().and_then(|d| d.wb.active()
-            .map(|sheet| sheet.charts.iter().any(|chart| chart.id == id))).unwrap_or(false);
-        if !exists { return Err("Choose a chart on this sheet first".into()); }
+        let kind = self.session.doc().ok().and_then(|d| d.wb.active()
+            .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| chart.kind)));
+        let Some(kind) = kind else { return Err("Choose a chart on this sheet first".into()); };
         if let Some(title) = input.strip_prefix("title ") {
             if title.is_empty() || title.chars().count() > 120 { return Err("Enter title followed by 1–120 characters".into()); }
             self.run("chart.set", json!({ "chart": id, "title": title }))?;
@@ -546,8 +546,8 @@ impl Book {
             return Ok("Chart title cleared".into());
         }
         if let Some(kind) = input.strip_prefix("type ") {
-            if !matches!(kind, "column" | "line" | "bar" | "pie") {
-                return Err("Choose type column, line, bar or pie".into());
+            if !matches!(kind, "column" | "line" | "bar" | "pie" | "doughnut") {
+                return Err("Choose type column, line, bar, pie or doughnut".into());
             }
             self.run("chart.set", json!({ "chart": id, "type": kind }))?;
             return Ok(format!("Chart type: {kind}"));
@@ -563,6 +563,22 @@ impl Book {
             let on = match choice { "on" => true, "off" => false, _ => return Err("Choose table on or off".into()) };
             self.run("chart.set", json!({ "chart": id, "dataTable": on }))?;
             return Ok(format!("Chart data table: {}", if on { "on" } else { "off" }));
+        }
+        if let Some(value) = input.strip_prefix("hole ") {
+            if kind != gridcraft_engine::model::ChartKind::Doughnut { return Err("Hole size needs a doughnut chart".into()); }
+            let hole = value.parse::<u8>().map_err(|_| "Choose hole size 10–90")?;
+            if !(10..=90).contains(&hole) { return Err("Choose hole size 10–90".into()); }
+            self.run("chart.set", json!({ "chart": id, "holeSize": hole }))?;
+            return Ok(format!("Doughnut hole: {hole}%"));
+        }
+        if let Some(value) = input.strip_prefix("angle ") {
+            if !matches!(kind, gridcraft_engine::model::ChartKind::Pie | gridcraft_engine::model::ChartKind::Doughnut) {
+                return Err("Slice angle needs a pie or doughnut chart".into());
+            }
+            let angle = value.parse::<u16>().map_err(|_| "Choose slice angle 0–359")?;
+            if angle > 359 { return Err("Choose slice angle 0–359".into()); }
+            self.run("chart.set", json!({ "chart": id, "firstSliceAngle": angle }))?;
+            return Ok(format!("First slice angle: {angle}°"));
         }
         for (prefix, field, label) in [("x title ", "xTitle", "horizontal axis"), ("y title ", "yTitle", "vertical axis")] {
             if let Some(title) = input.strip_prefix(prefix) {
@@ -586,7 +602,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter type, title, legend, table on/off, x/y title, labels or gridlines".into())
+        Err("Enter type, title, legend, table, hole, angle, axes, labels or gridlines".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -1249,6 +1265,42 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(state(&Book::open(&path).unwrap().0), ("Right".into(), Some("Category".into()), Some("Annual cost".into()), true, false));
+    }
+
+    #[test]
+    fn doughnut_design_controls_render_undo_and_round_trip() {
+        let mut book = budget("chart-design.xlsx");
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        for bad in ["hole 50", "angle 90", "type radar"] {
+            assert!(book.edit_chart(id, bad).is_err(), "{bad}");
+        }
+        book.edit_chart(id, "type doughnut").unwrap();
+        let before = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        for bad in ["hole 9", "hole 91", "angle 360", "angle -1"] {
+            assert!(book.edit_chart(id, bad).is_err(), "{bad}");
+        }
+        book.edit_chart(id, "hole 50").unwrap();
+        let after_hole = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(before, after_hole);
+        book.edit_chart(id, "angle 90").unwrap();
+        let after_angle = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(after_hole, after_angle);
+        let state = |book: &Book| {
+            let chart = &book.session.doc().unwrap().wb.active().unwrap().charts[0];
+            (chart.kind, chart.hole_size, chart.first_slice_angle)
+        };
+        assert_eq!(state(&book), (gridcraft_engine::model::ChartKind::Doughnut, 50, 90));
+        book.undo().unwrap();
+        assert_ne!(state(&book).2, 90);
+        book.redo().unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(state(&Book::open(&path).unwrap().0), state(&book));
+        let mut inserted = budget("doughnut-insert.xlsx");
+        inserted.add_chart_kind(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3, "doughnut").unwrap();
+        assert_eq!(state(&inserted).0, gridcraft_engine::model::ChartKind::Doughnut);
+        assert!(inserted.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).is_some());
     }
 
     #[test]
