@@ -790,6 +790,23 @@ impl Book {
         Ok(())
     }
 
+    /// Place a selected picture in the paragraph, beside text, or between
+    /// blocks of text. These three modes survive both DOCX and ODT export.
+    pub fn picture_wrap(&mut self, input: &str) -> Result<(), String> {
+        let wrap = match input.trim().to_ascii_lowercase().as_str() {
+            "inline" | "in line" => "inline",
+            "square" | "beside" => "square",
+            "top and bottom" | "top-and-bottom" | "above and below" => "topAndBottom",
+            _ => return Err("Choose inline, square, or top-and-bottom".into()),
+        };
+        if !matches!(wordcraft_engine::cmd::objects::selected(&self.session), Some((_, InlineObject::Image { .. }))) {
+            return Err("Select a picture first".into());
+        }
+        self.run("arrange.wrap", json!({ "wrap": wrap }))
+            .map_err(|_| "Select a picture first".to_string())?;
+        Ok(())
+    }
+
     /// Selects the next proofing issue and returns its word and suggestions.
     pub fn next_spelling_issue(&mut self) -> Result<Option<(String, Vec<String>)>, String> {
         let issue = self.run("review.spelling", json!({}))?;
@@ -2421,6 +2438,35 @@ mod tests {
             book.save().unwrap();
             let kept = crop(&Book::open(&path).unwrap());
             assert!(kept.iter().zip(want).all(|(got, want)| (*got - want).abs() < 0.001), "{ext} lost crop: {kept:?}");
+        }
+    }
+
+    #[test]
+    fn picture_text_flow_round_trips_in_docx_and_odt() {
+        use wordcraft_engine::doc::para::Wrap;
+        let picture = temp("flow-mark.png");
+        std::fs::write(&picture, include_bytes!("../../../assets/brand/sexos-lips-badge-64.png")).unwrap();
+        let wrap_of = |book: &Book| book.session.doc.body.iter().filter_map(|b| b.as_para())
+            .flat_map(|p| p.object_offsets().into_iter().filter_map(|off| p.object_at(off)))
+            .find_map(|o| match o { wordcraft_engine::doc::para::InlineObject::Image { float, .. } => Some(float.wrap), _ => None }).unwrap();
+        for ext in ["docx", "odt"] {
+            for (mode, want) in [("square", Wrap::Square), ("top-and-bottom", Wrap::TopAndBottom), ("inline", Wrap::Inline)] {
+                let path = temp(&format!("picture-flow-{mode}.{ext}"));
+                let mut book = Book::blank(&path);
+                assert!(book.picture_wrap(mode).is_err());
+                book.insert_picture(&picture).unwrap();
+                assert!(book.picture_wrap("through the page").is_err());
+                book.picture_wrap(mode).unwrap();
+                assert_eq!(wrap_of(&book), want);
+                if mode != "inline" {
+                    book.key(&Chord { name: "Z", ctrl: true, shift: false });
+                    assert_eq!(wrap_of(&book), Wrap::Inline, "undo did not restore inline flow");
+                    book.key(&Chord { name: "Y", ctrl: true, shift: false });
+                    assert_eq!(wrap_of(&book), want, "redo did not restore {mode} flow");
+                }
+                book.save().unwrap();
+                assert_eq!(wrap_of(&Book::open(&path).unwrap()), want, "{ext} lost {mode} wrap");
+            }
         }
     }
 
