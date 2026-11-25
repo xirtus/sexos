@@ -180,7 +180,13 @@ impl Book {
     /// The file beside this one with extension `ext` (`letter.docx` -> `letter.pdf`).
     pub fn beside(&self, ext: &str) -> String {
         let name_at = self.path.rfind('/').map_or(0, |i| i + 1);
-        let stem = match self.path[name_at..].rfind('.') { Some(dot) if dot > 0 => &self.path[..name_at + dot], _ => &self.path[..] };
+        let own = self.path.starts_with("@/");
+        let stem = match self.path[name_at..].rfind('.') {
+            Some(dot) if dot > 0 && own => &self.path[name_at..name_at + dot],
+            Some(dot) if dot > 0 => &self.path[..name_at + dot],
+            _ if own => &self.path[name_at..],
+            _ => &self.path[..],
+        };
         format!("{stem}.{ext}")
     }
 
@@ -251,8 +257,14 @@ impl Book {
     }
 }
 
-/// Where unsaved changes to `path` are kept: `letter.odt` -> `letter.odt.recovered.docx`.
-pub fn recovery_path(path: &str) -> String { format!("{path}.recovered.docx") }
+/// Where unsaved changes to `path` are kept. An exact external file grant does not
+/// authorize a sibling, so its recovery copy lives in Assuit's own folder.
+pub fn recovery_path(path: &str) -> String {
+    if path.starts_with("@/") {
+        let hash = path.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+        format!("assuit-recovered-{hash:016x}.docx")
+    } else { format!("{path}.recovered.docx") }
+}
 
 /// Stage bytes beside the destination, then ask Files to replace its name in one
 /// rename. A failed encode or write leaves the previous document untouched.
@@ -265,7 +277,9 @@ fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     let mut staged = None;
     for _ in 0..16 {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("{path}.assuit-{n}.tmp");
+        // An exact `@/file.docx` grant does not authorize a temporary sibling.
+        let name = if path.starts_with("@/") { format!("assuit-{n}.tmp") }
+            else { format!("{path}.assuit-{n}.tmp") };
         match OpenOptions::new().write(true).create_new(true).open(&name) {
             Ok(file) => { staged = Some((name, file)); break; }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
@@ -524,6 +538,16 @@ mod tests {
     fn doc_saves_beside_as_docx() {
         let book = Book::blank(&temp("old.doc"));
         assert!(book.save_path().ends_with("old.docx"));
+    }
+
+    #[test]
+    fn exact_file_grant_uses_own_folder_for_recovery() {
+        let kept = recovery_path("@/documents/letter.docx");
+        assert!(kept.starts_with("assuit-recovered-") && kept.ends_with(".docx"));
+        assert_eq!(kept, recovery_path("@/documents/letter.docx"));
+        assert_ne!(kept, recovery_path("@/documents/other.docx"));
+        let book = Book::blank("@/documents/letter.docx");
+        assert_eq!(book.beside("pdf"), "letter.pdf");
     }
 
     #[test]
