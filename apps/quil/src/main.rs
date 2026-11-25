@@ -9,6 +9,7 @@
 //! folder, Ctrl+N new tab, Ctrl+W close tab, Ctrl+PageUp/PageDown switch tabs, Ctrl+D
 //! next occurrence, Ctrl+Shift+L all occurrences, Ctrl+Shift+Up/Down add cursors,
 //! Ctrl+/ comment, Ctrl+F find, Ctrl+H replace, Ctrl+L go to line, Escape one cursor.
+//! Ctrl+Shift+V shows tracked changes against a granted project's Git index.
 //! The palette switches to Vim mode or Emacs keys.
 //! Ctrl+Shift+J checks the current Rust, Python or JavaScript file with Quil's
 //! native LSP diagnostic helper through a run-scoped pipe.
@@ -24,6 +25,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 use quil_core::buffer::{Buffer, MemSource, Source};
 use quil_core::draft;
+use quil_core::git;
 use quil_core::editor::{Editor, Motion};
 use quil_core::highlight::{self, Kind};
 use quil_core::keymap::{self, Command, Keymap, Keys, Lookup, Named, Press, K};
@@ -147,6 +149,48 @@ fn write_buffer(buf: &Buffer, path: &[u8]) -> Result<(usize, u64), u8> {
 
 fn draft_name(path: &[u8]) -> Vec<u8> { format!("quil-draft-{:016x}", draft::hash(path)).into_bytes() }
 
+/// Read within Quil's existing project grant; Git status never launches a shell.
+fn git_read(path: &[u8], max: usize) -> Option<Vec<u8>> {
+    let len = usize::try_from(files::direct::stat(path).ok()?.size).ok()?;
+    if len > max { return None; }
+    let mut bytes = vec![0; len];
+    let mut at = 0;
+    while at < len {
+        let end = (at + sex_pdx::fs::IO_MAX).min(len);
+        let n = files::direct::read_at(path, at as u64, &mut bytes[at..end]).ok()?;
+        if n == 0 { return None; }
+        at += n;
+    }
+    Some(bytes)
+}
+
+#[derive(Clone)]
+struct GitChange { code: char, path: Vec<u8> }
+
+/// Compare tracked paths with the checked Git index; no ignored/untracked claim.
+fn git_changes(root: &[u8]) -> Result<Vec<GitChange>, String> {
+    let index = project::join(root, b".git/index");
+    let bytes = git_read(&index, git::MAX_INDEX).ok_or_else(|| String::from("No readable Git index in this project."))?;
+    let tracked = git::parse_index(&bytes).map_err(|e| format!("Unsupported or damaged Git index: {e:?}"))?;
+    let mut out = Vec::new();
+    for entry in tracked {
+        if entry.stage != 0 { out.push(GitChange { code: 'C', path: entry.path }); continue; }
+        let path = project::join(root, &entry.path);
+        let code = match files::direct::stat(&path) {
+            Err(_) => 'D',
+            Ok(st) if st.dir => 'D',
+            Ok(st) if st.size > git::MAX_FILE => '?',
+            Ok(_) => match git_read(&path, git::MAX_FILE as usize) {
+                Some(bytes) if git::blob_id(&bytes) == entry.id => continue,
+                Some(_) => 'M',
+                None => '?',
+            },
+        };
+        out.push(GitChange { code, path: entry.path });
+    }
+    Ok(out)
+}
+
 fn read_draft(path: &[u8]) -> Option<Vec<u8>> {
     if path.is_empty() { return None; }
     let name = draft_name(path);
@@ -236,6 +280,7 @@ enum Focus { Editor, Tree }
 enum Overlay {
     None,
     Help { scroll: usize },
+    Git { changes: Vec<GitChange>, sel: usize, note: String },
     Palette { query: String, sel: usize },
     QuickOpen { query: String, sel: usize, files: Vec<Vec<u8>> },
     Find { query: String },
@@ -565,6 +610,18 @@ impl App {
             sex_pdx::serial_record!("[quil.code.shortcuts] open={}", matches!(self.overlay, Overlay::Help { .. }) as u8);
             return;
         }
+        if p == Press::ctrl_shift('v') {
+            if matches!(self.overlay, Overlay::Git { .. }) { self.overlay = Overlay::None; }
+            else {
+                let (changes, note) = match git_changes(&self.root) {
+                    Ok(changes) => (changes, String::new()),
+                    Err(note) => (Vec::new(), note),
+                };
+                sex_pdx::serial_record!("[quil.code.git] tracked_changes={} note={}", changes.len(), note);
+                self.overlay = Overlay::Git { changes, sel: 0, note };
+            }
+            return;
+        }
         if !matches!(self.overlay, Overlay::None) { self.overlay_key(p, window); return; }
         if self.focus == Focus::Tree && !p.ctrl {
             match p.k {
@@ -656,6 +713,16 @@ impl App {
                     K::Named(Named::PageDown) => scroll.saturating_add(visible).min(max),
                     _ => *scroll,
                 };
+            }
+            Overlay::Git { changes, sel, .. } => {
+                if !changes.is_empty() {
+                    *sel = (*sel as isize + updown).clamp(0, changes.len() as isize - 1) as usize;
+                    if enter && changes[*sel].code != 'D' {
+                        let path = project::join(&self.root, &changes[*sel].path);
+                        self.open(&path);
+                        keep = false;
+                    }
+                }
             }
             Overlay::Palette { query, sel } => {
                 edit(query);
@@ -965,9 +1032,19 @@ impl App {
             Overlay::None => return,
             Overlay::Help { scroll } => {
                 let mut all = keymap::shortcut_rows(self.keymap);
+                all.insert(0, String::from("Ctrl+Shift+V  tracked Git changes (read-only)"));
                 all.insert(0, String::from("Language diagnostics  Ctrl+Shift+J"));
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
                 ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
+            }
+            Overlay::Git { changes, sel, note } => {
+                if !note.is_empty() { lines.push((note.clone(), false)); }
+                else if changes.is_empty() { lines.push((String::from("Indexed files match the worktree."), false)); }
+                let first = sel.saturating_sub(9);
+                for (i, change) in changes.iter().enumerate().skip(first).take(10) {
+                    lines.push((format!("{}  {}", change.code, lossy(&change.path)), i == *sel));
+                }
+                ("Quil tracked changes  ", String::from("M modified  D deleted  C conflict  ? too large; Enter opens; Esc closes"))
             }
             Overlay::Palette { query, sel } => {
                 let names: Vec<&str> = Command::ALL.iter().map(|c| c.name()).collect();

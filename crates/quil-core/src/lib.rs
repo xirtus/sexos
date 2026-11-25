@@ -15,6 +15,7 @@ pub mod buffer;
 pub mod draft;
 pub mod editor;
 pub mod fuzzy;
+pub mod git;
 pub mod highlight;
 pub mod keymap;
 pub mod lsp;

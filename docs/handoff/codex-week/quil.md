@@ -11,7 +11,9 @@ Remaining gaps:
   delimiter balance and trailing whitespace for Rust, Python and JavaScript
   files up to 256 KiB. Continuous diagnostics, completion, navigation, rename,
   and full language-server implementations remain gaps.
-- A Git panel for status, diff, staging, commit and branches.
+- Ctrl+Shift+V now shows tracked modified, deleted and conflicted files from a
+  checked Git index in the project's Files grant. Untracked/ignored files,
+  diffs, staging, commit and branches still need native controls.
 - Tree-sitter style structural editing, debugging and extensions.
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the
