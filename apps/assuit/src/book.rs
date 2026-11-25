@@ -329,6 +329,29 @@ impl Book {
         Some(url)
     }
 
+    /// An explicit selection may cross paragraphs. Only prefill the edit
+    /// prompt when every selected character has the same link destination;
+    /// never infer a cross-paragraph link from a collapsed caret.
+    pub fn selected_hyperlink_target(&self) -> Option<String> {
+        if self.session.sel.is_collapsed() { return None; }
+        let (a, b) = self.session.sel.ordered();
+        let mut target: Option<String> = None;
+        let mut selected = false;
+        for path in self.session.doc.paths_between(&a, &b) {
+            let para = self.session.doc.para(a.story, &path)?;
+            let from = if path == a.path { a.off } else { 0 };
+            let to = if path == b.path { b.off } else { para.len() };
+            for (range, props) in para.run_ranges() {
+                if range.end <= from || range.start >= to { continue; }
+                let link = props.link.as_ref()?;
+                if target.as_ref().is_some_and(|old| old != link) { return None; }
+                target.get_or_insert_with(|| link.clone());
+                selected = true;
+            }
+        }
+        if selected { target } else { None }
+    }
+
     fn has_table_of_contents(&self) -> bool {
         let is_toc = |instr: &str| instr.split_whitespace().next() == Some("TOC") && !instr.contains("\\c");
         self.session.doc.body.iter().filter_map(|block| block.as_para())
@@ -1942,6 +1965,37 @@ mod tests {
         plain.session.sel = Selection::caret(Pos::body(0, 4));
         assert!(plain.select_hyperlink_at_caret().is_none());
         assert!(plain.session.sel.is_collapsed());
+    }
+
+    #[test]
+    fn explicit_cross_paragraph_link_selection_edits_and_removes_without_losing_words() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("cross-paragraph-link.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First").unwrap();
+            book.key(&Chord { name: "Enter", ctrl: false, shift: false });
+            book.type_text("Last").unwrap();
+            let whole = || Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 4) };
+            book.session.sel = whole();
+            book.insert_hyperlink("https://old.example").unwrap();
+            book.session.sel = whole();
+            assert_eq!(book.selected_hyperlink_target().as_deref(), Some("https://old.example"));
+            book.insert_hyperlink("https://new.example").unwrap();
+            book.session.sel = whole();
+            assert_eq!(book.selected_hyperlink_target().as_deref(), Some("https://new.example"));
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            reopened.session.sel = whole();
+            assert_eq!(reopened.selected_hyperlink_target().as_deref(), Some("https://new.example"), "{ext}");
+            let words = reopened.text();
+            reopened.remove_hyperlink().unwrap();
+            assert_eq!(reopened.text(), words);
+            reopened.session.sel = whole();
+            assert_eq!(reopened.selected_hyperlink_target(), None);
+            reopened.key(&Chord { name: "Z", ctrl: true, shift: false });
+            reopened.session.sel = whole();
+            assert_eq!(reopened.selected_hyperlink_target().as_deref(), Some("https://new.example"));
+        }
     }
 
     #[test]

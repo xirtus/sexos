@@ -1082,7 +1082,11 @@ impl Ui {
                     return;
                 }
                 (code::K, _) if !key.alt => {
-                    let current = self.book.select_hyperlink_at_caret();
+                    let current = if self.book.session.sel.is_collapsed() {
+                        self.book.select_hyperlink_at_caret()
+                    } else {
+                        self.book.selected_hyperlink_target()
+                    };
                     if current.is_some() { sex_std::record("[assuit.link.edit]"); self.invalidate(); }
                     self.ask = Some(Ask::Link(current.unwrap_or_default()));
                     return;
