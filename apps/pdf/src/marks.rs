@@ -64,8 +64,8 @@ pub fn line_rects(boxes: &[[f64; 4]]) -> Vec<[f64; 4]> {
 /// that are not read-only and have a widget, in reading order.
 pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
     let mut out: Vec<(FieldInfo, usize, [f64; 4])> = fields.iter()
-        .filter(|f| !f.read_only && (matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox)
-            || (!f.options.is_empty() && matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false }))))
+        .filter(|f| !f.read_only && (matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox | FieldKind::ComboBox { editable: true })
+            || (!f.options.is_empty() && matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { .. }))))
         .filter_map(|f| f.widgets.iter().find_map(|(_, page, rect)| page.map(|p| (f.clone(), p, *rect))))
         .collect();
     // Rows within a few points of each other read left to right.
@@ -83,6 +83,26 @@ pub fn choice_index(f: &FieldInfo) -> Option<usize> {
         _ => return None,
     };
     f.options.iter().position(|(export, display)| export == value || display == value)
+}
+
+/// The option rows selected by a list box, matched by PDF export value.
+pub fn choice_indices(f: &FieldInfo) -> Vec<usize> {
+    let values: Vec<&str> = match &f.value {
+        vellum_edit::FieldValue::Choices(v) => v.iter().map(String::as_str).collect(),
+        vellum_edit::FieldValue::Text(s) | vellum_edit::FieldValue::State(s) => vec![s],
+        vellum_edit::FieldValue::Empty => Vec::new(),
+    };
+    f.options.iter().enumerate().filter_map(|(i, (export, display))|
+        values.iter().any(|v| *v == export || *v == display).then_some(i)).collect()
+}
+
+/// Toggle one multi-list row and return its export values in document order.
+pub fn toggle_choice(f: &FieldInfo, index: usize) -> Option<Vec<String>> {
+    if index >= f.options.len() { return None; }
+    let mut selected = choice_indices(f);
+    if let Some(at) = selected.iter().position(|&n| n == index) { selected.remove(at); }
+    else { selected.push(index); selected.sort_unstable(); }
+    Some(selected.iter().map(|&n| f.options[n].0.clone()).collect())
 }
 
 /// Up/Down through a finite choice list. An empty field starts at the first/last item.
@@ -269,6 +289,32 @@ mod tests {
         let after = fillable(&again.fields().unwrap());
         assert_eq!(after[0].0.value, vellum_edit::FieldValue::Text("M".into()));
         assert_eq!(after[1].0.value, vellum_edit::FieldValue::Text("E".into()));
+        assert!(hayro::hayro_syntax::Pdf::new(saved).is_ok());
+    }
+
+    #[test]
+    fn editable_combo_and_multi_list_are_keyboard_fillable() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+        let mut ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(fields.iter().map(|f| f.0.name.as_str()).collect::<Vec<_>>(), ["project", "teams"]);
+        assert_eq!(fields[0].0.kind, FieldKind::ComboBox { editable: true });
+        assert_eq!(choice_index(&fields[0].0), None);
+        assert_eq!(fields[1].0.kind, FieldKind::ListBox { multi_select: true });
+        assert_eq!(choice_indices(&fields[1].0), [0, 2]);
+        let first = toggle_choice(&fields[1].0, 1).unwrap();
+        assert_eq!(first, ["A", "E", "D"]);
+        ed.set_field("teams", FieldValue::Choices(first)).unwrap();
+        let fresh = fillable(&ed.fields().unwrap());
+        let second = toggle_choice(&fresh[1].0, 0).unwrap();
+        assert_eq!(second, ["E", "D"]);
+        assert_eq!(toggle_choice(&fresh[1].0, 3), None);
+        ed.set_field("project", FieldValue::Text("Orbit".into())).unwrap();
+        ed.set_field("teams", FieldValue::Choices(second)).unwrap();
+        let saved = ed.save_incremental().unwrap();
+        let after = fillable(&Editor::open(saved.clone()).unwrap().fields().unwrap());
+        assert_eq!(after[0].0.value, FieldValue::Text("Orbit".into()));
+        assert_eq!(choice_indices(&after[1].0), [1, 2]);
         assert!(hayro::hayro_syntax::Pdf::new(saved).is_ok());
     }
 

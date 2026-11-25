@@ -326,6 +326,48 @@ fn real_combo_and_list_pdf_keep_export_values_after_incremental_save() {
 }
 
 #[test]
+fn editable_combo_custom_text_round_trips_real_pdf() {
+    const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+    let mut ed = Editor::open(PDF.to_vec()).unwrap();
+    let fields = ed.fields().unwrap();
+    let project = fields.iter().find(|f| f.name == "project").unwrap();
+    assert_eq!(project.kind, FieldKind::ComboBox { editable: true });
+    assert_eq!(project.value, FieldValue::Text("Custom".into()));
+    ed.set_field("project", FieldValue::Text("New Project".into())).unwrap();
+    let saved = ed.save_incremental().unwrap();
+    assert!(saved.starts_with(PDF));
+    let reopened = Editor::open(saved).unwrap();
+    let after = reopened.fields().unwrap();
+    assert_eq!(after.iter().find(|f| f.name == "project").unwrap().value, FieldValue::Text("New Project".into()));
+}
+
+#[test]
+fn multi_list_export_values_round_trip_real_pdf() {
+    const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+    let mut ed = Editor::open(PDF.to_vec()).unwrap();
+    let fields = ed.fields().unwrap();
+    let teams = fields.iter().find(|f| f.name == "teams").unwrap();
+    assert_eq!(teams.kind, FieldKind::ListBox { multi_select: true });
+    assert_eq!(teams.value, FieldValue::Choices(vec!["A".into(), "D".into()]));
+    ed.set_field("teams", FieldValue::Choices(vec!["E".into(), "D".into()])).unwrap();
+    let saved = ed.save_incremental().unwrap();
+    assert!(saved.starts_with(PDF));
+    let after = Editor::open(saved).unwrap().fields().unwrap();
+    assert_eq!(after.iter().find(|f| f.name == "teams").unwrap().value, FieldValue::Choices(vec!["E".into(), "D".into()]));
+}
+
+#[test]
+fn guest_advanced_choices_survive_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_ADVANCED_PDF") else { return };
+    const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+    let saved = std::fs::read(path).unwrap();
+    assert!(saved.starts_with(PDF));
+    let fields = Editor::open(saved).unwrap().fields().unwrap();
+    assert_eq!(fields.iter().find(|f| f.name == "project").unwrap().value, FieldValue::Text("Orbit".into()));
+    assert_eq!(fields.iter().find(|f| f.name == "teams").unwrap().value, FieldValue::Choices(vec!["E".into(), "D".into()]));
+}
+
+#[test]
 fn form_fill_table() { check_form(Style::Table); }
 
 #[test]

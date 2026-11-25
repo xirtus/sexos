@@ -83,7 +83,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+H highlight a found word or selected region",
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
-    "Type text; Space checkbox; Up/Down choice, Enter selects",
+    "Type text; Space toggles; Up/Down choice, Enter selects",
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
@@ -473,6 +473,13 @@ impl Viewer {
                     FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false } =>
                         form.choice.and_then(|i| f.options.get(i)).map(|(_, shown)| format!("{shown}  (Up/Down choose, Enter saves)"))
                             .unwrap_or_else(|| "Up/Down choose, Enter saves".into()),
+                    FieldKind::ComboBox { editable: true } => form.choice.and_then(|i| f.options.get(i))
+                        .map(|(_, shown)| format!("{shown}  (type or Up/Down choose)"))
+                        .unwrap_or_else(|| format!("{}_  (type or Up/Down choose)", form.text)),
+                    FieldKind::ListBox { multi_select: true } => form.choice.and_then(|i| f.options.get(i))
+                        .map(|(_, shown)| format!("{} {shown}  (Space toggles, Up/Down moves)",
+                            if marks::choice_indices(f).contains(&i) { "[x]" } else { "[ ]" }))
+                        .unwrap_or_else(|| "Up/Down moves, Space toggles".into()),
                     _ => format!("{}_", form.text),
                 };
                 (format!("{}:", f.name), value, format!("field {} of {}, Tab next, Escape ends", form.at + 1, form.fields.len()))
@@ -1231,12 +1238,14 @@ impl Viewer {
         form.at = at;
         let Some((f, page, rect)) = form.fields.get(at).cloned() else { return };
         form.text = match &f.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
-        form.choice = marks::choice_index(&f);
+        form.choice = if matches!(f.kind, FieldKind::ListBox { multi_select: true }) {
+            marks::choice_indices(&f).first().copied().or(Some(0))
+        } else { marks::choice_index(&f) };
         let choice = form.choice;
         self.go(page);
         if let Some(info) = self.page_info(page) { self.reveal = Some(marks::rect_to_shown(&info, rect)[1] as f32); }
         sex_std::record(&format!("[pdf.field.focus] name={} index={} page={}", f.name, at + 1, page + 1));
-        if matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false }) {
+        if matches!(f.kind, FieldKind::ComboBox { .. } | FieldKind::ListBox { .. }) {
             sex_std::record(&format!("[pdf.choice.focus] name={} selected={} count={}", f.name, choice.map_or(0, |i| i + 1), f.options.len()));
         }
     }
@@ -1250,6 +1259,15 @@ impl Viewer {
             if marks::choice_index(f) == form.choice { return; }
             let name = f.name.clone();
             self.set_field(&name, FieldValue::Text(export), "choice", &shown);
+            return;
+        }
+        if matches!(f.kind, FieldKind::ComboBox { editable: true }) {
+            let selected = form.choice.and_then(|i| f.options.get(i)).map(|(export, _)| export.clone());
+            let value = selected.unwrap_or_else(|| form.text.clone());
+            if f.value == FieldValue::Text(value.clone()) { return; }
+            let shown = form.choice.and_then(|i| f.options.get(i)).map(|(_, shown)| shown.clone()).unwrap_or_else(|| value.clone());
+            let name = f.name.clone();
+            self.set_field(&name, FieldValue::Text(value), "editable-choice", &shown);
             return;
         }
         if !matches!(f.kind, FieldKind::Text { .. }) { return; }
@@ -1290,7 +1308,9 @@ impl Viewer {
                     form.fields = fields;
                     if let Some((field, _, _)) = form.fields.get(form.at) {
                         form.text = match &field.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
-                        form.choice = marks::choice_index(field);
+                        form.choice = if matches!(field.kind, FieldKind::ListBox { multi_select: true }) {
+                            marks::choice_indices(field).first().copied().or(Some(0))
+                        } else { marks::choice_index(field) };
                     }
                 }
                 self.refresh();
@@ -1330,15 +1350,16 @@ impl Viewer {
         let Some(form) = self.form.as_mut() else { return false };
         let n = form.fields.len().max(1);
         let checkbox = form.fields.get(form.at).is_some_and(|f| f.0.kind == FieldKind::Checkbox);
+        let choice_kind = form.fields.get(form.at).map(|f| f.0.kind.clone());
         let choices = form.fields.get(form.at).and_then(|f| matches!(f.0.kind,
-            FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false })
-            .then_some(f.0.options.len()));
+            FieldKind::ComboBox { .. } | FieldKind::ListBox { .. }).then_some(f.0.options.len()));
         if let Some(count) = choices {
             if !key.control {
                 if let Some(backward) = match sex_app::nav(key) { Some(Nav::Up) => Some(true), Some(Nav::Down) => Some(false), _ => None } {
                     form.choice = marks::step_choice(count, form.choice, backward);
                     if let Some((f, _, _)) = form.fields.get(form.at) {
-                        if let Some((_, shown)) = form.choice.and_then(|i| f.options.get(i)) {
+                        if let Some((export, shown)) = form.choice.and_then(|i| f.options.get(i)) {
+                            if matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) { form.text = export.clone(); }
                             sex_std::record(&format!("[pdf.choice] name={} selected={} count={} display={}", f.name, form.choice.unwrap_or(0) + 1, count, shown));
                         }
                     }
@@ -1361,9 +1382,14 @@ impl Viewer {
         }
         match key.code {
             ESCAPE => { self.end_form(); return true; }
-            BACKSPACE if !checkbox && choices.is_none() => { form.text.pop(); return true; }
+            BACKSPACE if !checkbox && (choices.is_none() || matches!(choice_kind, Some(FieldKind::ComboBox { editable: true }))) => {
+                form.text.pop(); form.choice = None; return true;
+            }
             BACKSPACE if choices.is_some() => return true,
             _ => {}
+        }
+        if matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) && key.control && key.code == sex_std::sex_pdx::app_key::A {
+            form.text.clear(); form.choice = None; return true;
         }
         let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) else { return false };
         if checkbox {
@@ -1372,9 +1398,19 @@ impl Viewer {
                 let to = marks::toggled(&f);
                 self.set_field(&f.name, FieldValue::State(to.clone()), "checkbox", &to);
             }
-        } else if choices.is_some() {
+        } else if matches!(choice_kind, Some(FieldKind::ListBox { multi_select: true })) {
+            if c == ' ' {
+                let Some((f, _, _)) = form.fields.get(form.at).cloned() else { return true };
+                let Some(i) = form.choice else { return true };
+                let Some(values) = marks::toggle_choice(&f, i) else { return true };
+                let count = values.len();
+                self.set_field(&f.name, FieldValue::Choices(values), "multi-choice", &format!("{count} selected"));
+            }
+            return true;
+        } else if choices.is_some() && !matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) {
             return true;
         } else if form.text.chars().count() < 200 {
+            form.choice = None;
             form.text.push(c);
         }
         true

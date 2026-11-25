@@ -4,6 +4,7 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 
 - **Already present:** native page rendering, zoom and thumbnails, full-document search, outline navigation, highlights and notes, AcroForm text/checkbox filling, incremental PDF updates, and signature field inspection. CI has host tests and QEMU viewer/edit gates.
 - **Choice fields:** the viewer now includes noneditable combo boxes and single-select lists in form focus order. Up/Down chooses a displayed option, Enter commits its PDF export value, and incremental save/reopen keeps it. Editable combos and multi-select lists still need distinct controls.
+- **Advanced choices:** editable combo boxes now accept custom text or an Up/Down option (Ctrl+A clears the current text). Multi-select lists show each option's selected state; Up/Down moves and Space toggles it. Both use the editor's PDF export values and incremental save path. A real-PDF host test and guest save/reopen gate cover both; richer pointer controls remain open.
 - **Search across layout breaks:** Find currently treats extracted line breaks as
   literal characters, so a phrase typed with a space misses words split across
   two visible lines. This slice makes whitespace runs match one query space and
