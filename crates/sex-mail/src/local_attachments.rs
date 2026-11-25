@@ -2,6 +2,11 @@
 //! Names and picked paths for exporting a decoded local MIME attachment.
 use alloc::vec::Vec;
 
+/// First selection names the first attachment; later selections cycle.
+pub fn next_index(current: Option<usize>, count: usize) -> Option<usize> {
+    if count == 0 { None } else { Some(current.map_or(0, |i| (i + 1) % count)) }
+}
+
 /// MIME filenames are untrusted display text. The picker gets a single safe
 /// basename, never a path supplied by the sender.
 pub fn suggested_name(raw: &str) -> Vec<u8> {
@@ -39,5 +44,13 @@ mod tests {
         for bad in [b"/Documents/plan.pdf".as_slice(), b"@/Documents/../plan.pdf", b"@/Documents/", b"@/Documents/x\0.pdf"] {
             assert!(!picked_file(bad));
         }
+    }
+
+    #[test]
+    fn first_selection_starts_at_first_attachment_then_wraps() {
+        assert_eq!(next_index(None, 0), None);
+        assert_eq!(next_index(None, 3), Some(0));
+        assert_eq!(next_index(Some(0), 3), Some(1));
+        assert_eq!(next_index(Some(2), 3), Some(0));
     }
 }

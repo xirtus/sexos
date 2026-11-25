@@ -83,7 +83,7 @@ impl Compose {
 struct App {
     items: Vec<Item>, shown: Vec<usize>, picked: usize, opened: Option<usize>,
     folders: Vec<Vec<u8>>, folder: usize,
-    mail: Option<Message>, query: String, status: String, scroll: usize, attachment: usize,
+    mail: Option<Message>, query: String, status: String, scroll: usize, attachment: Option<usize>,
     palette: Palette, generation: u64,
     compose: Option<Compose>, next_draft: u32, help: bool,
 }
@@ -94,7 +94,7 @@ impl App {
         sex_pdx::serial_record!("[valentine.theme] mode={:?}", theme.mode);
         Self { items: Vec::new(), shown: Vec::new(), picked: 0, opened: None, mail: None,
             folders: vec![Vec::new()], folder: 0,
-            query: String::new(), status: String::new(), scroll: 0, attachment: 0, palette,
+            query: String::new(), status: String::new(), scroll: 0, attachment: None, palette,
             generation: settings::generation().unwrap_or(0), compose: None, next_draft: 0, help: false }
     }
     fn filter(&mut self) {
@@ -105,7 +105,7 @@ impl App {
     fn reload(&mut self, window: &mut Window) {
         let selected = self.folders.get(self.folder).cloned().unwrap_or_default();
         let previous = self.opened.and_then(|i| self.items.get(i)).map(|item| item.name.clone());
-        self.items.clear(); self.opened = None; self.mail = None; self.attachment = 0;
+        self.items.clear(); self.opened = None; self.mail = None; self.attachment = None;
         let mut discovered = vec![Vec::new()];
         let mut scan = 0;
         while scan < discovered.len() && discovered.len() < folders::MAX_FOLDERS {
@@ -152,7 +152,7 @@ impl App {
         let store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
         match files::read(window, &item.name, &mut store[..size as usize]) {
             Ok(n) if n == size as usize => {
-                self.mail = Some(message::parse(&store[..n])); self.opened = Some(i); self.scroll = 0; self.attachment = 0;
+                self.mail = Some(message::parse(&store[..n])); self.opened = Some(i); self.scroll = 0; self.attachment = None;
                 sex_pdx::serial_record!("[valentine.opened] file={} bytes={} subject={}",
                     String::from_utf8_lossy(&item.name), n, item.summary.subject);
             }
@@ -244,16 +244,17 @@ impl App {
     fn choose_attachment(&mut self) {
         let Some(mail) = &self.mail else { self.status = "Open a message to choose an attachment.".into(); return; };
         if mail.attachments.is_empty() { self.status = "This message has no attachments.".into(); return; }
-        self.attachment = (self.attachment + 1) % mail.attachments.len();
-        let chosen = &mail.attachments[self.attachment];
+        self.attachment = local_attachments::next_index(self.attachment, mail.attachments.len());
+        let index = self.attachment.unwrap();
+        let chosen = &mail.attachments[index];
         let safe_name = local_attachments::suggested_name(&chosen.filename);
-        self.status = format!("Attachment {}/{}: {} ({} bytes)", self.attachment + 1,
+        self.status = format!("Attachment {}/{}: {} ({} bytes)", index + 1,
             mail.attachments.len(), String::from_utf8_lossy(&safe_name), chosen.data.len());
-        sex_pdx::serial_record!("[valentine.attachment.selected] index={} total={}", self.attachment + 1, mail.attachments.len());
+        sex_pdx::serial_record!("[valentine.attachment.selected] index={} total={}", index + 1, mail.attachments.len());
     }
     fn save_attachment(&mut self, window: &mut Window) {
         let Some(mail) = &self.mail else { self.status = "Open a message before saving an attachment.".into(); return; };
-        let Some(chosen) = mail.attachments.get(self.attachment) else {
+        let Some(chosen) = mail.attachments.get(self.attachment.unwrap_or(0)) else {
             self.status = "This message has no attachments.".into(); return;
         };
         let suggestion = local_attachments::suggested_name(&chosen.filename);
@@ -264,8 +265,8 @@ impl App {
             Err(sex_pdx::fs::DENIED) => { self.status = "Attachment save cancelled in Loom.".into(); return; },
             Err(e) => { self.status = format!("Loom could not choose a location: {}", String::from_utf8_lossy(files::message(e))); return; },
         };
-        // CREATE is no-clobber on every Files volume. A failed write is removed
-        // where possible; only a confirmed sync is reported as a completed save.
+        // CREATE is no-clobber on every Files volume. A failed write may leave
+        // a partial file; path-based removal could delete another run's replacement.
         if let Err(e) = files::create(window, path) {
             if e == sex_pdx::fs::EXISTS {
                 sex_pdx::serial_record!("[valentine.attachment.exists] path={}", String::from_utf8_lossy(path));
@@ -282,16 +283,14 @@ impl App {
                 sex_pdx::serial_record!("[valentine.attachment.saved] path={} bytes={}", String::from_utf8_lossy(path), chosen.data.len());
             }
             Err(e) => {
-                let removed = files::remove(window, path).and_then(|_| files::sync(window)).is_ok();
-                self.status = format!("Attachment save failed: {}{}", String::from_utf8_lossy(files::message(e)),
-                    if removed { "" } else { "; an incomplete file may remain" });
-                sex_pdx::serial_record!("[valentine.attachment.failed] status={} cleaned={}", e, removed as u8);
+                self.status = format!("Attachment save failed: {}; an incomplete file may remain", String::from_utf8_lossy(files::message(e)));
+                sex_pdx::serial_record!("[valentine.attachment.failed] status={} partial_possible=1", e);
             }
         }
     }
     fn compose_key(&mut self, window: &mut Window, k: sex_pdx::app_key::Key) -> bool {
         if self.compose.is_none() { return false; }
-        if k.control && k.code == 0x1f { self.save_draft(window); return true; } // Ctrl+S
+        if k.control && !k.alt && k.code == 0x1f { self.save_draft(window); return true; } // Ctrl+S
         if k.code == 0x01 { // Escape keeps a changed draft before leaving.
             if self.compose.as_ref().is_some_and(Compose::dirty) && !self.save_draft(window) { return true; }
             self.compose = None; return true;
@@ -447,11 +446,12 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
         c.text(body, x, 94, &format!("From: {}", mail.from()), p.dim, max);
         c.text(tiny, x, 121, &format!("Date: {}", mail.headers.text("date").unwrap_or_default()), p.dim, max);
         if !mail.attachments.is_empty() {
-            let selected = &mail.attachments[app.attachment.min(mail.attachments.len() - 1)];
+            let index = app.attachment.unwrap_or(0).min(mail.attachments.len() - 1);
+            let selected = &mail.attachments[index];
             let safe_name = local_attachments::suggested_name(&selected.filename);
-            c.text(tiny, x, 146, &format!("Attachment {}/{}: {} ({} bytes)", app.attachment + 1,
+            c.text(tiny, x, 146, &format!("Attachment {}/{}: {} ({} bytes)", index + 1,
                 mail.attachments.len(), String::from_utf8_lossy(&safe_name), selected.data.len()), p.accent, max);
-            c.text(tiny, x, 166, "Ctrl+Alt+A next  Ctrl+Alt+S save with Loom", p.dim, max);
+            c.text(tiny, x, 166, "Ctrl+Alt+A select/next  Ctrl+Alt+S save with Loom", p.dim, max);
         }
         let lines: Vec<&str> = mail.text.as_deref().unwrap_or("").lines().collect();
         let first = app.scroll.min(lines.len());
