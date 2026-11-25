@@ -81,6 +81,8 @@ def main():
   s=len(t());q.key('ret');g['wait'](r'\[valentine.opened\] file=draft-[^ ]+\.eml bytes=\d+ subject=plans',s,60)
   s=len(t());ctrl('e');time.sleep(.4);shot('valentine-draft-reopened');q.key('esc')
   s=len(t());ctrl('m');g['wait'](r'\[valentine.account.unavailable\] reason=multipass-service-not-booted',s,60)
+  # The wire contract is present, but no boot-routed Multipass/TLS flow service
+  # exists yet. The guest must continue to show the honest unavailable state.
   shot('valentine-account-status')
   s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name=Travel messages=1',s,60)
   g['wait'](r'\[valentine.opened\] file=Travel/trip.eml bytes=\d+ subject=Dinner on Friday',s,60)
