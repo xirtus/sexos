@@ -974,6 +974,7 @@ static OPENS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Loom");
+    let _ = window.want_keys(sex_pdx::app_key::DESKTOP_KEYS);
     // The folder the person gave: `@/` is everything.
     let mut args = [0u8; w::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
