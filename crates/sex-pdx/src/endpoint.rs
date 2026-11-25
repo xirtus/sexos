@@ -290,45 +290,53 @@ pub fn call(slot: u32, label: u32, payload: [u64; 3]) -> Result<Received, u64> {
 }
 
 /// Receives the next message on endpoint `slot`.
+#[cfg(target_arch = "x86_64")]
 pub fn recv(slot: u32) -> Result<Received, u64> {
     endpoint(OP_RECV, slot, [0; 4])
 }
 
 /// Replies to the currently held call with `label` and three payload words.
+#[cfg(target_arch = "x86_64")]
 pub fn reply(label: u32, payload: [u64; REGISTER_PAYLOAD]) -> Result<Received, u64> {
     let words = encode_reply(label, payload).map_err(|_| E_BADMSG)?;
     endpoint(OP_REPLY, 0, words)
 }
 
 /// Replies to the currently held call and immediately receives the next message on `slot`.
+#[cfg(target_arch = "x86_64")]
 pub fn reply_recv(slot: u32, label: u32, payload: [u64; REGISTER_PAYLOAD]) -> Result<Received, u64> {
     let words = encode_reply(label, payload).map_err(|_| E_BADMSG)?;
     endpoint(OP_REPLY_RECV, slot, words)
 }
 
 /// Replies to the currently held call with a single word.
+#[cfg(target_arch = "x86_64")]
 pub fn reply_word(label: u32, word: u64) -> Result<Received, u64> {
     let words = encode_word_reply(label, word).map_err(|_| E_BADMSG)?;
     endpoint(OP_REPLY, 0, words)
 }
 
 /// Replies with a single word and immediately receives the next message on `slot`.
+#[cfg(target_arch = "x86_64")]
 pub fn reply_word_recv(slot: u32, label: u32, word: u64) -> Result<Received, u64> {
     let words = encode_word_reply(label, word).map_err(|_| E_BADMSG)?;
     endpoint(OP_REPLY_RECV, slot, words)
 }
 
 /// Grants a derived copy of endpoint `slot` into the domain named by `target_domain_slot`.
+#[cfg(target_arch = "x86_64")]
 pub fn grant(slot: u32, target_domain_slot: u32, rights: u32, badge: u64) -> Result<u32, u64> {
     endpoint(OP_GRANT, slot, [target_domain_slot as u64, rights as u64, badge, 0]).map(|r| r.words[0] as u32)
 }
 
 /// Derives a narrower/badged copy of endpoint `slot` in this domain's own capability table.
+#[cfg(target_arch = "x86_64")]
 pub fn derive(slot: u32, rights: u32, badge: u64) -> Result<u32, u64> {
-    endpoint(OP_DERIVE, slot, [0, rights as u64, badge, 0]).map(|r| r.words[0] as u32)
+    endpoint(OP_DERIVE, slot, [0, rights as u64, badge, 0]).map(|r| r.words[0] as u64 as u32)
 }
 
 /// Destroys an endpoint owned by this domain.
+#[cfg(target_arch = "x86_64")]
 pub fn destroy(slot: u32) -> Result<(), u64> {
     endpoint(OP_DESTROY, slot, [0; 4]).map(|_| ())
 }
