@@ -50,3 +50,23 @@ fn links_and_emphasis_stay_and_text_is_escaped() {
     let a = reader::article(&dom, "https://x.example/doc/").unwrap();
     assert!(a.html.contains(r#"Read the <a href="https://x.example/spec">spec</a> with <em>care</em>: a &lt; b, and c &amp; d"#), "{}", a.html);
 }
+
+#[test]
+fn article_data_table_keeps_rows_cells_and_safe_links() {
+    let body = format!(
+        "<article><h1>Observation log</h1>{}<table class=\"article-data\" onclick=\"track()\"><caption>Count by place</caption>\
+         <thead><tr><th>Site</th><th colspan=\"2\">Observed moths</th></tr></thead>\
+         <tbody><tr><td><a href=\"/places/river\">River</a></td><td>Twenty</td><td>at dusk</td></tr>\
+         <tr hidden><td>Secret row</td><td>zero</td></tr>\
+         <tr><td>Forest</td><td colspan=\"999\">Thirty</td><td>at night</td></tr></tbody></table></article>",
+        "<p>Careful observations of these insects across several quiet nights reveal different counts at the river and forest.</p>".repeat(4)
+    );
+    let dom = sex_web::sex_html::parse::parse(&body);
+    let article = reader::article(&dom, "https://news.example/story").unwrap();
+    assert!(article.html.contains("<tr><th>Site</th><th colspan=\"2\">Observed moths</th></tr>"), "{}", article.html);
+    assert!(article.html.contains("<caption>Count by place</caption>"), "{}", article.html);
+    assert!(article.html.contains("<a href=\"https://news.example/places/river\">River</a>"), "{}", article.html);
+    assert!(article.html.contains("<tr><td>Forest</td><td>Thirty</td><td>at night</td></tr>"), "{}", article.html);
+    assert!(!article.html.contains("Secret row") && !article.html.contains("onclick") && !article.html.contains("colspan=\"999\""));
+    assert!(reader::page(&article, "https://news.example/story").contains("border-collapse:collapse"));
+}
