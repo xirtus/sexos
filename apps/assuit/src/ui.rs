@@ -90,6 +90,8 @@ enum Ask {
     Paper(String),
     /// Ctrl+Shift+M: a margin preset or four inch values.
     Margins(String),
+    /// Ctrl+Shift+K: document proofing language.
+    Language(String),
 }
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
@@ -128,6 +130,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Z / Y", "Undo / redo"), ("Ctrl+A", "Select all"),
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+G", "Go to page"), ("Ctrl+Shift+Y", "Spelling suggestions"),
+    ("Ctrl+Shift+K", "Proofing language"),
     ("Ctrl+= / - / 0", "Zoom in / out / reset"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -152,6 +155,8 @@ mod code {
     pub const Y: u8 = 0x15;
     pub const L: u8 = 0x26;
     pub const M: u8 = 0x32;
+    pub const K: u8 = 0x25;
+    pub const A: u8 = 0x1E;
     pub const SLASH: u8 = 0x35;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
@@ -323,6 +328,7 @@ impl Ui {
                 Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
+                Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
             match &p.with {
@@ -338,9 +344,9 @@ impl Ui {
             }
         } else if let Some(proof) = &self.proof {
             if proof.suggestions.is_empty() {
-                format!("Spelling: {}. No suggestion; Ctrl+Shift+Y next, Esc closes", proof.word)
+                format!("Spelling: {}. No suggestion; A adds to dictionary, Ctrl+Shift+Y next, Esc closes", proof.word)
             } else {
-                format!("Spelling: {} → {} ({}/{})   Up/Down choose, Enter changes, Ctrl+Shift+Y next, Esc closes",
+                format!("Spelling: {} → {} ({}/{})   Enter changes, A adds to dictionary, Ctrl+Shift+Y next, Esc closes",
                     proof.word, proof.suggestions[proof.at], proof.at + 1, proof.suggestions.len())
             }
         } else if self.message.is_empty() {
@@ -414,7 +420,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -551,6 +557,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Language(_)) {
+            match self.book.proofing_language(&typed) {
+                Ok(tag) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.proofing-language] {tag}"));
+                    self.message = format!("Default proofing language: {tag}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         match self.book.save_as(&typed) {
             Ok((path, bytes)) => {
                 self.ask = None;
@@ -603,6 +621,7 @@ impl Ui {
                 (code::P, _) if key.shift => { self.ask = Some(Ask::PrintRange(String::new())); return; }
                 (code::L, _) if key.shift => { self.ask = Some(Ask::Paper(String::new())); return; }
                 (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
+                (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }
                 (code::I, _) if key.shift => { self.ask = Some(Ask::Picture(String::new())); return; }
@@ -659,6 +678,19 @@ impl Ui {
         if key.code == code::ESC { self.proof = None; return; }
         if key.code == code::Y && key.control && key.shift { self.proof = None; return self.check_spelling(); }
         let Some(proof) = &mut self.proof else { return };
+        if key.code == code::A && !key.control {
+            let word = proof.word.clone();
+            match self.book.add_spelling_word(&word) {
+                Ok(()) => {
+                    self.proof = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.dictionary.added] word={word}"));
+                    self.message = format!("Added {word} to Assuit's dictionary");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         match sex_app::nav(key) {
             Some(Nav::Up) => proof.at = proof.at.saturating_sub(1),
             Some(Nav::Down) => proof.at = (proof.at + 1).min(proof.suggestions.len().saturating_sub(1)),
