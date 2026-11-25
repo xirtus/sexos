@@ -38,7 +38,7 @@ pub struct Ui {
     picker: Option<(Vec<(String, String)>, usize)>,
     /// The Save As or Go To prompt, while it is open.
     ask: Option<Ask>,
-    /// F7's selected issue and its suggestion list.
+    /// Ctrl+Shift+Y's selected issue and its suggestion list.
     proof: Option<Proof>,
     /// The document came back with last time's unsaved changes: Esc throws them away until
     /// the next edit.
@@ -98,7 +98,7 @@ mod code {
     pub const P: u8 = 0x19;
     pub const T: u8 = 0x14;
     pub const I: u8 = 0x17;
-    pub const F7: u8 = 0x41;
+    pub const Y: u8 = 0x15;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -253,13 +253,13 @@ impl Ui {
             }
         } else if let Some(proof) = &self.proof {
             if proof.suggestions.is_empty() {
-                format!("Spelling: {}. No suggestion; F7 next, Esc closes", proof.word)
+                format!("Spelling: {}. No suggestion; Ctrl+Shift+Y next, Esc closes", proof.word)
             } else {
-                format!("Spelling: {} → {} ({}/{})   Up/Down choose, Enter changes, F7 next, Esc closes",
+                format!("Spelling: {} → {} ({}/{})   Up/Down choose, Enter changes, Ctrl+Shift+Y next, Esc closes",
                     proof.word, proof.suggestions[proof.at], proof.at + 1, proof.suggestions.len())
             }
         } else if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  F7 spelling  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
+            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  Ctrl+Shift+Y spelling  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
                 self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
         } else {
             self.message.clone()
@@ -417,7 +417,7 @@ impl Ui {
         if self.proof.is_some() { return self.proof_key(key); }
         if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         self.message.clear();
-        if key.code == code::F7 && !key.control { return self.check_spelling(); }
+        if key.code == code::Y && key.control && key.shift { return self.check_spelling(); }
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
                 (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }
@@ -473,7 +473,7 @@ impl Ui {
 
     fn proof_key(&mut self, key: Key) {
         if key.code == code::ESC { self.proof = None; return; }
-        if key.code == code::F7 { self.proof = None; return self.check_spelling(); }
+        if key.code == code::Y && key.control && key.shift { self.proof = None; return self.check_spelling(); }
         let Some(proof) = &mut self.proof else { return };
         match sex_app::nav(key) {
             Some(Nav::Up) => proof.at = proof.at.saturating_sub(1),
