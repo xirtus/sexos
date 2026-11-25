@@ -9,17 +9,32 @@ use sex_office::{Canvas, Pen};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_key::Key;
 use sex_std::sex_pdx::app_pointer::{Kind, Pointer};
+use sex_theme::Tokens;
 
-const DESK: u32 = 0x00e8eaed;
-const SHADOW: u32 = 0x00c4c7cc;
-const CARET: u32 = 0x00000000;
-const BAR_BG: u32 = 0x00f8f9fa;
-const DIM: u32 = 0x005f6368;
-const LINE: u32 = 0x00dadce0;
+#[derive(Clone, Copy)]
+struct Palette {
+    desk: u32, shadow: u32, caret: u32, bar_bg: u32,
+    dim: u32, ink: u32, line: u32, selected: u32, on_selected: u32,
+}
+
+impl Palette {
+    fn from_tokens(t: Tokens) -> Self {
+        let rgb = |c: u32| c & 0x00FF_FFFF;
+        Self {
+            desk: rgb(t.window), shadow: rgb(t.border),
+            // Document pages are rendered on white paper in every UI theme.
+            caret: 0x00000000,
+            bar_bg: rgb(t.surface), dim: rgb(t.text_dim), ink: rgb(t.text), line: rgb(t.border),
+            selected: rgb(t.accent), on_selected: rgb(t.on_accent),
+        }
+    }
+}
 const STATUS_H: i32 = 26;
 const MARGIN: i32 = 16;
 
 pub struct Ui {
+    palette: Palette,
+    theme_generation: u64,
     book: Book,
     name: String,
     /// 1.0 fits the page to the window's width.
@@ -82,7 +97,6 @@ impl Prompt {
 }
 
 const GAP: i32 = 12;
-const SELECTED: u32 = 0x001a73e8;
 
 /// Set-1 scan codes Shell passes.
 mod code {
@@ -125,7 +139,11 @@ fn key_name(key: Key) -> Option<String> {
 
 impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
-        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, recovered: false, unkept: None, scroll_to: None }
+        let theme = sex_app::settings::theme();
+        let palette = Palette::from_tokens(theme);
+        let theme_generation = sex_app::settings::generation().unwrap_or(0);
+        sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, palette.selected));
+        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, recovered: false, unkept: None, scroll_to: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -165,6 +183,7 @@ impl Ui {
     }
 
     pub fn draw(&mut self, window: &mut sex_app::Window) {
+        let palette = self.palette;
         let (width, height) = window.size();
         let (w, h) = (width as i32, height as i32);
         let view_h = h - STATUS_H;
@@ -191,22 +210,22 @@ impl Ui {
             if self.picture(page, scale).is_some() { drawn.push((page, left, y, pw, ph, scale)); }
         }
         let mut canvas = Canvas::new(window.pixels(), width, height);
-        canvas.fill(0, 0, w, h, DESK);
+        canvas.fill(0, 0, w, h, palette.desk);
         let clip = (0, 0, w, view_h);
         for (page, left, y, pw, ph, scale) in drawn {
-            canvas.fill(left + 2, y + 2, pw, ph, SHADOW);
+            canvas.fill(left + 2, y + 2, pw, ph, palette.shadow);
             if let Some((_, picture)) = &self.shown[page] { canvas.blit(left, y, &picture.pixels, picture.width, clip); }
             for &(_, rx, ry, rw, rh) in selection.iter().filter(|r| r.0 == page) {
                 let (x0, y0) = (left + (rx * scale) as i32, y + (ry * scale) as i32);
                 let (x1, y1) = (left + ((rx + rw) * scale).ceil() as i32, (y + ((ry + rh) * scale).ceil() as i32).min(view_h));
-                canvas.tint(x0, y0, x1 - x0, y1 - y0, SELECTED, 70);
+                canvas.tint(x0, y0, x1 - x0, y1 - y0, palette.selected, 70);
             }
             if let Some(c) = caret.filter(|c| c.page == page && selection.is_empty()) {
                 let cx = left + (c.x * scale) as i32;
                 let cy = y + (c.top * scale) as i32;
                 let ch = ((c.height * scale) as i32).max(8);
                 let (top, bottom) = (cy.max(0), (cy + ch).min(view_h));
-                if bottom > top { canvas.fill(cx, top, 2, bottom - top, CARET); }
+                if bottom > top { canvas.fill(cx, top, 2, bottom - top, palette.caret); }
             }
         }
         if let Some((styles, at)) = &self.picker {
@@ -217,18 +236,18 @@ impl Ui {
             let first = (at + 1).saturating_sub(shown);
             let (bw, bh) = (240, row * shown as i32 + 34);
             let (bx, by) = (MARGIN, (view_h - bh - MARGIN).max(MARGIN.min(view_h - bh)));
-            canvas.fill(bx + 3, by + 3, bw, bh, SHADOW);
-            canvas.fill(bx, by, bw, bh, BAR_BG);
-            canvas.frame(bx, by, bw, bh, LINE);
-            self.pen.text(&mut canvas, bx + 10, by + 8, "Apply a style (Enter, Esc)", DIM, Some((bx, bw - 10)));
+            canvas.fill(bx + 3, by + 3, bw, bh, palette.shadow);
+            canvas.fill(bx, by, bw, bh, palette.bar_bg);
+            canvas.frame(bx, by, bw, bh, palette.line);
+            self.pen.text(&mut canvas, bx + 10, by + 8, "Apply a style (Enter, Esc)", palette.dim, Some((bx, bw - 10)));
             for (i, (_, name)) in styles.iter().enumerate().skip(first).take(shown) {
                 let y = by + 30 + (i - first) as i32 * row;
-                if i == *at { canvas.fill(bx + 4, y - 2, bw - 8, row, SELECTED); }
-                self.pen.text(&mut canvas, bx + 12, y + 2, name, if i == *at { 0x00ffffff } else { CARET }, Some((bx, bw - 12)));
+                if i == *at { canvas.fill(bx + 4, y - 2, bw - 8, row, palette.selected); }
+                self.pen.text(&mut canvas, bx + 12, y + 2, name, if i == *at { palette.on_selected } else { palette.ink }, Some((bx, bw - 12)));
             }
         }
-        canvas.fill(0, view_h, w, STATUS_H, BAR_BG);
-        canvas.fill(0, view_h, w, 1, LINE);
+        canvas.fill(0, view_h, w, STATUS_H, palette.bar_bg);
+        canvas.fill(0, view_h, w, 1, palette.line);
         let pages = self.places.len();
         let page = caret.map_or(0, |c| c.page);
         let status = if let Some(ask) = &self.ask {
@@ -264,7 +283,7 @@ impl Ui {
         } else {
             self.message.clone()
         };
-        self.pen.text(&mut canvas, 10, view_h + (STATUS_H - self.pen.line_height()) / 2, &status, DIM, Some((0, w - 10)));
+        self.pen.text(&mut canvas, 10, view_h + (STATUS_H - self.pen.line_height()) / 2, &status, palette.dim, Some((0, w - 10)));
         window.show_pixels(width, height);
         let short: String = self.name.chars().take(15).collect();
         window.title(format!("{short}{}", if self.book.dirty() { "*" } else { "" }).as_bytes());
@@ -574,7 +593,21 @@ impl Ui {
 
     pub fn run(mut self, window: &mut sex_app::Window) {
         self.draw(window);
+        let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
         loop {
+            let now = sex_std::sex_pdx::get_ticks();
+            if now >= theme_next {
+                theme_next = now.saturating_add(1000);
+                if let Ok(generation) = sex_app::settings::generation() {
+                    if generation != self.theme_generation {
+                        self.theme_generation = generation;
+                        let theme = sex_app::settings::theme();
+                        self.palette = Palette::from_tokens(theme);
+                        sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, self.palette.selected));
+                        self.draw(window);
+                    }
+                }
+            }
             let Some(event) = window.next_within(1000) else {
                 // A quiet moment after a change: keep the unsaved work safe.
                 if self.unkept.is_some_and(|t| sex_std::sex_pdx::get_ticks().saturating_sub(t) >= KEEP_AFTER_MS) { self.keep(); }
