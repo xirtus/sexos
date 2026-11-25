@@ -27,7 +27,7 @@ Remaining gaps:
   framing text. Larger attachments need a streamed Files path rather than an
   in-memory response.
 - JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,
-  real attachment open/save via Loom, and a safe HTML view through sex-html.
+  attachment opening, and a safe HTML view through sex-html. A local `.eml` attachment can now be selected and saved through Loom's Save picker. Valentine sanitizes the sender's suggested name, uses the exact picked Files grant, refuses an existing destination, and reports success after sync; a failed write is removed when Files permits it. A sudden stop during an export can still leave an incomplete file because the picker grants only the chosen destination, not a same-volume staging name.
 - Search across accounts, conversation view, filters, and signatures.
   Draft fields now support bounded Ctrl+Z/Ctrl+Y history, including changes after
   save. Local drafts save through staged replacement and recover from the `.eml`

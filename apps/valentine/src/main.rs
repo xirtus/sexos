@@ -7,6 +7,7 @@
 //! Ctrl+N starts a draft, Ctrl+E edits an unsent draft, Tab moves fields and
 //! Ctrl+S saves it; Ctrl+Z/Y undo and redo field edits. A quiet draft autosaves
 //! after three seconds.
+//! Ctrl+Alt+A chooses an attachment and Ctrl+Alt+S saves it through Loom.
 //! Ctrl+Shift+/ opens the offline keyboard reference; Escape closes it.
 #![no_std]
 #![no_main]
@@ -23,6 +24,7 @@ use sex_mail::inbox::Summary;
 use sex_mail::local_folders as folders;
 use sex_mail::draft::{DraftEdit, DraftHistory, LocalDraft};
 use sex_mail::message::{self, Message};
+use sex_mail::local_attachments;
 use sex_pdx::app_pointer::Kind;
 use sex_theme::Tokens;
 
@@ -42,6 +44,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save the draft in Valentine's folder"),
     ("Ctrl+Z / Ctrl+Y", "Undo / redo a draft edit"),
     ("Ctrl+M", "Show mail account status"),
+    ("Ctrl+Alt+A", "Choose an attachment in the opened message"),
+    ("Ctrl+Alt+S", "Save the chosen attachment through Loom"),
     ("Mouse wheel", "Scroll the opened message"),
     ("F11", "Close the Valentine window"),
 ];
@@ -79,7 +83,7 @@ impl Compose {
 struct App {
     items: Vec<Item>, shown: Vec<usize>, picked: usize, opened: Option<usize>,
     folders: Vec<Vec<u8>>, folder: usize,
-    mail: Option<Message>, query: String, status: String, scroll: usize,
+    mail: Option<Message>, query: String, status: String, scroll: usize, attachment: Option<usize>,
     palette: Palette, generation: u64,
     compose: Option<Compose>, next_draft: u32, help: bool,
 }
@@ -90,7 +94,7 @@ impl App {
         sex_pdx::serial_record!("[valentine.theme] mode={:?}", theme.mode);
         Self { items: Vec::new(), shown: Vec::new(), picked: 0, opened: None, mail: None,
             folders: vec![Vec::new()], folder: 0,
-            query: String::new(), status: String::new(), scroll: 0, palette,
+            query: String::new(), status: String::new(), scroll: 0, attachment: None, palette,
             generation: settings::generation().unwrap_or(0), compose: None, next_draft: 0, help: false }
     }
     fn filter(&mut self) {
@@ -101,7 +105,7 @@ impl App {
     fn reload(&mut self, window: &mut Window) {
         let selected = self.folders.get(self.folder).cloned().unwrap_or_default();
         let previous = self.opened.and_then(|i| self.items.get(i)).map(|item| item.name.clone());
-        self.items.clear(); self.opened = None; self.mail = None;
+        self.items.clear(); self.opened = None; self.mail = None; self.attachment = None;
         let mut discovered = vec![Vec::new()];
         let mut scan = 0;
         while scan < discovered.len() && discovered.len() < folders::MAX_FOLDERS {
@@ -148,7 +152,7 @@ impl App {
         let store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
         match files::read(window, &item.name, &mut store[..size as usize]) {
             Ok(n) if n == size as usize => {
-                self.mail = Some(message::parse(&store[..n])); self.opened = Some(i); self.scroll = 0;
+                self.mail = Some(message::parse(&store[..n])); self.opened = Some(i); self.scroll = 0; self.attachment = None;
                 sex_pdx::serial_record!("[valentine.opened] file={} bytes={} subject={}",
                     String::from_utf8_lossy(&item.name), n, item.summary.subject);
             }
@@ -237,9 +241,56 @@ impl App {
         self.status = "Draft name was taken repeatedly; try saving again.".into();
         false
     }
+    fn choose_attachment(&mut self) {
+        let Some(mail) = &self.mail else { self.status = "Open a message to choose an attachment.".into(); return; };
+        if mail.attachments.is_empty() { self.status = "This message has no attachments.".into(); return; }
+        self.attachment = local_attachments::next_index(self.attachment, mail.attachments.len());
+        let index = self.attachment.unwrap();
+        let chosen = &mail.attachments[index];
+        let safe_name = local_attachments::suggested_name(&chosen.filename);
+        self.status = format!("Attachment {}/{}: {} ({} bytes)", index + 1,
+            mail.attachments.len(), String::from_utf8_lossy(&safe_name), chosen.data.len());
+        sex_pdx::serial_record!("[valentine.attachment.selected] index={} total={}", index + 1, mail.attachments.len());
+    }
+    fn save_attachment(&mut self, window: &mut Window) {
+        let Some(mail) = &self.mail else { self.status = "Open a message before saving an attachment.".into(); return; };
+        let Some(chosen) = mail.attachments.get(self.attachment.unwrap_or(0)) else {
+            self.status = "This message has no attachments.".into(); return;
+        };
+        let suggestion = local_attachments::suggested_name(&chosen.filename);
+        let mut picked = [0u8; sex_pdx::fs::PATH_BYTES];
+        let path = match files::pick(window, files::Pick::Save, &suggestion, &mut picked) {
+            Ok(path) if local_attachments::picked_file(path) => path,
+            Ok(_) => { self.status = "Loom returned an invalid save location.".into(); return; },
+            Err(sex_pdx::fs::DENIED) => { self.status = "Attachment save cancelled in Loom.".into(); return; },
+            Err(e) => { self.status = format!("Loom could not choose a location: {}", String::from_utf8_lossy(files::message(e))); return; },
+        };
+        // CREATE is no-clobber on every Files volume. A failed write may leave
+        // a partial file; path-based removal could delete another run's replacement.
+        if let Err(e) = files::create(window, path) {
+            if e == sex_pdx::fs::EXISTS {
+                sex_pdx::serial_record!("[valentine.attachment.exists] path={}", String::from_utf8_lossy(path));
+            }
+            self.status = if e == sex_pdx::fs::EXISTS { "That file already exists; choose another name in Loom.".into() }
+                else { format!("Attachment not saved: {}", String::from_utf8_lossy(files::message(e))) };
+            return;
+        }
+        let saved = files::write_at(window, path, 0, &chosen.data)
+            .and_then(|n| if n == chosen.data.len() { files::sync(window) } else { Err(sex_pdx::fs::NO_SPACE) });
+        match saved {
+            Ok(()) => {
+                self.status = format!("Saved {} ({} bytes).", String::from_utf8_lossy(&suggestion), chosen.data.len());
+                sex_pdx::serial_record!("[valentine.attachment.saved] path={} bytes={}", String::from_utf8_lossy(path), chosen.data.len());
+            }
+            Err(e) => {
+                self.status = format!("Attachment save failed: {}; an incomplete file may remain", String::from_utf8_lossy(files::message(e)));
+                sex_pdx::serial_record!("[valentine.attachment.failed] status={} partial_possible=1", e);
+            }
+        }
+    }
     fn compose_key(&mut self, window: &mut Window, k: sex_pdx::app_key::Key) -> bool {
         if self.compose.is_none() { return false; }
-        if k.control && k.code == 0x1f { self.save_draft(window); return true; } // Ctrl+S
+        if k.control && !k.alt && k.code == 0x1f { self.save_draft(window); return true; } // Ctrl+S
         if k.code == 0x01 { // Escape keeps a changed draft before leaving.
             if self.compose.as_ref().is_some_and(Compose::dirty) && !self.save_draft(window) { return true; }
             self.compose = None; return true;
@@ -288,6 +339,8 @@ impl App {
             return;
         }
         if self.compose_key(window, k) { return; }
+        if k.control && k.alt && k.code == 0x1e { self.choose_attachment(); return; } // Ctrl+Alt+A
+        if k.control && k.alt && k.code == 0x1f { self.save_attachment(window); return; } // Ctrl+Alt+S
         match (k.control, k.code) {
             (true, 0x32) => { // Ctrl+M: account linking needs the boot-routed Multipass service.
                 self.status = "Mail accounts are unavailable in this build; local mail and drafts remain available.".into();
@@ -393,16 +446,22 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
         c.text(body, x, 94, &format!("From: {}", mail.from()), p.dim, max);
         c.text(tiny, x, 121, &format!("Date: {}", mail.headers.text("date").unwrap_or_default()), p.dim, max);
         if !mail.attachments.is_empty() {
-            c.text(tiny, x, 146, &format!("{} attachment(s) kept with the original message", mail.attachments.len()), p.accent, max);
+            let index = app.attachment.unwrap_or(0).min(mail.attachments.len() - 1);
+            let selected = &mail.attachments[index];
+            let safe_name = local_attachments::suggested_name(&selected.filename);
+            c.text(tiny, x, 146, &format!("Attachment {}/{}: {} ({} bytes)", index + 1,
+                mail.attachments.len(), String::from_utf8_lossy(&safe_name), selected.data.len()), p.accent, max);
+            c.text(tiny, x, 166, "Ctrl+Alt+A select/next  Ctrl+Alt+S save with Loom", p.dim, max);
         }
         let lines: Vec<&str> = mail.text.as_deref().unwrap_or("").lines().collect();
         let first = app.scroll.min(lines.len());
+        let body_y = if mail.attachments.is_empty() { 178 } else { 203 };
         if lines.is_empty() {
             let note = if mail.html.is_some() { "HTML mail is closed here; remote content is blocked." } else { "No plain-text body." };
-            c.text(body, x, 178, note, p.dim, max);
+            c.text(body, x, body_y, note, p.dim, max);
         } else {
-            for (row, line) in lines.iter().skip(first).take(((h - 220) / body.h as i32).max(0) as usize).enumerate() {
-                c.text(body, x, 178 + row as i32 * body.h as i32, clip(line, (max / body.w as i32) as usize), p.text, max);
+            for (row, line) in lines.iter().skip(first).take(((h - body_y - 42) / body.h as i32).max(0) as usize).enumerate() {
+                c.text(body, x, body_y + row as i32 * body.h as i32, clip(line, (max / body.w as i32) as usize), p.text, max);
             }
         }
     } else {
@@ -412,7 +471,7 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
     }
     c.fill(0, h - 28, w, 28, p.panel);
     c.fill(0, h - 28, w, 1, p.border);
-    let status = if app.status.is_empty() { "Ctrl+G folder  Ctrl+N draft  Ctrl+E edit  Ctrl+M account  Enter open  Ctrl+R reload" } else { &app.status };
+    let status = if app.status.is_empty() { "Ctrl+G folder  Ctrl+N draft  Ctrl+E edit  Ctrl+Alt+S attachment  Ctrl+M account" } else { &app.status };
     c.text(tiny, 12, h - 22, status, p.dim, w - 24);
     window.show_pixels(w as usize, h as usize);
 }

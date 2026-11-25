@@ -5,10 +5,15 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 MAIL=(b'From: =?UTF-8?Q?Ren=C3=A9e?= <renee@example.org>\r\n'
       b'Subject: Dinner on Friday\r\nDate: Tue, 24 Nov 2026 12:00:00 +0000\r\n'
-      b'Content-Type: multipart/alternative; boundary=x\r\n\r\n'
+      b'Content-Type: multipart/mixed; boundary=outer\r\n\r\n'
+      b'--outer\r\nContent-Type: multipart/alternative; boundary=x\r\n\r\n'
       b'--x\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n'
       b'Meet at seven.\r\n--x\r\nContent-Type: text/html\r\n\r\n'
-      b'<img src="https://tracker.example/p.gif">\r\n--x--\r\n')
+      b'<img src="https://tracker.example/p.gif">\r\n--x--\r\n'
+      b'--outer\r\nContent-Type: application/pdf; name="menu.pdf"\r\n'
+      b'Content-Disposition: attachment; filename="menu.pdf"\r\n'
+      b'Content-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK\r\n'
+      b'--outer--\r\n')
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   if self.path!='/inbox.eml':self.send_response(404);self.end_headers();return
@@ -27,11 +32,13 @@ def main():
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  elf=(ROOT/'iso_root/programs/valentine').read_bytes();assert elf[:4]==b'\x7fELF'
- install(disk,[('valentine',elf)])
+ loom=(ROOT/'iso_root/programs/loom').read_bytes();assert loom[:4]==b'\x7fELF'
+ install(disk,[('valentine',elf),('loom',loom)])
  g=boot(a.iso,disk,a.out,'valentine',a.resolution);t=g['text'];q=g['q']
  def keys(value):
   send_text(q,value)
  def ctrl(key):q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':key}],'hold-time':80})
+ def ctrl_alt(key):q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'alt'},{'type':'qcode','data':key}],'hold-time':80})
  def shell(line,pattern,timeout=120):
   g['focus'](153);time.sleep(.5);s=len(t());keys(line);q.key('ret');return g['wait'](pattern,s,timeout)
  def launch():
@@ -60,6 +67,25 @@ def main():
   g['wait'](r'\[valentine.loaded\] messages=1',s,60)
   shot('valentine-inbox')
   pixels=(a.out/'valentine-inbox.ppm').read_bytes();assert pixels.startswith(b'P6\n') and len(pixels)>100000
+  valentine_surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,5)[1])
+  started=len(t());files_launch=shell('files',r'\[shell.program.launch\] target=\d+ task=\d+ surface=(\d+)',90)
+  files_surface=int(files_launch[1]);g['wait'](r'\[files.app.ready\] target=\d+ task=\d+ root=/ portal=1',started,60)
+  g['focus'](valentine_surface);time.sleep(.4)
+  s=len(t());ctrl_alt('a');g['wait'](r'\[valentine.attachment.selected\] index=1 total=1',s,30)
+  s=len(t());ctrl_alt('s');g['wait'](r'\[files.pick.asked\] row=\d+ mode=1 ',s,60)
+  g['wait'](r'\[files.app.question\] program=valentine mode=Save',s,60)
+  g['focus'](files_surface);time.sleep(.4);ctrl('s');time.sleep(.4)
+  shot('valentine-attachment-picker')
+  s=len(t());q.key('ret');g['wait'](r'\[files.pick.granted\] row=\d+ path=/menu.pdf',s,60)
+  g['wait'](r'\[valentine.attachment.saved\] path=@/menu.pdf bytes=9',s,60)
+  g['focus'](valentine_surface);time.sleep(.4);shot('valentine-attachment-saved')
+  s=len(t());ctrl_alt('s');g['wait'](r'\[files.pick.asked\] row=\d+ mode=1 ',s,60)
+  g['focus'](files_surface);time.sleep(.4);ctrl('s');time.sleep(.4)
+  s=len(t());q.key('ret');g['wait'](r'\[files.pick.granted\] row=\d+ path=/menu.pdf',s,60)
+  g['wait'](r'\[valentine.attachment.exists\] path=@/menu.pdf',s,60)
+  g['focus'](valentine_surface);time.sleep(.4);shot('valentine-attachment-existing-name')
+  shell('cat /menu.pdf',r'\[spindle.fs.cat\] %PDF-1.4',90)
+  g['focus'](valentine_surface);time.sleep(.4)
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'slash'}],'hold-time':80})
   g['wait'](r'\[valentine.shortcuts\] open=1',s,60);shot('valentine-shortcuts')
   help_pixels=(a.out/'valentine-shortcuts.ppm').read_bytes()
