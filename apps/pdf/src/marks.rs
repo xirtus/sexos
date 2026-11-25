@@ -6,7 +6,7 @@
 //! vellum-edit works in PDF user space: points from the bottom left of the unrotated
 //! page. These convert between the two, merge a found word's character boxes into one
 //! rectangle per line, order form fields as the eye reads them, and date annotations.
-use vellum_edit::{FieldInfo, FieldKind, PageInfo, PdfDate};
+use vellum_edit::{FieldInfo, FieldKind, FieldValue, PageInfo, PdfDate};
 
 /// A shown point in user space.
 pub fn to_user(p: &PageInfo, (x, y): (f64, f64)) -> (f64, f64) {
@@ -103,6 +103,16 @@ pub fn toggle_choice(f: &FieldInfo, index: usize) -> Option<Vec<String>> {
     if let Some(at) = selected.iter().position(|&n| n == index) { selected.remove(at); }
     else { selected.push(index); selected.sort_unstable(); }
     Some(selected.iter().map(|&n| f.options[n].0.clone()).collect())
+}
+
+/// A pointer row uses the PDF export value, never its display label.
+pub fn clicked_choice(f: &FieldInfo, index: usize) -> Option<FieldValue> {
+    match &f.kind {
+        FieldKind::ComboBox { .. } | FieldKind::ListBox { multi_select: false } =>
+            f.options.get(index).map(|(export, _)| FieldValue::Text(export.clone())),
+        FieldKind::ListBox { multi_select: true } => toggle_choice(f, index).map(FieldValue::Choices),
+        _ => None,
+    }
 }
 
 /// Up/Down through a finite choice list. An empty field starts at the first/last item.
@@ -316,6 +326,22 @@ mod tests {
         assert_eq!(after[0].0.value, FieldValue::Text("Orbit".into()));
         assert_eq!(choice_indices(&after[1].0), [1, 2]);
         assert!(hayro::hayro_syntax::Pdf::new(saved).is_ok());
+    }
+
+    #[test]
+    fn pointer_rows_commit_export_values_and_toggle_multi_list() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+        let mut ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(clicked_choice(&fields[0].0, 1), Some(FieldValue::Text("M".into())));
+        assert_eq!(clicked_choice(&fields[1].0, 1), Some(FieldValue::Choices(vec!["A".into(), "E".into(), "D".into()])));
+        assert_eq!(clicked_choice(&fields[0].0, 3), None);
+        ed.set_field("project", clicked_choice(&fields[0].0, 1).unwrap()).unwrap();
+        ed.set_field("teams", clicked_choice(&fields[1].0, 1).unwrap()).unwrap();
+        let again = Editor::open(ed.save_incremental().unwrap()).unwrap();
+        let after = fillable(&again.fields().unwrap());
+        assert_eq!(after[0].0.value, FieldValue::Text("M".into()));
+        assert_eq!(after[1].0.value, FieldValue::Choices(vec!["A".into(), "E".into(), "D".into()]));
     }
 
     #[test]

@@ -48,6 +48,8 @@ const BAR: usize = 30;
 const CW: usize = 9;
 const CH: usize = 16;
 const ROW: usize = 20;
+const CHOICE_MENU_ROWS: usize = 8;
+const CHOICE_MENU_WIDTH: usize = 360;
 /// Two pages besides the shown page, never more than 48 MiB of retired pixels.
 const CACHE_PAGES: usize = 2;
 const CACHE_BYTES: usize = 48 << 20;
@@ -84,6 +86,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Type text; Space toggles; Up/Down choice, Enter selects",
+    "Click a choice value for its pointer menu; wheel scrolls options",
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
@@ -103,7 +106,29 @@ const NUDGE: f64 = 12.0;
 enum Panel { None, Thumbs, Outline, Annots }
 
 /// Form filling: the fields the keyboard reaches, which one, and its text so far.
-struct Form { fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String, choice: Option<usize> }
+struct Form {
+    fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String,
+    choice: Option<usize>, popup: bool, popup_top: usize,
+}
+
+/// The bounded menu fits in the client area even for a PDF with many choices.
+fn choice_menu(width: usize, height: usize, bar: usize, count: usize) -> Option<(usize, usize, usize, usize)> {
+    let rows = count.min(CHOICE_MENU_ROWS).min(height.saturating_sub(bar + 4) / ROW);
+    let w = width.saturating_sub(16).min(CHOICE_MENU_WIDTH);
+    (rows > 0 && w >= 80).then_some((8, bar, w, rows))
+}
+
+fn choice_menu_hit(menu: (usize, usize, usize, usize), x: usize, y: usize, top: usize, count: usize) -> Option<usize> {
+    let (mx, my, mw, rows) = menu;
+    if x < mx || x >= mx + mw || y < my || y >= my + rows * ROW { return None; }
+    let index = top + (y - my) / ROW;
+    (index < count).then_some(index)
+}
+
+fn scroll_choice_top(top: usize, count: usize, rows: usize, steps: i8) -> usize {
+    if steps > 0 { top.saturating_sub(steps as usize) }
+    else { top.saturating_add(steps.unsigned_abs() as usize).min(count.saturating_sub(rows)) }
+}
 
 struct SigningChoice { signer: pdf_sign::Signer, field: String, certificate_hash: [u8; 32] }
 
@@ -427,6 +452,7 @@ impl Viewer {
         }
         if l.panel > 0 { self.draw_panel(out, width, height); }
         if l.bar > 0 { self.draw_bar(out, width, l.bar); }
+        self.draw_choice_menu(out, width, height, l.bar);
         if self.shortcuts { self.draw_shortcuts(out, width, height); }
         window.show_pixels(width, height);
         let short: String = self.name.chars().take(9).collect();
@@ -508,6 +534,24 @@ impl Viewer {
         letters.draw(out, width, (8 + 6 * CW, y), width.saturating_sub(16 * CW), &format!("{}_", self.term), palette.ink);
         let sx = width.saturating_sub(8 + status.len() * CW);
         letters.draw(out, width, (sx, y), width, &status, if self.found_none { palette.danger } else { palette.dim });
+    }
+
+    fn draw_choice_menu(&mut self, out: &mut [u32], width: usize, height: usize, bar: usize) {
+        let Some(form) = self.form.as_ref().filter(|f| f.popup) else { return };
+        let Some((field, _, _)) = form.fields.get(form.at) else { return };
+        let Some((x, y, w, rows)) = choice_menu(width, height, bar, field.options.len()) else { return };
+        let selected = marks::choice_indices(field);
+        let lines: Vec<(usize, String)> = field.options.iter().enumerate().skip(form.popup_top).take(rows)
+            .map(|(i, (_, shown))| (i, format!("{} {shown}", if selected.contains(&i) { "[x]" } else { "[ ]" }))).collect();
+        fill(out, width, (x, y, w, rows * ROW), self.palette.panel_back);
+        let Some(letters) = self.letters.as_mut() else { return };
+        for (row, (index, label)) in lines.iter().enumerate() {
+            if Some(*index) == form.choice {
+                fill(out, width, (x, y + row * ROW, w, ROW), self.palette.selected);
+            }
+            letters.draw(out, width, (x + 6, y + row * ROW + 2), w.saturating_sub(12), label,
+                if Some(*index) == form.choice { self.palette.accent } else { self.palette.ink });
+        }
     }
 
     fn draw_panel(&mut self, out: &mut [u32], width: usize, height: usize) {
@@ -709,6 +753,7 @@ impl Viewer {
     fn pointer(&mut self, p: sex_std::sex_pdx::app_pointer::Pointer, size: (usize, usize)) -> bool {
         let l = self.layout(size);
         let (x, y) = (p.x.max(0) as usize, p.y.max(0) as usize);
+        if self.choice_pointer(p.kind, (x, y), size, l.bar) { return true; }
         match p.kind {
             Kind::Wheel { steps } => {
                 let by = steps.unsigned_abs() as usize * 48;
@@ -740,6 +785,52 @@ impl Viewer {
             }
             _ => false,
         }
+    }
+
+    fn choice_pointer(&mut self, kind: Kind, (x, y): (usize, usize), (width, height): (usize, usize), bar: usize) -> bool {
+        let Some(form) = self.form.as_ref() else { return false };
+        let Some((field, _, _)) = form.fields.get(form.at) else { return false };
+        if !matches!(field.kind, FieldKind::ComboBox { .. } | FieldKind::ListBox { .. }) { return false; }
+        let count = field.options.len();
+        let Some(menu) = choice_menu(width, height, bar, count) else { return false };
+        if let Kind::Wheel { steps } = kind {
+            if !form.popup || choice_menu_hit(menu, x, y, form.popup_top, count).is_none() { return false; }
+            let top = scroll_choice_top(form.popup_top, count, menu.3, steps);
+            if let Some(form) = self.form.as_mut() { form.popup_top = top; }
+            return true;
+        }
+        if !matches!(kind, Kind::Down { button: 0 }) { return false; }
+        if form.popup {
+            if let Some(index) = choice_menu_hit(menu, x, y, form.popup_top, count) {
+                let (field, _, _) = form.fields[form.at].clone();
+                if let Some(form) = self.form.as_mut() {
+                    form.choice = Some(index);
+                    if let FieldKind::ComboBox { editable: true } = &field.kind {
+                        form.text = field.options[index].0.clone();
+                    }
+                    form.popup = matches!(&field.kind, FieldKind::ListBox { multi_select: true });
+                }
+                if let Some(value) = marks::clicked_choice(&field, index).filter(|v| *v != field.value) {
+                    let (kind, shown) = if let FieldValue::Choices(v) = &value {
+                        ("multi-choice", format!("{} selected", v.len()))
+                    } else { ("choice", field.options[index].1.clone()) };
+                    self.set_field(&field.name, value, kind, &shown);
+                }
+                sex_std::record(&format!("[pdf.choice.pointer] name={} selected={} count={}", field.name, index + 1, field.options.len()));
+                return true;
+            }
+            if let Some(form) = self.form.as_mut() { form.popup = false; }
+            return true;
+        }
+        if y < bar && x < width.saturating_mul(2) / 3 {
+            if let Some(form) = self.form.as_mut() {
+                form.popup = true;
+                form.popup_top = form.choice.unwrap_or(0).min(count.saturating_sub(menu.3));
+            }
+            sex_std::record(&format!("[pdf.choice.menu] name={} count={count}", field.name));
+            return true;
+        }
+        false
     }
 }
 
@@ -1228,7 +1319,7 @@ impl Viewer {
             return;
         }
         sex_std::record(&format!("[pdf.form] fields={} first={}", fields.len(), fields[0].0.name));
-        self.form = Some(Form { fields, at: 0, text: String::new(), choice: None });
+        self.form = Some(Form { fields, at: 0, text: String::new(), choice: None, popup: false, popup_top: 0 });
         self.focus(0);
     }
 
@@ -1236,6 +1327,8 @@ impl Viewer {
     fn focus(&mut self, at: usize) {
         let Some(form) = self.form.as_mut() else { return };
         form.at = at;
+        form.popup = false;
+        form.popup_top = 0;
         let Some((f, page, rect)) = form.fields.get(at).cloned() else { return };
         form.text = match &f.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
         form.choice = if matches!(f.kind, FieldKind::ListBox { multi_select: true }) {
@@ -1542,6 +1635,19 @@ mod render_cache_tests {
             let shared = render_page_cached(&pdf, &cache, page, 0.2).unwrap();
             assert_eq!(shared, separate, "page {page}");
         }
+    }
+
+    #[test]
+    fn choice_menu_clips_rows_and_rejects_outside_clicks() {
+        let menu = choice_menu(640, 180, BAR, 100).unwrap();
+        assert_eq!(menu, (8, BAR, CHOICE_MENU_WIDTH, 7));
+        assert_eq!(choice_menu_hit(menu, 20, BAR + 2, 91, 100), Some(91));
+        assert_eq!(choice_menu_hit(menu, 20, BAR + 6 * ROW + 2, 91, 100), Some(97));
+        assert_eq!(choice_menu_hit(menu, 20, BAR + 7 * ROW, 91, 100), None);
+        assert_eq!(choice_menu_hit(menu, 400, BAR + 2, 91, 100), None);
+        assert!(choice_menu(70, 180, BAR, 3).is_none());
+        assert_eq!(scroll_choice_top(0, 100, 7, -100), 93);
+        assert_eq!(scroll_choice_top(93, 100, 7, 100), 0);
     }
 }
 

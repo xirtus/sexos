@@ -17,6 +17,8 @@ import argparse,http.server,io,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from install_program import install
 from make_pdf_fixture import form_document,choice_document,advanced_choice_document,FORM_WORD
+from browser_gate_viewport import chrome_metrics,content_rect
+from web_surface_geometry import latest_frame
 ROOT=Path(__file__).resolve().parents[1]
 FORM=form_document()
 CHOICE=choice_document()
@@ -38,6 +40,7 @@ os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 NOTE='check this'
 NAME='Ada Lovelace'
+BAR=30
 def thumb_ok(data,want_w,want_h):
  w,h=int.from_bytes(data[0:2],'little'),int.from_bytes(data[2:4],'little')
  assert (w,h)==(want_w,want_h),(w,h)
@@ -45,6 +48,7 @@ def thumb_ok(data,want_w,want_h):
  return w,h
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ rw,rh=map(int,a.resolution.split('x'))
  pdf=(ROOT/'iso_root/programs/vellum').read_bytes();assert pdf[:4]==b'\x7fELF'
  signer=(ROOT/'iso_root/programs/shibari-sign').read_bytes();assert signer[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -68,6 +72,9 @@ def main():
   g['focus'](153);time.sleep(.5);keys(text);q.key('ret')
  def step(action,pattern,timeout=300):
   s=len(t());action();return g['wait'](pattern,s,timeout)
+ def click(x,y):
+  q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.25)
+  for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
  saved_path=None
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
@@ -182,6 +189,21 @@ def main():
   step(lambda:chord('ctrl','down'),r'\[pdf\.choice\.focus\] name=team selected=2 count=3\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-choice-reopened.ppm')})
   assert (a.out/'pdf-choice-reopened.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','up'),r'\[pdf\.choice\.focus\] name=size selected=2 count=3\n')
+  tile=latest_frame(t(),sid)
+  bx,by,_,_=content_rect(t(),tile)
+  ui=chrome_metrics(t())['scale']
+  step(lambda:click(bx+100*ui,by+15*ui),r'\[pdf\.choice\.menu\] name=size count=3\n')
+  q.cmd('screendump',{'filename':str(a.out/'pdf-choice-pointer-menu.ppm')})
+  assert (a.out/'pdf-choice-pointer-menu.ppm').stat().st_size>10000
+  s=len(t());step(lambda:click(bx+100*ui,by+(BAR+2*20+10)*ui),r'\[pdf\.choice\.pointer\] name=size selected=3 count=3\n')
+  g['wait'](r'\[pdf\.field\] name=size kind=choice value=Large\n',s,120)
+  q.cmd('screendump',{'filename':str(a.out/'pdf-choice-pointer-selected.ppm')})
+  assert (a.out/'pdf-choice-pointer-selected.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.save\.synced\] path=@/choice\.pdf bytes=\d+\n',s,300)
+  g['wait'](r'\[pdf\.saved\] path=@/choice\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=2 ms=\d+\n',s,300)
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # Editable combo text and multi-select list values survive a guest save.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/advanced-choice.pdf advanced-choice.pdf')
@@ -336,6 +358,10 @@ def main():
  subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/advanced-choice.pdf',str(advanced_pdf)],check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_advanced_choices_survive_guest_save','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_ADVANCED_PDF':str(advanced_pdf)},check=True)
+ pointer_pdf=a.out/'choice-pointer-saved.pdf'
+ subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/choice.pdf',str(pointer_pdf)],check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_pointer_choice_survives_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_POINTER_PDF':str(pointer_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_verifies_independently_when_supplied','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_SIGNED_PDF':str(signed_pdf)},check=True)
  checked='bytes'
