@@ -64,7 +64,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   page-number command can add a field. Ctrl+Alt+H/F now enters the header or
   footer shown on the caret's page for rich text edits around existing fields;
   Esc returns to the body. DOCX and ODT round trips cover the text and field.
-  More complex per-section header/footer management remains.
+  Ctrl+Alt+Shift+H now starts a distinct default header or footer in the
+  section at the body caret, leaving earlier sections' text intact. DOCX/ODT
+  round trips and one-step undo are covered. Other first/even-page variants,
+  relinking, and richer per-section header/footer management remain.
 - **List editing:** WordCraft can create bullet and numbered lists, but Assuit
   exposes no native way to choose numbered formats, remove a list, or restart
   numbering. This slice adds a bounded list prompt for those document edits and
