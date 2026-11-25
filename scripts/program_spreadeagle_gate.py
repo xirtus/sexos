@@ -340,6 +340,18 @@ def main():
   column('B',r'Cost\|~\|150\|40\|~\|~\|\|',s)
   time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-bottom-two.ppm')})
   assert (a.out/'spreadeagle-filter-bottom-two.ppm').stat().st_size>10000
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=B\n')
+  s=len(t());type_line('above average');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=B rule=above average\n',s,120)
+  column('B',r'Cost\|~\|~\|~\|~\|5880\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-above-average.ppm')})
+  assert (a.out/'spreadeagle-filter-above-average.ppm').stat().st_size>10000
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=B\n')
+  s=len(t());type_line('below average');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=B rule=below average\n',s,120)
+  column('B',r'Cost\|300\|150\|40\|490\|~\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-below-average.ppm')})
+  assert (a.out/'spreadeagle-filter-below-average.ppm').stat().st_size>10000
   ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=B values=5\n')
   s=len(t());q.key('spc');q.key('ret')
   g['wait'](r'\[spreadeagle\.filter\.choice\] col=B value=all\n',s,120)

@@ -441,7 +441,7 @@ impl Book {
     /// Apply one or two AutoFilter comparisons to a column. GridCraft evaluates
     /// the criteria against cells, including numeric values and formula results.
     pub fn filter_by_condition(&mut self, at: Range, col: u32, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter top/bottom N or N%, =, <>, text or numeric comparison; join two comparisons with and/or";
+        const HELP: &str = "Enter above/below average, top/bottom N or N%, =, <>, text or numeric comparison";
         fn criterion(input: &str) -> Result<(&'static str, &str), String> {
             let (name, value) = input.trim().split_once(' ').ok_or(HELP)?;
             let value = value.trim();
@@ -469,6 +469,14 @@ impl Book {
             if self.filter_range().is_none() { self.toggle_filter(at)?; }
             self.run("data.filterBy", json!({ "column": column_name(col),
                 "top": { "count": count, "bottom": direction == "bottom", "percent": percent } }))?;
+            return Ok(());
+        }
+        if matches!(direction.as_str(), "above" | "below") {
+            if !words.next().is_some_and(|word| word.eq_ignore_ascii_case("average")) || words.next().is_some() {
+                return Err(HELP.into());
+            }
+            if self.filter_range().is_none() { self.toggle_filter(at)?; }
+            self.run("data.filterBy", json!({ "column": column_name(col), "aboveAverage": direction == "above" }))?;
             return Ok(());
         }
         // Ordinary text may contain "and" or "or". A join exists only when
@@ -1197,6 +1205,29 @@ mod tests {
         assert_eq!(visible(&book), [false, true, false, true, false, false, false]);
         book.filter_by_condition(at, 0, "top 50%").unwrap();
         assert_eq!(visible(&book), [false, false, true, false, true, true, false]);
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(visible(&Book::open(&path).unwrap().0), visible(&book));
+    }
+
+    #[test]
+    fn above_below_average_filter_numeric_and_formula_values() {
+        let mut book = Book::blank(&temp("filter-average.xlsx"));
+        book.set(0, 0, "Score").unwrap();
+        for (row, value) in [(1, "1"), (2, "2"), (3, "3"), (4, "=AVERAGE(A2:A4)"), (5, "x")] {
+            book.set(row, 0, value).unwrap();
+        }
+        assert_eq!(book.shown(4, 0).text, "2");
+        let at = Range::cell(0, 0);
+        for bad in ["above", "below median", "above average and > 2"] {
+            assert!(book.filter_by_condition(at, 0, bad).is_err(), "{bad}");
+        }
+        assert!(book.filter_range().is_none());
+        let visible = |book: &Book| (1..=5).map(|row| book.row_height(row) > 0).collect::<Vec<_>>();
+        book.filter_by_condition(at, 0, "above average").unwrap();
+        assert_eq!(visible(&book), [false, false, true, false, false]);
+        book.filter_by_condition(at, 0, "below average").unwrap();
+        assert_eq!(visible(&book), [true, false, false, false, false]);
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(visible(&Book::open(&path).unwrap().0), visible(&book));
