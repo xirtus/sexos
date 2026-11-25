@@ -88,11 +88,11 @@ fn receive(
     Err("Language service response timed out")
 }
 
-fn check_inner(
+fn begin(
     path: &[u8],
     language: &str,
     text: &str,
-) -> core::result::Result<Result, &'static str> {
+) -> core::result::Result<(Result, Vec<u8>, u64), &'static str> {
     let word = console::stdio(console::PIPED, console::PIPED, console::NULL);
     let ticket = relay::prepare_piped(b"/bin/quil-ls", b"", 0, word)
         .map_err(|_| "Install Quil's language service first")?;
@@ -125,7 +125,58 @@ fn check_inner(
         json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri(path),"languageId":language,"version":1,"text":text}}}),
         deadline,
     )?;
-    receive(deadline, true, &mut rx)?.ok_or("Language service ended without diagnostics")
+    let diagnostics = receive(deadline, true, &mut rx)?.ok_or("Language service ended without diagnostics")?;
+    Ok((diagnostics, rx, deadline))
+}
+
+fn completion_position(text: &str, cursor: usize) -> Option<(u64, u64)> {
+    if cursor > text.len() || !text.is_char_boundary(cursor) { return None; }
+    let before = &text[..cursor];
+    let line = before.bytes().filter(|&b| b == b'\n').count() as u64;
+    let tail = before.rsplit('\n').next().unwrap_or("");
+    let character = tail.encode_utf16().count() as u64;
+    Some((line, character))
+}
+
+fn receive_completion(deadline: u64, rx: &mut Vec<u8>) -> core::result::Result<Vec<String>, &'static str> {
+    while sex_pdx::get_ticks() < deadline {
+        let (_, bytes) = relay::take_at(0).map_err(|_| "Language service output failed")?;
+        if rx.len() + bytes.len() > quil_core::lsp::MAX_BODY + 1024 { return Err("Language service output is too large"); }
+        rx.extend_from_slice(&bytes);
+        while let Some(body) = take_frame(rx)? {
+            let value: Value = serde_json::from_slice(&body).map_err(|_| "Language service sent invalid JSON")?;
+            if value["id"].as_u64() == Some(2) {
+                let list = value["result"].as_array().ok_or("Language service sent invalid completions")?;
+                if list.len() > 8 { return Err("Language service sent too many completions"); }
+                let mut items = Vec::new();
+                for item in list {
+                    let label = item["label"].as_str().ok_or("Language service sent invalid completion")?;
+                    if label.len() > 64 || !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return Err("Language service sent invalid completion"); }
+                    items.push(label.to_string());
+                }
+                return Ok(items);
+            }
+        }
+        sex_pdx::sched_yield();
+    }
+    Err("Language completion timed out")
+}
+
+fn complete_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Vec<String>, &'static str> {
+    let (line, character) = completion_position(text, cursor).ok_or("Language completion cursor is invalid")?;
+    let (_, mut rx, deadline) = begin(path, language, text)?;
+    send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":uri(path)},"position":{"line":line,"character":character}}}), deadline)?;
+    receive_completion(deadline, &mut rx)
+}
+
+fn cleanup() {
+    launch::kill(COOKIE);
+    let deadline = sex_pdx::get_ticks().saturating_add(1000);
+    while sex_pdx::get_ticks() < deadline {
+        if matches!(launch::poll(COOKIE), Some(launch::Event::Done { .. } | launch::Event::Refused { .. })) { break; }
+        sex_pdx::sched_yield();
+    }
+    let _ = relay::release_at(0);
 }
 
 /// Checks the current buffer. The server sees a bounded text snapshot, not a Files grant.
@@ -137,18 +188,15 @@ pub fn check(
     if text.len() > 256 * 1024 {
         return Err("Language check supports files up to 256 KiB");
     }
-    let result = check_inner(path, language, text);
-    launch::kill(COOKIE);
-    let deadline = sex_pdx::get_ticks().saturating_add(1000);
-    while sex_pdx::get_ticks() < deadline {
-        if matches!(
-            launch::poll(COOKIE),
-            Some(launch::Event::Done { .. } | launch::Event::Refused { .. })
-        ) {
-            break;
-        }
-        sex_pdx::sched_yield();
-    }
-    let _ = relay::release_at(0);
+    let result = begin(path, language, text).map(|(diagnostics, _, _)| diagnostics);
+    cleanup();
+    result
+}
+
+/// Requests at most eight labels for one immutable editor snapshot.
+pub fn complete(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Vec<String>, &'static str> {
+    if text.len() > 256 * 1024 { return Err("Language completion supports files up to 256 KiB"); }
+    let result = complete_inner(path, language, text, cursor);
+    cleanup();
     result
 }

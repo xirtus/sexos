@@ -9,8 +9,12 @@ Remaining gaps:
 - Ctrl+Shift+J now starts a bundled native LSP helper through a run-scoped
   stdin/stdout pipe and shows returned diagnostics. The first helper checks
   delimiter balance and trailing whitespace for Rust, Python and JavaScript
-  files up to 256 KiB. Continuous diagnostics, completion, navigation, rename,
-  and full language-server implementations remain gaps.
+  files up to 256 KiB. Ctrl+Shift+Space now requests up to eight keyword
+  completions for one cursor and inserts the chosen label with undo support;
+  a document revision and cursor guard rejects stale choices. This is a
+  language-service protocol slice, not semantic completion. Continuous
+  diagnostics, identifier and semantic completion, navigation, rename, and
+  full language-server implementations remain gaps.
 - Ctrl+Shift+V now shows tracked modified, deleted and conflicted files from a
   checked Git index in the project's Files grant. Untracked/ignored files,
   diffs, staging, commit and branches still need native controls.

@@ -8,8 +8,9 @@ ROOT=Path(__file__).resolve().parents[1]
 DEMO=b'fn main() {\n    let needle = 1;\n    println!("{}", needle);\n}\n'
 OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
 BROKEN=b'fn main() {\n    let value = 1;\n'
+COMPLETE=b'ret'
 INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/git-index':INDEX}
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/git-index':INDEX}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -59,7 +60,7 @@ def main():
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs','broken.rs'):
+  for name in ('demo.rs','other.rs','broken.rs','complete.rs'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   line('mkdir /data/quil/.git')
   m=expect(f'fetch http://10.0.2.2:{PORT}/git-index /data/quil/.git/index',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
@@ -108,6 +109,15 @@ def main():
   g['wait'](r'\[quil.lsp.diagnostics\] language=rust count=1 first_line=1',s,90)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostics.ppm')})
   assert (a.out/'quil-lsp-diagnostics.ppm').stat().st_size>100000
+  # Completion is a second request over the same native LSP pipe, and Enter
+  # replaces the prefix in the editor's undoable document.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('complete');q.key('ret');time.sleep(.5)
+  ctrl('end');s=len(t());send('ctrl','shift','spc')
+  g['wait'](r'\[quil.lsp.completion\] language=rust count=1 prefix=ret',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-completion.ppm')})
+  assert (a.out/'quil-lsp-completion.ppm').stat().st_size>100000
+  s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.inserted\] label=return version=\d+',s,30)
+  s=len(t());ctrl('s');g['wait'](rf'\[quil.code.saved\] path=complete.rs bytes=6 hash={fnv(b"return"):016x}',s,60)
   s=len(t());send('ctrl','shift','p');time.sleep(.3);keys(f'large {a.large_mb}');q.key('ret')
   big=large_expected(a.large_mb)
   m=g['wait'](rf'\[quil.code.large\] mb={a.large_mb} write_ms=(\d+) open_ms=(\d+) pieces=(\d+)',s,1200)
