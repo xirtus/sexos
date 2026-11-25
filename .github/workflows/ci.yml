@@ -925,6 +925,8 @@ jobs:
       run: python3 scripts/program_polyamour_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/polyamour"
     - name: Assuit word processor opens, edits, saves and reopens docx
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
+    - name: Assuit idle recovery survives a power cut and saved edits reopen
+      run: python3 scripts/program_assuit_recovery_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit-recovery"
     - name: Gestalt vector editor draws, edits, saves and reopens SVG
       run: python3 scripts/program_gestalt_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/gestalt"
     - name: Lua 5.4 interpreter
