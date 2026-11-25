@@ -32,6 +32,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+R | Describe the selected picture with alternative text (1–500 characters) |
 | Ctrl+Shift+O | Set the selected picture's width in inches, preserving proportions |
 | Ctrl+Shift+C | Crop the selected picture by left, top, right, bottom percentages; `0 0 0 0` resets |
+| Ctrl+Shift+W | Set selected picture text flow: inline, square, or top-and-bottom |
 | Ctrl+Shift+S | Choose a paragraph style |
 | Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline |
 | Ctrl+Z, Ctrl+Y | Undo, redo |

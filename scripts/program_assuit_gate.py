@@ -198,6 +198,10 @@ def main():
   s=len(t());press('ctrl','shift','c');type_line('10 0 5 0');q.key('ret')
   g['wait'](r'\[assuit\.picture-crop\] values=10 0 5 0\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-picture-cropped.ppm')})
+  s=len(t());press('ctrl','shift','w');type_line('square');q.key('ret')
+  g['wait'](r'\[assuit\.picture-wrap\] mode=square\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-picture-square-wrap.ppm')})
+  assert (a.out/'assuit-picture-square-wrap.ppm').stat().st_size>10000
   type_line(' helo');q.key('home')
   s=len(t());press('ctrl','shift','u')
   g['wait'](r'\[assuit\.proofing\.marks\] enabled=0\n',s,120)
