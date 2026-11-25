@@ -238,6 +238,9 @@ struct Browser {
     referrer_next: Option<String>,
     /// A reader page made from the live document, consumed by the next navigation.
     reader_pending: Option<(String, String)>,
+    /// Appearance of Kaleidoscope's own tabs and controls, never site content.
+    chrome_palette: sex_web::ChromePalette,
+    theme_generation: u64,
     /// While a page loads (`Some`): the page it was opened from, for its requests'
     /// `Referer`, or `None` when it has none (a typed address, `no-referrer`).
     nav_from: Option<Option<String>>,
@@ -734,7 +737,7 @@ impl Browser {
             shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
             side: self.side(),
             pane: if self.split_pair().is_some() { self.pane() } else { (0, 0) },
-            group_of: &group_of, groups: &self.groups,
+            group_of: &group_of, groups: &self.groups, palette: self.chrome_palette,
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -2186,7 +2189,11 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, nav_from: None, frames_check: false,
+    let theme = sex_app::settings::theme();
+    let chrome_palette = sex_web::ChromePalette::from_tokens(theme);
+    let theme_generation = sex_app::settings::generation().unwrap_or(0);
+    sex_pdx::serial_record!("[web.theme] mode={:?} generation={}", theme.mode, theme_generation);
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, chrome_palette, theme_generation, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
@@ -2216,7 +2223,22 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
     sex_pdx::serial_record!("[web.voyeur.register] sent={}", registered as u8);
     let mut queued: Option<Event> = None;
+    let mut next_theme_poll = 0u64;
     loop {
+        let now = sex_pdx::get_ticks();
+        if now >= next_theme_poll {
+            next_theme_poll = now.saturating_add(500);
+            if let Ok(generation) = sex_app::settings::generation() {
+                if generation != b.theme_generation {
+                    let theme = sex_app::settings::theme();
+                    b.chrome_palette = sex_web::ChromePalette::from_tokens(theme);
+                    b.theme_generation = generation;
+                    b.full_redraw = true;
+                    b.draw();
+                    sex_pdx::serial_record!("[web.theme] mode={:?} generation={}", theme.mode, generation);
+                }
+            }
+        }
         b.poll_autofill();
         b.settle();
         // Blocking resource calls can fill the bounded held-event queue. Window

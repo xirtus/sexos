@@ -677,6 +677,33 @@ pub struct Chrome<'a> {
     pub group_of: &'a [Option<usize>],
     /// Tab groups, as in Chrome: a coloured label before their tabs, which folds them away.
     pub groups: &'a [TabGroup],
+    /// SexOS appearance tokens for the browser controls, separate from site CSS.
+    pub palette: ChromePalette,
+}
+
+/// Colours of Kaleidoscope's own controls. Sites continue to paint their own CSS.
+#[derive(Clone, Copy, Debug)]
+pub struct ChromePalette {
+    pub bar: u32, pub border: u32, pub tab: u32, pub active: u32,
+    pub text: u32, pub dim: u32, pub field: u32, pub field_text: u32,
+    pub picked: u32, pub accent: u32, pub badge: u32, pub badge_text: u32,
+    pub suggestion: u32, pub find: u32, pub danger: u32,
+}
+
+impl ChromePalette {
+    pub fn from_tokens(t: sex_theme::Tokens) -> Self {
+        Self {
+            bar: t.surface, border: t.border, tab: t.control, active: t.control_pressed,
+            text: t.text, dim: t.text_dim, field: t.field, field_text: t.text,
+            picked: t.control_hover, accent: t.focus, badge: t.accent,
+            badge_text: t.on_accent, suggestion: t.surface, find: t.surface,
+            danger: t.danger,
+        }
+    }
+}
+
+impl Default for ChromePalette {
+    fn default() -> Self { Self::from_tokens(sex_theme::tokens(sex_theme::Mode::Light, sex_theme::DEFAULT_ACCENT)) }
 }
 
 /// A group of tabs that sit together in the strip under a coloured label.
@@ -785,6 +812,7 @@ fn fit(fonts: &mut Fonts, text: &str, font: FontKey, w: i32) -> String {
 
 /// Like [`frame`], with tabs, suggestions, find marks and zoom.
 pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, c: &Chrome) {
+    let p = c.palette;
     let side = c.side.clamp(0, width);
     let (px, pw) = if c.pane.1 > 0 { c.pane } else { (side, width - side) };
     // The page takes the columns right of the tab strip (or its half of a split).
@@ -798,7 +826,7 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         }
     }
     let mut bar = Target { pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
-    bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
+    bar.fill(0, 0, width, BAR, p.bar, 0);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false, face: 0 };
     let small = FontKey { size: 12, ..font };
     let slots = if c.group_of.len() == c.tabs.len() { strip_slots(c.group_of, c.groups) } else { (0..c.tabs.len()).map(Slot::Tab).collect() };
@@ -806,8 +834,8 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         // Vertical tabs: one row each down the strip, the shown one lit, with its
         // container's colour as a bar at the left edge.
         let mut strip = Target { pixels: bar.pixels, width: side, height, scroll: 0, top: BAR, premul: false, clip: None, stride: width };
-        strip.fill(0, 0, side, height - BAR, 0xFF0D_1420, 0);
-        strip.fill(side - 1, 0, 1, height - BAR, 0xFF22_2C3A, 0);
+        strip.fill(0, 0, side, height - BAR, p.bar, 0);
+        strip.fill(side - 1, 0, 1, height - BAR, p.border, 0);
         for (row, slot) in slots.iter().enumerate() {
             let y = 6 + row as i32 * SIDE_ROW;
             if y + SIDE_ROW > height - BAR { break; }
@@ -819,7 +847,7 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
                     let name = if grp.name.is_empty() { "Group" } else { grp.name.as_str() };
                     let label = if grp.folded { alloc::format!("{name} ({})", group_count(c.group_of, g)) } else { String::from(name) };
                     let shown = fit(fonts, &label, small, side - 40);
-                    text_run(&mut strip, fonts, 26, y + 17, small, 0xFFD7_E3F0, &shown);
+                    text_run(&mut strip, fonts, 26, y + 17, small, p.text, &shown);
                 }
                 Slot::Tab(i) => {
                     let Some(label) = c.tabs.get(i) else { continue };
@@ -828,17 +856,17 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
                     let inset = if group.is_some() { 12 } else { 0 };
                     if let Some(g) = group { strip.fill(13, y - 4, 3, SIDE_ROW, g.colour, 0); }
                     let on = i == c.active;
-                    if on { strip.fill(6 + inset, y, side - 13 - inset, SIDE_ROW - 4, 0xFF3A_4A60, 6); }
+                    if on { strip.fill(6 + inset, y, side - 13 - inset, SIDE_ROW - 4, p.active, 6); }
                     if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { strip.fill(6 + inset, y + 4, 3, SIDE_ROW - 12, c, 1); }
                     let shown = fit(fonts, label, small, side - 32 - inset);
-                    text_run(&mut strip, fonts, 16 + inset, y + 17, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &shown);
+                    text_run(&mut strip, fonts, 16 + inset, y + 17, small, if on { p.text } else { p.dim }, &shown);
                 }
             }
         }
         bar = Target { pixels: strip.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
     }
     // In a split view, a line under the bar marks the half that has the keyboard.
-    if c.pane.1 > 0 { bar.fill(px, BAR - 2, pw, 2, 0xFF0B_57D0, 0); }
+    if c.pane.1 > 0 { bar.fill(px, BAR - 2, pw, 2, p.accent, 0); }
     let chips = if side > 0 { Vec::new() } else { tab_chips(width, &slots, c.groups) };
     for (slot, (x, w)) in slots.iter().zip(chips.iter()) {
         let i = match *slot {
@@ -849,16 +877,17 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
                 let n = group_count(c.group_of, g);
                 let label = match (grp.folded, grp.name.is_empty()) { (true, true) => alloc::format!("{n}"), (true, false) => alloc::format!("{} ({n})", grp.name), _ => grp.name.clone() };
                 let label = fit(fonts, &label, small, w - 10);
-                text_run(&mut bar, fonts, x + 6, 19, small, 0xFFFF_FFFF, &label);
+                let ink = if sex_theme::contrast(grp.colour, 0xFFFF_FFFF) >= sex_theme::contrast(grp.colour, 0xFF00_0000) { 0xFFFF_FFFF } else { 0xFF00_0000 };
+                text_run(&mut bar, fonts, x + 6, 19, small, ink, &label);
                 continue;
             }
             Slot::Tab(i) => i,
         };
         let Some(text) = c.tabs.get(i) else { continue };
         let on = i == c.active;
-        bar.fill(*x, 4, *w, BAR - 8, if on { 0xFF3A_4A60 } else { 0xFF18_2230 }, 6);
+        bar.fill(*x, 4, *w, BAR - 8, if on { p.active } else { p.tab }, 6);
         let label = fit(fonts, text, small, w - 12);
-        text_run(&mut bar, fonts, x + 6, 19, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &label);
+        text_run(&mut bar, fonts, x + 6, 19, small, if on { p.text } else { p.dim }, &label);
         if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { bar.fill(x + 4, BAR - 7, w - 8, 2, c, 0); }
         // A grouped tab is underlined in its group's colour, joined to the next.
         if let Some(g) = c.group_of.get(i).copied().flatten().and_then(|g| c.groups.get(g)) { bar.fill(*x, BAR - 3, w + 2, 2, g.colour, 0); }
@@ -871,17 +900,17 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         let label = if !up { String::from("off") } else if n > 999 { String::from("999+") } else { alloc::format!("{}", n) };
         let w = fonts.text_width(&label, small) + 26;
         let x = width - 6 - w;
-        bar.fill(x, 6, w, BAR - 12, if up { 0xFFFB_542B } else { 0xFF4A_5260 }, 9);
+        bar.fill(x, 6, w, BAR - 12, if up { p.badge } else { p.tab }, 9);
         // A small shield: a square top and a pointed foot.
         let (sx, sy) = (x + 6, 10);
-        bar.fill(sx, sy, 9, 6, 0xFFFF_FFFF, 1);
-        for row in 0..5 { bar.fill(sx + row, sy + 6 + row, 9 - 2 * row, 1, 0xFFFF_FFFF, 0); }
-        text_run(&mut bar, fonts, x + 20, 19, small, 0xFFFF_FFFF, &label);
+        bar.fill(sx, sy, 9, 6, p.badge_text, 1);
+        for row in 0..5 { bar.fill(sx + row, sy + 6 + row, 9 - 2 * row, 1, p.badge_text, 0); }
+        text_run(&mut bar, fonts, x + 20, 19, small, if up { p.badge_text } else { p.text }, &label);
         zoom_w += w + 4;
     }
-    bar.fill(left, 4, width - 6 - left - zoom_w, BAR - 8, if c.editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
-    if !zoom.is_empty() { text_run(&mut bar, fonts, width - zoom_w, 19, small, 0xFFD7_E3F0, &zoom); }
-    let color = if c.editing { 0xFF1F_1F1F } else { 0xFFD7_E3F0 };
+    bar.fill(left, 4, width - 6 - left - zoom_w, BAR - 8, p.field, 8);
+    if !zoom.is_empty() { text_run(&mut bar, fonts, width - zoom_w, 19, small, p.text, &zoom); }
+    let color = p.field_text;
     // Keep the end of a long address in view while typing.
     let room = width - left - 34 - zoom_w;
     let mut shown = c.text;
@@ -892,20 +921,20 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
     text_run(&mut bar, fonts, left + 10, 19, font, color, shown);
     if c.editing {
         let x = left + 10 + fonts.text_width(shown, font) + 1;
-        bar.fill(x, 8, 1, BAR - 16, 0xFF0B_57D0, 0);
+        bar.fill(x, 8, 1, BAR - 16, p.accent, 0);
     }
     // Suggestions drop down over the page.
     let all = Target { pixels: bar.pixels, width, height, scroll: 0, top: 0, premul: false, clip: None, stride: width };
     let mut over = all;
     if c.editing && !c.suggestions.is_empty() {
         let h = c.suggestions.len() as i32 * SUGGESTION_ROW + 4;
-        over.fill(6, BAR, width - 12, h, 0xFFFF_FFFF, 0);
-        over.fill(6, BAR + h - 1, width - 12, 1, 0xFFC4_C7C5, 0);
+        over.fill(6, BAR, width - 12, h, p.suggestion, 0);
+        over.fill(6, BAR + h - 1, width - 12, 1, p.border, 0);
         for (i, s) in c.suggestions.iter().enumerate() {
             let y = BAR + 2 + i as i32 * SUGGESTION_ROW;
-            if c.chosen == Some(i) { over.fill(6, y, width - 12, SUGGESTION_ROW, 0xFFD3_E3FD, 0); }
+            if c.chosen == Some(i) { over.fill(6, y, width - 12, SUGGESTION_ROW, p.picked, 0); }
             let label = fit(fonts, s, font, width - 32);
-            text_run(&mut over, fonts, 16, y + 17, font, 0xFF1F_1F1F, &label);
+            text_run(&mut over, fonts, 16, y + 17, font, p.text, &label);
         }
     }
     // The find bar sits at the bottom right.
@@ -913,13 +942,13 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         let status = if count == 0 { String::from("no matches") } else { alloc::format!("{} of {}", at + 1, count) };
         let w = (fonts.text_width(query, font) + fonts.text_width(&status, small) + 48).clamp(180, width - 12);
         let (x, y) = (width - 6 - w, height - BAR);
-        over.fill(x, y, w, BAR - 4, 0xFF22_2C3A, 8);
-        over.fill(x + 6, y + 4, w - 20 - fonts.text_width(&status, small), BAR - 12, 0xFFFF_FFFF, 4);
+        over.fill(x, y, w, BAR - 4, p.find, 8);
+        over.fill(x + 6, y + 4, w - 20 - fonts.text_width(&status, small), BAR - 12, p.field, 4);
         let q = fit(fonts, query, font, w - 40 - fonts.text_width(&status, small));
-        text_run(&mut over, fonts, x + 10, y + 17, font, 0xFF1F_1F1F, &q);
+        text_run(&mut over, fonts, x + 10, y + 17, font, p.field_text, &q);
         let cx = x + 11 + fonts.text_width(&q, font);
-        over.fill(cx, y + 7, 1, BAR - 18, 0xFF0B_57D0, 0);
-        text_run(&mut over, fonts, x + w - 8 - fonts.text_width(&status, small), y + 17, small, if count == 0 { 0xFFFF_8A80 } else { 0xFFD7_E3F0 }, &status);
+        over.fill(cx, y + 7, 1, BAR - 18, p.accent, 0);
+        text_run(&mut over, fonts, x + w - 8 - fonts.text_width(&status, small), y + 17, small, if count == 0 { p.danger } else { p.text }, &status);
     }
 }
 

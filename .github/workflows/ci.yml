@@ -559,6 +559,8 @@ jobs:
       run: python3 scripts/program_web_websocket_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-websocket"
     - name: Browser downloads (20 MB to Files, hash read back from disk)
       run: python3 scripts/program_web_download_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-download"
+    - name: Kaleidoscope light and dark chrome follow Settings
+      run: python3 scripts/program_web_theme_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-theme"
     - name: Kaleidoscope keyboard reference and screenshot
       run: python3 scripts/program_web_shortcuts_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-shortcuts"
     - name: Browser forms (GET, urlencoded and multipart POST)
