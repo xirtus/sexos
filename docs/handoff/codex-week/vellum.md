@@ -9,7 +9,8 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Performance and polish:** the viewer chrome now follows Settings' light,
   dark and high-contrast colors. This slice retains up to two retired rendered
   pages under a 48 MiB cache cap, so a same-zoom revisit avoids Hayro rendering.
-  Document the cold-render latency target with a fixture, add a shortcut
-  reference and prove crash recovery on interrupted saves.
+  Document the cold-render latency target with a fixture and prove crash
+  recovery on interrupted saves. Ctrl+Shift+/ now opens an in-app shortcut
+  reference; `docs/apps/vellum-shortcuts.md` lists the active keys.
 
 Each remaining feature needs a focused host test and CI guest evidence before being called complete.
