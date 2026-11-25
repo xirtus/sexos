@@ -58,7 +58,9 @@ def main():
   for k in line:
    if k=='+':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'equal'}],'hold-time':80})
    elif k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
-   else:q.key({' ':'spc','.':'dot','/':'slash','-':'minus'}.get(k,k))
+   elif k in '<>':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'comma' if k=='<' else 'dot'}],'hold-time':80})
+   elif k=='*':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'8'}],'hold-time':80})
+   else:q.key({' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal'}.get(k,k))
    time.sleep(.05)
  def run(line):
   g['focus'](153);time.sleep(.5);type_line(line);q.key('ret')
@@ -302,6 +304,18 @@ def main():
   column('A',r'Item\|Food\|Fun\|~\|~\|~\|\|',s)
   time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-compound.ppm')})
   assert (a.out/'spreadeagle-filter-compound.ppm').stat().st_size>10000
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=A\n')
+  s=len(t());type_line('<> Food');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=A rule=<> Food\n',s,120)
+  column('A',r'Item\|~\|Fun\|Rent\|Total\|Per year\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-not-equal.ppm')})
+  assert (a.out/'spreadeagle-filter-not-equal.ppm').stat().st_size>10000
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=A\n')
+  s=len(t());type_line('= F*');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=A rule== F\*\n',s,120)
+  column('A',r'Item\|Food\|Fun\|~\|~\|~\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-wildcard.ppm')})
+  assert (a.out/'spreadeagle-filter-wildcard.ppm').stat().st_size>10000
   s=len(t());ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=5\n')
   g['wait'](r'\[spreadeagle\.filter\.menu\.state\] col=A active=condition selected=0\n',s,120)
   s=len(t());q.key('ret')
