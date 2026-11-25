@@ -12,6 +12,7 @@ pub mod tls;
 pub mod sound;
 pub mod mailbox;
 pub mod pdf_sign;
+pub mod notify;
 pub mod autofill;
 pub mod settings;
 

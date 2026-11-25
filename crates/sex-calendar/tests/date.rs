@@ -6,6 +6,103 @@ use sex_calendar::clock::{self, Alarm, Clock};
 use sex_calendar::{ics, tz, Calendar, Date, Event, PartStat, Rule, SyncState};
 
 fn d(y: i32, m: u8, day: u8) -> Date { Date::new(y, m, day).unwrap() }
+
+#[test]
+fn moving_personal_event_preserves_identity_and_refuses_series_or_invites() {
+    let from = d(2026, 11, 25);
+    let to = d(2026, 12, 2);
+    let mut local = Event::all_day(from, "Dentist");
+    local.uid = "personal-1".into();
+    local.time = Some((540, 600));
+    local.alarms = vec![30];
+    let moved = local.moved_personal_to(to, false).unwrap();
+    assert_eq!((moved.start, moved.uid.as_str(), moved.time, moved.alarms.as_slice()),
+        (to, "personal-1", Some((540, 600)), &[30][..]));
+    assert_eq!(moved.state, SyncState::Clean);
+    assert_eq!(local.start, from, "the source stays available for undo");
+    assert_eq!(local.moved_personal_to(to, true).unwrap().state, SyncState::New);
+    local.href = "/cal/personal-1.ics".into();
+    local.etag = "v1".into();
+    let linked = local.moved_personal_to(to, true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-1.ics", "v1", SyncState::Modified));
+    local.rule = Rule::parse("FREQ=WEEKLY;COUNT=3");
+    assert!(local.moved_personal_to(to, true).is_err());
+    local.rule = None;
+    local.invitation = true;
+    assert!(local.moved_personal_to(to, false).is_err());
+    local.invitation = false;
+    local.conflict_source_calendar = Some(0);
+    local.conflict_source_href = "/cal/source.ics".into();
+    assert!(local.moved_personal_to(to, false).is_err());
+    local.conflict_source_calendar = None;
+    local.conflict_source_href.clear();
+    local.uid = "legacy-conflict".into();
+    assert!(local.moved_personal_to(to, false).is_err());
+}
+
+#[test]
+fn retitling_personal_event_preserves_details_and_sync_identity() {
+    let mut event = Event::all_day(d(2026, 11, 25), "Dentist");
+    event.uid = "personal-2".into();
+    event.time = Some((540, 600));
+    event.alarms = vec![30];
+    let local = event.retitled_personal("  Checkup  ", false).unwrap();
+    assert_eq!((local.title.as_str(), local.uid.as_str(), local.time, local.alarms.as_slice(), local.state),
+        ("Checkup", "personal-2", Some((540, 600)), &[30][..], SyncState::Clean));
+    assert_eq!(event.title, "Dentist", "undo needs the old value");
+    assert_eq!(event.retitled_personal("Checkup", true).unwrap().state, SyncState::New);
+    event.href = "/cal/personal-2.ics".into();
+    event.etag = "v1".into();
+    let linked = event.retitled_personal("Checkup", true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-2.ics", "v1", SyncState::Modified));
+    assert!(event.retitled_personal(" ", false).is_err());
+    event.rule = Rule::parse("FREQ=WEEKLY;COUNT=3");
+    assert!(event.retitled_personal("Checkup", true).is_err());
+    event.rule = None;
+    event.uid = "personal-2-conflict".into();
+    assert!(event.retitled_personal("Checkup", false).is_err());
+}
+
+#[test]
+fn personal_location_can_be_set_and_cleared_without_losing_identity() {
+    let mut event = Event::all_day(d(2026, 11, 25), "Checkup");
+    event.uid = "personal-3".into();
+    event.time = Some((540, 600));
+    event.alarms = vec![30];
+    let located = event.located_personal("  North room  ", false).unwrap();
+    assert_eq!((located.location.as_str(), located.uid.as_str(), located.time, located.alarms.as_slice(), located.state),
+        ("North room", "personal-3", Some((540, 600)), &[30][..], SyncState::Clean));
+    assert!(event.location.is_empty(), "undo needs the old value");
+    assert_eq!(located.located_personal("", false).unwrap().location, "");
+    assert_eq!(event.located_personal("North room", true).unwrap().state, SyncState::New);
+    event.href = "/cal/personal-3.ics".into();
+    event.etag = "v1".into();
+    let linked = event.located_personal("North room", true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-3.ics", "v1", SyncState::Modified));
+    event.invitation = true;
+    assert!(event.located_personal("North room", true).is_err());
+}
+
+#[test]
+fn personal_time_can_change_or_become_all_day_without_losing_identity() {
+    let mut event = Event::all_day(d(2026, 11, 25), "Checkup");
+    event.uid = "personal-4".into();
+    event.alarms = vec![30];
+    let timed = event.timed_personal(Some((690, 735)), false).unwrap();
+    assert_eq!((timed.time, timed.uid.as_str(), timed.alarms.as_slice(), timed.state),
+        (Some((690, 735)), "personal-4", &[30][..], SyncState::Clean));
+    assert_eq!(event.time, None, "undo needs the old value");
+    assert_eq!(timed.timed_personal(None, false).unwrap().time, None);
+    assert_eq!(event.timed_personal(Some((690, 735)), true).unwrap().state, SyncState::New);
+    event.href = "/cal/personal-4.ics".into();
+    event.etag = "v1".into();
+    let linked = event.timed_personal(Some((690, 735)), true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-4.ics", "v1", SyncState::Modified));
+    assert!(event.timed_personal(Some((735, 690)), true).is_err());
+    assert!(event.timed_personal(Some((690, 1440)), true).is_err());
+    event.span = 2;
+    assert!(event.timed_personal(Some((690, 735)), true).is_err());
+}
 fn unix_min(text: &str) -> i64 {
     // YYYY-MM-DDTHH:MM in UTC.
     let day = Date::parse(&text[..10]).unwrap();
@@ -153,6 +250,37 @@ fn alarms_and_timers() {
     assert_eq!(Clock::default().world().len(), 7);
 }
 
+#[test]
+fn snoozed_notice_survives_restart_and_rings_once() {
+    let mut clock = Clock::default();
+    assert!(!clock.snooze_notice(0, "Dentist"));
+    assert!(clock.snooze_notice(1_000_000, "Dentist: in 5 min"));
+    let mut restored = Clock::parse(&clock.serialize());
+    assert!(restored.timers_done(1_299_999).is_empty());
+    let rung = restored.timers_done(1_300_000);
+    assert_eq!(rung.len(), 1);
+    assert_eq!(rung[0].label, "Dentist: in 5 min");
+    assert!(restored.timers_done(1_300_001).is_empty());
+}
+
+#[test]
+fn failed_timer_transport_stays_due_after_save_and_retries_once() {
+    let mut clock = Clock::default();
+    clock.timers.push(sex_calendar::clock::Timer { ends_ms: 5_000, seconds: 5, label: "Tea".into() });
+    let mut attempts = 0;
+    assert!(clock.deliver_timers(5_000, |_| { attempts += 1; false }).is_empty());
+    assert_eq!(attempts, 1);
+    let mut restored = Clock::parse(&clock.serialize());
+    assert_eq!(restored.timers.len(), 1, "failed post must remain in clock.txt");
+    let done = restored.deliver_timers(5_500, |_| { attempts += 1; true });
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].label, "Tea");
+    assert_eq!(attempts, 2);
+    assert!(restored.deliver_timers(6_000, |_| { attempts += 1; true }).is_empty());
+    assert_eq!(attempts, 2, "confirmed transport removes exactly one timer");
+    assert!(Clock::parse(&restored.serialize()).timers.is_empty());
+}
+
 const INVITE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:plan@example.org\r\nSEQUENCE:2\r\n\
 DTSTART:20261120T140000Z\r\nDTEND:20261120T150000Z\r\nSUMMARY:Planning\r\nORGANIZER;CN=Boss:mailto:boss@example.org\r\n\
 ATTENDEE;CN=Boss;PARTSTAT=ACCEPTED:mailto:boss@example.org\r\nATTENDEE;CN=\"Me, Myself\";PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.org\r\n\
@@ -175,6 +303,35 @@ fn invitations_accept_and_decline() {
     assert_eq!((back.uid.as_str(), back.attendees.len(), back.attendees[0].partstat), ("plan@example.org", 1, PartStat::Accepted));
     assert!(e.respond(&["me@example.org"], PartStat::Declined));
     assert!(ics::export([&e], None, "20261114T120000Z").contains("PARTSTAT=DECLINED"));
+}
+
+#[test]
+fn copied_occurrence_keeps_details_but_not_server_or_invitation_identity() {
+    let mut source = ics::import(INVITE).unwrap().remove(0);
+    source.calendar = 2;
+    source.location = "Studio".into();
+    source.description = "Bring notes".into();
+    source.alarms = vec![15];
+    source.rule = Rule::parse("FREQ=WEEKLY;BYDAY=FR");
+    source.exdates = vec![d(2026, 11, 27)];
+    source.rdates = vec![d(2026, 11, 28)];
+    source.href = "/dav/plan.ics".into();
+    source.etag = "server-tag".into();
+    source.state = SyncState::Modified;
+    source.conflict_source_calendar = Some(2);
+    source.conflict_source_href = source.href.clone();
+    let tomorrow = d(2026, 11, 21);
+    let copy = source.copy_occurrence_to(tomorrow, "fresh@date.sexos".into(), true);
+    assert_eq!((copy.start, copy.time, copy.title.as_str(), copy.location.as_str(), copy.description.as_str(), copy.calendar),
+        (tomorrow, source.time, "Planning", "Studio", "Bring notes", 2));
+    assert_eq!(copy.alarms, vec![15]);
+    assert_eq!(copy.uid, "fresh@date.sexos");
+    assert_eq!(copy.state, SyncState::New);
+    assert!(copy.rule.is_none() && copy.exdates.is_empty() && copy.rdates.is_empty() && copy.recurrence_id.is_none());
+    assert!(!copy.invitation && copy.organizer.is_empty() && copy.attendees.is_empty() && copy.sequence == 0);
+    assert!(copy.href.is_empty() && copy.etag.is_empty() && copy.conflict_source_calendar.is_none() && copy.conflict_source_href.is_empty());
+    assert_eq!(source.href, "/dav/plan.ics", "the source stays untouched");
+    assert_eq!(source.copy_occurrence_to(tomorrow, "local@date.sexos".into(), false).state, SyncState::Clean);
 }
 
 #[test]

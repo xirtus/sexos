@@ -16895,6 +16895,12 @@ const NOTIFY_HISTORY: usize = 32;
 /// How long the panel shows a new notification, in ticks (ms).
 const NOTIFY_SHOW_TICKS: u64 = 5_000;
 static mut NOTIFY_ASSEMBLER: sex_pdx::notify::Assembler = sex_pdx::notify::Assembler::new();
+#[derive(Clone, Copy)]
+struct PendingNoticePresentation {
+    identity: sex_pdx::notify::Presentation, since: u64,
+    key_required: bool, key: Option<(u64, u64)>,
+}
+static mut NOTIFY_PRESENTATION: Option<PendingNoticePresentation> = None;
 static mut NOTIFY_RING: [sex_pdx::notify::Text; NOTIFY_HISTORY] = [sex_pdx::notify::Text::EMPTY; NOTIFY_HISTORY];
 static mut NOTIFY_TOTAL: usize = 0;
 /// Tick at which the panel notice ends; 0 when none is showing.
@@ -17022,6 +17028,30 @@ unsafe fn shell_memory_poll() {
     sex_pdx::serial_record!("[shell.oom.end] target={} task={} pages={} ok={}", e.target, e.task, pages, ok as u8);
 }
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id == sex_pdx::notify::OP_NOTIFICATION_BEGIN {
+        if msg.caller_pd != NOTIFY_BELL_PD { return true; }
+        let live_bell = sex_pdx::system_stats::domain(NOTIFY_BELL_PD).map_or(0, |run| run.task);
+        let sender = sex_pdx::notify::decode_begin_sender(msg.arg2);
+        let key_required = sender.is_some_and(|(_, keyed)| keyed);
+        let identity = sender.and_then(|(sender, _)| sex_pdx::notify::Presentation::new(
+            msg.arg0, msg.arg1 as u32, sender, msg.caller_task));
+        if live_bell == msg.caller_task
+            && msg.arg1 <= u32::MAX as u64 {
+            NOTIFY_PRESENTATION = identity.map(|identity| PendingNoticePresentation {
+                identity, since: sex_pdx::get_ticks(), key_required, key: None });
+        }
+        return true;
+    }
+    if msg.type_id == sex_pdx::notify::OP_NOTIFICATION_KEY {
+        if msg.caller_pd == NOTIFY_BELL_PD {
+            if let Some(pending) = NOTIFY_PRESENTATION.as_mut() {
+                if pending.identity.matches_key(msg.arg0, msg.caller_task) {
+                    pending.key = Some((msg.arg1, msg.arg2));
+                }
+            }
+        }
+        return true;
+    }
     if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }
     if msg.caller_pd != NOTIFY_BELL_PD {
         sex_pdx::serial_record!("[shell.notify.reject] caller_pd={} reason=not_bell", msg.caller_pd);
@@ -17029,11 +17059,35 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     }
     let assembler = &mut *core::ptr::addr_of_mut!(NOTIFY_ASSEMBLER);
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
-    if program_notify::hidden(text.sender) { sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender); return true; }
-    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
-    NOTIFY_TOTAL += 1;
-    // Buttons and a reply field its program gave for it (slice S2).
-    tray_items_glue::notification(&text);
+    let presentation = NOTIFY_PRESENTATION.filter(|pending|
+        sex_pdx::get_ticks().saturating_sub(pending.since) < 5_000
+            && pending.identity.matches_text(&text, msg.caller_task));
+    NOTIFY_PRESENTATION = None;
+    let acknowledge = |disposition: sex_pdx::notify::Disposition| {
+        if let Some(presentation) = presentation {
+            let (a, b, c) = presentation.identity.ack_words(disposition);
+            let queued = pdx_call(SLOT_BELL, sex_pdx::notify::OP_NOTIFICATION_HANDLED, a, b, c).0 == 0;
+            sex_pdx::serial_record!("[shell.notify.handled] event_id={} ticket={} queued={} shown={} muted={}",
+                presentation.identity.event_id, presentation.identity.ticket, queued as u8,
+                (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+        }
+    };
+    if presentation.is_some_and(|p| p.key_required && p.key.is_none()) {
+        acknowledge(sex_pdx::notify::Disposition::Retry);
+        return true;
+    }
+    if let Some(p) = presentation {
+        if let Some((low, high)) = p.key {
+            sex_pdx::serial_record!("[shell.notify.semantic] event_id={} key_low={} key_high={}",
+                p.identity.event_id, low, high);
+        }
+    }
+    if program_notify::hidden(text.sender) {
+        sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender);
+        acknowledge(sex_pdx::notify::Disposition::Muted);
+        return true;
+    }
     // Panel line: "Sender: summary".
     let name = notify_sender_name(text.sender);
     let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
@@ -17041,11 +17095,20 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     for &b in name.as_bytes().iter().chain(b": ").chain(text.summary()) {
         if n < line.len() { line[n] = b; n += 1; }
     }
-    notify_panel(&line[..n]);
+    let panel_queued = notify_panel(&line[..n]);
+    if presentation.is_some() && !panel_queued {
+        acknowledge(sex_pdx::notify::Disposition::Retry);
+        return true;
+    }
+    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
+    NOTIFY_TOTAL += 1;
+    // Buttons and a reply field its program gave for it (slice S2).
+    tray_items_glue::notification(&text);
     NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
     sex_pdx::serial_record!("[shell.notify.show] id={} sender={} app={} urgency={} summary={} body_len={} history={}",
         text.id, text.sender, name, text.urgency, core::str::from_utf8(text.summary()).unwrap_or("?"),
         text.body().len(), NOTIFY_TOTAL.min(NOTIFY_HISTORY));
+    acknowledge(sex_pdx::notify::Disposition::Accepted);
     if bell_frame_id().is_some() { bell_render_lane_text(); }
     true
 }

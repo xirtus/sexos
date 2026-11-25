@@ -251,6 +251,21 @@ fn post_assembler(caller: u32) -> &'static mut sex_pdx::notify::Assembler {
     &mut all[i].1
 }
 
+static mut POST_KEYS: [Option<sex_pdx::notify::PendingKey>; POST_SENDERS] = [None; POST_SENDERS];
+fn take_post_key(caller: u32, task: u32, ticket: u32) -> Option<(u64, u64)> {
+    let slots = unsafe { &mut *core::ptr::addr_of_mut!(POST_KEYS) };
+    let slot = slots.iter_mut().find(|slot| slot.is_some_and(|key| key.caller == caller))?;
+    let key = slot.take()?;
+    key.take_for(caller, task, ticket)
+}
+
+#[derive(Clone, Copy)]
+struct PendingPresentation { identity: sex_pdx::notify::Presentation, sender_task: u32, since: u64 }
+/// Date gets an accepted receipt only after Shell has handled this event.
+/// One slot keeps the cross-service ordering unambiguous; another confirmed
+/// sender gets Retry and may ask again after the first receipt or timeout.
+static mut PENDING_PRESENTATION: Option<PendingPresentation> = None;
+
 // ── Mute List ────────────────────────────────────────────────────────
 
 /// Static mute list of sender PDs. Muted senders' NOTIFY is rejected.
@@ -665,6 +680,13 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        if let Some(pending) = unsafe { PENDING_PRESENTATION } {
+            if sex_pdx::get_ticks().saturating_sub(pending.since) >= 5_000 {
+                unsafe { PENDING_PRESENTATION = None; }
+                sex_pdx::serial_record!("[bell.post.presentation.timeout] event_id={} ticket={}",
+                    pending.identity.event_id, pending.identity.ticket);
+            }
+        }
         match msg.type_id {
             OP_BELL_NOTIFY => {
                 // ── Parse fixed numeric fields from IpcCall args ──────
@@ -1463,30 +1485,126 @@ pub extern "C" fn _start() -> ! {
                 sound::listen(msg.caller_pd as u32);
             }
 
-            sex_pdx::notify::OP_BELL_POST => {
+            sex_pdx::notify::OP_NOTIFICATION_HANDLED => {
+                if msg.caller_pd != 3 { continue; }
+                let Some(pending) = (unsafe { PENDING_PRESENTATION }) else { continue };
+                let live_bell_task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
+                let live_sender_task = sex_pdx::system_stats::domain(pending.identity.sender).map_or(0, |run| run.task);
+                let Some(disposition) = pending.identity.accepts_ack_for_live_tasks(msg.arg0, msg.arg1,
+                    msg.arg2, pending.sender_task, live_bell_task, live_sender_task) else {
+                    sex_pdx::serial_record!("[bell.post.presentation.reject] reason=stale_identity");
+                    continue;
+                };
+                let identity = pending.identity;
+                unsafe { PENDING_PRESENTATION = None; }
+                sex_pdx::serial_record!("[bell.post.presentation] event_id={} ticket={} handled={} muted={}",
+                    identity.event_id, identity.ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                    (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+                sex_pdx::serial_record!("[bell.post.receipt] caller_pd={} ticket={} accepted={} muted={}",
+                    identity.sender, identity.ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                    (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+                pdx_reply(identity.sender, sex_pdx::notify::receipt(identity.ticket, disposition));
+            }
+
+            sex_pdx::notify::OP_BELL_POST_KEY => {
+                if msg.caller_task == 0 || msg.arg0 > u32::MAX as u64 { continue; }
+                let slots = unsafe { &mut *core::ptr::addr_of_mut!(POST_KEYS) };
+                let index = slots.iter().position(|slot| slot.is_some_and(|key| key.caller == msg.caller_pd))
+                    .or_else(|| slots.iter().position(Option::is_none));
+                if let Some(index) = index {
+                    slots[index] = Some(sex_pdx::notify::PendingKey { caller: msg.caller_pd, task: msg.caller_task,
+                        ticket: msg.arg0 as u32, low: msg.arg1, high: msg.arg2 });
+                }
+            }
+
+            sex_pdx::notify::OP_BELL_POST | sex_pdx::notify::OP_BELL_POST_CONFIRMED
+                | sex_pdx::notify::OP_BELL_POST_CONFIRMED_KEYED => {
                 // A notification with text, a chunk at a time, from the
                 // kernel-named caller. Policy runs once the text is whole.
                 let caller = msg.caller_pd;
-                let Some(text) = post_assembler(caller).push(msg.arg0, msg.arg1, msg.arg2) else { continue };
-                let allowed = !is_muted(caller) && !is_policy_muted(caller) && check_spam_budget(caller);
-                if !allowed {
-                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=muted_or_spam", caller);
+                let keyed = msg.type_id == sex_pdx::notify::OP_BELL_POST_CONFIRMED_KEYED;
+                let confirmed = msg.type_id != sex_pdx::notify::OP_BELL_POST;
+                let header = sex_pdx::notify::Chunk::decode(msg.arg0);
+                let Some(text) = post_assembler(caller).push(msg.arg0, msg.arg1, msg.arg2) else {
+                    // A malformed final chunk must not strand Date waiting for
+                    // an acknowledgement. Intermediate chunks have no answer.
+                    if confirmed {
+                        if let Some(c) = header.filter(|c| c.last) {
+                            let ticket = c.id as u32 | (c.sender as u32) << 16;
+                            pdx_reply(caller, sex_pdx::notify::receipt(ticket, sex_pdx::notify::Disposition::Retry));
+                        }
+                    }
+                    continue
+                };
+                let ticket = text.id as u32 | (text.sender as u32) << 16;
+                let acknowledge = |disposition: sex_pdx::notify::Disposition| {
+                    if confirmed {
+                        sex_pdx::serial_record!("[bell.post.receipt] caller_pd={} ticket={} accepted={} muted={}",
+                            caller, ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                            (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+                        pdx_reply(caller, sex_pdx::notify::receipt(ticket, disposition));
+                    }
+                };
+                let semantic_key = if keyed { take_post_key(caller, msg.caller_task, ticket) } else { None };
+                if keyed && semantic_key.is_none() {
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
                     continue;
                 }
+                if is_muted(caller) || is_policy_muted(caller) {
+                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=muted", caller);
+                    acknowledge(sex_pdx::notify::Disposition::Muted);
+                    continue;
+                }
+                if !check_spam_budget(caller) {
+                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=spam", caller);
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
+                    continue;
+                }
+                let bell_task = if confirmed {
+                    if (unsafe { PENDING_PRESENTATION }).is_some() {
+                        acknowledge(sex_pdx::notify::Disposition::Retry);
+                        continue;
+                    }
+                    let task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
+                    if task == 0 || msg.caller_task == 0 || caller > u16::MAX as u32 {
+                        acknowledge(sex_pdx::notify::Disposition::Retry);
+                        continue;
+                    }
+                    task
+                } else { 0 };
                 let urgency = text.urgency;
                 let lane = apply_policy_lane(caller, match urgency { sex_pdx::notify::URGENCY_CRITICAL => LANE_NOW, sex_pdx::notify::URGENCY_LOW => LANE_LATER, _ => LANE_SOON });
                 let pushed = unsafe { BELL_QUEUE.push(caller, 0, urgency, lane, urgency, apply_policy_privacy(caller, 0), 0, 0, 0, 0, 0) };
                 let Ok((event_id, _)) = pushed else {
                     sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=queue", caller);
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
                     continue;
                 };
                 bump_generation();
+                if confirmed {
+                    let Some(identity) = sex_pdx::notify::Presentation::new(event_id, ticket, caller, bell_task) else {
+                        acknowledge(sex_pdx::notify::Disposition::Retry);
+                        continue;
+                    };
+                    unsafe { PENDING_PRESENTATION = Some(PendingPresentation {
+                        identity, sender_task: msg.caller_task, since: sex_pdx::get_ticks() }); }
+                }
                 if lane == LANE_NOW && sound::chime() {
                     sex_pdx::serial_record!("[bell.sound.chime] event_id={}", event_id);
                 }
                 // Hand it to the Shell with Bell's id and the true sender.
-                let delivered = sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
+                let announced = !confirmed || sex_pdx::pdx_call(sex_pdx::SLOT_SHELL,
+                    sex_pdx::notify::OP_NOTIFICATION_BEGIN, event_id, ticket as u64,
+                    sex_pdx::notify::begin_sender_word(caller, keyed).unwrap_or(0)).0 == 0;
+                let key_delivered = announced && semantic_key.map_or(true, |(low, high)|
+                    sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::notify::OP_NOTIFICATION_KEY,
+                        event_id, low, high).0 == 0);
+                let delivered = key_delivered && sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
                     .all(|(w, a, b)| sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::notify::OP_NOTIFICATION, w, a, b).0 == 0);
+                if confirmed && !delivered {
+                    unsafe { PENDING_PRESENTATION = None; }
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
+                }
                 sex_pdx::serial_record!("[bell.post.ok] caller_pd={} event_id={} lane={} len={} delivered={}",
                     caller, event_id, lane, text.len, delivered as u8);
             }

@@ -93,6 +93,14 @@ pub fn format_duration(seconds: u64) -> String {
 }
 
 impl Clock {
+    /// Ring the visible notice again in five minutes. A timer is already durable
+    /// in `clock.txt`, so a Date restart does not silently lose the snooze.
+    pub fn snooze_notice(&mut self, now_ms: u64, label: &str) -> bool {
+        let Some(ends_ms) = now_ms.checked_add(300_000) else { return false };
+        if now_ms == 0 || label.is_empty() { return false; }
+        self.timers.push(Timer { ends_ms, seconds: 300, label: label.into() });
+        true
+    }
     pub fn parse(text: &str) -> Clock {
         let mut c = Clock::default();
         for line in text.lines() {
@@ -153,5 +161,16 @@ impl Clock {
         let (done, left): (Vec<Timer>, Vec<Timer>) = self.timers.drain(..).partition(|t| t.ends_ms <= now_ms);
         self.timers = left;
         done
+    }
+    /// Try each due timer once. A failed transport leaves its original deadline
+    /// in the clock file so the next check can retry it.
+    pub fn deliver_timers(&mut self, now_ms: u64, mut post: impl FnMut(&Timer) -> bool) -> Vec<Timer> {
+        let mut delivered = Vec::new();
+        self.timers.retain(|timer| {
+            if timer.ends_ms > now_ms || !post(timer) { return true; }
+            delivered.push(timer.clone());
+            false
+        });
+        delivered
     }
 }

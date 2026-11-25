@@ -907,6 +907,7 @@ dependencies = [
  "sex-fetch",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]

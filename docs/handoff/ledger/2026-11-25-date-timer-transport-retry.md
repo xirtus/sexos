@@ -1,0 +1,6 @@
+# Date timer transport retry
+
+- Both visible Date and its hidden worker previously removed due timers before checking the return from Bell's PDX post. A transport failure could then be saved as if the timer had fired. They now remove each due timer only when every post chunk was transported; failed timers keep their original deadline in the crash-safe clock file for retry.
+- A host model test injects a failed post, serializes and reopens the clock, then confirms one successful retry removes the timer and later checks do not post it again. The calendar QEMU gate checks a normal timer reached Bell once and captures `date-timer-delivered.ppm` with the visible notice.
+- This fixes PDX transport failure only. Bell may still silently reject a transported notification for mute, spam or queue policy; Date has no acknowledgement of that decision. A later Bell acknowledgement protocol is needed for delivery guarantees. Reminders and alarms still advance their minute cursor without such an acknowledgement. A power cut after Bell accepts a post but before `clock.txt` commits can replay a timer, so exactly-once delivery is not claimed.
+- Full build and QEMU run are GitHub CI work. No kernel, Wi-Fi or tether code changed.
