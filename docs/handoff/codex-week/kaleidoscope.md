@@ -36,7 +36,9 @@ and Shields. The remaining gaps are:
   stages and syncs each save, retains a previous copy, and recovers it after an
   interrupted promotion. Per-site Shields choices now use the same staged save
   and previous-copy recovery; the QEMU gate cuts power after a toggle and checks
-  the choice on reboot. Extension settings and disposable caches still need review.
+  the choice on reboot. Extension enablement and saved dynamic rules now use
+  staged replacement and previous-copy recovery; the extension QEMU gate
+  verifies both after a hard reboot. Disposable caches still need review.
 
 Keep browser state and controls within its own capabilities. Do not add a POSIX
 filesystem or network path.
