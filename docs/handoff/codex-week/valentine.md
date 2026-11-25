@@ -22,7 +22,8 @@ Remaining gaps:
 - Search across accounts, conversation view, filters, and signatures.
   Draft fields now support bounded Ctrl+Z/Ctrl+Y history, including changes after
   save. Local drafts save through staged replacement and recover from the `.eml`
-  file, but account-backed send and sync remain.
+  file. A two-boot QEMU gate now checks idle draft autosave after killing the
+  guest with the composer open. Account-backed send and sync remain.
 
 The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
 keyboard reference for the controls that currently work.
