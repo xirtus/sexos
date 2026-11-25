@@ -322,7 +322,7 @@ unsafe fn shell_program_reborn(msg: &sex_pdx::PdxMessage) {
     }
 }
 unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
-    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN { shell_program_reborn(msg); return true; }
+    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN { shell_program_reborn(msg); program_rebirth_poll(); return true; }
     if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
     if msg.caller_pd == 0 { launch_ended(msg.arg0 as u32, msg.arg1 as u32); }
     for e in APP_CUSTODY.iter_mut().flatten() { e.hint(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2); }
@@ -17765,11 +17765,11 @@ unsafe fn open_program_in_active_scene()->bool{
     }
     false
 }
-/// A row a disk program can start on, if any: one that ran before first, so fresh
-/// rows stay for when several programs are open at once.
+/// A row a disk program can start on, if any: prefer pre-initialized READY rows
+/// (zero launch-time rebirth handshake), falling back to REUSABLE rows.
 fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
     use sex_pdx::app_lifecycle as a;
-    program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY))
+    program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE))
 }
 static mut PROGRAM_READING: bool = false;
 /// Background copies still to start from the file Files last read, and its length.
