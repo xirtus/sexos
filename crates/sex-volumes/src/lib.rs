@@ -45,6 +45,19 @@ pub enum Error {
 }
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Flush every mounted volume, reporting the first failure after all mounts
+/// have had a chance to flush. A failed flush must not become a successful
+/// Files SYNC receipt just because the other mounts succeeded.
+pub fn sync_each(count: usize, mut sync: impl FnMut(usize) -> Result<()>) -> Result<()> {
+    let mut first = None;
+    for index in 0..count {
+        if let Err(error) = sync(index) {
+            if first.is_none() { first = Some(error); }
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
+
 /// Whole 512-byte sectors. `buf.len()` is always a multiple of [`SECTOR`].
 pub trait Disk {
     fn sectors(&self) -> u64;

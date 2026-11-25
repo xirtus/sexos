@@ -4,8 +4,9 @@
 A FAT32 USB stick holds a folder `docs` (two text files and a 300 KiB file in `docs/sub`),
 a folder `ren` with three files, and `host.tar.gz` made on the host. Files, given that
 stick:
-1. packs `docs` into `docs.zip` (Ctrl+Shift+A), browses into it (Enter, then into its
-   `docs` folder) and out (Backspace), then extracts it (Ctrl+Shift+X) into a new folder;
+1. packs `docs` into `docs.zip` (Ctrl+Shift+A), plain tar (Ctrl+Shift+N),
+   tar.gz (Ctrl+Shift+F, then 3) and tar.zst (Ctrl+Shift+M), browses into each,
+   then extracts the zip (Ctrl+Shift+X) into a new folder;
 2. compares `docs` with the extracted copy (Ctrl+Shift+C): everything is the same;
 3. browses into `host.tar.gz`, made by another program;
 4. renames the files in `ren` by the mask `pic_[C:2]` (Ctrl+Shift+R), takes it back with
@@ -29,6 +30,7 @@ files, and the metadata file; the second stick holds the files copied out of the
 byte for byte (SHA-256) as they are in them."""
 import argparse,hashlib,io,os,random,re,shutil,subprocess,tarfile,time,zipfile
 from pathlib import Path
+from program_gate_geometry import current_tile
 ROOT=Path(__file__).resolve().parents[1]
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','[':'bracket_left',']':'bracket_right',',':'comma'}
 SHIFTED={':':'semicolon','_':'minus','(':'9',')':'0','+':'equal','@':'2'}
@@ -151,14 +153,31 @@ def main():
  ctrl=lambda k:chord(k,'ctrl')
  cs=lambda k:chord(k,'ctrl','shift')
  E=re.escape
+ surfaces=[]
  def open_files(where='/media/LOOM',command=None):
   s=len(t());line(command or 'loom '+where);m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[files.app.list\] dir={E(where)} count=\d+',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
-  g['focus'](int(m[3]));time.sleep(.5);return s
+  surfaces.append(int(m[3]));g['focus'](int(m[3]));time.sleep(.5);return s
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  # Redo needs stable SexFS object IDs; the removable FAT32 fixture has none.
+  expect('mkdir /redo',r'\[spindle.fs.result\] kind=\d+ status=0')
+  for name in ('one','two','three'):
+   expect('touch /redo/'+name,r'\[spindle.fs.result\] kind=\d+ status=0')
+  open_files('/redo')
+  step(lambda:cs('r'),r'\[files.app.rename.start\] dir=/redo items=3')
+  for _ in range(3):q.key('backspace');time.sleep(.05)
+  keys('pic_[C:2]');time.sleep(.3)
+  step(lambda:q.key('ret'),r'\[files.app.renamed\] dir=/redo mask=pic_\[C:2\] files=3 moves=3')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:ctrl('y'),r'\[files.app.redone\] kind=rename count=3')
+  g['wait'](r'\[files.app.list\] dir=/redo count=3\b',0,10)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'rename-redone.ppm')})
+  assert (a.out/'rename-redone.ppm').stat().st_size>10000
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:q.key('f11'),r'\[files.app.closed\]')
   q.cmd('blockdev-add',{'driver':'raw','node-name':'loomdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
   for _ in range(40):
@@ -167,6 +186,60 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
   s=open_files()
   g['wait'](r'\[files.app.meta.loaded\] root=/media/LOOM records=0',s,10)
+  # Folder tabs preserve each path and return to the first tab after close.
+  step(lambda:cs('t'),r'\[loom.tab.opened\] active=2 count=2 dir=/media/LOOM')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  # Local Places only offers folders inside the grant; Start returns this tab
+  # to the granted USB root while leaving the other tab independent.
+  step(lambda:cs('b'),r'\[loom.quick-places.open\] count=1 dir=/media/LOOM/docs')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'folder-places.ppm')})
+  assert (a.out/'folder-places.ppm').stat().st_size>10000
+  step(lambda:q.key('ret'),r'\[loom.quick-places.go\] name=Start dir=/media/LOOM\b')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
+  step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs.ppm')})
+  # Two independent folder tabs shown together; only the active one navigates.
+  step(lambda:cs('backslash'),r'\[loom.split\] on=1 active=2 pair=1 dir=/media/LOOM/docs other=/media/LOOM\b')
+  step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
+  q.key('down');time.sleep(.3)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
+  step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-split.ppm')})
+  # The same two tabs also draw as independent graphical tile grids. A click
+  # in the right pane focuses it; keyboard switching then returns to the left.
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=1 dir=/media/LOOM/docs')
+  g['wait'](r'\[loom.split.grid\] active=2 pair=1 left=/media/LOOM/docs right=/media/LOOM/ren',0,60)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'folder-split-grid.ppm')})
+  assert (a.out/'folder-split-grid.ppm').stat().st_size>10000
+  step(lambda:cs('b'),r'\[loom.quick-places.open\] count=1 dir=/media/LOOM/docs')
+  step(lambda:q.key('esc'),r'\[loom.quick-places.closed\]')
+  tile=current_tile(t(),surfaces[-1]);rw,rh=map(int,a.resolution.split('x'))
+  x=tile[0]+8+(tile[2]-16)*3//4;y=tile[1]+34+15
+  q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},
+                                    {'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
+  s=len(t())
+  for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.15)
+  g['wait'](r'\[loom.split.focus\] pane=2 active=1 dir=/media/LOOM/ren item=0',s,60)
+  step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=0 dir=/media/LOOM/docs')
+  step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM/ren\b')
+  step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM count=3\b')
+  step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
+  step(lambda:cs('backslash'),r'\[loom.split\] on=0 active=2 pair=1 dir=/media/LOOM/docs other=/media/LOOM\b')
+  step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(1)
+  restored=open_files()
+  g['wait'](r'\[loom.session.loaded\] count=2 active=2 dir=/media/LOOM/docs\b',restored,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs-restored.ppm')})
+  step(lambda:cs('w'),r'\[loom.tab.closed\] active=1 count=1 dir=/media/LOOM\b')
+  # F3 previews a text file without starting its editor or interpreting controls.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  q.key('down')  # folders precede files; alpha.txt is the next row.
+  step(lambda:q.key('f3'),r'\[files.app.preview.opened\] path=/media/LOOM/docs/alpha.txt lines=40 truncated=0')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'text-preview.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.preview.closed\]')
+  step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM count=3\b')
   # 1. Pack docs (the first row), browse into the zip and out, extract it.
   m=step(lambda:cs('a'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.zip files=(\d+) bytes=(\d+)',180)
   assert int(m[1])==3,m[0];result['zip_bytes']=int(m[2])
@@ -176,6 +249,10 @@ def main():
   g['wait'](r'\[files.app.archive.list\] archive=/media/LOOM/docs.zip dir=/ count=1\b',0,10)
   step(lambda:q.key('ret'),r'\[files.app.archive.list\] archive=/media/LOOM/docs.zip dir=docs count=3\b')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-zip.ppm')})
+  q.key('down');time.sleep(.3)
+  step(lambda:q.key('f3'),r'\[files.app.preview.opened\] path=/media/LOOM/docs.zip/docs/alpha.txt lines=40 truncated=0 source=archive')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'archive-text-preview.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.preview.closed\]')
   step(lambda:q.key('backspace'),r'\[files.app.archive.list\] archive=/media/LOOM/docs.zip dir=/ count=1\b')
   step(lambda:q.key('backspace'),r'\[files.app.archive.left\] path=/media/LOOM/docs.zip')
   m=step(lambda:cs('x'),r'\[files.app.archive.extracted\] archive=/media/LOOM/docs.zip member=\* to=(/media/LOOM/[^\n]*?) files=(\d+) bytes=(\d+)',180)
@@ -197,6 +274,17 @@ def main():
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   q.key('down');time.sleep(.3);q.key('down');time.sleep(.3)
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
+  # Cut one.txt and paste it within the same FAT32 volume, then undo/redo/undo.
+  ctrl('x');time.sleep(.3)
+  step(lambda:ctrl('h'),r'\[files.app.list\] dir=/media/LOOM count=5\b')
+  step(lambda:ctrl('v'),r'\[files.app.pasted\] from=/media/LOOM/ren/one.txt to=/media/LOOM/one.txt cut=1')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:ctrl('y'),r'\[files.app.redone\] left=0')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'same-volume-redone.ppm')})
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  q.key('home');time.sleep(.2)
+  q.key('down');time.sleep(.2);q.key('down');time.sleep(.2)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
   for n in (1,2):
    step(lambda:cs('r'),r'\[files.app.rename.start\] dir=/media/LOOM/ren items=3')
    for _ in range(3):q.key('backspace');time.sleep(.05)
@@ -204,7 +292,115 @@ def main():
    if n==1:q.cmd('screendump',{'filename':str(a.out/'rename-preview.ppm')})
    step(lambda:q.key('ret'),r'\[files.app.renamed\] dir=/media/LOOM/ren mask=pic_\[C:2\] files=3 moves=3')
    g['wait'](r'\[files.app.renamed.file\] from=one.txt to=pic_01.txt',0,5)
-   if n==1:step(lambda:ctrl('z'),r'\[files.app.undone\]');g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+   if n==1:
+    step(lambda:ctrl('z'),r'\[files.app.undone\]');g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # The second rename cleared redo (FAT32 has no stable IDs for rename redo anyway).
+  step(lambda:ctrl('y'),r'\[files.app.redo.empty\]')
+  # Shift+Down selects the first two rows; Delete and one undo cover both.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=0 last=1')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'loom-multi-selection.ppm')})
+  step(lambda:q.key('delete'),r'\[files.app.trashed.batch\] count=2')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=1\b',0,10)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # Cut two text-list rows, move them into a new folder, and undo the group.
+  q.key('home');time.sleep(.2)
+  step(lambda:ctrl('2'),r'\[files.app.meta.rated\] path=ren/pic_01.txt stars=2')
+  ctrl('n');time.sleep(.3);keys('moved')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=4\b')
+  q.key('home');time.sleep(.2)
+  q.key('down');time.sleep(.2)
+  step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=1 last=2')
+  step(lambda:ctrl('x'),r'\[files.app.cut.batch\] count=2')
+  q.key('home');time.sleep(.3)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren/moved count=0\b')
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=1')
+  g['wait'](r'\[files.app.meta.moved\] from=ren/pic_01.txt to=ren/moved/pic_01.txt',0,10)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren/moved count=2\b',0,10)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-batch-cut.ppm')})
+  assert (a.out/'loom-batch-cut.ppm').stat().st_size>10000
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.meta.moved\] from=ren/moved/pic_01.txt to=ren/pic_01.txt',0,10)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren/moved count=0\b',0,10)
+  step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM/ren count=4\b')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # Copy two files as one staged background job in this folder. Both taken
+  # names receive a suffix, the rating follows, and one undo removes both.
+  q.key('home');time.sleep(.2)
+  step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=0 last=1')
+  step(lambda:ctrl('c'),r'\[files.app.copy.batch\] count=2')
+  copy_started=len(t())
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=0',120)
+  g['wait'](r'\[files.app.job.final-sync.ok\] kind=Copy',copy_started,10)
+  g['wait'](r'\[files.app.job.verified\] path=/media/LOOM/ren/pic_01 \(copy\).txt bytes=\d+',copy_started,10)
+  g['wait'](r'\[files.app.job.verified\] path=/media/LOOM/ren/pic_02 \(copy\).txt bytes=\d+',copy_started,10)
+  g['wait'](r'\[files.app.meta.copied\] from=ren/pic_01.txt to=ren/pic_01 \(copy\).txt',0,10)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=5\b',0,10)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-batch-copy.ppm')})
+  q.cmd('screendump',{'filename':str(a.out/'loom-verified-copy.ppm')})
+  q.cmd('screendump',{'filename':str(a.out/'loom-sync-confirmed.ppm')})
+  assert (a.out/'loom-sync-confirmed.ppm').stat().st_size>10000
+  assert (a.out/'loom-verified-copy.ppm').stat().st_size>10000
+  assert (a.out/'loom-batch-copy.ppm').stat().st_size>10000
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # Toggle rows 0 and 2 while leaving row 1 alone. The same disjoint set
+  # reaches copy, trash and move, each with one undo.
+  def sparse(first=0):
+   q.key('home');time.sleep(.2)
+   for _ in range(first):q.key('down');time.sleep(.2)
+   step(lambda:ctrl('spc'),r'\[files.app.selection.disjoint\] count=1 focus='+str(first))
+   chord('down','ctrl');time.sleep(.2)
+   step(lambda:chord('down','ctrl'),r'\[display.text.committed\]',10)
+   step(lambda:ctrl('spc'),r'\[files.app.selection.disjoint\] count=2 focus='+str(first+2))
+  sparse()
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-disjoint-selection.ppm')})
+  assert (a.out/'loom-disjoint-selection.ppm').stat().st_size>10000
+  step(lambda:ctrl('c'),r'\[files.app.copy.batch\] count=2')
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=0',120)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=5\b',0,10)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  sparse()
+  step(lambda:q.key('delete'),r'\[files.app.trashed.batch\] count=2')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=1\b',0,10)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  ctrl('n');time.sleep(.3);keys('sparse')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=4\b')
+  sparse(1)
+  step(lambda:ctrl('x'),r'\[files.app.cut.batch\] count=2')
+  q.key('home');time.sleep(.2)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren/sparse count=0\b')
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=1')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren/sparse count=2\b',0,10)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren/sparse count=0\b',0,10)
+  step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM/ren count=4\b')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # The graphical grid uses its actual tile hit geometry and pointer Ctrl bit.
+  q.key('home');time.sleep(.2)
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=1 dir=/media/LOOM/ren')
+  tile=current_tile(t(),surfaces[-1]);rw,rh=map(int,a.resolution.split('x'))
+  def tile_click(index,control=False):
+   x=tile[0]+8+index*136+20;y=tile[1]+34+20
+   if control:q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':True,'key':{'type':'qcode','data':'ctrl'}}}]});time.sleep(.1)
+   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},
+                                     {'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
+   for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.15)
+   if control:q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':False,'key':{'type':'qcode','data':'ctrl'}}}]});time.sleep(.1)
+  step(lambda:tile_click(0),r'\[files.app.grid.select\] focus=0 count=1 control=0')
+  step(lambda:tile_click(2,True),r'\[files.app.grid.select\] focus=2 count=2 control=1')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-grid-selection.ppm')})
+  assert (a.out/'loom-grid-selection.ppm').stat().st_size>10000
+  step(lambda:ctrl('c'),r'\[files.app.copy.batch\] count=2')
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=0',120)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=0 dir=/media/LOOM/ren')
   # 5. Rate and tag the first file.
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:ctrl('3'),r'\[files.app.meta.rated\] path=ren/pic_01.txt stars=3')
@@ -228,6 +424,33 @@ def main():
   m=g['wait'](r'\[files.app.usage.view\] path=/ total=\d+ items=5 biggest=([^:\n]+):',0,10)
   if not m[1].endswith('.zip'):step(lambda:q.key('ret'),rf'\[files.app.usage.view\] path=/{E(m[1])} ',10)
   step(lambda:q.key('esc'),r'\[files.app.list\] dir=/media/LOOM count=5\b')
+  # Pack the same folder as tar.zst, then browse the result through Loom.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('m'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.zst files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.zst format=TarZst entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-zst.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.zst')
+  # Ctrl+Shift+N packs plain tar directly; the Ctrl+Shift+F picker packs
+  # tar.gz. Both use the same streaming writer and staged promotion.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('n'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar format=Tar entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar')
+  q.key('home');time.sleep(.2)
+  step(lambda:cs('f'),r'\[files.app.archive.format\] selected=/media/LOOM/docs')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-pack-format.ppm')})
+  assert (a.out/'loom-pack-format.ppm').stat().st_size>10000
+  m=step(lambda:q.key('3'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.gz files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.gz format=TarGz entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-gz.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.gz')
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
   # 7. Disk and CD images, on a second stick.
   q.cmd('blockdev-add',{'driver':'raw','node-name':'imgsdrive','file':{'driver':'file','filename':str(imgs)}})
@@ -313,7 +536,43 @@ def main():
    step(lambda:q.key('esc'),r'\[files.app.places.left\]')
    step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
    assert 'pw1234' not in t(),'a password reached the log'
-  assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
+  # A completed tab-session save survives an abrupt VM power cut, not just a
+  # normal Loom close. Reattach the same USB disk after boot and reopen Loom.
+  s=open_files('/media/LOOM')
+  s=len(t());cs('t')
+  g['wait'](r'\[loom.tab.opened\] active=2 count=2 dir=/media/LOOM',s,60)
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  s=len(t());q.key('ret')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/docs count=3\b',s,60)
+  g['wait'](r'\[loom.session.saved\] count=2 active=2',s,60)
+  # The archive receipt comes only after both the hidden bytes and visible
+  # rename have been synced. Cut power immediately after that receipt.
+  packed_at=len(t());cs('a')
+  g['wait'](r'\[files.app.archive.created\] from=/media/LOOM/docs/sub to=/media/LOOM/docs/sub.zip files=1 bytes=\d+',packed_at,180)
+  pre_cut_log=t()
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'loom-session-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  q.cmd('blockdev-add',{'driver':'raw','node-name':'loomdrive','file':{'driver':'file','filename':str(stick)}})
+  s=len(t())
+  for _ in range(40):
+   try:q.cmd('device_add',{'driver':'usb-storage','bus':'xhci.0','drive':'loomdrive','id':'loom1'});break
+   except RuntimeError:time.sleep(.5)
+  g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
+  restored=open_files('/media/LOOM')
+  g['wait'](r'\[loom.session.loaded\] count=2 active=2 dir=/media/LOOM/docs\b',restored,60)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/docs count=4\b',restored,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs-powercut-restored.ppm')})
+  assert (a.out/'folder-tabs-powercut-restored.ppm').stat().st_size>10000
+  step(lambda:q.key('end'),r'\[display.text.committed\]',10)
+  step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs/sub.zip format=Zip entries=\d+',60)
+  q.cmd('screendump',{'filename':str(a.out/'archive-powercut-restored.ppm')})
+  assert (a.out/'archive-powercut-restored.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs/sub.zip')
+  step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
+  step(lambda:q.key('f11'),r'\[files.app.closed\]')
+  log=pre_cut_log+t()
+  assert 'KERNEL PANIC' not in log and 'panicked' not in log and '[files.app.fatal]' not in log
  except BaseException:
   # What the guest and the host servers said about the places, for a failed run.
   print('\n'.join(l for l in t().split('\n') if '[files.app.places' in l)[-4000:])
@@ -324,6 +583,16 @@ def main():
  z=zipfile.ZipFile(io.BytesIO(mread(stick,'docs.zip')))
  assert z.testzip() is None
  for name,data in CONTENT.items():assert z.read(name)==data,name
+ powercut_zip=zipfile.ZipFile(io.BytesIO(mread(stick,'docs/sub.zip')))
+ assert powercut_zip.testzip() is None
+ assert powercut_zip.read('sub/gamma.bin')==CONTENT['docs/sub/gamma.bin']
+ compressed=mread(stick,'docs.tar.zst')
+ plain=subprocess.run(['zstd','-dc'],input=compressed,capture_output=True,check=True).stdout
+ with tarfile.open(fileobj=io.BytesIO(plain),mode='r:') as packed:
+  for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,name
+ for suffix,mode in (('tar','r:'),('tar.gz','r:gz')):
+  with tarfile.open(fileobj=io.BytesIO(mread(stick,'docs.'+suffix)),mode=mode) as packed:
+   for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,(suffix,name)
  for name,data in CONTENT.items():assert mread(stick,'docs (extracted)/'+name)==data,name
  assert mlist(stick,'ren')==['pic_01.txt','pic_02.txt','pic_03.txt'],mlist(stick,'ren')
  assert mread(stick,'ren/pic_01.txt')==REN['one.txt']

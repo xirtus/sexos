@@ -15,6 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use loom_core::journal::TransferProgress;
+use loom_core::verify::{finish_sync, CopyVerifier, FinalSync};
 use sex_app::files;
 use sex_app::Window;
 use sha2::{Digest, Sha256};
@@ -30,8 +31,9 @@ pub enum Kind { Copy, Move, Delete, Sum }
 
 enum Step {
     MakeDir(Vec<u8>),
-    /// Copies `from` into `part`, then renames `part` to `to`.
-    CopyFile { from: Vec<u8>, part: Vec<u8>, to: Vec<u8>, size: u64, offset: u64, started: bool },
+    /// Copies `from` into `part`; VerifyFile promotes it only after readback.
+    CopyFile { from: Vec<u8>, part: Vec<u8>, to: Vec<u8>, size: u64, offset: u64, started: bool, verify: Option<CopyVerifier> },
+    VerifyFile { part: Vec<u8>, to: Vec<u8>, verify: Option<CopyVerifier> },
     Remove(Vec<u8>),
     Sum { path: Vec<u8>, size: u64, offset: u64 },
 }
@@ -39,11 +41,12 @@ enum Step {
 pub enum Outcome {
     Running,
     Done(Kind, String),
-    Failed(Kind, String),
+    Failed(Kind, String, bool),
 }
 
 pub struct Job {
     pub kind: Kind,
+    pub batch_count: usize,
     /// What it is about, as shown: the top file or folder.
     pub what: Vec<u8>,
     pub from: Vec<u8>,
@@ -67,6 +70,13 @@ pub struct Job {
 }
 
 fn ticks() -> u64 { sex_pdx::get_ticks() }
+
+struct StagedRead<'a>(&'a mut Window);
+impl loom_core::ReadAt for StagedRead<'_> {
+    fn read_at(&mut self, path: &[u8], offset: u64, buf: &mut [u8]) -> Option<usize> {
+        files::read_at(self.0, &at(path), offset, buf).ok()
+    }
+}
 
 /// The hidden name a file is written under until it is whole.
 fn part_name(to: &[u8]) -> Vec<u8> {
@@ -94,7 +104,7 @@ impl Job {
     fn new(kind: Kind, what: &[u8], from: &[u8], to: &[u8]) -> Self {
         let started_at = ticks();
         let tid = TRANSFER_IDS.fetch_add(1, Ordering::Relaxed);
-        Job { kind, what: what.to_vec(), from: from.to_vec(), to: to.to_vec(), steps: VecDeque::new(), made: Vec::new(), open_part: None,
+        Job { kind, batch_count: 0, what: what.to_vec(), from: from.to_vec(), to: to.to_vec(), steps: VecDeque::new(), made: Vec::new(), open_part: None,
               done: 0, total: 0, removed: 0, items_done: 0, started_at, hash: None, buf: Vec::new(), committed: false,
               transfer: TransferProgress::new(tid, what, 0, 1, started_at) }
     }
@@ -107,7 +117,8 @@ impl Job {
             if dir { self.steps.push_back(Step::MakeDir(dest)); }
             else {
                 self.total += size;
-                self.steps.push_back(Step::CopyFile { from: path, part: part_name(&dest), to: dest, size, offset: 0, started: false });
+                self.steps.push_back(Step::CopyFile { from: path, part: part_name(&dest), to: dest, size, offset: 0,
+                    started: false, verify: Some(CopyVerifier::new(size)) });
             }
         }
         self.transfer.bytes_total = self.total;
@@ -125,6 +136,14 @@ impl Job {
     pub fn copy(window: &mut Window, from: &[u8], to: &[u8]) -> Result<Self, u8> {
         let mut job = Job::new(Kind::Copy, base(to), from, to);
         job.plan_copy(window, from, to)?;
+        Ok(job)
+    }
+    /// Plans every selected source before writing any destination. One job owns
+    /// the whole group, so failure or Escape removes all paths it made.
+    pub fn copy_many(window: &mut Window, paths: &[(Vec<u8>, Vec<u8>)]) -> Result<Self, u8> {
+        let mut job = Job::new(Kind::Copy, b"selected items", b"", b"");
+        for (from, to) in paths { job.plan_copy(window, from, to)?; }
+        job.batch_count = paths.len();
         Ok(job)
     }
     /// Moves between disks: copies, then removes the source once every copy is whole.
@@ -165,16 +184,24 @@ impl Job {
                 Outcome::Running
             }
             Ok(false) => {
-                self.transfer.complete();
-                Outcome::Done(self.kind, self.summary())
+                match finish_sync(files::sync(window), || self.cleanup_if_possible(window)) {
+                    FinalSync::Complete => {
+                        sex_pdx::serial_record!("[files.app.job.final-sync.ok] kind={:?}", self.kind);
+                        self.transfer.complete();
+                        Outcome::Done(self.kind, self.summary())
+                    }
+                    FinalSync::Failed { error, cleaned } => {
+                        self.transfer.fail();
+                        sex_pdx::serial_record!("[files.app.job.final-sync.failed] kind={:?} cleaned={}", self.kind, cleaned as u8);
+                        Outcome::Failed(self.kind, shown(files::message(error)).into(), cleaned)
+                    }
+                }
             }
             Err(e) => {
                 let why = shown(files::message(e)).into();
-                // A copy that failed is cleaned like a cancelled one; a move keeps
-                // its source whenever the copy did not finish.
-                if self.kind != Kind::Delete && self.kind != Kind::Sum && !self.committed { self.undo_made(window); }
+                let cleaned = self.cleanup_if_possible(window);
                 self.transfer.fail();
-                Outcome::Failed(self.kind, why)
+                Outcome::Failed(self.kind, why, cleaned)
             }
         }
     }
@@ -189,7 +216,7 @@ impl Job {
                 self.items_done = self.items_done.saturating_add(1);
                 self.steps.pop_front();
             }
-            Step::CopyFile { from, part, to, size, offset, started } => {
+            Step::CopyFile { from, part, to, size, offset, started, verify } => {
                 if !*started {
                     // A leftover from an earlier stopped run goes first.
                     let _ = files::remove(window, &at(part));
@@ -204,18 +231,41 @@ impl Job {
                     if n == 0 { return Err(sex_pdx::fs::IO); }
                     let wrote = files::write_at(window, &at(part), *offset, &self.buf[..n])?;
                     if wrote < n { return Err(sex_pdx::fs::NO_SPACE); }
+                    verify.as_mut().unwrap().record_source(&self.buf[..n]).map_err(|_| sex_pdx::fs::IO)?;
                     *offset += n as u64;
                     self.done += n as u64;
                 }
                 if *offset >= *size {
+                    files::sync(window)?;
+                    let next = Step::VerifyFile { part: part.clone(), to: to.clone(), verify: verify.take() };
+                    self.steps.pop_front();
+                    self.steps.push_front(next);
+                }
+            }
+            Step::VerifyFile { part, to, verify } => {
+                let staged_size = files::stat(window, &at(part))?.size;
+                if self.buf.len() != PIECE { self.buf = vec![0u8; PIECE]; }
+                let remaining = verify.as_mut().unwrap().read_next(&mut StagedRead(window), part, &mut self.buf)
+                    .map_err(|why| { sex_pdx::serial_record!("[files.app.job.verify.failed] path={} why={:?}", shown(to), why); sex_pdx::fs::IO })?;
+                if !remaining {
+                    // The stat cache may lag a write; an EOF probe rules out
+                    // extra trailing bytes independently of cached metadata.
+                    let mut extra = [0u8; 1];
+                    if files::read_at(window, &at(part), verify.as_ref().unwrap().size(), &mut extra)? != 0 {
+                        sex_pdx::serial_record!("[files.app.job.verify.failed] path={} why=Length", shown(to));
+                        return Err(sex_pdx::fs::IO);
+                    }
+                    verify.take().unwrap().finish(staged_size)
+                        .map_err(|why| { sex_pdx::serial_record!("[files.app.job.verify.failed] path={} why={:?}", shown(to), why); sex_pdx::fs::IO })?;
+                    sex_pdx::serial_record!("[files.app.job.verified] path={} bytes={}", shown(to), staged_size);
                     files::rename(window, &at(part), &at(to))?;
                     self.made.push(core::mem::take(to));
                     self.open_part = None;
                     self.items_done = self.items_done.saturating_add(1);
                     self.steps.pop_front();
-                    // The copy is whole: what is left of a move only removes the source.
-                    if self.kind == Kind::Move && !self.steps.iter().any(|s| matches!(s, Step::CopyFile { .. } | Step::MakeDir(_))) {
-                        let _ = files::sync(window);
+                    // Every staged copy is verified before a cross-disk move can remove its source.
+                    if self.kind == Kind::Move && !self.steps.iter().any(|s| matches!(s, Step::CopyFile { .. } | Step::VerifyFile { .. } | Step::MakeDir(_))) {
+                        files::sync(window)?;
                         self.committed = true;
                     }
                 }
@@ -244,23 +294,38 @@ impl Job {
                 }
             }
         }
-        if self.steps.is_empty() { let _ = files::sync(window); return Ok(false); }
+        if self.steps.is_empty() { return Ok(false); }
         Ok(true)
     }
 
+    fn cleanup_if_possible(&mut self, window: &mut Window) -> bool {
+        match self.kind {
+            Kind::Copy => self.undo_made(window),
+            Kind::Move if !self.committed => self.undo_made(window),
+            Kind::Sum => true,
+            Kind::Move | Kind::Delete => false,
+        }
+    }
     /// Removes the half-written file and everything this job made, newest first.
-    fn undo_made(&mut self, window: &mut Window) {
-        if let Some(part) = self.open_part.take() { let _ = files::remove(window, &at(&part)); }
-        while let Some(p) = self.made.pop() { let _ = files::remove(window, &at(&p)); }
-        let _ = files::sync(window);
+    fn undo_made(&mut self, window: &mut Window) -> bool {
+        let mut cleaned = true;
+        if let Some(part) = self.open_part.take() {
+            cleaned &= matches!(files::remove(window, &at(&part)), Ok(()) | Err(sex_pdx::fs::NOT_FOUND));
+        }
+        while let Some(p) = self.made.pop() {
+            cleaned &= matches!(files::remove(window, &at(&p)), Ok(()) | Err(sex_pdx::fs::NOT_FOUND));
+        }
+        cleaned & files::sync(window).is_ok()
     }
 
     /// Stops the job. Returns what was kept, as shown to the person.
     pub fn cancel(&mut self, window: &mut Window) -> String {
         let label: String = shown(&self.what).into();
         let s = match self.kind {
-            Kind::Copy => { self.undo_made(window); format!("Stopped copying {}: nothing half-copied was left.", label) }
-            Kind::Move if !self.committed => { self.undo_made(window); format!("Stopped moving {}: it is still where it was.", label) }
+            Kind::Copy => if self.undo_made(window) { format!("Stopped copying {}: copied paths were removed.", label) }
+                else { format!("Stopped copying {}: source remains, but cleanup could not be confirmed. Check the destination.", label) },
+            Kind::Move if !self.committed => if self.undo_made(window) { format!("Stopped moving {}: it is still where it was.", label) }
+                else { format!("Stopped moving {}: source remains, but cleanup could not be confirmed. Check the destination.", label) },
             Kind::Move => return format!("Moving {}: almost done, finishing.", label),
             Kind::Delete => format!("Stopped deleting: {} items were already gone.", self.removed),
             Kind::Sum => format!("Stopped checking {}.", label),
@@ -305,7 +370,8 @@ impl Job {
         let mut bar = String::from("[");
         for i in 0..20 { bar.push(if i < filled { '#' } else { '.' }); }
         bar.push(']');
-        let verb = match self.kind { Kind::Copy => "Copying", Kind::Move => "Moving", Kind::Delete => "Deleting", Kind::Sum => "Checking" };
+        let verb = if matches!(self.steps.front(), Some(Step::VerifyFile { .. })) { "Verifying" }
+            else { match self.kind { Kind::Copy => "Copying", Kind::Move => "Moving", Kind::Delete => "Deleting", Kind::Sum => "Checking" } };
         let amount = match self.kind {
             Kind::Delete => format!("{} of {} items", self.done, self.total),
             _ => {

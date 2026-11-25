@@ -1260,8 +1260,20 @@ pub mod files {
     /// Writes `/home` out and forgets its key.
     pub fn home_lock(window: &mut Window) -> Result<(), Error> { request(window, sex_pdx::home_lock::LOCK, b"", 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
+    /// Create and fill one small file in a single Files request, returning its ID.
+    pub fn create_with_data(window: &mut Window, path: &[u8], bytes: &[u8]) -> Result<u64, Error> {
+        if bytes.is_empty() || bytes.len() > w::DATA_MAX { return Err(w::NAME); }
+        exchange(Some(window), w::CREATE_WITH_DATA, path, 0, bytes.len() as u64,
+            |d| d[..bytes.len()].copy_from_slice(bytes),
+            |value, d| if value == 8 { u64::from_le_bytes(d[..8].try_into().unwrap()) } else { 0 })
+    }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }
+    /// Remove only the object ID returned by a checked create.
+    pub fn remove_if_id(window: &mut Window, path: &[u8], expected_id: u64) -> Result<(), Error> {
+        if expected_id == 0 { return Err(w::NAME); }
+        request(window, w::REMOVE_IF_ID, path, expected_id, 0).map(|_| ())
+    }
     pub fn truncate(window: &mut Window, path: &[u8], len: u64) -> Result<(), Error> { request(window, w::TRUNCATE, path, len, 0).map(|_| ()) }
     /// Moves or renames. Between two disks Files answers `OTHER_DISK`: copy, then remove.
     pub fn rename(window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), Error> {

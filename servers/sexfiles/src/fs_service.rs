@@ -43,7 +43,7 @@ pub(crate) fn commit_now(fs: &mut Fs<'static, Disk>) { commit_writes(fs) }
 fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
     // Home's own commit first: its blocks then go out with the system's.
-    crate::home::sync(fs);
+    let _ = crate::home::sync(fs);
     if let Err(e) = fs.commit() { forget_stats(None); sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
     crate::organize::committed(fs);
 }
@@ -1018,6 +1018,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
+        if r.kind == w::REMOVE_IF_ID { return w::reply(r.seq, w::UNSUPPORTED, 0); }
         if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
@@ -1031,11 +1032,15 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
     }
     let path = &path[..path_len];
+    // These requests require SexFS object IDs and a single committed edit.
+    if crate::volumes::owns(path) && r.kind == w::REMOVE_IF_ID {
+        return w::reply(r.seq, w::UNSUPPORTED, 0);
+    }
     // Before anything changes: forget what clients were told about it.
     match r.kind {
         w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC | w::PREPARE => {}
         // By file id, so every spelling of the path (`a//b`, `a/b/`) is cleared.
-        w::WRITE | w::TRUNCATE | w::CREATE | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
+        w::WRITE | w::TRUNCATE | w::CREATE | w::CREATE_WITH_DATA | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
@@ -1044,7 +1049,9 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     // within another volume or the encrypted home, whose files have other identities.
     if matches!(r.kind, w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
         let Some((a, b)) = rename_halves else { return w::reply(r.seq, w::NAME, 0) };
-        if crate::volumes::owns(a) || crate::volumes::owns(b) || crate::home::owns(a) || crate::home::owns(b) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+        if crate::volumes::owns(a) || crate::volumes::owns(b)
+            || (r.kind == w::ORGANIZE_MOVE && (crate::home::owns(a) || crate::home::owns(b)))
+            || crate::home::crosses(a, b) { return w::reply(r.seq, w::OTHER_DISK, 0); }
     }
     // The Organizer (Spindle only, checked in `handle`): Files' own policy module.
     if (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
@@ -1064,9 +1071,9 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     }
     // The encrypted home: its own filesystem, reached only once unlocked.
     let home = match (r.kind, rename_halves) {
-        (w::RENAME, Some((a, b))) if crate::home::crosses(a, b) => Some(Err(w::OTHER_DISK)),
-        (w::RENAME, Some((a, _))) if crate::home::owns(a) => Some(crate::home::run(&mut *fs, r, path, data)),
-        (w::RENAME, _) => None,
+        (w::RENAME | w::MOVE_IF_ID, Some((a, b))) if crate::home::crosses(a, b) => Some(Err(w::OTHER_DISK)),
+        (w::RENAME | w::MOVE_IF_ID, Some((a, _))) if crate::home::owns(a) => Some(crate::home::run(&mut *fs, r, path, data)),
+        (w::RENAME | w::MOVE_IF_ID, _) => None,
         (w::PREPARE | w::MOUNT | w::UNMOUNT, _) if crate::home::owns(path) => Some(Err(w::UNSUPPORTED)),
         _ if crate::home::owns(path) => Some(crate::home::run(&mut *fs, r, path, data)),
         _ => None,
@@ -1078,10 +1085,11 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     // Its sealed file changes only through it.
     if !read_only && (path == sex_pdx::home_lock::IMAGE || rename_halves.is_some_and(|(_, b)| b == sex_pdx::home_lock::IMAGE)) { return w::reply(r.seq, w::DENIED, 0); }
     // A mounted image changes only through its volume.
-    if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
+    if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE | w::REMOVE_IF_ID) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
         return w::reply(r.seq, w::DENIED, 0);
     }
-    if r.kind == w::SYNC { crate::volumes::sync_all(fs); crate::home::sync(fs); }
+    let media_sync_error = if r.kind == w::SYNC { crate::volumes::sync_all(fs).err() } else { None };
+    let home_sync_error = if r.kind == w::SYNC { crate::home::sync(fs).err() } else { None };
     let owner = if r.kind == w::PREPARE && program.is_some() {
         let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
         Some(owner)
@@ -1099,12 +1107,13 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
             }
             if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
             if !read_only { crate::organize::after(fs, r.kind, path); }
+            if let Some(code) = media_sync_error.or(home_sync_error) { return w::reply(r.seq, code, 0); }
             w::reply(r.seq, w::OK, value)
         }
         Err(e) => {
             // Nothing half done becomes durable: back to the last commit.
             if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = fs.rollback(); forget_stats(None); }
-            w::reply(r.seq, status(e), 0)
+            w::reply(r.seq, media_sync_error.or(home_sync_error).unwrap_or(status(e)), 0)
         }
     }
 }
@@ -1265,7 +1274,23 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         }
         w::MKDIR => { fs.mkdir(path, now)?; fs.commit()?; Ok(0) }
         w::CREATE => { fs.create(path, now)?; fs.commit()?; Ok(0) }
+        w::CREATE_WITH_DATA => {
+            let len = r.length as usize;
+            if r.offset != 0 || len == 0 || len > data.len() { return Err(Error::Name); }
+            let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+            own[..len].copy_from_slice(&data[..len]);
+            let id = fs.create_with_data(path, &own[..len], now)?;
+            fs.commit()?;
+            data[..8].copy_from_slice(&id.to_le_bytes());
+            Ok(8)
+        }
         w::REMOVE => { fs.remove_path(path)?; fs.commit()?; Ok(0) }
+        w::REMOVE_IF_ID => {
+            if r.offset == 0 || r.length != 0 { return Err(Error::Name); }
+            fs.remove_path_if_id(path, r.offset)?;
+            fs.commit()?;
+            Ok(0)
+        }
         w::RENAME => {
             let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
             fs.rename(&path[..split], &path[split + 1..])?;

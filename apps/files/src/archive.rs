@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Archives in Files: Enter on a zip, tar (plain, gz, zst, xz) or 7z browses into it as a
 //! read-only folder; Ctrl+Shift+X extracts it next to itself (or, inside one, copies the
-//! selected item out); Ctrl+Shift+A packs the selected file or folder into a zip.
+//! selected item out); Ctrl+Shift+A/N/M packs the selected file or folder
+//! into zip, tar or tar.zst, and Ctrl+Shift+F picks zip, tar, tar.gz or tar.zst.
 //!
 //! The archive is read through Files' own file calls a piece at a time, never loaded
 //! whole. What is extracted or packed is written under a hidden `.NAME.part` name and
@@ -17,6 +18,7 @@ use core::cell::RefCell;
 use sex_app::files::{self, direct, Entry};
 use sex_app::{Event, Nav, Window};
 use sex_archive::{Archive, ArchiveBuilder, ByteSource, EntryKind, ExtractVisitor, Flow, IoError, OutputFormat, Progress, Sink, SourceReader};
+use loom_core::preview::{BoundedBytes, TextPreview, MAX_BYTES};
 
 use crate::{at, base, human, join, parent, shown, App, Undo, BACKSPACE, ENTER, ESC};
 
@@ -141,8 +143,44 @@ pub struct Inside {
     pub dir: String,
 }
 
+/// Keep decompressed preview bytes in memory only, with a hard bound even if
+/// an archive's declared member size is false.
+struct PreviewSink { bytes: BoundedBytes }
+impl Sink for PreviewSink {
+    fn write_all(&mut self, data: &[u8]) -> Result<(), IoError> {
+        if !self.bytes.push(data) { return Err(IoError("preview limit")); }
+        Ok(())
+    }
+}
+
 /// How an operation with a progress line ended.
 pub(crate) enum End { Done, Stopped, Failed(String) }
+
+/// Archive promotion can leave a visible output whose final sync was refused.
+enum ArchiveEnd { Done, Stopped, Failed(String), Unconfirmed(String) }
+
+/// A completed archive must be durable before it gets a visible name, and the
+/// visible rename must be durable before we report success or offer undo.
+fn promote(window: &mut Window, from: &[u8], to: &[u8], file: bool) -> ArchiveEnd {
+    if let Err(e) = files::sync(window) {
+        return ArchiveEnd::Failed(format!("staged output sync failed: {}", shown(files::message(e))));
+    }
+    // SexFS rename replaces a destination file. Use its checked no-replace
+    // move for archive files, including those in encrypted home. FAT/exFAT
+    // rename already refuses a taken name; their object IDs are not SexFS IDs.
+    let moved = if file && !from.starts_with(b"/media/") {
+        files::file_id(window, &at(from)).and_then(|id| files::move_if_id(window, &at(from), &at(to), id))
+    } else {
+        files::rename(window, &at(from), &at(to))
+    };
+    if let Err(e) = moved {
+        return ArchiveEnd::Failed(format!("couldn't give output its final name: {}", shown(files::message(e))));
+    }
+    if let Err(e) = files::sync(window) {
+        return ArchiveEnd::Unconfirmed(format!("final storage sync failed: {}", shown(files::message(e))));
+    }
+    ArchiveEnd::Done
+}
 
 /// Key polling and redrawing while a long archive operation runs.
 pub(crate) struct Ticker { verb: &'static str, what: String, last: u64, pct: u64, closing: bool, started: u64 }
@@ -191,7 +229,7 @@ impl App {
                 sex_pdx::serial_record!("[files.app.archive.opened] path={} format={:?} entries={}", shown(&path), arch.format(), arch.entries().len());
                 let home = parent(&path);
                 self.loom.inside = Some(Inside { arch, file: path, home, dir: String::new() });
-                self.status = "Inside an archive, read only. Ctrl+Shift+X copies the selected item out next to it; Backspace leaves.".into();
+                self.status = "Inside an archive, read only. F3 previews text; Ctrl+Shift+X copies an item out; Backspace leaves.".into();
                 self.archive_list();
             }
             Err(why) => {
@@ -223,6 +261,34 @@ impl App {
         self.go(window, inside.home);
         self.select(&name);
     }
+    /// F3: inspect a small text member without creating a file beside the archive.
+    fn archive_preview(&mut self) {
+        let Some(e) = self.entries.get(self.cursor) else { return };
+        if e.dir { self.status = "Select a text file inside the archive for F3 preview.".into(); return; }
+        let Some(inside) = self.loom.inside.as_ref() else { return };
+        let mut member = inside.dir.clone();
+        if !member.is_empty() { member.push('/'); }
+        member.push_str(shown(&e.name));
+        let mut path = inside.file.clone();
+        path.push(b'/');
+        path.extend_from_slice(member.as_bytes());
+        let result = (|| -> Result<TextPreview, &'static str> {
+            let index = inside.arch.find(&member).ok_or("That member is unavailable.")?;
+            let entry = &inside.arch.entries()[index];
+            if !entry.size_known || entry.size > MAX_BYTES as u64 { return Err("F3 previews archive members up to 32 KiB."); }
+            let mut sink = PreviewSink { bytes: BoundedBytes::new() };
+            let mut next = |_| Flow::Continue;
+            inside.arch.extract(index, &mut sink, &mut next).map_err(|_| "Couldn't read that archive member.")?;
+            TextPreview::parse(sink.bytes.as_slice(), false).ok_or("F3 previews UTF-8 text only.")
+        })();
+        match result {
+            Ok(preview) => {
+                sex_pdx::serial_record!("[files.app.preview.opened] path={} lines={} truncated=0 source=archive", shown(&path), preview.len());
+                self.preview = Some((path, preview));
+            }
+            Err(why) => self.status = why.into(),
+        }
+    }
     /// Keys while inside an archive. False lets Files handle the key (moving the cursor).
     pub(crate) fn archive_key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) -> bool {
         if matches!(sex_app::nav(key), Some(Nav::Up | Nav::Down | Nav::Home | Nav::End | Nav::Left | Nav::Right)) { return false; }
@@ -230,6 +296,7 @@ impl App {
         // Going somewhere else leaves the archive first.
         if key.control && !key.shift && matches!(key.code, crate::KEY_H | crate::KEY_D | crate::KEY_T | crate::KEY_G) { self.loom.inside = None; return false; }
         match key.code {
+            crate::F3 => self.archive_preview(),
             ESC => self.archive_leave(window),
             BACKSPACE => {
                 let inside = self.loom.inside.as_mut().unwrap();
@@ -248,10 +315,10 @@ impl App {
                     inside.dir.push_str(shown(&e.name));
                     self.archive_list();
                 } else {
-                    self.status = format!("{}: {} in the archive. Ctrl+Shift+X copies it out next to the archive.", shown(&e.name), human(e.size));
+                    self.status = format!("{}: {} in the archive. F3 previews text; Ctrl+Shift+X copies it out.", shown(&e.name), human(e.size));
                 }
             }
-            _ => self.status = "This is inside an archive, read only: Ctrl+Shift+X copies the selected item out, Backspace leaves.".into(),
+            _ => self.status = "Inside an archive: F3 previews text, Ctrl+Shift+X copies an item out, Backspace leaves.".into(),
         }
         true
     }
@@ -314,34 +381,47 @@ impl App {
             let mut cb = |p: Progress| ticker.tick(self, window, p);
             arch.extract_all(&mut writer, &mut cb)
         };
+        let mut cleanup_warning = None;
         let end = match result {
-            Ok(()) if writer.files == 0 && !whole && member_is_file => End::Failed("nothing could be read for it".into()),
+            Ok(()) if writer.files == 0 && !whole && member_is_file => ArchiveEnd::Failed("nothing could be read for it".into()),
             Ok(()) => {
                 let from = if whole || !member_is_file { part.clone() } else { join(&part, base(only.as_bytes())) };
-                match files::rename(window, &at(&from), &at(&to)) {
-                    Ok(()) => { if from != part { let _ = self.remove_all(window, &part); } End::Done }
-                    Err(e) => End::Failed(shown(files::message(e)).into()),
+                let promoted = promote(window, &from, &to, member_is_file);
+                if matches!(promoted, ArchiveEnd::Done) && from != part {
+                    if let Err(e) = self.remove_all(window, &part).and_then(|_| files::sync(window)) {
+                        sex_pdx::serial_record!("[files.app.archive.cleanup-unconfirmed] part={} code={}", shown(&part), e);
+                        cleanup_warning = Some(shown(files::message(e)).to_string());
+                    }
                 }
+                promoted
             }
-            Err(sex_archive::Error::Cancelled) => End::Stopped,
-            Err(e) => End::Failed(e.to_string()),
+            Err(sex_archive::Error::Cancelled) => ArchiveEnd::Stopped,
+            Err(e) => ArchiveEnd::Failed(e.to_string()),
         };
-        let _ = files::sync(window);
         match end {
-            End::Done => {
+            ArchiveEnd::Done => {
                 sex_pdx::serial_record!("[files.app.archive.extracted] archive={} member={} to={} files={} bytes={}", shown(&file), if whole { "*" } else { &only }, shown(&to), writer.files, writer.bytes);
-                self.status = format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes));
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.status = match cleanup_warning {
+                    Some(why) => format!("Extracted {} safely, but hidden partial cleanup is unconfirmed: {}. Ctrl+Z takes the extracted output back.", shown(base(&to)), why),
+                    None => format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes)),
+                };
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
-            End::Stopped => {
-                let _ = self.remove_all(window, &part);
+            ArchiveEnd::Stopped => {
+                let cleaned = self.remove_all(window, &part).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.cancelled] kind=extract archive={}", shown(&file));
-                self.status = "Stopped extracting: nothing half-extracted was left.".into();
+                self.status = if cleaned { "Stopped extracting: nothing half-extracted was left.".into() }
+                    else { "Stopped extracting; storage state is unconfirmed. Check the hidden partial folder.".into() };
             }
-            End::Failed(why) => {
-                let _ = self.remove_all(window, &part);
+            ArchiveEnd::Failed(why) => {
+                let cleaned = self.remove_all(window, &part).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.failed] kind=extract archive={} why={}", shown(&file), why);
-                self.status = format!("Couldn't extract: {}. Nothing half-extracted was left.", why);
+                self.status = if cleaned { format!("Couldn't extract: {}. Nothing half-extracted was left.", why) }
+                    else { format!("Couldn't extract: {}. Storage state is unconfirmed; check the hidden partial folder.", why) };
+            }
+            ArchiveEnd::Unconfirmed(why) => {
+                sex_pdx::serial_record!("[files.app.archive.unconfirmed] kind=extract archive={} to={} why={}", shown(&file), shown(&to), why);
+                self.status = format!("Extracted output at {} has unconfirmed storage: {}. Check it before retrying.", shown(&to), why);
             }
         }
         let _ = files::sync(window);
@@ -364,14 +444,33 @@ impl App {
 
     /// Ctrl+Shift+A: packs the selected file or folder into `NAME.zip` beside it.
     pub(crate) fn make_zip(&mut self, window: &mut Window) {
-        let Some(path) = self.selected() else { self.status = "Ctrl+Shift+A packs the selected file or folder into a zip: select one.".into(); return };
-        let dir_item = self.entries.get(self.cursor).is_some_and(|e| e.dir);
+        self.make_archive(window, OutputFormat::Zip, b".zip", "zip");
+    }
+
+    /// Ctrl+Shift+M: a compressed tar, using the same staged write as zip.
+    pub(crate) fn make_tar_zst(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::TarZst, b".tar.zst", "tar.zst");
+    }
+
+    /// Ctrl+Shift+N, or Ctrl+Shift+F then 2: an uncompressed tar.
+    pub(crate) fn make_tar(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::Tar, b".tar", "tar");
+    }
+
+    /// Ctrl+Shift+F then 3: gzip-compressed tar for widely shared archives.
+    pub(crate) fn make_tar_gz(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::TarGz, b".tar.gz", "tar.gz");
+    }
+
+    fn make_archive(&mut self, window: &mut Window, format: OutputFormat, extension: &[u8], kind: &str) {
+        let Some(path) = self.selected() else { self.status = format!("Select a file or folder to pack as {kind}."); return };
+        let dir_item = direct::stat(&at(&path)).is_ok_and(|s| s.dir);
         let name = base(&path).to_vec();
-        let mut zip_name = if dir_item { name.clone() } else {
+        let mut archive_name = if dir_item { name.clone() } else {
             match name.iter().rposition(|b| *b == b'.') { Some(i) if i > 0 => name[..i].to_vec(), _ => name.clone() }
         };
-        zip_name.extend_from_slice(b".zip");
-        let to = self.free_name(window, &self.cwd.clone(), &zip_name, "copy");
+        archive_name.extend_from_slice(extension);
+        let to = self.free_name(window, &self.cwd.clone(), &archive_name, "copy");
         let mut part_name = b".".to_vec();
         part_name.extend_from_slice(base(&to));
         part_name.extend_from_slice(b".part");
@@ -390,7 +489,7 @@ impl App {
             }
         }
         let cut = parent(&path).len() + if parent(&path) == b"/" { 0 } else { 1 };
-        let mut builder = ArchiveBuilder::new(OutputFormat::Zip);
+        let mut builder = ArchiveBuilder::new(format);
         let mut files_n = 0u64;
         for (p, dir, size, mtime) in &items {
             let rel = shown(&p[cut..]);
@@ -401,7 +500,7 @@ impl App {
             if let Err(e) = r { self.status = format!("Couldn't pack {}: {}.", rel, e); return; }
         }
         let _ = files::remove(window, &at(&part));
-        if let Err(e) = files::create(window, &at(&part)) { self.status = format!("Couldn't make the zip: {}.", shown(files::message(e))); return; }
+        if let Err(e) = files::create(window, &at(&part)) { self.status = format!("Couldn't make the {kind}: {}.", shown(files::message(e))); return; }
         sex_pdx::serial_record!("[files.app.archive.create.start] from={} to={} items={}", shown(&path), shown(&to), items.len());
         let mut sink = FileSink { path: at(&part), offset: 0 };
         let mut ticker = Ticker::new("Packing", base(&to));
@@ -410,25 +509,31 @@ impl App {
             builder.write(&mut sink, &mut cb)
         };
         let end = match result {
-            Ok(_) => match files::rename(window, &at(&part), &at(&to)) { Ok(()) => End::Done, Err(e) => End::Failed(shown(files::message(e)).into()) },
-            Err(sex_archive::Error::Cancelled) => End::Stopped,
-            Err(e) => End::Failed(e.to_string()),
+            Ok(_) => promote(window, &part, &to, true),
+            Err(sex_archive::Error::Cancelled) => ArchiveEnd::Stopped,
+            Err(e) => ArchiveEnd::Failed(e.to_string()),
         };
         match end {
-            End::Done => {
+            ArchiveEnd::Done => {
                 sex_pdx::serial_record!("[files.app.archive.created] from={} to={} files={} bytes={}", shown(&path), shown(&to), files_n, sink.offset);
                 self.status = format!("Packed {} into {} ({}). Ctrl+Z takes it back.", shown(&name), shown(base(&to)), human(sink.offset));
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
-            End::Stopped => {
-                let _ = files::remove(window, &at(&part));
+            ArchiveEnd::Stopped => {
+                let cleaned = files::remove(window, &at(&part)).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.cancelled] kind=create to={}", shown(&to));
-                self.status = "Stopped packing: no half-made zip was left.".into();
+                self.status = if cleaned { "Stopped packing: no half-made archive was left.".into() }
+                    else { "Stopped packing; storage state is unconfirmed. Check the hidden partial archive.".into() };
             }
-            End::Failed(why) => {
-                let _ = files::remove(window, &at(&part));
+            ArchiveEnd::Failed(why) => {
+                let cleaned = files::remove(window, &at(&part)).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.failed] kind=create to={} why={}", shown(&to), why);
-                self.status = format!("Couldn't pack {}: {}. No half-made zip was left.", shown(&name), why);
+                self.status = if cleaned { format!("Couldn't pack {}: {}. No half-made archive was left.", shown(&name), why) }
+                    else { format!("Couldn't pack {}: {}. Storage state is unconfirmed; check the hidden partial archive.", shown(&name), why) };
+            }
+            ArchiveEnd::Unconfirmed(why) => {
+                sex_pdx::serial_record!("[files.app.archive.unconfirmed] kind=create to={} why={}", shown(&to), why);
+                self.status = format!("Packed output at {} has unconfirmed storage: {}. Check it before retrying.", shown(&to), why);
             }
         }
         let _ = files::sync(window);

@@ -334,6 +334,16 @@ pub fn run(fs: Option<&mut Fs<'static, FsDisk>>, r: w::Request, path: &[u8], dat
             with(fs, m, |v, d| v.write(d, inner, r.offset, &own)).map(|n| n as u32)
         }
         w::CREATE => with(fs, m, |v, d| v.create(d, inner)).map(|_| 0),
+        w::CREATE_WITH_DATA => {
+            let total = r.length as usize;
+            if r.offset != 0 || total == 0 || total > data.len() || total > w::IO_MAX { return Err(w::NAME); }
+            let own = data[..total].to_vec();
+            with(fs, m, |v, d| {
+                v.create(d, inner)?;
+                if v.write(d, inner, 0, &own)? != own.len() { return Err(sv::Error::NoSpace); }
+                v.sync(d)
+            }).map(|_| 0) // Removable formats have no stable object IDs.
+        }
         w::MKDIR => with(fs, m, |v, d| v.mkdir(d, inner)).map(|_| 0),
         w::REMOVE if inner.iter().all(|b| *b == b'/') => return Err(w::DENIED),
         w::REMOVE => with(fs, m, |v, d| v.remove(d, inner)).map(|_| 0),
@@ -463,10 +473,15 @@ pub fn facts(mut fs: Option<&mut Fs<'static, FsDisk>>, out: &mut String) {
     }
 }
 /// SYNC with no path reaches every volume too.
-pub fn sync_all(fs: &mut Fs<'static, FsDisk>) {
-    for m in mounts().iter_mut().filter(|m| !m.read_only()) {
-        if let Err(e) = with(Some(&mut *fs), m, |v, d| v.sync(d)) { sex_pdx::serial_record!("[files.media.sync.failed] name={} error={:?}", m.name, e); }
-    }
+pub fn sync_all(fs: &mut Fs<'static, FsDisk>) -> Result<(), u8> {
+    let mounted = mounts();
+    sv::sync_each(mounted.len(), |index| {
+        let m = &mut mounted[index];
+        if m.read_only() { return Ok(()); }
+        let result = with(Some(&mut *fs), m, |v, d| v.sync(d));
+        if let Err(e) = result { sex_pdx::serial_record!("[files.media.sync.failed] name={} error={:?}", m.name, e); }
+        result
+    }).map_err(status)
 }
 
 /// The disk holds no SexOS filesystem: mounts every volume on it, read only, under

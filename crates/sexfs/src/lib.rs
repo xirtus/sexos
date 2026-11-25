@@ -754,6 +754,15 @@ impl<'a, D: Device> Fs<'a, D> {
         Ok(id)
     }
     pub fn create(&mut self, path: &[u8], now: u64) -> Result<u64> { self.guarded(|f| f.create_at(path, Kind::File, now)) }
+    /// Prepare a complete new file without replacing an existing name. The
+    /// caller commits on success or rolls back on error.
+    pub fn create_with_data(&mut self, path: &[u8], data: &[u8], now: u64) -> Result<u64> {
+        self.guarded(|f| {
+            let id = f.create_at(path, Kind::File, now)?;
+            if f.write_inner(id, 0, data, now)? != data.len() { return Err(Error::NoSpace); }
+            Ok(id)
+        })
+    }
     pub fn mkdir(&mut self, path: &[u8], now: u64) -> Result<u64> { self.guarded(|f| f.create_at(path, Kind::Dir, now)) }
     pub fn open(&mut self, path: &[u8]) -> Result<Stat> {
         self.guarded(|f| { let id = f.walk(path)?; let (kind, size, mtime) = f.inode(id)?; Ok(Stat { id, kind, size, mtime }) })
@@ -950,6 +959,12 @@ impl<'a, D: Device> Fs<'a, D> {
             f.drop_blocks(id, 0)?;
             f.remove(Key { id, kind: K_INODE, off: 0 })
         })
+    }
+    /// Refuse to remove a replacement that took this path after it was created.
+    pub fn remove_path_if_id(&mut self, path: &[u8], expected_id: u64) -> Result<()> {
+        if expected_id == 0 { return Err(Error::Name); }
+        if self.open(path)?.id != expected_id { return Err(Error::Stale); }
+        self.remove_path(path)
     }
     /// Atomic at the next commit. A file already at `to` is replaced.
     pub fn rename(&mut self, from: &[u8], to: &[u8]) -> Result<()> {

@@ -26,10 +26,16 @@ pub mod dupes;
 pub mod glob;
 pub mod hash;
 pub mod journal;
+pub mod quick_places;
+pub mod preview;
 pub mod rename;
+pub mod selection;
+pub mod session;
+pub mod split;
 pub mod tags;
 mod text;
 pub mod usage;
+pub mod verify;
 
 /// Where file contents come from: Loom implements it over its own file calls, tests over memory.
 pub trait ReadAt {
