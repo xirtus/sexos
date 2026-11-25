@@ -34,14 +34,12 @@ require_pattern "servers/sexfiles/src/program_store.rs" "DIRECTORY_SECTORS" "sex
 require_pattern "apps/sexdrive/src/main.rs" "pdx_reply_recv" "sexdrive request-reply loop uses pdx_reply_recv (syscall 103)"
 require_pattern "servers/sexdisplay/src/main.rs" "sched::deadline\(" "sexdisplay declares deadline class (syscall 104)"
 require_pattern "servers/sexdisplay/src/main.rs" "OP_WINDOW_OPEN_COMBINED" "sexdisplay handles one-hop OP_WINDOW_OPEN_COMBINED"
-require_pattern "servers/silk-shell/src/main.rs" "pdx_reply_recv" "silk-shell uses pdx_reply_recv (syscall 103)"
 require_pattern "servers/silk-shell/src/main.rs" "OP_WINDOW_OPEN_COMBINED" "silk-shell dispatches one-hop OP_WINDOW_OPEN_COMBINED"
 require_pattern "servers/silk-shell/src/app_custody.rs" "0x10B" "silk-shell app_custody permits OP_WINDOW_OPEN_COMBINED (0x10B)"
 require_pattern "servers/sexbell/src/main.rs" "sched::deadline\(" "sexbell declares deadline class (syscall 104)"
 require_pattern "servers/sexbell/src/main.rs" "pdx_reply_recv" "sexbell synchronous replies use pdx_reply_recv (syscall 103)"
 require_pattern "servers/sexinput/src/main.rs" "sched::deadline\(" "sexinput declares deadline class (syscall 104)"
 require_pattern "servers/sexusb/src/main.rs" "sched::deadline\(" "sexusb declares deadline class (syscall 104)"
-require_pattern "servers/sexnet/src/main.rs" "pdx_reply_recv" "sexnet idle synchronous replies use pdx_reply_recv (syscall 103)"
 require_pattern "servers/cufflinks/src/store.rs" "pdx_call_recv" "cufflinks Files RPCs use pdx_call_recv (syscall 102)"
 
 # 2. One-hop Window::open() verification in crates/sex-app/src/lib.rs

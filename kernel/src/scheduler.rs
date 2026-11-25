@@ -676,15 +676,18 @@ impl Scheduler {
         }
         let state = unsafe { (*task).state.snapshot() };
         let pd_id = unsafe { (*task).context.pd_id as u32 };
-        if state.exited
-            || matches!(state.phase, task_ownership::Phase::Dead | task_ownership::Phase::Constructed)
-            || crate::service_restart::down(pd_id)
-        {
+        if state.exited || matches!(state.phase, task_ownership::Phase::Dead | task_ownership::Phase::Constructed) {
             if state.exited && state.phase == task_ownership::Phase::Queued {
                 let _ = unsafe { (*task).state.begin_dispatch(self.core_id) };
             }
             self.handoff_streak.store(0, Ordering::Relaxed);
             return ptr::null_mut();
+        }
+        // A live task of a service being restarted holds a real run token: it waits in
+        // the queue like any wake rather than skipping ahead, and is never dropped.
+        if crate::service_restart::down(pd_id) {
+            self.handoff_streak.store(0, Ordering::Relaxed);
+            return if self.runqueue.try_push(task).is_ok() { ptr::null_mut() } else { task };
         }
         if self.handoff_streak.fetch_add(1, Ordering::Relaxed) < HANDOFF_STREAK {
             HANDOFFS.fetch_add(1, Ordering::Relaxed);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Host unit tests for SexOS fault recovery & automatic client reconnect:
 //! 1. Stale handoff purge & custody guard against dead/exited/restarting tasks.
 //! 2. IPC v2 endpoint detach & waiter wakeup with E_RESTARTED on server restart.
@@ -21,6 +22,9 @@ impl<T> Mutex<T> {
 pub const SEXFS_V0_META_END_LBA: u64 = 47;
 pub const SEXDRIVE_AP4_MULTI_BASE_LBA: u64 = 128;
 pub const ERR_SERVICE_NOT_READY: u64 = 0xFFFF_FFFF_FFFF_FFFE;
+// x86_64 hosts compile ipc_recv's live wrappers too; they reach these through `crate::`.
+pub fn get_ticks() -> u64 { 0 }
+pub fn sys_yield() {}
 pub mod program_store { pub const DIRECTORY_LBA: u64 = 2048; }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

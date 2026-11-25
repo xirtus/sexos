@@ -75,7 +75,7 @@ assert 'FRAME_GROUPS.observe(&SURFACES)' in s and 'FRAME_GROUPS.fit_children(&mu
 assert 'FRAME_GROUPS.register(surface_lifecycle::Catalog' in s
 assert 'FRAME_GROUPS.awaiting_parent(surface)' in s
 assert '[display.child.parent_gate] target={} surface={} parent={} observed=0 standalone=0 retained=1' in s
-admit=s[s.index('                0xEC => {'):s.index('                0xDE => {')]
+admit=s[s.index('                0xEC | sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED => {'):s.index('                0xDE => {')]
 assert admit.index('surface_lifecycle::upsert(')<admit.index('FRAME_GROUPS.observe(')<admit.index('FRAME_GROUPS.awaiting_parent(surface)')
 assert 'fill_rect_color(surf, x, y, DISPLAY_TOKENS.focus_surface_color)' not in s
 out.write_text('\n'.join(parts))

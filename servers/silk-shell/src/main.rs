@@ -27172,9 +27172,7 @@ pub extern "C" fn _start() -> ! {
         // drained burst instead of one IPC per HID event.
         config_watch::poll();
         lock::poll();
-        static mut SHELL_NEXT_MSG: Option<sex_pdx::PdxMessage> = None;
-        let mut fast_reply: Option<(u32, u64)> = None;
-        let mut msg = match unsafe { (*core::ptr::addr_of_mut!(SHELL_NEXT_MSG)).take() }.or_else(pop_startup_message).or_else(|| pdx_try_listen_raw(0)) {
+        let mut msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
                 unsafe { flush_pending_cursor_send(); }
@@ -27240,7 +27238,7 @@ pub extern "C" fn _start() -> ! {
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }
-                    fast_reply = Some((msg.caller_pd, 0));
+                    pdx_reply(msg.caller_pd, 0);
                 }
                 OP_SHELL_BIND_BUFFER => {
                     if !app_custody::buffer_sender(msg.caller_pd) { continue; }
@@ -29083,20 +29081,6 @@ pub extern "C" fn _start() -> ! {
 
         // A3: Sync FocusRef from FOCUSED_SURFACE_ID after all state changes.
         unsafe { sync_focus_ref(); }
-
-        if let Some((reply_pd, reply_val)) = fast_reply {
-            let shell_idle = !shell_ready_publisher.is_pending()
-                && !unsafe { DESKTOP_RECORDING.pending() || RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || silk_ctl_glue::busy() || restricted_routes::pending() || APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) || autofill_routes::wake().is_some() || tray_wake().is_some() }
-                && lock::next_wake().is_none();
-            if shell_idle {
-                match sex_pdx::ipc_recv::pdx_reply_recv(reply_pd, reply_val) {
-                    Ok(m) => { unsafe { *core::ptr::addr_of_mut!(SHELL_NEXT_MSG) = m; } continue; }
-                    Err(()) => { pdx_reply(reply_pd, reply_val); }
-                }
-            } else {
-                pdx_reply(reply_pd, reply_val);
-            }
-        }
 
         sys_yield();
     }

@@ -12,6 +12,14 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:41a967417d003a89c8baca507f6898e52b1a7e9d17752c1930f613003d174578'),  # fault kill purges handoff slots + IPC v2 teardown after exit (no wait change; Gemini #819), 2026-11-25
+
+    ('timed', 'kernel/src/program_workers.rs', 'fn-v1:d10bc5f46ea06738125daf3234fe9fbfb3c636834c52b9979e43cfa9567dd9ff'),  # worker end purges handoff before unpark (no wait change; Gemini #819), 2026-11-25
+
+    ('timed', 'servers/sexnet/src/main.rs', '7aeeff9d3187ccef1bdc28a380b9e52541e8433e3d999c5da5563b813eaed0c6'),  # virtio-net link beside the PCI NIC; receive loop and two-tick envelope unchanged (Gemini #819), 2026-11-25
+
+    ('timed', 'servers/sexusb/src/main.rs', '02894ade100c69b36260c70e9d4b0bac12da2136466b429d6cfb60cca1335bc0'),  # declares deadline class (syscall 104) at start; quiet predicate unchanged (Gemini #819), 2026-11-25
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:8779db0221aab125b06bff4e13ce43265f334898ef1f5c1800e12dc129f40c4c'),  # service stacks grow on touch before the fault is parked (no wait change), 2026-11-23
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:230bcac20c18ce4eddb3b3a8232622d432edeff676b47f448b791bd48abf9615'),  # #466 (cld on entry, PKU gates) merged with #456's hot-plug tick (x17 PR sweep; union of two reviewed versions), 2026-11-21
 
