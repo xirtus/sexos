@@ -72,9 +72,14 @@ Remaining gaps:
   occurrences and reminder times stay distinct. Date now sends its fixed-size
   digest with the ticketed post; Bell binds it to the sender task and ticket,
   then Shell requires it for that Bell event before acknowledging the text.
-  Shell logs the key after matching Bell's task and event, but does not yet
-  persist or suppress it. A digest collision is possible, and no durable
-  receiver receipt exists, so replay remains at least once. Legacy events
+  Shell logs the key after matching Bell's task and event. Date now keeps a
+  bounded, staged-and-synced receipt journal for UID-backed reminders. It
+  records a key after Bell's Shell-handled receipt and before advancing the
+  due cursor, then suppresses that key on retry or restart. A failed receipt
+  save keeps the minute pending. Bell/Shell do not hold this durable store;
+  a crash between Shell handling and Date's receipt commit can still replay,
+  as can eviction after 256 entries or a digest collision. Delivery remains
+  at least once. Legacy events
   without UIDs, Clock alarms and timers still need persistent source identities
   before cross-restart dedupe can be sound. The guest gate imports a near-future
   UID-backed reminder, checks its Shell semantic key and matching handled event,

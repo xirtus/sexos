@@ -41,7 +41,7 @@ use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
 use sex_calendar::history::{ClockEditKind, ClockHistory, ClockState, EventEdit, EventHistory, ReplyDraftHistory};
-use sex_calendar::notice_cursor::{deliver_due, lease_live, DueNotice, NoticeCadence, NoticeCursor, NoticeRetry};
+use sex_calendar::notice_cursor::{deliver_due, lease_live, DueNotice, NoticeCadence, NoticeCursor, NoticeRetry, ReceiptJournal};
 use sex_calendar::conflicts;
 use sex_calendar::storage::{finish_replace, ReplaceFailure as SaveFailure};
 use sex_dav::FileAccount;
@@ -50,6 +50,7 @@ use sex_pdx::app_pointer::Kind;
 const FILE: &[u8] = b"events.txt";
 const CLOCK: &[u8] = b"clock.txt";
 const NOTICE_CURSOR: &[u8] = b"notice.cursor";
+const NOTICE_RECEIPTS: &[u8] = b"notice.receipts";
 const NOTICE_UI: &[u8] = b"notice.ui-open";
 const NOTICE_UI_PREFIX: &[u8] = b"notice.ui-";
 const NOTICE_WORKER_ACTIVE: &[u8] = b"notice.worker-active";
@@ -109,6 +110,7 @@ pub struct App {
     last_minute: i64,
     cursor_ready: bool,
     notice_retry: NoticeRetry,
+    receipts: ReceiptJournal,
     uid_counter: u32,
 }
 
@@ -161,6 +163,11 @@ fn due_text(cal: &Calendar, notice: &DueNotice, offset: i32) -> (&'static str, S
     }
 }
 
+fn receipt_digest(key: &str) -> u128 {
+    let (low, high) = sex_pdx::notify::semantic_digest(key.as_bytes());
+    (high as u128) << 64 | low as u128
+}
+
 /// Each visible run keeps its own lease. A dead run's file stops participating
 /// after ten seconds; the smallest live task owns Bell delivery.
 fn notice_ui_owner(my_task: u32, now: u64) -> bool {
@@ -206,11 +213,18 @@ fn poll_visible_notices(window: &mut Window, app: &mut App, store: &mut [u8],
     seen_events: &mut String, seen_clock: &mut String, notice_owner: &mut Option<bool>) -> bool {
     let now = now_ms();
     let owns = notice_ui_owner(window.task, now);
+    let became_owner = owns && *notice_owner != Some(true);
     if *notice_owner != Some(owns) {
         sex_pdx::serial_record!("[date.notice.ui.owner] task={} owns={}", window.task, owns as u8);
         *notice_owner = Some(owns);
     }
     if !owns { app.now_ms = now; return false; }
+    if became_owner {
+        app.receipts = match files::read(window, NOTICE_RECEIPTS, store) {
+            Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
+            Err(_) => ReceiptJournal::default(),
+        };
+    }
     if let Ok(n) = files::read(window, FILE, store) {
         let saved = String::from_utf8_lossy(&store[..n]);
         if saved.as_ref() != seen_events.as_str() { app.cal = Calendar::parse(&saved); *seen_events = saved.into_owned(); }
@@ -287,6 +301,10 @@ fn notice_worker() -> ! {
                 saved_events || saved_clock, |initial| save_notice_direct(NOTICE_CURSOR, initial.serialize().as_bytes())),
             Err(_) => NoticeCursor::bootstrap(None, now, saved_events || saved_clock, |_| false),
         };
+        let mut receipts = match fs::read_at(NOTICE_RECEIPTS, 0, &mut store[..]) {
+            Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
+            Err(_) => ReceiptJournal::default(),
+        };
         if !cursor_ready { sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor-initial"); }
         let mut retry = NoticeRetry::default();
         sex_pdx::serial_record!("[date.notice.worker.resumed]");
@@ -323,11 +341,19 @@ fn notice_worker() -> ! {
                 let delivery = deliver_due(&cal, &mut clock, cursor.minute, minute, offset, |notice| {
                     let (kind, title, body) = due_text(&cal, notice, offset);
                     let key = notice.semantic_key(&cal);
+                    let digest = key.as_deref().map(receipt_digest);
+                    if digest.is_some_and(|digest| receipts.contains(notice.at(), digest)) {
+                        sex_pdx::serial_record!("[date.notice.receipt.reused] kind={} minute={}", kind, notice.at());
+                        return true;
+                    }
                     let disposition = sex_app::notify::post_confirmed_keyed(title.as_bytes(), body.as_bytes(),
                         sex_pdx::notify::URGENCY_CRITICAL, key.as_deref().map(str::as_bytes));
+                    let settled = disposition.settles_due() && digest.map_or(true, |digest|
+                        receipts.record_after_ack(notice.at(), digest,
+                            |text| save_notice_direct(NOTICE_RECEIPTS, text.as_bytes())));
                     sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
-                        (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
-                    disposition.settles_due()
+                        (disposition == sex_pdx::notify::Disposition::Accepted) as u8, settled as u8);
+                    settled
                 });
                 if delivery.failed { retry.failed(sex_pdx::get_ticks()); } else { retry.succeeded(); }
                 rang |= !delivery.delivered.is_empty();
@@ -766,12 +792,20 @@ impl App {
             let delivery = deliver_due(&self.cal, &mut self.clock, self.last_minute, minute, offset, |notice| {
                 let (kind, title, body) = due_text(&self.cal, notice, offset);
                 let key = notice.semantic_key(&self.cal);
+                let digest = key.as_deref().map(receipt_digest);
+                if digest.is_some_and(|digest| self.receipts.contains(notice.at(), digest)) {
+                    sex_pdx::serial_record!("[date.notice.receipt.reused] kind={} minute={}", kind, notice.at());
+                    return true;
+                }
                 let disposition = sex_app::notify::post_confirmed_keyed(title.as_bytes(), body.as_bytes(),
                     sex_pdx::notify::URGENCY_CRITICAL, key.as_deref().map(str::as_bytes));
+                let settled = disposition.settles_due() && digest.map_or(true, |digest|
+                    self.receipts.record_after_ack(notice.at(), digest,
+                        |text| save_file(window, NOTICE_RECEIPTS, text.as_bytes()).is_ok()));
                 sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
-                    (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
-                if disposition == sex_pdx::notify::Disposition::Accepted { banner = Some(format!("{title}: {body}")); }
-                disposition.settles_due()
+                    (disposition == sex_pdx::notify::Disposition::Accepted) as u8, settled as u8);
+                if settled && disposition == sex_pdx::notify::Disposition::Accepted { banner = Some(format!("{title}: {body}")); }
+                settled
             });
             if delivery.failed { self.notice_retry.failed(sex_pdx::get_ticks()); } else { self.notice_retry.succeeded(); }
             rang |= !delivery.delivered.is_empty();
@@ -1180,9 +1214,13 @@ pub extern "C" fn _start() -> ! {
     let palette = views::Palette::from_tokens(theme);
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
+    let receipts = match files::read(&mut window, NOTICE_RECEIPTS, store) {
+        Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
+        Err(_) => ReceiptJournal::default(),
+    };
     let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, review_choice: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
-        picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, cursor_ready, notice_retry: NoticeRetry::default(), uid_counter: 0 };
+        picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, cursor_ready, notice_retry: NoticeRetry::default(), receipts, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
     let mut path_copy = [0u8; sex_pdx::fs::ARGS_MAX];
