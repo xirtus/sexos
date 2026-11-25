@@ -5,6 +5,7 @@
 //! skipped; charts float over the cells at their anchors.
 use crate::book::{Book, Function, Range, column_name};
 use crate::filter_menu::FilterMenu;
+use gridcraft_engine::core::CellRef;
 use sex_office::{Canvas, Pen};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::{Kind, Pointer};
@@ -85,6 +86,8 @@ pub struct Ui {
     ask: Option<Ask>,
     /// Value picker opened from an AutoFilter header button or Ctrl+Shift+O.
     filter_menu: Option<FilterMenu>,
+    /// Choices for the selected cell's in-cell validation dropdown.
+    validation_menu: Option<ValidationMenu>,
     /// Searchable worksheet function catalog.
     function_picker: Option<FunctionPicker>,
     /// An in-app shortcut reference, opened with Ctrl+Shift+/.
@@ -116,9 +119,11 @@ enum Ask {
     MultiSort { range: crate::book::Range, text: Vec<char> },
     /// Ctrl+Shift+K or C in the value menu: a comparison for this column.
     FilterCondition { col: u32, text: Vec<char> },
-    /// Ctrl+Alt+L: literal list validation on the selected cells.
+    /// Ctrl+Alt+L: list validation on the selected cells.
     ValidationList { range: crate::book::Range, text: Vec<char> },
 }
+
+struct ValidationMenu { row: u32, col: u32, values: Vec<String>, selected: usize }
 
 
 struct FunctionPicker { entries: Vec<Function>, query: String, selected: usize }
@@ -140,6 +145,9 @@ impl FunctionPicker {
 const FILTER_MENU_W: i32 = 230;
 const FILTER_MENU_ROW: i32 = 23;
 const FILTER_MENU_VISIBLE: usize = 8;
+const VALIDATION_MENU_W: i32 = 230;
+const VALIDATION_MENU_ROW: i32 = 23;
+const VALIDATION_MENU_VISIBLE: usize = 8;
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
 const KEEP_AFTER_MS: u64 = 15_000;
@@ -174,6 +182,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+U", "Wrap or unwrap selected cells"),
     ("Ctrl+Alt+C / R", "Fit selected columns / rows to their contents"),
     ("Ctrl+Alt+L", "Allow only listed values in selected cells"),
+    ("Alt+Down", "Choose a listed value for the selected cell"),
     ("Ctrl+Shift+W", "Review import warnings"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
@@ -255,7 +264,7 @@ impl Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None, resizing_row: None,
-            ask: None, filter_menu: None, function_picker: None, help: false,
+            ask: None, filter_menu: None, validation_menu: None, function_picker: None, help: false,
             import_warnings: Vec::new(), warning_open: false, warning_index: 0, recovered: false, unkept: None,
         }
     }
@@ -538,6 +547,12 @@ impl Ui {
             canvas.frame(cx - 1, cy - 1, cw + 1, ch + 1, palette.cursor);
             canvas.frame(cx, cy, cw - 1, ch - 1, palette.cursor);
             canvas.fill(cx + cw - 4, cy + ch - 4, 5, 5, palette.cursor);
+            if self.edit.is_none() && self.book.validation_choices(self.row, self.col).is_some() {
+                let (bx, by) = (cx + cw - 17, cy + (ch - 14) / 2);
+                canvas.fill(bx, by, 14, 14, palette.bar_bg);
+                canvas.frame(bx, by, 14, 14, palette.accent);
+                for i in 0..4 { canvas.fill(bx + 3 + i, by + 5 + i, 8 - 2 * i, 1, palette.accent); }
+            }
         }
 
         // Charts, over the cells at their anchors.
@@ -604,6 +619,8 @@ impl Ui {
             }
         } else if let Some(menu) = &self.filter_menu {
             format!("Filter {}: Up/Down chooses, Space marks, C condition, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
+        } else if let Some(menu) = &self.validation_menu {
+            format!("Choices for {}: Up/Down chooses, Enter applies, Esc closes ({} values)", CellRef::new(menu.row, menu.col).a1(), menu.values.len())
         } else if let Some(picker) = &self.function_picker {
             format!("Function: {}_   Type to search names, categories or descriptions; Up/Down chooses, Enter inserts, Esc closes ({} matches)", picker.query, picker.matches().len())
         } else if self.message.is_empty() {
@@ -640,6 +657,22 @@ impl Ui {
                 let shown = format!("{mark}{}", if label.is_empty() { "(blank)" } else { label });
                 self.pen.text(&mut canvas, mx + 9, y + 3, &shown, if index == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, FILTER_MENU_W - 18)));
             }
+        }
+        if let Some(menu) = &self.validation_menu {
+            let (mx, my) = self.validation_menu_rect(menu.row, menu.col, w, h);
+            let count = menu.values.len().min(VALIDATION_MENU_VISIBLE);
+            let mh = 26 + count.max(1) as i32 * VALIDATION_MENU_ROW;
+            canvas.fill(mx + 3, my + 3, VALIDATION_MENU_W, mh, palette.grid);
+            canvas.fill(mx, my, VALIDATION_MENU_W, mh, palette.bar_bg);
+            canvas.frame(mx, my, VALIDATION_MENU_W, mh, palette.grid);
+            self.pen.text(&mut canvas, mx + 8, my + 5, "Choose a value", palette.ink, Some((mx + 8, VALIDATION_MENU_W - 16)));
+            let first = menu.selected.saturating_sub(VALIDATION_MENU_VISIBLE - 1);
+            for (slot, value) in menu.values.iter().skip(first).take(count).enumerate() {
+                let y = my + 25 + slot as i32 * VALIDATION_MENU_ROW;
+                if first + slot == menu.selected { canvas.fill(mx + 3, y, VALIDATION_MENU_W - 6, VALIDATION_MENU_ROW, palette.head_on); }
+                self.pen.text(&mut canvas, mx + 9, y + 3, value, if first + slot == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, VALIDATION_MENU_W - 18)));
+            }
+            if count == 0 { self.pen.text(&mut canvas, mx + 9, my + 28, "No choices in source", palette.dim, Some((mx + 9, VALIDATION_MENU_W - 18))); }
         }
         if let Some(picker) = &self.function_picker {
             let matches = picker.matches();
@@ -936,6 +969,53 @@ impl Ui {
         (x, y.clamp(BAR_H + HEAD_H, (height - TABS_H - 26 - FILTER_MENU_ROW * FILTER_MENU_VISIBLE as i32).max(BAR_H + HEAD_H)))
     }
 
+    fn validation_menu_rect(&self, row: u32, col: u32, width: i32, height: i32) -> (i32, i32) {
+        let x = (self.col_x(col) + self.book.col_width(col) as i32 - 17)
+            .clamp(ROW_HEAD_W, (width - VALIDATION_MENU_W).max(ROW_HEAD_W));
+        let y = self.row_y(row) + self.book.row_height(row) as i32;
+        (x, y.clamp(BAR_H + HEAD_H, (height - TABS_H - 26 - VALIDATION_MENU_ROW * VALIDATION_MENU_VISIBLE as i32).max(BAR_H + HEAD_H)))
+    }
+
+    fn open_validation_menu(&mut self) {
+        let (row, col) = (self.row, self.col);
+        let Some(values) = self.book.validation_choices(row, col) else {
+            self.message = "This cell has no choice dropdown".into();
+            return;
+        };
+        let current = self.book.input(row, col);
+        let selected = values.iter().position(|v| v.eq_ignore_ascii_case(&current)).unwrap_or(0);
+        sex_std::record(&format!("[spreadeagle.validation.menu] cell={} choices={}", CellRef::new(row, col).a1(), values.len()));
+        self.validation_menu = Some(ValidationMenu { row, col, values, selected });
+    }
+
+    fn apply_validation_menu(&mut self) -> bool {
+        let Some(menu) = self.validation_menu.take() else { return false };
+        let Some(value) = menu.values.get(menu.selected) else { return false };
+        let value = value.clone();
+        let cell = CellRef::new(menu.row, menu.col).a1();
+        let done = self.book.set(menu.row, menu.col, &value);
+        let changed = self.command("cell.set", done, format!("{cell}: {value}"));
+        if changed {
+            self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks());
+            self.recovered = false;
+            sex_std::record(&format!("[spreadeagle.validation.chosen] cell={cell} value={value}"));
+        }
+        changed
+    }
+
+    fn validation_menu_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        if key.code == code::ESC { self.validation_menu = None; return false; }
+        if key.code == code::ENTER { return self.apply_validation_menu(); }
+        if let Some(menu) = &mut self.validation_menu {
+            match sex_app::nav(key) {
+                Some(Nav::Up) => menu.selected = menu.selected.saturating_sub(1),
+                Some(Nav::Down) => menu.selected = (menu.selected + 1).min(menu.values.len().saturating_sub(1)),
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn open_filter_menu(&mut self, col: u32) {
         let Some(range) = self.book.filter_range() else {
             self.message = "Turn the filter on with Ctrl+Shift+L first".into();
@@ -1126,8 +1206,13 @@ impl Ui {
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
         if self.filter_menu.is_some() { return self.filter_menu_key(key); }
+        if self.validation_menu.is_some() { return self.validation_menu_key(key); }
         if self.recovered && key.code == code::ESC && !key.control && self.edit.is_none() {
             return self.discard_recovered();
+        }
+        if key.alt && !key.control && !key.shift && self.edit.is_none() && matches!(sex_app::nav(key), Some(Nav::Down)) {
+            self.open_validation_menu();
+            return false;
         }
         if key.control && self.edit.is_none() {
             if key.alt && !key.shift && matches!(key.code, code::C | code::R) {
@@ -1422,12 +1507,28 @@ impl Ui {
         let (x, y) = (p.x as i32, p.y as i32);
         match p.kind {
             Kind::Wheel { steps } => {
+                if let Some(menu) = &mut self.validation_menu {
+                    menu.selected = (menu.selected as i64 - steps as i64).clamp(0, menu.values.len().saturating_sub(1) as i64) as usize;
+                    return;
+                }
                 let (fr, _) = self.frozen();
                 self.top = (self.top as i64 - steps as i64 * 3).max(fr as i64) as u32;
                 // Keep the cursor where the rows are, as scrolling a sheet does.
                 if self.row >= fr && self.row < self.top { self.row = self.top; }
             }
             Kind::Down { button: 0 } => {
+                if let Some((row, col, selected)) = self.validation_menu.as_ref().map(|m| (m.row, m.col, m.selected)) {
+                    let (mx, my) = self.validation_menu_rect(row, col, window.size().0 as i32, height as i32);
+                    if x >= mx && x < mx + VALIDATION_MENU_W && y >= my + 25 {
+                        let slot = ((y - my - 25) / VALIDATION_MENU_ROW) as usize;
+                        let index = selected.saturating_sub(VALIDATION_MENU_VISIBLE - 1) + slot;
+                        if slot < VALIDATION_MENU_VISIBLE && index < self.validation_menu.as_ref().unwrap().values.len() {
+                            self.validation_menu.as_mut().unwrap().selected = index;
+                            if self.apply_validation_menu() { self.record_column(); }
+                        }
+                    } else { self.validation_menu = None; }
+                    return;
+                }
                 if let Some(col) = self.filter_menu.as_ref().map(|menu| menu.col) {
                     let (mx, my) = self.filter_menu_rect(col, window.size().0 as i32, height as i32);
                     if x >= mx && x < mx + FILTER_MENU_W && y >= my + 25 {
@@ -1475,6 +1576,13 @@ impl Ui {
                                 return;
                             }
                         }
+                    }
+                }
+                if let (Some(&(_, cx, cw)), Some(&(_, cy, ch))) = (self.cols.iter().find(|c| c.0 == self.col), self.rows.iter().find(|r| r.0 == self.row)) {
+                    let (bx, by) = (cx + cw - 17, cy + (ch - 14) / 2);
+                    if x >= bx && x < bx + 14 && y >= by && y < by + 14 && self.book.validation_choices(self.row, self.col).is_some() {
+                        self.open_validation_menu();
+                        return;
                     }
                 }
                 if let Some(chart) = self.book.charts().into_iter().rev().find(|chart| {
