@@ -19,6 +19,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+K | Filter the current column by `contains text`, `starts text`, `ends text`, `notcontains text`, or a numeric rule such as `> 200` or `<= 40` |
 | Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert a column chart |
 | Ctrl+Shift+M | Choose a column, line, bar or pie chart for the selection |
+| Ctrl+Shift+Q | Edit a selected chart (or chart at the current anchor cell): `type line`, `type bar`, `type column`, `type pie`, `title text`, or `clear title` |
 | Ctrl+PageUp, Ctrl+PageDown | Previous or next sheet |
 
 The status line also shows common operations. While entering a formula, Enter

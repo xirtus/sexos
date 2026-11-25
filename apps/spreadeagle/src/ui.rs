@@ -102,6 +102,8 @@ enum Ask {
     Lines { insert: bool },
     /// Ctrl+Shift+M: C, L, B or P picks a chart for the current selection.
     Chart,
+    /// Ctrl+Shift+Q: edit the chart anchored at the selected cell.
+    ChartEdit { id: u32, text: Vec<char> },
     /// Ctrl+Shift+K or C in the value menu: a comparison for this column.
     FilterCondition { col: u32, text: Vec<char> },
 }
@@ -126,6 +128,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+K", "Filter current column by condition"),
     ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
+    ("Ctrl+Shift+Q", "Edit selected chart type or title"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -171,6 +174,7 @@ mod code {
     pub const U: u8 = 0x16;
     pub const O: u8 = 0x18;
     pub const K: u8 = 0x25;
+    pub const Q: u8 = 0x10;
     pub const F2: u8 = 0x3C;
     pub const SLASH: u8 = 0x35;
     pub const H: u8 = 0x23;
@@ -500,6 +504,7 @@ impl Ui {
                 Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
+                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type line/bar/column/pie, title text, or clear title")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("contains/starts/ends/notcontains text or >, >=, <, <= number; Enter applies")),
             }
         } else if let Some(p) = &self.find {
@@ -648,6 +653,27 @@ impl Ui {
                         column_name(chart.col), u64::from(chart.row) + 1, chart.width, chart.height));
                 }
                 false
+            }
+            Ask::ChartEdit { id, text } => {
+                let id = *id;
+                match key.code {
+                    code::BACKSPACE => { text.pop(); self.message.clear(); return false; }
+                    code::ENTER => {}
+                    _ => {
+                        if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { text.push(ch); self.message.clear(); }
+                        return false;
+                    }
+                }
+                let typed = text.iter().collect::<String>();
+                match self.book.edit_chart(id, &typed) {
+                    Ok(description) => {
+                        self.ask = None;
+                        sex_std::record(&format!("[spreadeagle.chart.edit] id={id} action={typed}"));
+                        self.message = description;
+                        true
+                    }
+                    Err(e) => { self.message = e; false }
+                }
             }
             Ask::FilterCondition { col, text } => {
                 let col = *col;
@@ -856,6 +882,12 @@ impl Ui {
                 code::S if key.shift => Some(Ask::SaveAs(self.name.chars().collect())),
                 code::G => Some(Ask::GoTo(Vec::new())),
                 code::M if key.shift => { sex_std::record("[spreadeagle.chart.choose]"); Some(Ask::Chart) },
+                code::Q if key.shift => {
+                    if let Some(chart) = self.book.chart_at_anchor(self.row, self.col) {
+                        sex_std::record(&format!("[spreadeagle.chart.edit-prompt] id={} at={}{}", chart.id, column_name(chart.col), u64::from(chart.row) + 1));
+                        Some(Ask::ChartEdit { id: chart.id, text: Vec::new() })
+                    } else { self.message = "Select a chart or go to its anchor cell first".into(); None }
+                }
                 code::K if key.shift => { sex_std::record(&format!("[spreadeagle.filter.condition-prompt] col={}", column_name(self.col))); Some(Ask::FilterCondition { col: self.col, text: Vec::new() }) },
                 code::EQUALS if key.shift => Some(Ask::Lines { insert: true }),
                 code::MINUS => Some(Ask::Lines { insert: false }),
@@ -1140,6 +1172,20 @@ impl Ui {
                             }
                         }
                     }
+                }
+                if let Some(chart) = self.book.charts().into_iter().rev().find(|chart| {
+                    let cx = self.col_x(chart.col) + chart.dx;
+                    let cy = self.row_y(chart.row) + chart.dy;
+                    x >= cx && x < cx + chart.width && y >= cy && y < cy + chart.height
+                        && y < height as i32 - TABS_H
+                }) {
+                    self.commit();
+                    self.anchor = None;
+                    self.row = chart.row;
+                    self.col = chart.col;
+                    self.message = "Chart selected. Ctrl+Shift+Q edits its title or type".into();
+                    sex_std::record(&format!("[spreadeagle.chart.selected] id={} at={}{}", chart.id, column_name(chart.col), u64::from(chart.row) + 1));
+                    return;
                 }
                 let (Some(&(c, ..)), Some(&(r, ..))) = (self.cols.iter().find(|c| x >= c.1 && x < c.1 + c.2), self.rows.iter().find(|r| y >= r.1 && y < r.1 + r.2)) else { return };
                 self.commit();

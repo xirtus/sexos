@@ -39,7 +39,7 @@ impl Range {
 
 /// A chart's place on the grid: its anchor cell, the offset into it and its size, in pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Placed { pub row: u32, pub col: u32, pub dx: i32, pub dy: i32, pub width: i32, pub height: i32 }
+pub struct Placed { pub id: u32, pub row: u32, pub col: u32, pub dx: i32, pub dy: i32, pub width: i32, pub height: i32 }
 
 /// One piece of a chart's text, in the chart's pixels; `align` and `valign` are -1, 0 or 1
 /// for left/top, centre and right/bottom of the anchor point.
@@ -363,8 +363,38 @@ impl Book {
             let a = c.anchor;
             // Anchors are in points; the grid is in pixels at 96 dpi.
             let px = |pt: f32| (pt * 4.0 / 3.0).round() as i32;
-            Placed { row: a.cell.row, col: a.cell.col, dx: px(a.dx), dy: px(a.dy), width: px(a.width).max(1), height: px(a.height).max(1) }
+            Placed { id: c.id, row: a.cell.row, col: a.cell.col, dx: px(a.dx), dy: px(a.dy), width: px(a.width).max(1), height: px(a.height).max(1) }
         }).collect()
+    }
+
+    /// The topmost chart anchored at the current cell.
+    pub fn chart_at_anchor(&self, row: u32, col: u32) -> Option<Placed> {
+        self.charts().into_iter().rev().find(|c| c.row == row && c.col == col)
+    }
+
+    /// Change an existing chart's type or title through GridCraft's undoable command.
+    pub fn edit_chart(&mut self, id: u32, input: &str) -> Result<String, String> {
+        let input = input.trim();
+        let exists = self.session.doc().ok().and_then(|d| d.wb.active()
+            .map(|sheet| sheet.charts.iter().any(|chart| chart.id == id))).unwrap_or(false);
+        if !exists { return Err("Choose a chart on this sheet first".into()); }
+        if let Some(title) = input.strip_prefix("title ") {
+            if title.is_empty() || title.chars().count() > 120 { return Err("Enter title followed by 1–120 characters".into()); }
+            self.run("chart.set", json!({ "chart": id, "title": title }))?;
+            return Ok(format!("Chart title: {title}"));
+        }
+        if input == "clear title" {
+            self.run("chart.set", json!({ "chart": id, "title": null }))?;
+            return Ok("Chart title cleared".into());
+        }
+        if let Some(kind) = input.strip_prefix("type ") {
+            if !matches!(kind, "column" | "line" | "bar" | "pie") {
+                return Err("Choose type column, line, bar or pie".into());
+            }
+            self.run("chart.set", json!({ "chart": id, "type": kind }))?;
+            return Ok(format!("Chart type: {kind}"));
+        }
+        Err("Enter type column/line/bar/pie, title text, or clear title".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -829,6 +859,33 @@ mod tests {
         book.save().unwrap();
         let (reopened, _) = Book::open(&path).unwrap();
         assert_eq!(kinds(&reopened).join(","), "ColumnClustered,Line,BarClustered,Pie");
+    }
+
+    #[test]
+    fn chart_title_and_type_edit_round_trip_in_xlsx() {
+        let mut book = budget("chart-edit.xlsx");
+        let range = Range { r0: 0, c0: 0, r1: 3, c1: 1 };
+        book.add_chart(range, 0, 3).unwrap();
+        let chart = book.chart_at_anchor(0, 3).unwrap();
+        assert!(book.edit_chart(chart.id, "type donut").is_err());
+        assert!(book.edit_chart(chart.id + 100, "type line").is_err());
+        book.edit_chart(chart.id, "title Budget by category").unwrap();
+        book.edit_chart(chart.id, "type line").unwrap();
+        let state = |book: &Book| {
+            let chart = &book.session.doc().unwrap().wb.active().unwrap().charts[0];
+            (chart.title.clone(), format!("{:?}", chart.kind))
+        };
+        assert_eq!(state(&book), (Some("Budget by category".into()), "Line".into()));
+        book.edit_chart(chart.id, "clear title").unwrap();
+        assert_eq!(state(&book).0, None);
+        book.undo().unwrap();
+        assert_eq!(state(&book).0, Some("Budget by category".into()));
+        book.undo().unwrap();
+        assert_eq!(state(&book).1, "ColumnClustered");
+        book.redo().unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(state(&Book::open(&path).unwrap().0), (Some("Budget by category".into()), "Line".into()));
     }
 
     #[test]
