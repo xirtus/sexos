@@ -21,7 +21,13 @@ Remaining gaps:
 - Broader preview types and archive creation formats. ZIP and tar.zst can now
   be created from a selected file or folder. Ctrl+Shift+F opens a format picker
   for ZIP, plain tar, tar.gz and tar.zst, all using the same staged streaming
-  writer and one-step undo. More preview types remain open.
+  writer and one-step undo. Archive creation and extraction now sync the hidden
+  complete output before promotion and the visible rename before reporting
+  success. A failed final sync reports unconfirmed storage instead of offering
+  undo. Archive files on SexFS and encrypted home now use no-replace checked
+  promotion; a late name collision preserves the other file. A failed
+  encrypted-home flush is also reported. More preview types and checked
+  directory promotion on removable volumes remain open.
 - Folder tabs now restore from a versioned session file under the granted
   root, with a recoverable previous copy. An encrypted-home unlock and missing
   removable-volume restore policy still need a full session audit.

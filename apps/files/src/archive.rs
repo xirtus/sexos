@@ -144,6 +144,32 @@ pub struct Inside {
 /// How an operation with a progress line ended.
 pub(crate) enum End { Done, Stopped, Failed(String) }
 
+/// Archive promotion can leave a visible output whose final sync was refused.
+enum ArchiveEnd { Done, Stopped, Failed(String), Unconfirmed(String) }
+
+/// A completed archive must be durable before it gets a visible name, and the
+/// visible rename must be durable before we report success or offer undo.
+fn promote(window: &mut Window, from: &[u8], to: &[u8], file: bool) -> ArchiveEnd {
+    if let Err(e) = files::sync(window) {
+        return ArchiveEnd::Failed(format!("staged output sync failed: {}", shown(files::message(e))));
+    }
+    // SexFS rename replaces a destination file. Use its checked no-replace
+    // move for archive files, including those in encrypted home. FAT/exFAT
+    // rename already refuses a taken name; their object IDs are not SexFS IDs.
+    let moved = if file && !from.starts_with(b"/media/") {
+        files::file_id(window, &at(from)).and_then(|id| files::move_if_id(window, &at(from), &at(to), id))
+    } else {
+        files::rename(window, &at(from), &at(to))
+    };
+    if let Err(e) = moved {
+        return ArchiveEnd::Failed(format!("couldn't give output its final name: {}", shown(files::message(e))));
+    }
+    if let Err(e) = files::sync(window) {
+        return ArchiveEnd::Unconfirmed(format!("final storage sync failed: {}", shown(files::message(e))));
+    }
+    ArchiveEnd::Done
+}
+
 /// Key polling and redrawing while a long archive operation runs.
 pub(crate) struct Ticker { verb: &'static str, what: String, last: u64, pct: u64, closing: bool, started: u64 }
 impl Ticker {
@@ -314,34 +340,47 @@ impl App {
             let mut cb = |p: Progress| ticker.tick(self, window, p);
             arch.extract_all(&mut writer, &mut cb)
         };
+        let mut cleanup_warning = None;
         let end = match result {
-            Ok(()) if writer.files == 0 && !whole && member_is_file => End::Failed("nothing could be read for it".into()),
+            Ok(()) if writer.files == 0 && !whole && member_is_file => ArchiveEnd::Failed("nothing could be read for it".into()),
             Ok(()) => {
                 let from = if whole || !member_is_file { part.clone() } else { join(&part, base(only.as_bytes())) };
-                match files::rename(window, &at(&from), &at(&to)) {
-                    Ok(()) => { if from != part { let _ = self.remove_all(window, &part); } End::Done }
-                    Err(e) => End::Failed(shown(files::message(e)).into()),
+                let promoted = promote(window, &from, &to, member_is_file);
+                if matches!(promoted, ArchiveEnd::Done) && from != part {
+                    if let Err(e) = self.remove_all(window, &part).and_then(|_| files::sync(window)) {
+                        sex_pdx::serial_record!("[files.app.archive.cleanup-unconfirmed] part={} code={}", shown(&part), e);
+                        cleanup_warning = Some(shown(files::message(e)).to_string());
+                    }
                 }
+                promoted
             }
-            Err(sex_archive::Error::Cancelled) => End::Stopped,
-            Err(e) => End::Failed(e.to_string()),
+            Err(sex_archive::Error::Cancelled) => ArchiveEnd::Stopped,
+            Err(e) => ArchiveEnd::Failed(e.to_string()),
         };
-        let _ = files::sync(window);
         match end {
-            End::Done => {
+            ArchiveEnd::Done => {
                 sex_pdx::serial_record!("[files.app.archive.extracted] archive={} member={} to={} files={} bytes={}", shown(&file), if whole { "*" } else { &only }, shown(&to), writer.files, writer.bytes);
-                self.status = format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes));
+                self.status = match cleanup_warning {
+                    Some(why) => format!("Extracted {} safely, but hidden partial cleanup is unconfirmed: {}. Ctrl+Z takes the extracted output back.", shown(base(&to)), why),
+                    None => format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes)),
+                };
                 self.undo.push(Undo::Copied { to: to.clone() });
             }
-            End::Stopped => {
-                let _ = self.remove_all(window, &part);
+            ArchiveEnd::Stopped => {
+                let cleaned = self.remove_all(window, &part).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.cancelled] kind=extract archive={}", shown(&file));
-                self.status = "Stopped extracting: nothing half-extracted was left.".into();
+                self.status = if cleaned { "Stopped extracting: nothing half-extracted was left.".into() }
+                    else { "Stopped extracting; storage state is unconfirmed. Check the hidden partial folder.".into() };
             }
-            End::Failed(why) => {
-                let _ = self.remove_all(window, &part);
+            ArchiveEnd::Failed(why) => {
+                let cleaned = self.remove_all(window, &part).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.failed] kind=extract archive={} why={}", shown(&file), why);
-                self.status = format!("Couldn't extract: {}. Nothing half-extracted was left.", why);
+                self.status = if cleaned { format!("Couldn't extract: {}. Nothing half-extracted was left.", why) }
+                    else { format!("Couldn't extract: {}. Storage state is unconfirmed; check the hidden partial folder.", why) };
+            }
+            ArchiveEnd::Unconfirmed(why) => {
+                sex_pdx::serial_record!("[files.app.archive.unconfirmed] kind=extract archive={} to={} why={}", shown(&file), shown(&to), why);
+                self.status = format!("Extracted output at {} has unconfirmed storage: {}. Check it before retrying.", shown(&to), why);
             }
         }
         let _ = files::sync(window);
@@ -427,25 +466,31 @@ impl App {
             builder.write(&mut sink, &mut cb)
         };
         let end = match result {
-            Ok(_) => match files::rename(window, &at(&part), &at(&to)) { Ok(()) => End::Done, Err(e) => End::Failed(shown(files::message(e)).into()) },
-            Err(sex_archive::Error::Cancelled) => End::Stopped,
-            Err(e) => End::Failed(e.to_string()),
+            Ok(_) => promote(window, &part, &to, true),
+            Err(sex_archive::Error::Cancelled) => ArchiveEnd::Stopped,
+            Err(e) => ArchiveEnd::Failed(e.to_string()),
         };
         match end {
-            End::Done => {
+            ArchiveEnd::Done => {
                 sex_pdx::serial_record!("[files.app.archive.created] from={} to={} files={} bytes={}", shown(&path), shown(&to), files_n, sink.offset);
                 self.status = format!("Packed {} into {} ({}). Ctrl+Z takes it back.", shown(&name), shown(base(&to)), human(sink.offset));
                 self.undo.push(Undo::Copied { to: to.clone() });
             }
-            End::Stopped => {
-                let _ = files::remove(window, &at(&part));
+            ArchiveEnd::Stopped => {
+                let cleaned = files::remove(window, &at(&part)).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.cancelled] kind=create to={}", shown(&to));
-                self.status = "Stopped packing: no half-made archive was left.".into();
+                self.status = if cleaned { "Stopped packing: no half-made archive was left.".into() }
+                    else { "Stopped packing; storage state is unconfirmed. Check the hidden partial archive.".into() };
             }
-            End::Failed(why) => {
-                let _ = files::remove(window, &at(&part));
+            ArchiveEnd::Failed(why) => {
+                let cleaned = files::remove(window, &at(&part)).is_ok() && files::sync(window).is_ok();
                 sex_pdx::serial_record!("[files.app.archive.failed] kind=create to={} why={}", shown(&to), why);
-                self.status = format!("Couldn't pack {}: {}. No half-made archive was left.", shown(&name), why);
+                self.status = if cleaned { format!("Couldn't pack {}: {}. No half-made archive was left.", shown(&name), why) }
+                    else { format!("Couldn't pack {}: {}. Storage state is unconfirmed; check the hidden partial archive.", shown(&name), why) };
+            }
+            ArchiveEnd::Unconfirmed(why) => {
+                sex_pdx::serial_record!("[files.app.archive.unconfirmed] kind=create to={} why={}", shown(&to), why);
+                self.status = format!("Packed output at {} has unconfirmed storage: {}. Check it before retrying.", shown(&to), why);
             }
         }
         let _ = files::sync(window);

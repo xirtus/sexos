@@ -276,7 +276,7 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
     let strip = |p: &[u8]| -> alloc::vec::Vec<u8> { let i = &p[h::HOME.len().min(p.len())..]; if i.is_empty() { b"/".to_vec() } else { i.to_vec() } };
     // A rename's two halves both lose the prefix.
     let inner = match path.iter().position(|b| *b == 0) {
-        Some(i) if r.kind == w::RENAME => { let mut v = strip(&path[..i]); v.push(0); v.extend_from_slice(&strip(&path[i + 1..])); v }
+        Some(i) if matches!(r.kind, w::RENAME | w::MOVE_IF_ID) => { let mut v = strip(&path[..i]); v.push(0); v.extend_from_slice(&strip(&path[i + 1..])); v }
         _ => strip(path),
     };
     let inner = &inner[..];
@@ -288,7 +288,7 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
             _ => Err(h::LOCKED),
         };
     };
-    if matches!(r.kind, w::REMOVE | w::RENAME) && inner == b"/" { return Err(w::DENIED); }
+    if matches!(r.kind, w::REMOVE | w::RENAME | w::MOVE_IF_ID) && inner == b"/" { return Err(w::DENIED); }
     let read_only = matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS);
     let result = lend(main, || crate::fs_service::run_on(fs, r, inner, data));
     match result {
@@ -303,9 +303,15 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
 /// A rename with one half in `/home` and the other outside: another disk.
 pub fn crosses(a: &[u8], b: &[u8]) -> bool { owns(a) != owns(b) }
 /// SYNC with no path: home is written out too.
-pub fn sync(main: &mut Fs<'static, FsDisk>) {
-    if home().is_some() { deep(|| sync_here(main)) }
+pub fn sync(main: &mut Fs<'static, FsDisk>) -> Result<(), u8> {
+    if home().is_some() { deep(|| sync_here(main)) } else { Ok(()) }
 }
-fn sync_here(main: &mut Fs<'static, FsDisk>) {
-    if let Some(fs) = home().as_mut() { if let Err(e) = lend(main, || fs.commit()) { sex_pdx::serial_record!("[files.home.sync.failed] error={:?}", e); } }
+fn sync_here(main: &mut Fs<'static, FsDisk>) -> Result<(), u8> {
+    if let Some(fs) = home().as_mut() {
+        return lend(main, || fs.commit()).map_err(|e| {
+            sex_pdx::serial_record!("[files.home.sync.failed] error={:?}", e);
+            crate::fs_service::status(e)
+        });
+    }
+    Ok(())
 }

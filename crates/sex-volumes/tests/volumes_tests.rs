@@ -2,6 +2,18 @@
 use sex_volumes::partition::{self, Partition};
 use sex_volumes::{days_from_civil, parts, probe, split_last, Disk, Error, Result, SECTOR};
 
+#[test]
+fn sync_each_reports_failure_and_still_flushes_other_mounts() {
+    let mut visited = Vec::new();
+    let result = sex_volumes::sync_each(4, |index| {
+        visited.push(index);
+        match index { 1 => Err(Error::Io), 3 => Err(Error::NoSpace), _ => Ok(()) }
+    });
+    assert_eq!(visited, [0, 1, 2, 3]);
+    assert_eq!(result, Err(Error::Io));
+    assert_eq!(sex_volumes::sync_each(2, |_| Ok(())), Ok(()));
+}
+
 struct MemDisk {
     sectors: u64,
     data: Vec<u8>,
