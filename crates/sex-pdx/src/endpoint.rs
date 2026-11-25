@@ -171,6 +171,81 @@ pub const E_GONE: u64 = 0xFFFF_FFFF_FFFF_FFF5;
 /// Someone else already waits on this object.
 pub const E_BUSY: u64 = 0xFFFF_FFFF_FFFF_FFF6;
 
+/// Capability rights bits matching `kernel::capability_table::rights`.
+pub const RIGHT_READ: u32 = 1 << 0;
+pub const RIGHT_WRITE: u32 = 1 << 1;
+pub const RIGHT_GRANT: u32 = 1 << 2;
+pub const RIGHT_CALL: u32 = 1 << 3;
+pub const RIGHT_RECEIVE: u32 = 1 << 4;
+pub const RIGHT_ALL: u32 = RIGHT_READ | RIGHT_WRITE | RIGHT_GRANT | RIGHT_CALL | RIGHT_RECEIVE;
+
+/// v1 bootstrap opcode: ask a service for its IPC v2 endpoint slot or status.
+pub const OP_BIND_ENDPOINT: u64 = 0x5E02_0001;
+
+/// Encodes `(caller_pd, caller_task)` into an endpoint capability badge.
+pub const fn encode_badge(caller_pd: u32, caller_task: u32) -> u64 {
+    ((caller_pd as u64) << 32) | (caller_task as u64)
+}
+
+/// Decodes `(caller_pd, caller_task)` from an endpoint capability badge.
+pub const fn decode_badge(badge: u64) -> (u32, u32) {
+    ((badge >> 32) as u32, badge as u32)
+}
+
+/// Decoded IPC v2 endpoint request carrying caller identity (from badge) and 3 payload words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndpointRequest {
+    pub caller_pd: u32,
+    pub caller_task: u32,
+    pub label: u32,
+    pub regs: usize,
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
+}
+
+impl EndpointRequest {
+    /// Decodes a `Received` register message into a structured request.
+    pub const fn decode(got: &Received) -> Result<Self, MessageInfoError> {
+        let info = match MessageInfo::from_raw(got.words[0]) {
+            Ok(i) => i,
+            Err(e) => return Err(e),
+        };
+        let regs = info.registers();
+        if regs > REGISTER_PAYLOAD {
+            return Err(MessageInfoError::TooManyRegisters);
+        }
+        let (caller_pd, caller_task) = decode_badge(got.badge);
+        Ok(Self {
+            caller_pd,
+            caller_task,
+            label: info.label(),
+            regs,
+            arg0: if regs >= 1 { got.words[1] } else { 0 },
+            arg1: if regs >= 2 { got.words[2] } else { 0 },
+            arg2: if regs >= 3 { got.words[3] } else { 0 },
+        })
+    }
+}
+
+/// Encodes a register-carried IPC v2 reply with `label` and 3 payload words.
+pub const fn encode_reply(label: u32, payload: [u64; REGISTER_PAYLOAD]) -> Result<[u64; 4], MessageInfoError> {
+    let info = match MessageInfo::new(label, REGISTER_PAYLOAD, 0) {
+        Ok(i) => i,
+        Err(e) => return Err(e),
+    };
+    Ok([info.raw(), payload[0], payload[1], payload[2]])
+}
+
+/// Encodes a single-word IPC v2 reply (the common case for `fs::reply`, block status, etc.).
+pub const fn encode_word_reply(label: u32, word: u64) -> Result<[u64; 4], MessageInfoError> {
+    let info = match MessageInfo::new(label, 1, 0) {
+        Ok(i) => i,
+        Err(e) => return Err(e),
+    };
+    Ok([info.raw(), word, 0, 0])
+}
+
 /// What came back: status, the sender's badge, and the message (or a value in words[0]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Received { pub badge: u64, pub words: [u64; 4] }
@@ -207,6 +282,50 @@ pub fn endpoint(op: u64, slot: u32, words: [u64; 4]) -> Result<Received, u64> {
 pub fn call(slot: u32, label: u32, payload: [u64; 3]) -> Result<Received, u64> {
     let info = MessageInfo::new(label, REGISTER_PAYLOAD, 0).map_err(|_| E_BADMSG)?.raw();
     endpoint(OP_CALL, slot, [info, payload[0], payload[1], payload[2]])
+}
+
+/// Receives the next message on endpoint `slot`.
+pub fn recv(slot: u32) -> Result<Received, u64> {
+    endpoint(OP_RECV, slot, [0; 4])
+}
+
+/// Replies to the currently held call with `label` and three payload words.
+pub fn reply(label: u32, payload: [u64; REGISTER_PAYLOAD]) -> Result<Received, u64> {
+    let words = encode_reply(label, payload).map_err(|_| E_BADMSG)?;
+    endpoint(OP_REPLY, 0, words)
+}
+
+/// Replies to the currently held call and immediately receives the next message on `slot`.
+pub fn reply_recv(slot: u32, label: u32, payload: [u64; REGISTER_PAYLOAD]) -> Result<Received, u64> {
+    let words = encode_reply(label, payload).map_err(|_| E_BADMSG)?;
+    endpoint(OP_REPLY_RECV, slot, words)
+}
+
+/// Replies to the currently held call with a single word.
+pub fn reply_word(label: u32, word: u64) -> Result<Received, u64> {
+    let words = encode_word_reply(label, word).map_err(|_| E_BADMSG)?;
+    endpoint(OP_REPLY, 0, words)
+}
+
+/// Replies with a single word and immediately receives the next message on `slot`.
+pub fn reply_word_recv(slot: u32, label: u32, word: u64) -> Result<Received, u64> {
+    let words = encode_word_reply(label, word).map_err(|_| E_BADMSG)?;
+    endpoint(OP_REPLY_RECV, slot, words)
+}
+
+/// Grants a derived copy of endpoint `slot` into the domain named by `target_domain_slot`.
+pub fn grant(slot: u32, target_domain_slot: u32, rights: u32, badge: u64) -> Result<u32, u64> {
+    endpoint(OP_GRANT, slot, [target_domain_slot as u64, rights as u64, badge, 0]).map(|r| r.words[0] as u32)
+}
+
+/// Derives a narrower/badged copy of endpoint `slot` in this domain's own capability table.
+pub fn derive(slot: u32, rights: u32, badge: u64) -> Result<u32, u64> {
+    endpoint(OP_DERIVE, slot, [0, rights as u64, badge, 0]).map(|r| r.words[0] as u32)
+}
+
+/// Destroys an endpoint owned by this domain.
+pub fn destroy(slot: u32) -> Result<(), u64> {
+    endpoint(OP_DESTROY, slot, [0; 4]).map(|_| ())
 }
 
 /// A new endpoint owned by this domain; returns its slot.

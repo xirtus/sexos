@@ -26,6 +26,8 @@ mod restricted_control;
 mod restricted_load;
 mod restricted_data;
 mod fs_service;
+mod page_cache;
+mod ipc_v2;
 mod organize;
 mod recording_role;
 mod recording_image;
