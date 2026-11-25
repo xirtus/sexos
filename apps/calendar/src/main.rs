@@ -113,11 +113,31 @@ fn stamp(ms: u64) -> String {
     format!("{:04}{:02}{:02}T{:02}{:02}{:02}Z", d.year, d.month, d.day, m.rem_euclid(1440) / 60, m.rem_euclid(60), ms / 1000 % 60)
 }
 
+/// Commit a complete replacement in the program's own folder. The old file
+/// remains readable if the write or its first sync fails.
+fn save_file(window: &mut Window, live: &[u8], data: &[u8]) -> Result<(), files::Error> {
+    let name = core::str::from_utf8(live).unwrap_or("date");
+    let stage = format!("{name}.stage-{}", window.task);
+    let _ = files::remove(window, stage.as_bytes());
+    if let Err(e) = files::write(window, stage.as_bytes(), data) {
+        let _ = files::remove(window, stage.as_bytes());
+        return Err(e);
+    }
+    if let Err(e) = files::sync(window) {
+        let _ = files::remove(window, stage.as_bytes());
+        return Err(e);
+    }
+    files::rename(window, stage.as_bytes(), live)?;
+    files::sync(window)?;
+    sex_pdx::serial_record!("[date.save.committed] file={} bytes={}", name, data.len());
+    Ok(())
+}
+
 impl App {
     pub fn local_offset(&self) -> i32 { self.clock.home_zone().offset((self.now_ms / 60_000) as i64) }
     fn save(&mut self, window: &mut Window) {
         let text = self.cal.serialize();
-        match files::write(window, FILE, text.as_bytes()) {
+        match save_file(window, FILE, text.as_bytes()) {
             Ok(()) => sex_pdx::serial_record!("[calendar.saved] events={} bytes={}", self.cal.events.len(), text.len()),
             Err(e) => {
                 sex_pdx::serial_record!("[calendar.save.failed] status={}", e);
@@ -126,7 +146,7 @@ impl App {
         }
     }
     fn save_clock(&mut self, window: &mut Window) {
-        if let Err(e) = files::write(window, CLOCK, self.clock.serialize().as_bytes()) {
+        if let Err(e) = save_file(window, CLOCK, self.clock.serialize().as_bytes()) {
             self.status = String::from(core::str::from_utf8(files::message(e)).unwrap_or("Not saved."));
         }
     }
@@ -175,7 +195,10 @@ impl App {
         if name.ends_with(".dav") {
             match FileAccount::parse(&text) {
                 Some(a) => {
-                    let _ = files::write(window, ACCOUNT, text.as_bytes());
+                    if let Err(e) = save_file(window, ACCOUNT, text.as_bytes()) {
+                        self.status = format!("Could not save account: {}", core::str::from_utf8(files::message(e)).unwrap_or("?"));
+                        return;
+                    }
                     sex_pdx::serial_record!("[date.account] url={} user={}", a.url, a.user);
                     self.status = format!("CalDAV account {} kept; s syncs.", a.url);
                 }
