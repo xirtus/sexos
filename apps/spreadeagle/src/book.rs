@@ -85,6 +85,23 @@ pub struct Label { pub x: f32, pub y: f32, pub text: String, pub size: f32, pub 
 /// A drawn chart: 0x00RRGGBB pixels at the asked size, with the text still to draw over them.
 pub struct ChartPicture { pub pixels: Vec<u32>, pub text: Vec<Label> }
 
+/// GridCraft persists Excel chart style numbers but currently renders their
+/// default colours alike. Give each supported style a native palette while
+/// retaining any explicit series colours from the workbook.
+fn styled_color(base: [u8; 4], style: u32) -> [u8; 4] {
+    const TINTS: [[u8; 3]; 16] = [
+        [0, 0, 0], [156, 110, 94], [46, 42, 43], [44, 109, 158],
+        [45, 132, 124], [159, 85, 125], [176, 111, 43], [99, 91, 153],
+        [52, 126, 72], [184, 73, 72], [82, 108, 162], [151, 91, 61],
+        [81, 132, 145], [123, 104, 68], [122, 91, 139], [67, 67, 67],
+    ];
+    if !(2..=16).contains(&style) { return base; }
+    let tint = TINTS[(style - 1) as usize];
+    let strength = 40u16 + ((style - 2) % 4) as u16 * 10;
+    let mix = |a: u8, b: u8| ((a as u16 * (100 - strength) + b as u16 * strength) / 100) as u8;
+    [mix(base[0], tint[0]), mix(base[1], tint[1]), mix(base[2], tint[2]), base[3]]
+}
+
 /// One entry from GridCraft's built-in worksheet function catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function { pub name: String, pub category: String, pub signature: String, pub description: String }
@@ -764,6 +781,12 @@ impl Book {
             self.run("chart.set", json!({ "chart": id, "type": kind }))?;
             return Ok(format!("Chart type: {kind}"));
         }
+        if let Some(value) = input.strip_prefix("style ") {
+            let style = value.parse::<u32>().map_err(|_| "Choose chart style 1–16")?;
+            if !(1..=16).contains(&style) { return Err("Choose chart style 1–16".into()); }
+            self.run("chart.set", json!({ "chart": id, "style": style }))?;
+            return Ok(format!("Chart style: {style}"));
+        }
         if let Some(position) = input.strip_prefix("legend ") {
             if !matches!(position, "none" | "top" | "bottom" | "left" | "right") {
                 return Err("Choose legend none, top, bottom, left or right".into());
@@ -814,7 +837,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter remove 2, data A1:B4, switch, type, title, legend, table, hole or angle".into())
+        Err("Enter remove 2, data A1:B4, switch, type, style, title, legend, table, hole or angle".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -823,7 +846,13 @@ impl Book {
         let d = self.session.doc().ok()?;
         let si = d.wb.active_sheet();
         let chart = d.wb.sheets.get(si)?.charts.get(index)?;
-        let data = gridcraft_chart::resolve(&d.wb, si, chart);
+        let mut data = gridcraft_chart::resolve(&d.wb, si, chart);
+        if chart.style > 1 {
+            for color in &mut data.palette { *color = styled_color(*color, chart.style); }
+            for (series, drawn) in chart.series.iter().zip(&mut data.series) {
+                if series.color.is_none() { drawn.color = styled_color(drawn.color, chart.style); }
+            }
+        }
         let prims = gridcraft_chart::render(chart, &data, width as f32, height as f32, measure);
         let rgba = gridcraft_chart::rasterize(&prims, width, height, [255, 255, 255, 255]);
         if rgba.len() != (width * height * 4) as usize { return None; }
@@ -1711,6 +1740,32 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(state(&Book::open(&path).unwrap().0), (Some("Budget by category".into()), "Line".into()));
+    }
+
+    #[test]
+    fn chart_style_changes_native_pixels_and_survives_xlsx() {
+        let mut book = budget("chart-style.xlsx");
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        book.edit_chart(id, "type doughnut").unwrap();
+        let picture = |b: &Book| b.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        let default_pixels = picture(&book);
+        for bad in ["style 0", "style 17", "style rose"] {
+            assert!(book.edit_chart(id, bad).is_err(), "{bad}");
+        }
+        book.edit_chart(id, "style 5").unwrap();
+        let styled_pixels = picture(&book);
+        assert_ne!(styled_pixels, default_pixels, "style must affect the chart actually shown");
+        assert_eq!(book.session.doc().unwrap().wb.active().unwrap().charts[0].style, 5);
+        book.undo().unwrap();
+        assert_eq!(picture(&book), default_pixels);
+        book.redo().unwrap();
+        assert_eq!(picture(&book), styled_pixels);
+        let path = book.path.clone();
+        book.save().unwrap();
+        let (reopened, _) = Book::open(&path).unwrap();
+        assert_eq!(reopened.session.doc().unwrap().wb.active().unwrap().charts[0].style, 5);
+        assert_eq!(picture(&reopened), styled_pixels);
     }
 
     #[test]
