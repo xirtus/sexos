@@ -26,6 +26,7 @@ pub mod dupes;
 pub mod glob;
 pub mod hash;
 pub mod journal;
+pub mod quick_places;
 pub mod rename;
 pub mod selection;
 pub mod session;
