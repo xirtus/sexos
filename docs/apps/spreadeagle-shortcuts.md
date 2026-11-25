@@ -34,6 +34,8 @@ of a row header to change its height. Ctrl+Z undoes either size change.
 With AutoFilter on, click a column header's filter button or press Ctrl+Shift+O
 on that column. Use Up and Down to highlight a value, Space to mark several,
 Enter to apply, and Esc to close the menu. Existing selected values show checked;
+`(blank)` selects empty cells and formulas that display empty text, alone or
+alongside other checked values;
 press / or Ctrl+F in the menu to search its values (case-insensitive). Search
 narrows the list without losing checked choices; Enter applies the highlighted
 match, and Backspace edits the query. Esc clears a query before closing the menu.

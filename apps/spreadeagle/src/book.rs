@@ -433,7 +433,9 @@ impl Book {
         let params = if values.is_empty() {
             json!({ "column": column_name(col), "clear": true })
         } else {
-            json!({ "column": column_name(col), "values": values })
+            let blanks = values.iter().any(String::is_empty);
+            let nonblank: Vec<&str> = values.iter().filter(|value| !value.is_empty()).map(String::as_str).collect();
+            json!({ "column": column_name(col), "values": nonblank, "blanks": blanks })
         };
         self.run("data.filterBy", params).map(|_| ())
     }
@@ -1119,6 +1121,31 @@ mod tests {
         reopened.filter_by_values(at, 1, &["200".into()]).unwrap();
         assert_eq!(reopened.filter_state(1), FilterState::Values { values: vec!["200".into()], blanks: false });
         assert_eq!(reopened.filter_state(0), FilterState::None);
+    }
+
+    #[test]
+    fn filter_blank_choice_includes_empty_cells_and_empty_formula_results() {
+        let mut book = Book::blank(&temp("filter-blanks.xlsx"));
+        book.set(0, 0, "Item").unwrap();
+        book.set(1, 0, "Food").unwrap();
+        book.set(3, 0, "=\"\"").unwrap();
+        book.set(4, 0, "Rent").unwrap();
+        book.toggle_filter(Range { r0: 0, c0: 0, r1: 4, c1: 0 }).unwrap();
+        assert_eq!(book.filter_choices(0), ["", "Food", "Rent"]);
+        let visible = |book: &Book| (1..=4).map(|row| book.row_height(row) > 0).collect::<Vec<_>>();
+        book.filter_by_values(Range::cell(0, 0), 0, &[String::new()]).unwrap();
+        assert_eq!(visible(&book), [false, true, true, false]);
+        assert_eq!(book.filter_state(0), FilterState::Values { values: vec![], blanks: true });
+        let path = book.path.clone();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap().0;
+        assert_eq!(visible(&reopened), [false, true, true, false]);
+        assert_eq!(reopened.filter_state(0), FilterState::Values { values: vec![], blanks: true });
+        book.filter_by_values(Range::cell(0, 0), 0, &[String::new(), "Food".into()]).unwrap();
+        assert_eq!(visible(&book), [true, true, true, false]);
+        assert_eq!(book.filter_state(0), FilterState::Values { values: vec!["Food".into()], blanks: true });
+        book.filter_by_values(Range::cell(0, 0), 0, &[]).unwrap();
+        assert_eq!(visible(&book), [true, true, true, true]);
     }
 
     #[test]
