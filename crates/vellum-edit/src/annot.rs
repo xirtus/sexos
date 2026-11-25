@@ -120,6 +120,15 @@ const MARKUP_FLAGS: i64 = 4; // Print
 const NOTE_FLAGS: i64 = 4 | 8 | 16; // Print, NoZoom, NoRotate
 
 impl Editor {
+    /// Annotation permissions in signed revisions require DocMDP/FieldMDP evaluation.
+    /// Until that policy is implemented, do not silently invalidate a signature.
+    fn require_unsigned_annotations(&self) -> Result<(), Error> {
+        if self.signatures()?.iter().any(|signature| signature.signed) {
+            return Err(Error::BadValue("cannot edit annotations in a signed PDF".into()));
+        }
+        Ok(())
+    }
+
     /// Lists every annotation on the page, in `/Annots` order (including links, popups, widgets).
     pub fn annotations(&self, page: usize) -> Result<Vec<AnnotInfo>, Error> {
         let pid = self.page_id(page)?;
@@ -165,6 +174,7 @@ impl Editor {
 
     /// Adds an annotation with its appearance stream; returns the new annotation's object id.
     pub fn add_annotation(&mut self, page: usize, a: &NewAnnot) -> Result<ObjId, Error> {
+        self.require_unsigned_annotations()?;
         let pid = self.page_id(page)?;
         let st = &a.style;
         let [r, g, b] = st.color.map(|c| c.clamp(0.0, 1.0) as f64);
@@ -327,6 +337,7 @@ impl Editor {
 
     /// Remove an annotation and retain its exact page entry for undo.
     pub fn remove_annotation(&mut self, page: usize, index: usize) -> Result<RemovedAnnot, Error> {
+        self.require_unsigned_annotations()?;
         let pid = self.page_id(page)?;
         let (mut arr, holder) = self.annots_array(pid);
         let entry = arr.get(index).cloned().ok_or(Error::NoSuchAnnotation(index))?;
@@ -344,6 +355,7 @@ impl Editor {
 
     /// Restore the original annotation and popup references without recreating their appearance.
     pub fn restore_annotation(&mut self, removed: &RemovedAnnot) -> Result<(), Error> {
+        self.require_unsigned_annotations()?;
         let pid = self.page_id(removed.page)?;
         let (mut arr, holder) = self.annots_array(pid);
         if arr.contains(&removed.entry) || removed.popup.as_ref().is_some_and(|(_, popup)| arr.contains(popup)) {

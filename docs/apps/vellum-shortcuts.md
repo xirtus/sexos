@@ -40,6 +40,8 @@ menu, and a checkbox toggles. Read-only fields are skipped.
 Typed visual signatures are markup. Signature inspection verifies exact covered
 bytes for the supported P-256/SHA-256 detached CMS shape. It does not verify
 signer identity, certificate trust, or other CMS algorithms.
+Vellum refuses adding or deleting annotations in a signed PDF until it can
+evaluate the document's DocMDP and FieldMDP permissions.
 To sign, run `shibari-sign` with a P-256 DER certificate in Shibari's own
 window, enter the matching private scalar there, and approve each request with
 Y. Vellum refuses signing when edits are unsaved or the PDF already has a

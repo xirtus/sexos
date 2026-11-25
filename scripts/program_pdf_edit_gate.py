@@ -390,6 +390,12 @@ def main():
   g['focus'](sid);time.sleep(.5)
   step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-digital-signature.ppm')})
+  # A signed revision needs DocMDP/FieldMDP permission evaluation before markup changes.
+  step(lambda:chord('ctrl','r'),r'\[pdf\.region\] shown=1\n')
+  step(lambda:q.key('ret'),r'\[pdf\.annotate\.refused\] action=highlight reason=bad value: cannot edit annotations in a signed PDF\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signed-markup-refused.ppm')})
+  assert (a.out/'pdf-signed-markup-refused.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A separate source stays untouched while a complete unsaved PDF is kept.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')
@@ -444,6 +450,8 @@ def main():
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_pointer_choice_survives_guest_save','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_POINTER_PDF':str(pointer_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_verifies_independently_when_supplied','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_SIGNED_PDF':str(signed_pdf)},check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_refuses_annotation_edits_when_supplied','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_SIGNED_PDF':str(signed_pdf)},check=True)
  checked='bytes'
  try:import pypdf
