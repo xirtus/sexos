@@ -14,6 +14,7 @@
 //! Ctrl+Shift+J checks the current Rust, Python or JavaScript file with Quil's
 //! native LSP diagnostic helper through a run-scoped pipe.
 //! Ctrl+Shift+Space requests bounded keyword completions from the same helper.
+//! Ctrl+Shift+M opens a document outline returned by the helper.
 #![no_std]
 #![no_main]
 
@@ -365,6 +366,7 @@ enum Focus { Editor, Tree }
 enum Overlay {
     None,
     Completion { items: Vec<String>, sel: usize, start: usize, cursor: usize, version: u64, path: Vec<u8> },
+    Symbols { items: Vec<quil_core::lsp::Symbol>, sel: usize, version: u64, path: Vec<u8> },
     Help { scroll: usize },
     Git { changes: Vec<GitChange>, sel: usize, note: String },
     GitDiff { path: Vec<u8>, lines: Vec<String>, scroll: usize, note: String },
@@ -476,6 +478,29 @@ impl App {
                 sex_pdx::serial_record!("[quil.lsp.completion] language={} count={} prefix={}", language, items.len(), &source[start..cursor]);
                 if items.is_empty() { self.status = String::from("No completions for this prefix"); }
                 else { self.overlay = Overlay::Completion { items, sel: 0, start, cursor, version, path }; }
+            }
+            Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
+        }
+    }
+
+    fn show_symbols(&mut self) {
+        if self.focus != Focus::Editor { return; }
+        let len = self.tab().ed.buf.len();
+        if len > 256 * 1024 { self.status = String::from("Language symbols support files up to 256 KiB"); return; }
+        let (path, source, version) = {
+            let tab = self.tab();
+            (tab.path.clone(), tab.ed.buf.slice(0..len), tab.ed.version())
+        };
+        let language = if path.ends_with(b".rs") { "rust" }
+            else if path.ends_with(b".py") { "python" }
+            else if path.ends_with(b".js") { "javascript" }
+            else { self.status = String::from("Symbols support .rs, .py and .js"); return; };
+        let Ok(source) = core::str::from_utf8(&source) else { self.status = String::from("Symbols need UTF-8 text"); return; };
+        match lsp::symbols(&path, language, source) {
+            Ok(items) => {
+                sex_pdx::serial_record!("[quil.lsp.symbols] language={} count={}", language, items.len());
+                if items.is_empty() { self.status = String::from("No declarations found"); }
+                else { self.overlay = Overlay::Symbols { items, sel: 0, version, path }; }
             }
             Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
         }
@@ -770,6 +795,7 @@ impl App {
         let Some(p) = press(key) else { return };
         if p.ctrl && p.shift && p.k == K::Char(' ') { self.complete_language(); return; }
         if p == Press::ctrl_shift('j') { self.check_language(); return; }
+        if p == Press::ctrl_shift('m') { self.show_symbols(); return; }
         if p == Press::ctrl_shift('/') {
             self.overlay = if matches!(self.overlay, Overlay::Help { .. }) { Overlay::None } else { Overlay::Help { scroll: 0 } };
             sex_pdx::serial_record!("[quil.code.shortcuts] open={}", matches!(self.overlay, Overlay::Help { .. }) as u8);
@@ -882,6 +908,26 @@ impl App {
                         let new_version = tab.ed.version();
                         self.status = format!("Completed {label}");
                         sex_pdx::serial_record!("[quil.lsp.inserted] label={} version={}", label, new_version);
+                    }
+                }
+            }
+            Overlay::Symbols { items, sel, version, path } => {
+                *sel = (*sel as isize + updown).clamp(0, items.len().saturating_sub(1) as isize) as usize;
+                if enter {
+                    keep = false;
+                    let symbol = items[*sel].clone();
+                    let tab = self.tab();
+                    if tab.path != *path || tab.ed.version() != *version {
+                        self.status = String::from("Outline expired; request it again");
+                    } else {
+                        let bytes = tab.ed.buf.slice(0..tab.ed.buf.len());
+                        if let Ok(text) = core::str::from_utf8(&bytes) {
+                            if let Some(at) = quil_core::lsp::offset_at_position(text, symbol.line as u64, symbol.character as u64) {
+                                tab.ed.set_cursor(at);
+                                self.status = format!("{} at line {}", symbol.name, symbol.line + 1);
+                                sex_pdx::serial_record!("[quil.lsp.symbol.jump] line={} name={}", symbol.line + 1, symbol.name);
+                            }
+                        }
                     }
                 }
             }
@@ -1265,11 +1311,19 @@ impl App {
                 for (i, item) in items.iter().enumerate() { lines.push((item.clone(), i == *sel)); }
                 ("Quil completions  ", String::from("Up/Down choose; Enter inserts; Esc closes"))
             }
+            Overlay::Symbols { items, sel, .. } => {
+                let first = sel.saturating_sub(9);
+                for (i, symbol) in items.iter().enumerate().skip(first).take(10) {
+                    lines.push((format!("{}  line {}", symbol.name, symbol.line + 1), i == *sel));
+                }
+                ("Quil symbols  ", String::from("Up/Down choose; Enter jumps; Esc closes"))
+            }
             Overlay::Help { scroll } => {
                 let mut all = keymap::shortcut_rows(self.keymap);
                 all.insert(0, String::from("Ctrl+Shift+V  tracked Git changes; Right shows diff"));
                 all.insert(0, String::from("Language diagnostics  Ctrl+Shift+J"));
                 all.insert(0, String::from("Language completion  Ctrl+Shift+Space"));
+                all.insert(0, String::from("Document symbols  Ctrl+Shift+M"));
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
                 ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
             }

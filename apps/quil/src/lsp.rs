@@ -3,7 +3,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use quil_core::lsp::{frame, take_frame};
+use quil_core::lsp::{frame, take_frame, Symbol};
 use serde_json::{json, Value};
 use sex_app::{files::direct::relay, launch};
 use sex_pdx::console_relay as console;
@@ -162,11 +162,47 @@ fn receive_completion(deadline: u64, rx: &mut Vec<u8>) -> core::result::Result<V
     Err("Language completion timed out")
 }
 
+fn receive_symbols(deadline: u64, rx: &mut Vec<u8>) -> core::result::Result<Vec<Symbol>, &'static str> {
+    while sex_pdx::get_ticks() < deadline {
+        let (_, bytes) = relay::take_at(0).map_err(|_| "Language service output failed")?;
+        if rx.len() + bytes.len() > quil_core::lsp::MAX_BODY + 1024 { return Err("Language service output is too large"); }
+        rx.extend_from_slice(&bytes);
+        while let Some(body) = take_frame(rx)? {
+            let value: Value = serde_json::from_slice(&body).map_err(|_| "Language service sent invalid JSON")?;
+            if value["id"].as_u64() != Some(2) { continue; }
+            let list = value["result"].as_array().ok_or("Language service sent invalid symbols")?;
+            if list.len() > 128 { return Err("Language service sent too many symbols"); }
+            let mut symbols = Vec::new();
+            for item in list {
+                let name = item["name"].as_str().ok_or("Language service sent invalid symbol")?;
+                let position = &item["selectionRange"]["start"];
+                let line = position["line"].as_u64().ok_or("Language service sent invalid symbol")?;
+                let character = position["character"].as_u64().ok_or("Language service sent invalid symbol")?;
+                let kind = item["kind"].as_u64().ok_or("Language service sent invalid symbol")?;
+                if name.is_empty() || name.len() > 64 || name.chars().any(|c| c.is_control())
+                    || line > u32::MAX as u64 || character > u32::MAX as u64 || kind > u32::MAX as u64 {
+                    return Err("Language service sent invalid symbol");
+                }
+                symbols.push(Symbol { name: name.to_string(), line: line as u32, character: character as u32, kind: kind as u32 });
+            }
+            return Ok(symbols);
+        }
+        sex_pdx::sched_yield();
+    }
+    Err("Language symbols timed out")
+}
+
 fn complete_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Vec<String>, &'static str> {
     let (line, character) = completion_position(text, cursor).ok_or("Language completion cursor is invalid")?;
     let (_, mut rx, deadline) = begin(path, language, text)?;
     send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":uri(path)},"position":{"line":line,"character":character}}}), deadline)?;
     receive_completion(deadline, &mut rx)
+}
+
+fn symbols_inner(path: &[u8], language: &str, text: &str) -> core::result::Result<Vec<Symbol>, &'static str> {
+    let (_, mut rx, deadline) = begin(path, language, text)?;
+    send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":uri(path)}}}), deadline)?;
+    receive_symbols(deadline, &mut rx)
 }
 
 fn cleanup() {
@@ -197,6 +233,14 @@ pub fn check(
 pub fn complete(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Vec<String>, &'static str> {
     if text.len() > 256 * 1024 { return Err("Language completion supports files up to 256 KiB"); }
     let result = complete_inner(path, language, text, cursor);
+    cleanup();
+    result
+}
+
+/// Requests the declaration outline for one immutable editor snapshot.
+pub fn symbols(path: &[u8], language: &str, text: &str) -> core::result::Result<Vec<Symbol>, &'static str> {
+    if text.len() > 256 * 1024 { return Err("Language symbols support files up to 256 KiB"); }
+    let result = symbols_inner(path, language, text);
     cleanup();
     result
 }

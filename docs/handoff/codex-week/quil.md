@@ -13,8 +13,12 @@ Remaining gaps:
   completions for one cursor and inserts the chosen label with undo support;
   a document revision and cursor guard rejects stale choices. This is a
   language-service protocol slice, not semantic completion. Continuous
-  diagnostics, identifier and semantic completion, navigation, rename, and
+  diagnostics, identifier and semantic completion, cross-file navigation, rename, and
   full language-server implementations remain gaps.
+  Ctrl+Shift+M now requests bounded document symbols from that same child and
+  opens a keyboard picker that jumps to a declaration. The helper recognizes
+  basic Rust, Python and JavaScript declaration heads; full syntax and
+  reference resolution remain gaps.
 - Ctrl+Shift+V shows tracked modified, deleted and conflicted files from a
   checked Git index in the project's Files grant. Right shows a bounded,
   read-only line diff against an authenticated loose Git blob for UTF-8 files.
