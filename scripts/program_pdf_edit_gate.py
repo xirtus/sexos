@@ -143,6 +143,16 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-form-selection.ppm')})
   assert (a.out/'pdf-form-selection.ppm').stat().st_size>10000
   keys('Lovelace')
+  tile=latest_frame(t(),sid)
+  bx,by,_,_=content_rect(t(),tile)
+  ui=chrome_metrics(t())['scale']
+  name_vx=8+(len('name')+2)*9
+  s=len(t());click(bx+round((name_vx+5*9+2)*ui),by+round(BAR//2*ui))
+  g['wait'](r'\[pdf\.form\.pointer\] name=name at=5 chars=12\n',s)
+  keys('X')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-form-pointer-caret.ppm')})
+  assert (a.out/'pdf-form-pointer-caret.ppm').stat().st_size>10000
+  q.key('backspace');time.sleep(.2)
   # Shell keeps Tab (it moves focus between windows): Ctrl+Down is the next field.
   s=len(t());chord('ctrl','down')
   g['wait'](rf'\[pdf\.field\] name=name kind=text value={NAME}\n',s);g['wait'](r'\[pdf\.field\.focus\] name=agree index=2 page=1\n',s)
