@@ -44,6 +44,10 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  pdf=(ROOT/'iso_root/programs/vellum').read_bytes();assert pdf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
+ signed_fixture=a.out/'cms-signed.pdf'
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','detached_cms_in_pdf_verifies_over_its_byte_range','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_CMS_PDF_FIXTURE':str(signed_fixture)},check=True)
+ FILES['/cms-signed.pdf']=signed_fixture.read_bytes()
  with disk.open('r+b') as f:f.truncate(1024**3)
  install(disk,[('vellum',pdf)])
  extractor=a.out/'sexfs-extract';subprocess.run(['rustc','--edition=2021','-O','-A','dead_code','-A','unused_attributes',str(ROOT/'scripts/sexfs_extract.rs'),'-o',str(extractor)],check=True)
@@ -136,6 +140,18 @@ def main():
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
   step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,FreeText\n')
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # This fixture was signed by vellum-edit::cms in the host test above. The
+  # guest opens those exact bytes and shows its deliberately unverified status.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/cms-signed.pdf cms-signed.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @cms-signed.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=cms-signed\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
+  s=len(t());chord('ctrl','shift','v')
+  g['wait'](r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-cms-signed-inspection.ppm')})
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A separate source stays untouched while a complete unsaved PDF is kept.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')

@@ -12,6 +12,7 @@
 
 mod annot;
 pub mod cos;
+pub mod cms;
 mod doc;
 mod filters;
 mod form;
