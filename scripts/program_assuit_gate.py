@@ -328,6 +328,32 @@ def main():
   assert removed.startswith(b'P6\n') and removed!=(a.out/'assuit-page-numbers.ppm').read_bytes()
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  # Enter the page's actual footer story without replacing its dynamic field.
+  s=len(t());press('ctrl','alt','n');type_line('bottom right');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] bottom right\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-footer-before-edit.ppm')})
+  before_footer=(a.out/'assuit-footer-before-edit.ppm').read_bytes()
+  def paper_pixels(ppm):
+   magic,dimensions,maximum,pixels=ppm.split(b'\n',3)
+   width,height=map(int,dimensions.split())
+   assert magic==b'P6' and maximum==b'255' and len(pixels)==width*height*3
+   return pixels[:width*(height-40)*3]  # Ignore the changing status message.
+  s=len(t());press('ctrl','alt','f')
+  g['wait'](r'\[assuit\.footer\.edit\]',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-footer-edit-mode.ppm')})
+  assert (a.out/'assuit-footer-edit-mode.ppm').stat().st_size>10000
+  type_line(' Confidential')
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-footer-rich-edit.ppm')})
+  after_footer=(a.out/'assuit-footer-rich-edit.ppm').read_bytes()
+  assert paper_pixels(after_footer)!=paper_pixels(before_footer),'Footer edit did not change page rendering'
+  s=len(t());press('ctrl','alt','h')
+  g['wait'](r'\[assuit\.header\.edit\]',s,120)
+  type_line('Draft')
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-header-rich-edit.ppm')})
+  assert (a.out/'assuit-header-rich-edit.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})

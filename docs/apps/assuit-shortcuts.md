@@ -13,6 +13,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+L | Set the paper to Letter, Legal or A4, in portrait or landscape orientation |
 | Ctrl+Shift+M | Set normal, narrow, moderate, wide or mirrored margins, or enter top/bottom/left/right inches |
 | Ctrl+Alt+N | Add dynamic page numbers at `top` or `bottom`, aligned `left`, `center`, or `right`; append `of` for Page X of Y; `remove top/bottom` removes generated-only content in a single-section document; `start N` (1–32767) restarts numbering, `continue` resumes from the previous section, `format decimal/lower roman/upper roman/lower letter/upper letter` changes the current section's number style; `first on/off` uses a separate first-page header/footer in this section, and `even on/off` uses separate even-page headers/footers throughout the document |
+| Ctrl+Alt+H / Ctrl+Alt+F | Edit the header or footer shown on the current page. Type and format text around existing fields; Esc returns to the body. An empty newly opened region is removed on exit. |
 | Ctrl+Alt+S | Set the current or selected paragraphs' line multiple (0.5–3), space before (0–72 pt), and space after (0–72 pt), such as `1.5 0 8` |
 | Ctrl+Alt+L | Edit the current list: `bullet`, `numbered`, `numbered paren`, `upper letter`, `lower letter`, `lower roman`, `legal`, `off`, `restart`, or `level 1` through `level 9` (1 is the outermost level) |
 | Ctrl+Alt+Right / Ctrl+Alt+Left | Move the list item at the caret one level deeper or shallower (levels 1–9) |

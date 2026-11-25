@@ -23,7 +23,11 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   Roman and letter number formats for the current section. This slice exposes
   different-first-page and different-odd/even header/footer options, with
   DOCX/ODT persistence and guest screenshots. First-page choice is per section;
-  odd/even choice is document-wide. Rich header/footer editing remains.
+  odd/even choice is document-wide. Rich header/footer editing remains: the
+  page-number command can add a field. Ctrl+Alt+H/F now enters the header or
+  footer shown on the caret's page for rich text edits around existing fields;
+  Esc returns to the body. DOCX and ODT round trips cover the text and field.
+  More complex per-section header/footer management remains.
 - **List editing:** WordCraft can create bullet and numbered lists, but Assuit
   exposes no native way to choose numbered formats, remove a list, or restart
   numbering. This slice adds a bounded list prompt for those document edits and
