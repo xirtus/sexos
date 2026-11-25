@@ -77,6 +77,12 @@ def main():
   g['wait'](r'\[date.save.committed\] file=clock.txt bytes=\d+',s,30)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'date-notice-snoozed.ppm')});time.sleep(.5)
   notice=(a.out/'date-notice-snoozed.ppm').read_bytes();assert notice.startswith(b'P6\n') and len(notice)>100000
+  s=len(t());q.key('z');time.sleep(.3);keys('chicago');q.key('ret')
+  g['wait'](r'\[date.zone\] zone=America/Chicago home=0',s,30)
+  s=len(t());g['chord']('ctrl','z',r'\[date.zone.undo\] home= zones=0')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-zone-undone.ppm')})
+  s=len(t());g['chord']('ctrl','y',r'\[date.zone.redo\] home= zones=8')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-zone-redone.ppm')})
   q.key('m');time.sleep(.3)
   # Today is the machine's clock (QEMU's RTC follows this host, in UTC).
   host=datetime.datetime.now(datetime.timezone.utc).date()

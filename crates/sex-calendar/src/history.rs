@@ -2,7 +2,7 @@
 //! Bounded, in-session undo for Date's local event additions and deletions.
 //! Server sync changes the event list outside this history, so Date clears it then.
 use alloc::vec::Vec;
-use crate::Event;
+use crate::{clock::Clock, Event};
 
 const LIMIT: usize = 32;
 
@@ -46,6 +46,42 @@ fn apply(events: &mut Vec<Event>, edit: &EventEdit, backward: bool) -> bool {
         _ => return false,
     }
     true
+}
+
+/// Only the world-zone list and home zone participate. Alarms and timers can
+/// fire between keystrokes, so a whole-clock snapshot would resurrect them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ZoneState { home: alloc::string::String, zones: Vec<alloc::string::String> }
+
+impl ZoneState {
+    pub fn from_clock(clock: &Clock) -> Self { Self { home: clock.home.clone(), zones: clock.zones.clone() } }
+    fn restore(&self, clock: &mut Clock) { clock.home = self.home.clone(); clock.zones = self.zones.clone(); }
+}
+
+#[derive(Default)]
+pub struct ZoneHistory { undo: Vec<(ZoneState, ZoneState)>, redo: Vec<(ZoneState, ZoneState)> }
+
+impl ZoneHistory {
+    pub fn push(&mut self, before: ZoneState, after: ZoneState) {
+        if before == after { return; }
+        if self.undo.len() == LIMIT { self.undo.remove(0); }
+        self.undo.push((before, after));
+        self.redo.clear();
+    }
+    pub fn undo(&mut self, clock: &mut Clock) -> bool { self.apply(clock, true) }
+    pub fn redo(&mut self, clock: &mut Clock) -> bool { self.apply(clock, false) }
+    fn apply(&mut self, clock: &mut Clock, backward: bool) -> bool {
+        let source = if backward { &mut self.undo } else { &mut self.redo };
+        let Some((before, after)) = source.pop() else { return false };
+        let (current, wanted) = if backward { (&after, &before) } else { (&before, &after) };
+        if ZoneState::from_clock(clock) != *current {
+            self.undo.clear(); self.redo.clear();
+            return false;
+        }
+        wanted.restore(clock);
+        if backward { self.redo.push((before, after)); } else { self.undo.push((before, after)); }
+        true
+    }
 }
 
 #[cfg(test)]
@@ -101,5 +137,24 @@ mod tests {
         assert_eq!(events[0], before);
         assert!(history.redo(&mut events));
         assert_eq!(events[0], after);
+    }
+
+    #[test]
+    fn zone_history_keeps_live_timers_and_refuses_stale_zones() {
+        let mut clock = Clock::default();
+        let mut history = ZoneHistory::default();
+        let before = ZoneState::from_clock(&clock);
+        clock.zones.push("America/Chicago".into());
+        history.push(before, ZoneState::from_clock(&clock));
+        clock.timers.push(crate::clock::Timer { ends_ms: 1000, seconds: 1, label: "tea".into() });
+        assert!(history.undo(&mut clock));
+        assert!(clock.zones.is_empty());
+        assert_eq!(clock.timers.len(), 1);
+        assert!(history.redo(&mut clock));
+        assert_eq!(clock.zones, vec!["America/Chicago"]);
+        clock.home = "Europe/London".into();
+        assert!(!history.undo(&mut clock));
+        assert_eq!(clock.home, "Europe/London");
+        assert!(!history.redo(&mut clock));
     }
 }

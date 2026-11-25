@@ -43,7 +43,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("M W D C L", "Month, week, day, clock, calendars"),
     ("S / E", "Sync CalDAV / export shown events to .ics"),
     ("V", "Review retained local CalDAV conflicts"),
-    ("Ctrl+Z / Ctrl+Y", "Undo / redo local event changes"),
+    ("Ctrl+Z / Ctrl+Y", "Undo / redo local events; world zones in Clock"),
     ("Month: arrows", "Move one day or one week"),
     ("Month: PgUp/PgDn", "Previous or next month"),
     ("T / Home", "Return to today"),
