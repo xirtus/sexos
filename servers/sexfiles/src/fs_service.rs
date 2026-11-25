@@ -22,6 +22,12 @@ static mut PLACE: (*mut [u8; BLOCK], *mut Slot, usize, usize, *mut u64, *mut u64
 static mut SCRATCH: [u8; BLOCK] = [0; BLOCK];
 /// Files' own copy of one request's data.
 static mut OWN: [u8; w::DATA_MAX] = [0; w::DATA_MAX];
+/// Files' single-threaded service owns this copy until the staged request
+/// returns. Both the disk write and its digest read from this exact snapshot.
+pub(crate) fn staged_private_chunk(shared: &[u8]) -> Option<&'static [u8]> {
+    let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+    w::snapshot_stage_chunk(shared, own)
+}
 static mut STATE: State = State::Untried;
 /// Writes are not committed one request at a time (each commit costs two device
 /// flushes). They are committed on SYNC, before any other change, once this many bytes
@@ -1028,6 +1034,8 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     };
     let path = &path[..path_len];
     let staged = matches!(r.kind, w::STAGE_BEGIN | w::STAGE_CHUNK | w::STAGE_PUBLISH | w::STAGE_ABORT);
+    let sealed_image = crate::staged_export::sealed_image_alias(path);
+    if sealed_image && staged { return w::reply(r.seq, w::DENIED, 0); }
     if crate::staged_export::reserved(path)
         || matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE)
             && path.split(|b| *b == 0).any(crate::staged_export::reserved)
@@ -1035,6 +1043,10 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     if staged {
         let Some(k) = program else { return w::reply(r.seq, w::DENIED, 0); };
         if crate::home::owns(path) || crate::volumes::owns(path) { return w::reply(r.seq, w::UNSUPPORTED, 0); }
+        if writes_pending() {
+            commit_writes(fs);
+            if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
+        }
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
         return match crate::staged_export::request(fs, k, caller, binding.task, r, path, data) {
             Ok(n) => {
@@ -1283,6 +1295,7 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             let (mut cursor, mut used, mut name) = (r.offset, w::LIST_HEAD, [0u8; sexfs::NAME_MAX]);
             let mut next = 0;
             while let Some((len, kind, child, after)) = fs.read_dir(id, cursor, &mut name)? {
+                if !crate::staged_export::visible_entry(&name[..len]) { cursor = after; continue; }
                 if used + w::ENTRY_HEAD + len > 4000 { next = cursor; break; }
                 let size = if kind == Kind::File { fs.stat(child)?.size } else { 0 };
                 data[used] = (kind == Kind::Dir) as u8;

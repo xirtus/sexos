@@ -92,6 +92,14 @@ pub const STAGE_BEGIN: u8 = 55;
 pub const STAGE_CHUNK: u8 = 56;
 pub const STAGE_PUBLISH: u8 = 57;
 pub const STAGE_ABORT: u8 = 58;
+/// Snapshot one client chunk before Files writes or hashes it. A second task
+/// may change the shared PDX region after this copy; both operations must use
+/// the same private bytes. The caller supplies Files-owned storage.
+pub fn snapshot_stage_chunk<'a>(shared: &[u8], owned: &'a mut [u8]) -> Option<&'a [u8]> {
+    let dst = owned.get_mut(..shared.len())?;
+    dst.copy_from_slice(shared);
+    Some(dst)
+}
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;

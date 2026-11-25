@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Files owns this staging namespace. A run receives a ticket, never a stage path.
 //! The only visible destination transition is SexFS's checked COW move and commit.
-use crate::fs_service::{self, Disk};
+use crate::fs_service;
 use alloc::vec::Vec;
 use sex_pdx::fs as w;
-use sexfs::{Error, Fs, Kind, NAME_MAX};
+use sexfs::{Device, Error, Fs, Kind, NAME_MAX};
 use sha2::{Digest, Sha256};
 
 const ROOT: &[u8] = b"/.__sexfiles_staged";
@@ -32,12 +32,32 @@ pub fn reserved(path: &[u8]) -> bool {
     path.split(|b| *b == b'/').find(|part| !part.is_empty())
         == Some(b".__sexfiles_staged".as_slice())
 }
+pub fn sealed_image_alias(path: &[u8]) -> bool {
+    let mut parts = path.split(|b| *b == b'/').filter(|p| !p.is_empty());
+    parts.next() == sex_pdx::home_lock::IMAGE.strip_prefix(b"/") && parts.next().is_none()
+}
+pub fn visible_entry(name: &[u8]) -> bool {
+    name != b".__sexfiles_staged"
+}
 
 fn code(e: Error) -> u8 {
     fs_service::status(e)
 }
 fn now() -> u64 {
+    #[cfg(test)]
+    {
+        return 0;
+    }
+    #[cfg(not(test))]
     sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0)
+}
+fn ticks() -> u64 {
+    #[cfg(test)]
+    {
+        return 1;
+    }
+    #[cfg(not(test))]
+    sex_pdx::get_ticks()
 }
 
 fn named(ticket: u64) -> Vec<u8> {
@@ -52,7 +72,7 @@ fn named(ticket: u64) -> Vec<u8> {
 /// At mount, discard only our own incomplete files, before a new ticket is issued.
 /// If the marker is missing or cleanup fails, staged saves stay disabled while
 /// ordinary files remain usable. The namespace remains inaccessible to callers.
-pub fn recover(fs: &mut Fs<'static, Disk>) {
+pub fn recover<D: Device>(fs: &mut Fs<'static, D>) {
     unsafe {
         CLEAN = false;
         ACTIVE = None;
@@ -133,7 +153,7 @@ pub fn recover(fs: &mut Fs<'static, Disk>) {
     }
 }
 
-fn ensure_root(fs: &mut Fs<'static, Disk>) -> Result<(), u8> {
+fn ensure_root<D: Device>(fs: &mut Fs<'static, D>) -> Result<(), u8> {
     if fs.open(ROOT).is_ok() {
         return Ok(());
     }
@@ -167,8 +187,8 @@ fn ticket_stage(
     Ok(s)
 }
 
-pub fn request(
-    fs: &mut Fs<'static, Disk>,
+pub fn request<D: Device>(
+    fs: &mut Fs<'static, D>,
     row: usize,
     target: u32,
     task: u32,
@@ -181,12 +201,6 @@ pub fn request(
     }
     if reserved(destination) || destination.is_empty() || destination == b"/" {
         return Err(w::DENIED);
-    }
-    if fs_service::writes_pending() {
-        fs_service::commit_now(fs);
-        if fs.has_changes() {
-            return Err(w::IO);
-        }
     }
     match r.kind {
         w::STAGE_BEGIN => {
@@ -213,7 +227,7 @@ pub fn request(
             ensure_root(fs)?;
             let ticket = unsafe {
                 NEXT = NEXT.wrapping_add(1).max(1);
-                NEXT ^ sex_pdx::get_ticks().rotate_left(17)
+                NEXT ^ ticks().rotate_left(17)
             };
             let source = named(ticket);
             let id = fs
@@ -249,7 +263,7 @@ pub fn request(
             }
             let token = u64::from_le_bytes(data[..8].try_into().unwrap());
             let s = ticket_stage(row, task, token, destination)?;
-            let bytes = &data[8..n];
+            let bytes = fs_service::staged_private_chunk(&data[8..n]).ok_or(w::INVALID)?;
             if r.offset != s.written
                 || s.written
                     .checked_add(bytes.len() as u64)
@@ -307,5 +321,201 @@ pub fn request(
             Ok(0)
         }
         _ => Err(w::INVALID),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+    use sexfs::{Device, Memory, Slot, BLOCK};
+    use std::{boxed::Box, cell::RefCell, rc::Rc, vec, vec::Vec};
+
+    #[derive(Clone)]
+    struct Disk(Rc<RefCell<Vec<[u8; BLOCK]>>>);
+    impl Device for Disk {
+        fn blocks(&self) -> u64 {
+            self.0.borrow().len() as u64
+        }
+        fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> {
+            *out = self.0.borrow()[block as usize];
+            Ok(())
+        }
+        fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> Result<(), ()> {
+            self.0.borrow_mut()[block as usize] = *data;
+            Ok(())
+        }
+        fn flush(&mut self) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+    fn memory() -> Memory<'static> {
+        Memory {
+            cache: Box::leak(vec![[0; BLOCK]; 24].into_boxed_slice()),
+            slots: Box::leak(vec![Slot::EMPTY; 24].into_boxed_slice()),
+            used: Box::leak(vec![0; 32].into_boxed_slice()),
+            pending: Box::leak(vec![0; 32].into_boxed_slice()),
+            scratch: Box::leak(Box::new([0; BLOCK])),
+        }
+    }
+    fn req(kind: u8, offset: u64, length: u64) -> w::Request {
+        w::Request {
+            seq: 1,
+            kind,
+            path_len: 0,
+            offset,
+            length,
+        }
+    }
+
+    #[test]
+    fn ticket_checks_and_mount_scavenging() {
+        let disk = Disk(Rc::new(RefCell::new(vec![[0; BLOCK]; 1024])));
+        let mut fs = Fs::format(disk.clone(), memory()).unwrap();
+        recover(&mut fs);
+        let payload = b"original";
+        let hash: [u8; 32] = Sha256::digest(payload).into();
+        let mut data = [0u8; 64];
+        data[..32].copy_from_slice(&hash);
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_BEGIN, 8, 32),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(8)
+        );
+        let ticket = u64::from_le_bytes(data[..8].try_into().unwrap());
+        data[..8].copy_from_slice(&ticket.to_le_bytes());
+        data[8..16].copy_from_slice(payload);
+        assert_eq!(
+            request(
+                &mut fs,
+                2,
+                41,
+                7,
+                req(w::STAGE_CHUNK, 0, 16),
+                b"/chosen",
+                &mut data
+            ),
+            Err(w::STALE)
+        );
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                8,
+                req(w::STAGE_CHUNK, 0, 16),
+                b"/chosen",
+                &mut data
+            ),
+            Err(w::STALE)
+        );
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_CHUNK, 0, 16),
+                b"/other",
+                &mut data
+            ),
+            Err(w::STALE)
+        );
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_PUBLISH, ticket, 0),
+                b"/chosen",
+                &mut data
+            ),
+            Err(w::INVALID)
+        );
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_CHUNK, 0, 16),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(8)
+        );
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_PUBLISH, ticket, 0),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(0)
+        );
+        let chosen = fs.open(b"/chosen").unwrap();
+        let mut got = [0; 8];
+        assert_eq!(fs.read(chosen.id, 0, &mut got), Ok(8));
+        assert_eq!(&got, payload);
+        data[..32].copy_from_slice(&hash);
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_BEGIN, 8, 32),
+                b"/chosen",
+                &mut data
+            ),
+            Err(w::EXISTS)
+        );
+        assert_eq!(
+            request(
+                &mut fs,
+                1,
+                41,
+                7,
+                req(w::STAGE_BEGIN, 8, 32),
+                b"/later",
+                &mut data
+            ),
+            Ok(8)
+        );
+        let abandoned = unsafe { ACTIVE.as_ref().unwrap().source.clone() };
+        assert!(fs.open(&abandoned).is_ok());
+        drop(fs);
+        let mut remounted = Fs::mount(disk, memory()).unwrap();
+        recover(&mut remounted);
+        assert_eq!(remounted.open(b"/later"), Err(Error::NotFound));
+        assert_eq!(remounted.open(&abandoned), Err(Error::NotFound));
+        assert_eq!(remounted.open(b"/chosen").unwrap().id, chosen.id);
+    }
+
+    #[test]
+    fn namespace_and_sealed_image_aliases() {
+        assert!(reserved(b"/.__sexfiles_staged"));
+        assert!(reserved(b"//.__sexfiles_staged/file"));
+        for path in [
+            b"/.home.sexcrypt".as_slice(),
+            b"/.home.sexcrypt/",
+            b"//.home.sexcrypt",
+        ] {
+            assert!(sealed_image_alias(path));
+        }
+        assert!(!sealed_image_alias(b"/folder/.home.sexcrypt"));
+        assert!(!visible_entry(b".__sexfiles_staged"));
+        assert!(visible_entry(b"personal.txt"));
     }
 }
