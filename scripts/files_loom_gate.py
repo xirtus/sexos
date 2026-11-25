@@ -161,6 +161,22 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  # Redo needs stable SexFS object IDs; the removable FAT32 fixture has none.
+  expect('mkdir /redo',r'\[spindle.fs.result\] kind=\d+ status=0')
+  for name in ('one','two','three'):
+   expect('touch /redo/'+name,r'\[spindle.fs.result\] kind=\d+ status=0')
+  open_files('/redo')
+  step(lambda:cs('r'),r'\[files.app.rename.start\] dir=/redo items=3')
+  for _ in range(3):q.key('backspace');time.sleep(.05)
+  keys('pic_[C:2]');time.sleep(.3)
+  step(lambda:q.key('ret'),r'\[files.app.renamed\] dir=/redo mask=pic_\[C:2\] files=3 moves=3')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:ctrl('y'),r'\[files.app.redone\] kind=rename count=3')
+  g['wait'](r'\[files.app.list\] dir=/redo count=3\b',0,10)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'rename-redone.ppm')})
+  assert (a.out/'rename-redone.ppm').stat().st_size>10000
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:q.key('f11'),r'\[files.app.closed\]')
   q.cmd('blockdev-add',{'driver':'raw','node-name':'loomdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
   for _ in range(40):
@@ -252,7 +268,8 @@ def main():
    if n==1:q.cmd('screendump',{'filename':str(a.out/'rename-preview.ppm')})
    step(lambda:q.key('ret'),r'\[files.app.renamed\] dir=/media/LOOM/ren mask=pic_\[C:2\] files=3 moves=3')
    g['wait'](r'\[files.app.renamed.file\] from=one.txt to=pic_01.txt',0,5)
-   if n==1:step(lambda:ctrl('z'),r'\[files.app.undone\]');g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+   if n==1:
+    step(lambda:ctrl('z'),r'\[files.app.undone\]');g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
   # Shift+Down selects the first two rows; Delete and one undo cover both.
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=0 last=1')

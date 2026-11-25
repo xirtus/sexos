@@ -116,7 +116,7 @@ impl App {
             Undo::Copied { to } => self.meta_removed(window, to),
             Undo::CopiedBatch(items) => for (_, to) in items { self.meta_removed(window, to); },
             Undo::Renamed { dir, moves } => {
-                for (f, t) in moves.iter() { self.meta_moved(window, &join(dir, f), &join(dir, t)); }
+                for m in moves.iter() { self.meta_moved(window, &join(dir, &m.from), &join(dir, &m.to)); }
             }
             Undo::Made { .. } => {}
         }

@@ -110,6 +110,34 @@ fn stale_plan_and_collision_never_displace_a_file() {
 }
 
 #[test]
+fn redo_plan_rejects_replaced_later_source_and_rolls_back_earlier_move() {
+    let disk = Disk::new();
+    let mut cache = [[0; BLOCK]; 16];
+    let mut slots = [Slot::EMPTY; 16];
+    let mut used = [0; 16];
+    let mut pending = [0; 16];
+    let mut scratch = [0; BLOCK];
+    let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+    let mut fs = Fs::format(disk, memory).unwrap();
+    let a = fs.create(b"/a", 0).unwrap();
+    let b = fs.create(b"/b", 0).unwrap();
+    fs.commit().unwrap();
+    // An undone rename would retain (a, b) as the expected identities.
+    fs.remove_path(b"/b").unwrap();
+    let replacement = fs.create(b"/b", 0).unwrap();
+    fs.commit().unwrap();
+    assert_ne!(b, replacement);
+    fs.move_file_if_id(b"/a", b"/a-new", a).unwrap();
+    assert_eq!(fs.move_file_if_id(b"/b", b"/b-new", b), Err(Error::Stale));
+    fs.move_file_if_id(b"/a-new", b"/a", a).unwrap();
+    fs.commit().unwrap();
+    assert_eq!(fs.open(b"/a").unwrap().id, a);
+    assert_eq!(fs.open(b"/b").unwrap().id, replacement);
+    assert_eq!(fs.open(b"/a-new"), Err(Error::NotFound));
+    assert_eq!(fs.open(b"/b-new"), Err(Error::NotFound));
+}
+
+#[test]
 fn archive_part_promotion_refuses_a_name_taken_during_packing() {
     let disk = Disk::new();
     let mut cache = [[0; BLOCK]; 16];

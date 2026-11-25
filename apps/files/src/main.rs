@@ -88,7 +88,12 @@ enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: V
     MovedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     TrashedBatch(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>),
     /// A batch rename in `dir`: the moves that take it back, in order.
-    Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
+    Renamed { dir: Vec<u8>, moves: Vec<RenameMove> } }
+#[derive(Clone)]
+struct RenameMove { from: Vec<u8>, to: Vec<u8>, id: u64 }
+fn inverse_moves(moves: &[RenameMove]) -> Vec<RenameMove> {
+    moves.iter().rev().map(|m| RenameMove { from: m.to.clone(), to: m.from.clone(), id: m.id }).collect()
+}
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
 enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
@@ -115,6 +120,8 @@ struct App {
     /// A contiguous copied or cut range; it pastes as one undoable action.
     clip_batch: Option<(Vec<Vec<u8>>, bool)>,
     undo: Vec<Undo>,
+    /// The last batch rename taken back. Any new file operation drops it.
+    redo_rename: Option<Undo>,
     input: Option<(Input, Vec<u8>)>,
     status: String,
     question: Option<Question>,
@@ -542,7 +549,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+F pack as...  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+Y redo batch rename  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+F pack as...  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -603,7 +610,7 @@ impl App {
                     if let Undo::CopiedBatch(items) = &u {
                         for (from, to) in items { self.meta_copied(window, from, to); }
                     }
-                    self.undo.push(u);
+                    self.record_undo(u);
                 }
                 self.status = summary;
                 self.load(window);
@@ -753,7 +760,7 @@ impl App {
                 sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&from), shown(&to), cut as u8);
                 if cut { self.meta_moved(window, &from, &to); }
                 self.status = format!("{} {}.", if cut { "Moved" } else { "Copied" }, shown(base(&to)));
-                self.undo.push(if cut { Undo::Moved { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
+                self.record_undo(if cut { Undo::Moved { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
                 if cut { self.clip = None; }
                 let _ = files::sync(window);
                 self.load(window);
@@ -824,7 +831,7 @@ impl App {
         for (from, to) in &moved { self.meta_moved(window, from, to); }
         sex_pdx::serial_record!("[files.app.pasted.batch] count={} cut=1", moved.len());
         self.status = format!("Moved {} items. Ctrl+Z moves them back together.", moved.len());
-        self.undo.push(Undo::MovedBatch(moved));
+        self.record_undo(Undo::MovedBatch(moved));
         self.clip_batch = None;
         let _ = files::sync(window);
         self.load(window);
@@ -933,11 +940,11 @@ impl App {
             let (from, to, note, _) = prepared.pop().unwrap();
             sex_pdx::serial_record!("[files.app.trashed] from={} to={}", shown(&from), shown(&to));
             self.status = format!("Moved {} to the trash. Ctrl+Z puts it back.", shown(base(&from)));
-            self.undo.push(Undo::Trashed { from, to, info: note });
+            self.record_undo(Undo::Trashed { from, to, info: note });
         } else {
             sex_pdx::serial_record!("[files.app.trashed.batch] count={}", prepared.len());
             self.status = format!("Moved {} items to trash. Ctrl+Z restores them together.", prepared.len());
-            self.undo.push(Undo::TrashedBatch(prepared.into_iter().map(|(from, to, note, _)| (from, to, note)).collect()));
+            self.record_undo(Undo::TrashedBatch(prepared.into_iter().map(|(from, to, note, _)| (from, to, note)).collect()));
         }
         self.load(window);
     }
@@ -968,6 +975,7 @@ impl App {
             return;
         }
         self.confirm = None;
+        self.redo_rename = None;
         self.meta_removed(window, &path);
         let mut paths = vec![path.clone()];
         // A trash entry's note goes with it.
@@ -988,6 +996,7 @@ impl App {
             return;
         }
         self.confirm = None;
+        self.redo_rename = None;
         let list = files::list(window, &at(&self.cwd)).unwrap_or_default();
         let paths: Vec<Vec<u8>> = list.iter().map(|e| join(&self.cwd, &e.name)).collect();
         let trash = self.cwd.clone();
@@ -1028,7 +1037,7 @@ impl App {
                 self.meta_moved(window, &path, &back);
                 sex_pdx::serial_record!("[files.app.restored] from={} to={}", shown(&path), shown(&back));
                 self.status = format!("Restored {}.", shown(&back));
-                self.undo.push(Undo::Moved { from: path, to: back });
+                self.record_undo(Undo::Moved { from: path, to: back });
                 let _ = files::sync(window);
                 self.load(window);
             }
@@ -1045,18 +1054,61 @@ impl App {
             Undo::CopiedBatch(items) => self.undo_copy_batch(window, items),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
-            Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
+            Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves, false) }
         };
         match result {
             Ok(()) => {
                 self.meta_undone(window, &step);
+                self.redo_rename = match &step {
+                    Undo::Renamed { dir, moves } => Some(Undo::Renamed { dir: dir.clone(), moves: inverse_moves(moves) }),
+                    _ => None,
+                };
                 sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
                 self.status = "Undone.".into();
                 let _ = files::sync(window);
                 self.load(window);
             }
-            Err(e) => { self.status = format!("Couldn't undo: {}.", shown(files::message(e))); self.undo.push(step); }
+            Err(e) => {
+                self.status = if e == rename::ROLLBACK_UNCONFIRMED {
+                    "Couldn't undo: rollback was not confirmed. Inspect the folder before retrying.".into()
+                } else {
+                    format!("Couldn't undo: {}.{}", shown(files::message(e)),
+                        if matches!(&step, Undo::Renamed { .. }) { " Check the folder before retrying." } else { "" })
+                };
+                self.undo.push(step);
+            }
         }
+    }
+    /// Redo the last successfully undone batch rename. A failed checked move
+    /// leaves the plan available for retry and does not alter undo history.
+    fn redo_rename(&mut self, window: &mut Window) {
+        let Some(step) = self.redo_rename.take() else { self.status = "Nothing to redo.".into(); return };
+        let Undo::Renamed { dir, moves } = &step else { unreachable!() };
+        match self.rename_undo(window, dir, moves, true) {
+            Ok(()) => {
+                self.meta_undone(window, &step);
+                self.undo.push(Undo::Renamed { dir: dir.clone(), moves: inverse_moves(moves) });
+                sex_pdx::serial_record!("[files.app.redone] kind=rename count={}", moves.len());
+                self.status = "Renamed again. Ctrl+Z takes it back.".into();
+                self.load(window);
+            }
+            Err(e) => {
+                if e == sex_pdx::fs::UNSUPPORTED {
+                    self.status = "This disk has no stable file IDs, so Loom cannot safely redo its batch rename.".into();
+                } else {
+                    self.status = if e == rename::ROLLBACK_UNCONFIRMED {
+                        "Couldn't redo: rollback was not confirmed. Inspect the folder before retrying.".into()
+                    } else {
+                        format!("Couldn't redo: {}. Check the folder before retrying.", shown(files::message(e)))
+                    };
+                    self.redo_rename = Some(step);
+                }
+            }
+        }
+    }
+    fn record_undo(&mut self, step: Undo) {
+        self.redo_rename = None;
+        self.undo.push(step);
     }
     /// Enter on a file: it opens in its program, which is given that file alone.
     fn open_file(&mut self, name: &[u8], path: &[u8]) {
@@ -1142,7 +1194,7 @@ impl App {
                     Ok(()) => {
                         self.meta_moved(window, &from, &to);
                         self.status = format!("Renamed to {}.", shown(&text));
-                        self.undo.push(Undo::Moved { from, to });
+                        self.record_undo(Undo::Moved { from, to });
                         self.load(window);
                         self.select(&text);
                     }
@@ -1154,7 +1206,7 @@ impl App {
                 match files::mkdir(window, &at(&path)) {
                     Ok(()) => {
                         self.status = format!("Made {}.", shown(&text));
-                        self.undo.push(Undo::Made { path });
+                        self.record_undo(Undo::Made { path });
                         self.load(window);
                         self.select(&text);
                     }
@@ -1247,7 +1299,7 @@ impl App {
         }
         if self.job.is_some() {
             if key.code == ESC { self.stop_job(window); return; }
-            let changes = key.control && matches!(key.code, KEY_V | KEY_Z | KEY_N | KEY_R | KEY_E | KEY_I)
+            let changes = key.control && matches!(key.code, KEY_V | KEY_Z | KEY_Y | KEY_N | KEY_R | KEY_E | KEY_I)
                 || matches!(sex_app::nav(key), Some(Nav::Delete)) || key.code == F2;
             if changes { self.status = "Busy with the job below: wait for it, or Esc stops it.".into(); return; }
         }
@@ -1309,6 +1361,7 @@ impl App {
                 },
                 KEY_V => self.paste(window),
                 KEY_Z => self.undo(window),
+                KEY_Y => self.redo_rename(window),
                 KEY_N => self.input = Some((Input::NewFolder, Vec::new())),
                 KEY_T => { let t = join(&disk_root(&self.cwd), TRASH); self.go(window, t); }
                 KEY_R => self.restore(window),
@@ -1431,7 +1484,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, selection_marks: Vec::new(), top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, selection_marks: Vec::new(), top: 0, clip: None, clip_batch: None, undo: Vec::new(), redo_rename: None, input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, session_ready: false };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
