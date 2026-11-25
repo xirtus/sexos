@@ -627,6 +627,27 @@ fn python_inline_f_string_prefixes_are_colored_with_the_string() {
 }
 
 #[test]
+fn js_inline_template_colors_simple_identifier_substitutions() {
+    let text = b"const greeting = `Hello ${name}, ${this}!`;";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Js, text, false, &mut out));
+    let name = text.windows(4).position(|part| part == b"name").unwrap();
+    let this = text.windows(4).position(|part| part == b"this").unwrap();
+    assert!(out.contains(&(name, name + 4, Kind::Plain)));
+    assert!(out.contains(&(this, this + 4, Kind::Keyword)));
+    assert!(out.contains(&(name - 2, name, Kind::Punct)));
+    assert!(out.contains(&(name + 4, name + 5, Kind::Punct)));
+    let escaped = b"const s = `\\${name}`;";
+    highlight::line(Lang::Js, escaped, false, &mut out);
+    let ticks: Vec<usize> = escaped.iter().enumerate().filter_map(|(i, b)| (*b == b'`').then_some(i)).collect();
+    assert!(out.contains(&(ticks[0], ticks[1] + 1, Kind::String)));
+    let complex = b"const s = `${person.name}`;";
+    highlight::line(Lang::Js, complex, false, &mut out);
+    let ticks: Vec<usize> = complex.iter().enumerate().filter_map(|(i, b)| (*b == b'`').then_some(i)).collect();
+    assert!(out.contains(&(ticks[0], ticks[1] + 1, Kind::String)));
+}
+
+#[test]
 fn tabs_open_close_and_cycle() {
     let mut t = Tabs::default();
     t.add(Tab::new(b"a.rs", Editor::from_bytes(b"a")));
