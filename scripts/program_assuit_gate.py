@@ -123,6 +123,13 @@ def main():
   g['wait'](r'\[assuit\.spelling\] word=helo suggestions=\d+\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-spelling.ppm')})
   q.key('esc')
+  s=len(t());press('ctrl','shift','l')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paper-prompt.ppm')})
+  assert (a.out/'assuit-paper-prompt.ppm').stat().st_size>10000
+  type_line('a4 landscape');q.key('ret')
+  g['wait'](r'\[assuit\.paper\] a4 landscape\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-paper.ppm')})
+  assert (a.out/'assuit-paper.ppm').stat().st_size>10000
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})

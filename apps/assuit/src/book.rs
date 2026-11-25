@@ -113,6 +113,24 @@ impl Book {
         self.run("insert.table", json!({ "rows": rows, "cols": cols })).map(|_| ())
     }
 
+    /// Set the current section's paper and orientation. WordCraft stores this in the
+    /// document, so DOCX and ODT preserve it after Save As and reopen.
+    pub fn set_paper(&mut self, input: &str) -> Result<(), String> {
+        let mut words = input.split_whitespace();
+        let size = match words.next().unwrap_or("").to_ascii_lowercase().as_str() {
+            "letter" => "Letter", "legal" => "Legal", "a4" => "A4",
+            _ => return Err("Choose Letter, Legal or A4, then portrait or landscape".into()),
+        };
+        let orientation = match words.next().unwrap_or("").to_ascii_lowercase().as_str() {
+            "portrait" => "portrait", "landscape" => "landscape",
+            _ => return Err("Choose Letter, Legal or A4, then portrait or landscape".into()),
+        };
+        if words.next().is_some() { return Err("Choose Letter, Legal or A4, then portrait or landscape".into()); }
+        self.run("layout.size", json!({ "name": size }))?;
+        self.run("layout.orientation", json!({ "value": orientation }))?;
+        Ok(())
+    }
+
     /// Inserts a picture from a file the program can read in its granted folder.
     pub fn insert_picture(&mut self, path: &str) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("Could not read {path}: {e}"))?;
@@ -524,6 +542,22 @@ mod tests {
         // The title keeps its style through ODT, Writer's own format.
         let mut odt = Book::open(&temp("copy.odt")).unwrap();
         assert_eq!(odt.paragraph_style(), "Title");
+    }
+
+    #[test]
+    fn paper_setup_round_trips_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let mut book = welcome("paper.docx");
+            assert!(book.set_paper("A4 sideways").is_err());
+            assert!(book.set_paper("unknown landscape").is_err());
+            book.set_paper("A4 landscape").unwrap();
+            let (w, h) = book.page_size(0);
+            assert!(w > h && (w - 842.0).abs() < 2.0 && (h - 595.0).abs() < 2.0, "{w} × {h}");
+            let (path, _) = book.save_as(&temp(&format!("paper.{ext}"))).unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            let (w, h) = reopened.page_size(0);
+            assert!(w > h && (w - 842.0).abs() < 2.0 && (h - 595.0).abs() < 2.0, "{ext}: {w} × {h}");
+        }
     }
 
     #[test]
