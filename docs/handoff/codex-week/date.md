@@ -54,6 +54,8 @@ Remaining gaps:
   events and cursor before delivery. Closing one window leaves the other in
   charge; a hidden worker keeps a claim while the window is open and resumes
   from saved state ten seconds after a crashed window's lease expires. The
+  elected visible owner now checks due notices during continuous input; a
+  non-owner cannot post from its key handler. The
   opening handoff marker also expires after ten seconds. A crashed worker can
   be restarted by the next visible Date launch; no separate system supervisor
   restarts it while Date remains closed. A power cut after Bell posts but before

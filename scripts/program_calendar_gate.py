@@ -188,11 +188,29 @@ def main():
   second_target,second_task,second_sid,_,second_s=start('')
   g['wait'](rf'\[date.notice.ui.owner\] task={first_task} owns=1',first_s,30)
   g['wait'](rf'\[date.notice.ui.owner\] task={second_task} owns=0',second_s,30)
+  # Keep the non-owner busy with real key events while the first window's timer
+  # comes due. A key must not bypass the visible Bell-owner election.
+  g['focus'](second_sid)
+  busy_until=time.monotonic()+22
+  while time.monotonic()<busy_until:q.key('f2');time.sleep(.08)
   g['wait'](r'\[date.alarm.fired\] kind=timer title=two windows notified=1',s,45)
   time.sleep(2)
   assert len(re.findall(r'\[date.alarm.fired\] kind=timer title=two windows notified=1',t()[s:]))==1,'two Date windows posted duplicate Bell notices'
   q.cmd('screendump',{'filename':str(a.out/'date-two-windows.ppm')})
   assert (a.out/'date-two-windows.ppm').read_bytes().startswith(b'P6\n')
+  # Pointer movement is ignored by the calendar UI, but it must not starve the
+  # elected owner's periodic due check or its banner.
+  g['focus'](first_sid);time.sleep(.3);q.key('c');time.sleep(.2);s=len(t());q.key('r');time.sleep(.2);keys('4s busy owner');q.key('ret')
+  g['wait'](r'\[date.timer.started\] seconds=4 label=busy owner',s,30)
+  began=time.monotonic();posted_during_input=False
+  while time.monotonic()-began<6:
+   x=15000 if int((time.monotonic()-began)*20)%2 else 16000
+   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':x}},{'type':'abs','data':{'axis':'y','value':15000}}]})
+   if '[date.alarm.fired] kind=timer title=busy owner notified=1' in t()[s:]:posted_during_input=True
+   time.sleep(.05)
+  assert posted_during_input,'continuous pointer input postponed the elected Date owner\'s Bell notice'
+  q.cmd('screendump',{'filename':str(a.out/'date-owner-under-input.ppm')})
+  assert (a.out/'date-owner-under-input.ppm').read_bytes().startswith(b'P6\n')
   g['focus'](first_sid);close(first_target,first_task)
   g['focus'](second_sid);time.sleep(.5);s=len(t());q.key('c');time.sleep(.3);q.key('r');time.sleep(.3);keys('2s new owner');q.key('ret')
   g['wait'](rf'\[date.notice.ui.owner\] task={second_task} owns=1',s,30)

@@ -41,7 +41,7 @@ use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
 use sex_calendar::history::{ClockEditKind, ClockHistory, ClockState, EventEdit, EventHistory, ReplyDraftHistory};
-use sex_calendar::notice_cursor::{lease_live, NoticeCursor};
+use sex_calendar::notice_cursor::{lease_live, NoticeCadence, NoticeCursor};
 use sex_calendar::conflicts;
 use sex_calendar::storage::{finish_replace, ReplaceFailure as SaveFailure};
 use sex_dav::FileAccount;
@@ -179,6 +179,34 @@ fn notice_ui_live(now: u64) -> bool {
         }
     }
     false
+}
+
+/// The one visible Bell owner rereads shared state before checking due notices.
+/// Call this on a cadence from the event loop, even while input is arriving.
+fn poll_visible_notices(window: &mut Window, app: &mut App, store: &mut [u8],
+    seen_events: &mut String, seen_clock: &mut String, notice_owner: &mut Option<bool>) -> bool {
+    let now = now_ms();
+    let owns = notice_ui_owner(window.task, now);
+    if *notice_owner != Some(owns) {
+        sex_pdx::serial_record!("[date.notice.ui.owner] task={} owns={}", window.task, owns as u8);
+        *notice_owner = Some(owns);
+    }
+    if !owns { app.now_ms = now; return false; }
+    if let Ok(n) = files::read(window, FILE, store) {
+        let saved = String::from_utf8_lossy(&store[..n]);
+        if saved.as_ref() != seen_events.as_str() { app.cal = Calendar::parse(&saved); *seen_events = saved.into_owned(); }
+    }
+    if let Ok(n) = files::read(window, CLOCK, store) {
+        let saved = String::from_utf8_lossy(&store[..n]);
+        // Keep a timer removed in memory when its save failed; the unchanged
+        // disk copy must not ring again every half second.
+        if saved.as_ref() != seen_clock.as_str() { app.clock = Clock::parse(&saved); *seen_clock = saved.into_owned(); }
+    }
+    if let Ok(n) = files::read(window, NOTICE_CURSOR, store) {
+        let cursor = NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now);
+        app.last_minute = app.last_minute.max(cursor.minute);
+    }
+    app.tick(window)
 }
 
 fn ensure_notice_worker() {
@@ -1099,6 +1127,7 @@ pub extern "C" fn _start() -> ! {
     let mut shown_second = now / 1000;
     let mut theme_next = sex_pdx::get_ticks().saturating_add(1000);
     let mut lease_next = sex_pdx::get_ticks().saturating_add(500);
+    let mut notice_cadence = NoticeCadence::new(sex_pdx::get_ticks());
     let mut notice_owner = None;
     let mut seen_events = String::new();
     let mut seen_clock = String::new();
@@ -1120,39 +1149,16 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        let Some(event) = window.next_within(500) else {
-            let now = now_ms();
-            let owns = notice_ui_owner(window.task, now);
-            if notice_owner != Some(owns) {
-                sex_pdx::serial_record!("[date.notice.ui.owner] task={} owns={}", window.task, owns as u8);
-                notice_owner = Some(owns);
-            }
-            let rang = if owns {
-                // Another window may have saved a new alarm or event while this
-                // window was idle. Read the shared state before deciding what is due.
-                if let Ok(n) = files::read(&mut window, FILE, store) {
-                    let saved = String::from_utf8_lossy(&store[..n]);
-                    if saved != seen_events { app.cal = Calendar::parse(&saved); seen_events = saved.into_owned(); }
-                }
-                if let Ok(n) = files::read(&mut window, CLOCK, store) {
-                    let saved = String::from_utf8_lossy(&store[..n]);
-                    // Keep a timer removed in memory when its save failed; the
-                    // unchanged disk copy must not ring again every half second.
-                    if saved != seen_clock { app.clock = Clock::parse(&saved); seen_clock = saved.into_owned(); }
-                }
-                if let Ok(n) = files::read(&mut window, NOTICE_CURSOR, store) {
-                    let cursor = NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now);
-                    app.last_minute = app.last_minute.max(cursor.minute);
-                }
-                app.tick(&mut window)
-            } else { false };
+        if notice_cadence.due(ticks) {
+            let rang = poll_visible_notices(&mut window, &mut app, store,
+                &mut seen_events, &mut seen_clock, &mut notice_owner);
             let second = app.now_ms / 1000;
             if rang || (app.view == View::Clock && second != shown_second) {
                 shown_second = second;
                 views::render(&mut window, &app, &mut faces);
             }
-            continue;
-        };
+        }
+        let Some(event) = window.next_within(500) else { continue; };
         match event {
             Event::Close => {
                 sex_pdx::serial_record!("[calendar.closed] target={} task={}", window.target, window.task);
@@ -1180,7 +1186,6 @@ pub extern "C" fn _start() -> ! {
             Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => continue,
             Event::Resize { .. } => {}
         }
-        app.tick(&mut window);
         views::render(&mut window, &app, &mut faces);
     }
 }
