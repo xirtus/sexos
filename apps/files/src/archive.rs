@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Archives in Files: Enter on a zip, tar (plain, gz, zst, xz) or 7z browses into it as a
 //! read-only folder; Ctrl+Shift+X extracts it next to itself (or, inside one, copies the
-//! selected item out); Ctrl+Shift+A packs the selected file or folder into a zip.
+//! selected item out); Ctrl+Shift+A packs zip, Ctrl+Shift+Z packs tar.gz.
 //!
 //! The archive is read through Files' own file calls a piece at a time, never loaded
 //! whole. What is extracted or packed is written under a hidden `.NAME.part` name and
@@ -362,16 +362,18 @@ impl App {
         self.cursor = cursor.min(self.entries.len().saturating_sub(1));
     }
 
-    /// Ctrl+Shift+A: packs the selected file or folder into `NAME.zip` beside it.
-    pub(crate) fn make_zip(&mut self, window: &mut Window) {
-        let Some(path) = self.selected() else { self.status = "Ctrl+Shift+A packs the selected file or folder into a zip: select one.".into(); return };
+    /// Pack the selected file or folder beside it, with staged replacement and undo.
+    pub(crate) fn make_zip(&mut self, window: &mut Window) { self.make_archive(window, OutputFormat::Zip); }
+    pub(crate) fn make_targz(&mut self, window: &mut Window) { self.make_archive(window, OutputFormat::TarGz); }
+    fn make_archive(&mut self, window: &mut Window, format: OutputFormat) {
+        let Some(path) = self.selected() else { self.status = "Select a file or folder to pack.".into(); return };
         let dir_item = self.entries.get(self.cursor).is_some_and(|e| e.dir);
         let name = base(&path).to_vec();
-        let mut zip_name = if dir_item { name.clone() } else {
+        let mut archive_name = if dir_item { name.clone() } else {
             match name.iter().rposition(|b| *b == b'.') { Some(i) if i > 0 => name[..i].to_vec(), _ => name.clone() }
         };
-        zip_name.extend_from_slice(b".zip");
-        let to = self.free_name(window, &self.cwd.clone(), &zip_name, "copy");
+        archive_name.extend_from_slice(if format == OutputFormat::TarGz { &b".tar.gz"[..] } else { &b".zip"[..] });
+        let to = self.free_name(window, &self.cwd.clone(), &archive_name, "copy");
         let mut part_name = b".".to_vec();
         part_name.extend_from_slice(base(&to));
         part_name.extend_from_slice(b".part");
@@ -390,7 +392,7 @@ impl App {
             }
         }
         let cut = parent(&path).len() + if parent(&path) == b"/" { 0 } else { 1 };
-        let mut builder = ArchiveBuilder::new(OutputFormat::Zip);
+        let mut builder = ArchiveBuilder::new(format);
         let mut files_n = 0u64;
         for (p, dir, size, mtime) in &items {
             let rel = shown(&p[cut..]);
@@ -401,7 +403,7 @@ impl App {
             if let Err(e) = r { self.status = format!("Couldn't pack {}: {}.", rel, e); return; }
         }
         let _ = files::remove(window, &at(&part));
-        if let Err(e) = files::create(window, &at(&part)) { self.status = format!("Couldn't make the zip: {}.", shown(files::message(e))); return; }
+        if let Err(e) = files::create(window, &at(&part)) { self.status = format!("Couldn't make the archive: {}.", shown(files::message(e))); return; }
         sex_pdx::serial_record!("[files.app.archive.create.start] from={} to={} items={}", shown(&path), shown(&to), items.len());
         let mut sink = FileSink { path: at(&part), offset: 0 };
         let mut ticker = Ticker::new("Packing", base(&to));
