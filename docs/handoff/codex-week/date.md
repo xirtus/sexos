@@ -26,3 +26,7 @@ Remaining gaps:
 - Ctrl+Z/Ctrl+Y now undo and redo local event additions and removals, with each
   result saved immediately. A CalDAV sync clears the history so undo cannot roll
   back server changes. Clock edits and invitation replies still need undo.
+- The calendar QEMU gate now kills the guest after a completed staged event save,
+  reboots the same disk, and verifies the event in Date. This covers recovery
+  after the save receipt; a write interrupted before that receipt remains outside
+  the proof.
