@@ -19,6 +19,8 @@ mod restricted_control;
 mod restricted_load;
 mod restricted_data;
 mod fs_service;
+pub mod page_cache;
+pub mod ipc_v2;
 mod organize;
 mod config_store;
 mod password_store;
