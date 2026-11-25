@@ -169,6 +169,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+Shift+Q", "Edit selected chart layout"),
     ("Ctrl+Shift+I", "Search and insert a worksheet function"),
+    ("Ctrl+Shift+U", "Wrap or unwrap selected cells"),
     ("Ctrl+Shift+W", "Review import warnings"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
@@ -455,6 +456,26 @@ impl Ui {
             for (i, &(c, x, cw)) in cols.iter().enumerate() {
                 let shown = self.book.shown(r, c);
                 if shown.text.is_empty() { continue; }
+                let color = if shown.error { palette.error } else { palette.ink };
+                let (bold, _, underline) = self.book.font(r, c);
+                if self.book.wrapped(r, c) {
+                    let height = self.pen.line_height();
+                    let lines = crate::book::wrap_lines(&shown.text, cw - 2 * PAD,
+                        ((rh - 2 * PAD) / height).max(1) as usize, |line| self.pen.measure(line));
+                    let clip = Some((x + 1, cw - 2));
+                    for (n, line) in lines.iter().enumerate() {
+                        let tw = self.pen.measure(line);
+                        let tx = if shown.right { x + cw - PAD - tw } else { x + PAD };
+                        let ty = y + PAD + n as i32 * height;
+                        self.pen.text(&mut canvas, tx, ty, line, color, clip);
+                        if bold { self.pen.text(&mut canvas, tx + 1, ty, line, color, clip); }
+                        if underline {
+                            let ux = tx.max(x + 1);
+                            canvas.fill(ux, ty + height - 2, ((tx + tw + bold as i32).min(x + cw - 1) - ux).max(0), 1, color);
+                        }
+                    }
+                    continue;
+                }
                 let tw = self.pen.measure(&shown.text);
                 let mut room = cw;
                 if !shown.right {
@@ -464,10 +485,8 @@ impl Ui {
                     }
                 }
                 let tx = if shown.right { x + cw - PAD - tw } else { x + PAD };
-                let color = if shown.error { palette.error } else { palette.ink };
                 let ty = y + (rh - self.pen.line_height()) / 2;
                 let clip = Some((x + 1, room - 2));
-                let (bold, _, underline) = self.book.font(r, c);
                 self.pen.text(&mut canvas, tx, ty, &shown.text, color, clip);
                 // One face for now (sex-font): bold is the text drawn again a pixel right.
                 if bold { self.pen.text(&mut canvas, tx + 1, ty, &shown.text, color, clip); }
@@ -1048,6 +1067,16 @@ impl Ui {
                         Err(e) => self.message = e,
                     }
                     return false;
+                }
+                code::U if key.shift => {
+                    let range = self.selection();
+                    let on = !self.book.wrapped(self.row, self.col);
+                    let done = self.book.set_wrap(range, on);
+                    if done.is_ok() {
+                        sex_std::record(&format!("[spreadeagle.wrap] range={} on={} row_height={} cell_y={}", range.a1(), on as u8, self.book.row_height(self.row), self.row_y(self.row)));
+                    }
+                    self.command("home.wrapText", done, format!("{} {}", range.a1(), if on { "wrapped" } else { "unwrapped" }));
+                    return true;
                 }
                 code::S if key.shift => Some(Ask::SaveAs(self.name.chars().collect())),
                 code::G => Some(Ask::GoTo(Vec::new())),
