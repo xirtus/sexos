@@ -104,7 +104,7 @@ enum Ask {
     Chart,
 }
 
-struct FilterMenu { col: u32, values: Vec<String>, selected: usize }
+struct FilterMenu { col: u32, values: Vec<String>, selected: usize, checked: Vec<bool>, toggled: bool }
 
 const FILTER_MENU_W: i32 = 230;
 const FILTER_MENU_ROW: i32 = 23;
@@ -120,7 +120,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
     ("Ctrl+Shift+A / D", "Sort ascending / descending"),
-    ("Ctrl+Shift+L / E / O", "Filter / by cell / choose value"),
+    ("Ctrl+Shift+L / E / O", "Filter / by cell / choose values; Space marks"),
     ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
@@ -146,6 +146,7 @@ impl Prompt {
 mod code {
     pub const ESC: u8 = 0x01;
     pub const BACKSPACE: u8 = 0x0E;
+    pub const SPACE: u8 = 0x39;
     pub const TAB: u8 = 0x0F;
     pub const ENTER: u8 = 0x1C;
     pub const S: u8 = 0x1F;
@@ -511,7 +512,7 @@ impl Ui {
                 }
             }
         } else if let Some(menu) = &self.filter_menu {
-            format!("Filter {}: Up/Down chooses, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
+            format!("Filter {}: Up/Down chooses, Space marks, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
         } else if self.message.is_empty() {
             format!("{}{}  Ctrl+S save  Ctrl+Shift+S save as  Ctrl+P PDF  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+=/- insert/delete  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
@@ -528,14 +529,16 @@ impl Ui {
             canvas.fill(mx + 3, my + 3, FILTER_MENU_W, mh, palette.grid);
             canvas.fill(mx, my, FILTER_MENU_W, mh, palette.bar_bg);
             canvas.frame(mx, my, FILTER_MENU_W, mh, palette.grid);
-            self.pen.text(&mut canvas, mx + 8, my + 5, &format!("{}: choose value", column_name(menu.col)), palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
+            self.pen.text(&mut canvas, mx + 8, my + 5, &format!("{}: choose values", column_name(menu.col)), palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
             let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
             for slot in 0..count {
                 let index = first + slot;
                 let label = if index == 0 { "All rows" } else { &menu.values[index - 1] };
                 let y = my + 25 + slot as i32 * FILTER_MENU_ROW;
                 if index == menu.selected { canvas.fill(mx + 3, y, FILTER_MENU_W - 6, FILTER_MENU_ROW, palette.head_on); }
-                self.pen.text(&mut canvas, mx + 9, y + 3, if label.is_empty() { "(blank)" } else { label }, if index == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, FILTER_MENU_W - 18)));
+                let mark = if index == 0 { "    " } else if menu.checked[index - 1] { "[x] " } else { "[ ] " };
+                let shown = format!("{mark}{}", if label.is_empty() { "(blank)" } else { label });
+                self.pen.text(&mut canvas, mx + 9, y + 3, &shown, if index == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, FILTER_MENU_W - 18)));
             }
         }
         if self.help {
@@ -724,14 +727,19 @@ impl Ui {
         if !(left..=right).contains(&col) { return; }
         let values = self.book.filter_choices(col);
         sex_std::record(&format!("[spreadeagle.filter.menu] col={} values={}", column_name(col), values.len()));
-        self.filter_menu = Some(FilterMenu { col, values, selected: 0 });
+        let checked = vec![false; values.len()];
+        self.filter_menu = Some(FilterMenu { col, values, selected: 0, checked, toggled: false });
     }
 
     fn apply_filter_menu(&mut self) -> bool {
         let Some(menu) = self.filter_menu.take() else { return false };
-        let value = menu.selected.checked_sub(1).map(|i| menu.values[i].clone());
-        let label = value.as_deref().unwrap_or("all");
-        let done = self.book.filter_by(self.selection(), menu.col, value.as_deref());
+        let values: Vec<String> = if menu.toggled {
+            menu.values.into_iter().zip(menu.checked).filter_map(|(value, checked)| checked.then_some(value)).collect()
+        } else {
+            menu.selected.checked_sub(1).map(|i| menu.values[i].clone()).into_iter().collect()
+        };
+        let label = match values.as_slice() { [] => "all".to_string(), [one] => one.clone(), _ => format!("{}-values", values.len()) };
+        let done = self.book.filter_by_values(self.selection(), menu.col, &values);
         let changed = self.command("data.filterBy", done, format!("Filter {}: {label}", column_name(menu.col)));
         if changed { sex_std::record(&format!("[spreadeagle.filter.choice] col={} value={label}", column_name(menu.col))); }
         changed
@@ -741,6 +749,12 @@ impl Ui {
         if key.code == code::ESC { self.filter_menu = None; return false; }
         if key.code == code::ENTER { return self.apply_filter_menu(); }
         if let Some(menu) = &mut self.filter_menu {
+            if key.code == code::SPACE && !key.control {
+                menu.toggled = true;
+                if menu.selected == 0 { menu.checked.fill(false); }
+                else { menu.checked[menu.selected - 1] = !menu.checked[menu.selected - 1]; }
+                return false;
+            }
             match sex_app::nav(key) {
                 Some(Nav::Up) => menu.selected = menu.selected.saturating_sub(1),
                 Some(Nav::Down) => menu.selected = (menu.selected + 1).min(menu.values.len()),
