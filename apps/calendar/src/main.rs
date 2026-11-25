@@ -322,7 +322,9 @@ fn notice_worker() -> ! {
                 let offset = clock.home_zone().offset(minute);
                 let delivery = deliver_due(&cal, &mut clock, cursor.minute, minute, offset, |notice| {
                     let (kind, title, body) = due_text(&cal, notice, offset);
-                    let disposition = sex_app::notify::post_confirmed(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                    let key = notice.semantic_key(&cal);
+                    let disposition = sex_app::notify::post_confirmed_keyed(title.as_bytes(), body.as_bytes(),
+                        sex_pdx::notify::URGENCY_CRITICAL, key.as_deref().map(str::as_bytes));
                     sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
                         (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
                     disposition.settles_due()
@@ -763,7 +765,9 @@ impl App {
             let mut banner = None;
             let delivery = deliver_due(&self.cal, &mut self.clock, self.last_minute, minute, offset, |notice| {
                 let (kind, title, body) = due_text(&self.cal, notice, offset);
-                let disposition = sex_app::notify::post_confirmed(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                let key = notice.semantic_key(&self.cal);
+                let disposition = sex_app::notify::post_confirmed_keyed(title.as_bytes(), body.as_bytes(),
+                    sex_pdx::notify::URGENCY_CRITICAL, key.as_deref().map(str::as_bytes));
                 sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
                     (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
                 if disposition == sex_pdx::notify::Disposition::Accepted { banner = Some(format!("{title}: {body}")); }

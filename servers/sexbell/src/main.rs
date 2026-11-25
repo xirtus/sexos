@@ -251,6 +251,14 @@ fn post_assembler(caller: u32) -> &'static mut sex_pdx::notify::Assembler {
     &mut all[i].1
 }
 
+static mut POST_KEYS: [Option<sex_pdx::notify::PendingKey>; POST_SENDERS] = [None; POST_SENDERS];
+fn take_post_key(caller: u32, task: u32, ticket: u32) -> Option<(u64, u64)> {
+    let slots = unsafe { &mut *core::ptr::addr_of_mut!(POST_KEYS) };
+    let slot = slots.iter_mut().find(|slot| slot.is_some_and(|key| key.caller == caller))?;
+    let key = slot.take()?;
+    key.take_for(caller, task, ticket)
+}
+
 #[derive(Clone, Copy)]
 struct PendingPresentation { identity: sex_pdx::notify::Presentation, sender_task: u32, since: u64 }
 /// Date gets an accepted receipt only after Shell has handled this event.
@@ -1498,11 +1506,24 @@ pub extern "C" fn _start() -> ! {
                 pdx_reply(identity.sender, sex_pdx::notify::receipt(identity.ticket, disposition));
             }
 
-            sex_pdx::notify::OP_BELL_POST | sex_pdx::notify::OP_BELL_POST_CONFIRMED => {
+            sex_pdx::notify::OP_BELL_POST_KEY => {
+                if msg.caller_task == 0 || msg.arg0 > u32::MAX as u64 { continue; }
+                let slots = unsafe { &mut *core::ptr::addr_of_mut!(POST_KEYS) };
+                let index = slots.iter().position(|slot| slot.is_some_and(|key| key.caller == msg.caller_pd))
+                    .or_else(|| slots.iter().position(Option::is_none));
+                if let Some(index) = index {
+                    slots[index] = Some(sex_pdx::notify::PendingKey { caller: msg.caller_pd, task: msg.caller_task,
+                        ticket: msg.arg0 as u32, low: msg.arg1, high: msg.arg2 });
+                }
+            }
+
+            sex_pdx::notify::OP_BELL_POST | sex_pdx::notify::OP_BELL_POST_CONFIRMED
+                | sex_pdx::notify::OP_BELL_POST_CONFIRMED_KEYED => {
                 // A notification with text, a chunk at a time, from the
                 // kernel-named caller. Policy runs once the text is whole.
                 let caller = msg.caller_pd;
-                let confirmed = msg.type_id == sex_pdx::notify::OP_BELL_POST_CONFIRMED;
+                let keyed = msg.type_id == sex_pdx::notify::OP_BELL_POST_CONFIRMED_KEYED;
+                let confirmed = msg.type_id != sex_pdx::notify::OP_BELL_POST;
                 let header = sex_pdx::notify::Chunk::decode(msg.arg0);
                 let Some(text) = post_assembler(caller).push(msg.arg0, msg.arg1, msg.arg2) else {
                     // A malformed final chunk must not strand Date waiting for
@@ -1524,6 +1545,11 @@ pub extern "C" fn _start() -> ! {
                         pdx_reply(caller, sex_pdx::notify::receipt(ticket, disposition));
                     }
                 };
+                let semantic_key = if keyed { take_post_key(caller, msg.caller_task, ticket) } else { None };
+                if keyed && semantic_key.is_none() {
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
+                    continue;
+                }
                 if is_muted(caller) || is_policy_muted(caller) {
                     sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=muted", caller);
                     acknowledge(sex_pdx::notify::Disposition::Muted);
@@ -1568,8 +1594,12 @@ pub extern "C" fn _start() -> ! {
                 }
                 // Hand it to the Shell with Bell's id and the true sender.
                 let announced = !confirmed || sex_pdx::pdx_call(sex_pdx::SLOT_SHELL,
-                    sex_pdx::notify::OP_NOTIFICATION_BEGIN, event_id, ticket as u64, caller as u64).0 == 0;
-                let delivered = announced && sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
+                    sex_pdx::notify::OP_NOTIFICATION_BEGIN, event_id, ticket as u64,
+                    sex_pdx::notify::begin_sender_word(caller, keyed).unwrap_or(0)).0 == 0;
+                let key_delivered = announced && semantic_key.map_or(true, |(low, high)|
+                    sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::notify::OP_NOTIFICATION_KEY,
+                        event_id, low, high).0 == 0);
+                let delivered = key_delivered && sex_pdx::notify::chunks(text.as_bytes(), urgency, event_id as u16, caller as u16)
                     .all(|(w, a, b)| sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::notify::OP_NOTIFICATION, w, a, b).0 == 0);
                 if confirmed && !delivered {
                     unsafe { PENDING_PRESENTATION = None; }

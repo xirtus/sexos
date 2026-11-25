@@ -10,10 +10,24 @@ import argparse,calendar,datetime,http.server,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 ICS=(ROOT/'crates/sex-calendar/tests/fixture.ics').read_bytes()
+def due_ics():
+ # Leave at least one minute for fetch/import/launch before the reminder.
+ now=datetime.datetime.now(datetime.timezone.utc)
+ due=now.replace(second=0,microsecond=0)+datetime.timedelta(minutes=2)
+ start=due+datetime.timedelta(minutes=1)
+ end=start+datetime.timedelta(minutes=30)
+ lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//SexOS//Date keyed reminder gate//EN',
+  'BEGIN:VEVENT','UID:keyed-reminder-gate@sexos.test',f'DTSTART:{start:%Y%m%dT%H%M%SZ}',
+  f'DTEND:{end:%Y%m%dT%H%M%SZ}','SUMMARY:Keyed reminder proof',
+  'BEGIN:VALARM','TRIGGER:-PT1M','ACTION:DISPLAY','END:VALARM',
+  'END:VEVENT','END:VCALENDAR','']
+ return '\r\n'.join(lines).encode()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
-  if self.path!='/cal.ics':self.send_response(404);self.end_headers();return
-  self.send_response(200);self.send_header('Content-Length',str(len(ICS)));self.end_headers();self.wfile.write(ICS)
+  if self.path=='/cal.ics':data=ICS
+  elif self.path=='/due.ics':data=due_ics()
+  else:self.send_response(404);self.end_headers();return
+  self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
@@ -301,6 +315,19 @@ def main():
   s=len(t());q.key('t');time.sleep(.3);keys('all day');q.key('ret')
   g['wait'](rf'\[date.event.timed\] date={move_day} title=rescheduled power cut from=11:30-12:15 to=all day linked=0',s,60)
   g['wait'](r'\[calendar.saved\] events=10 ',s,60)
+  close(target,task)
+  # A fresh UID-backed event must take the keyed Date -> Bell -> Shell route.
+  m=spindle(f'fetch http://10.0.2.2:{PORT}/due.ics due.ics',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
+  assert m[1].startswith('Saved'),m[1]
+  target,task,sid,_,s=start(' @due.ics')
+  g['wait'](r'\[calendar.imported\] events=1 added=1\n',s,60)
+  q.cmd('screendump',{'filename':str(a.out/'date-keyed-before.ppm')})
+  semantic=g['wait'](r'\[shell.notify.semantic\] event_id=(\d+) key_low=(\d+) key_high=(\d+)',s,180)
+  g['wait'](rf'\[shell.notify.handled\] event_id={semantic[1]} ticket=\d+ queued=1 shown=1 muted=0',s,30)
+  g['wait'](r'\[date.alarm.fired\] kind=reminder title=Keyed reminder proof notified=1 settled=1',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-keyed-reminder.ppm')})
+  keyed=(a.out/'date-keyed-reminder.ppm').read_bytes()
+  assert keyed.startswith(b'P6\n') and len(keyed)>100000 and keyed!=(a.out/'date-keyed-before.ppm').read_bytes()
   close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'today':str(today),'months_moved':months,'powercut_event':True})

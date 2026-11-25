@@ -8,10 +8,24 @@ static NEXT_TICKET: AtomicU32 = AtomicU32::new(1);
 /// Bell's disposition of one due notice after Shell has handled it. A timeout
 /// is uncertain: Shell may have queued it and the caller may retry.
 pub fn post_confirmed(summary: &[u8], body: &[u8], urgency: u8) -> n::Disposition {
+    post_confirmed_keyed(summary, body, urgency, None)
+}
+
+/// A UID-backed Date reminder carries its stable source identity to Bell.
+/// The digest is bound to this call's ticket; a refused key call retries.
+pub fn post_confirmed_keyed(summary: &[u8], body: &[u8], urgency: u8,
+    semantic_key: Option<&[u8]>) -> n::Disposition {
     let Some((text, len)) = n::compose(summary, body) else { return n::Disposition::Retry };
     let ticket = NEXT_TICKET.fetch_add(1, Ordering::Relaxed);
+    if let Some(key) = semantic_key {
+        let (low, high) = n::semantic_digest(key);
+        if sex_pdx::pdx_call(sex_pdx::SLOT_BELL, n::OP_BELL_POST_KEY,
+            ticket as u64, low, high).0 != 0 { return n::Disposition::Retry; }
+    }
+    let opcode = if semantic_key.is_some() { n::OP_BELL_POST_CONFIRMED_KEYED }
+        else { n::OP_BELL_POST_CONFIRMED };
     for (head, a, b) in n::chunks(&text[..len], urgency, ticket as u16, (ticket >> 16) as u16) {
-        if sex_pdx::pdx_call(sex_pdx::SLOT_BELL, n::OP_BELL_POST_CONFIRMED, head, a, b).0 != 0 {
+        if sex_pdx::pdx_call(sex_pdx::SLOT_BELL, opcode, head, a, b).0 != 0 {
             return n::Disposition::Retry;
         }
     }
