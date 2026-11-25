@@ -16,6 +16,7 @@ Vellum's light, dark, and high-contrast colors.
 | Choose highlight color | Ctrl+Shift+H cycles yellow, green, pink, blue; the choice applies to found text and selected regions |
 | Choose highlight opacity | Ctrl+Shift+O cycles 100%, 75%, 50%, 25% before placing a highlight |
 | Remove selected annotation | Delete in the annotation list |
+| Edit a highlight comment | Ctrl+L, select a highlight, Enter; type up to 400 characters, Enter saves or Escape cancels |
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; type text, Space checks a box, Up / Down chooses combo or list options, Enter commits and advances. Editable combos accept custom text (Ctrl+A clears); multi-select lists use Space to toggle the focused option |
 | Edit form text at the caret | Left / Right moves one character; Home / End jumps to an edge; Backspace / Delete removes the character before / after the caret |
 | Select and replace form text | Shift+Left / Shift+Right or Shift+Home / Shift+End extends a selection; Ctrl+A selects the whole text field; typing, Backspace, or Delete replaces or removes it |

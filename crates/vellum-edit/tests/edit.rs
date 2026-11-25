@@ -104,6 +104,7 @@ fn signed_pdf_refuses_annotation_add_and_remove_without_changes() {
     };
     let expected = Error::BadValue("cannot edit annotations in a signed PDF".into());
     assert_eq!(editor.add_annotation(0, &highlight).unwrap_err(), expected);
+    assert_eq!(editor.set_highlight_comment(0, 0, "No change").unwrap_err(), expected);
     assert_eq!(editor.remove_annotation(0, 0).unwrap_err(), expected);
     assert!(!editor.is_modified());
 }
@@ -185,6 +186,41 @@ fn colored_highlight_renders_and_survives_incremental_save() {
     let highlighted = px(&render(&saved), 135.0, 165.0);
     assert!(highlighted[1] > highlighted[0] && highlighted[1] > highlighted[2],
         "green highlight renders green: {highlighted:?}");
+}
+
+#[test]
+fn highlight_comment_edits_without_changing_appearance() {
+    let original = simple(Style::Table);
+    let mut editor = Editor::open(original.clone()).unwrap();
+    editor.add_annotation(0, &NewAnnot {
+        kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
+        style: AnnotStyle::default(),
+    }).unwrap();
+    let before_comment = editor.save_incremental().unwrap();
+    let before = editor.annotations(0).unwrap().remove(0);
+    assert_eq!(editor.set_highlight_comment(0, before.index, "Review this paragraph").unwrap(), None);
+    let after = editor.annotations(0).unwrap().remove(0);
+    assert_eq!(after.contents.as_deref(), Some("Review this paragraph"));
+    assert_eq!(after.quad_points, before.quad_points);
+    assert_eq!(after.color, before.color);
+    assert!(after.has_appearance);
+    let saved = editor.save_incremental().unwrap();
+    assert_incremental(&original, &saved);
+    assert_eq!(Editor::open(saved.clone()).unwrap().annotations(0).unwrap()[0].contents.as_deref(), Some("Review this paragraph"));
+    let l = lopdf_annots(&saved);
+    assert_eq!(l[0].get(b"Contents").unwrap().as_str().unwrap(), b"Review this paragraph");
+    assert_eq!(render(&saved), render(&before_comment));
+    let mut reopened = Editor::open(saved).unwrap();
+    assert_eq!(reopened.set_highlight_comment(0, before.index, "").unwrap().as_deref(), Some("Review this paragraph"));
+    assert_eq!(Editor::open(reopened.save_incremental().unwrap()).unwrap().annotations(0).unwrap()[0].contents, None);
+}
+
+#[test]
+fn guest_highlight_comment_survives_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_COMMENT_PDF") else { return };
+    let editor = Editor::open(std::fs::read(path).unwrap()).unwrap();
+    let highlight = editor.annotations(0).unwrap().into_iter().find(|a| a.subtype == "Highlight").unwrap();
+    assert_eq!(highlight.contents.as_deref(), Some("Review green"));
 }
 
 #[test]
