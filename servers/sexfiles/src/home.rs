@@ -271,9 +271,9 @@ fn crypt_status(e: sex_crypt::Error) -> u8 {
 /// A request on `/home` or under it; `inner` is the path inside the volume.
 /// Vellum's staged file lives in its primary-filesystem folder while the chosen
 /// PDF can live in the encrypted home. Files owns this one request: it copies
-/// the complete staged bytes to a home-private staging name, commits them, then
-/// compares and replaces the home destination in a second home commit. No other
-/// Files request can write the destination between the comparison and rename.
+/// the complete staged bytes to a home-private staging name, then compares and
+/// replaces the home destination in the same home commit. The internal stage
+/// is never a durable name on its own, including after a power cut.
 pub fn replace_from_main_if_sha256(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<u32, u8> {
     deep(|| replace_from_main_here(main, from, to, expected))
 }
@@ -310,7 +310,7 @@ fn replace_from_main_here(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8]
             }
             at += n as u64;
         }
-        lend(main, || fs.commit())
+        Ok(())
     })();
     if let Err(e) = copied {
         let _ = lend(main, || fs.rollback());
@@ -318,10 +318,9 @@ fn replace_from_main_here(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8]
     }
     let promoted = lend(main, || fs.rename_if_sha256(&stage, inner, expected).and_then(|_| fs.commit()));
     if let Err(e) = promoted {
-        // A mismatch leaves the destination intact. The internal stage has
-        // already been committed, so clean it up in its own transaction.
+        // The stage and destination change are one transaction. On mismatch
+        // neither was committed; rollback also drops the stage's name.
         let _ = lend(main, || fs.rollback());
-        let _ = lend(main, || fs.remove_path(&stage).and_then(|_| fs.commit()));
         return Err(crate::fs_service::status(e));
     }
     Ok(0)

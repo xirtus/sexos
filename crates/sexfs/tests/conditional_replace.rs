@@ -58,3 +58,65 @@ fn same_size_writer_cannot_be_clobbered_by_conditional_replace() {
     assert_eq!(reopened.open(b"/source.pdf").unwrap().id, staged);
     assert_eq!(reopened.open(b"/staged.pdf"), Err(Error::NotFound));
 }
+
+#[test]
+fn power_cut_before_home_style_promotion_commit_leaves_no_stage() {
+    let disk = Disk(Rc::new(RefCell::new(vec![[0; BLOCK]; 1024])));
+    let mut cache = [[0; BLOCK]; 16];
+    let mut slots = [Slot::EMPTY; 16];
+    let mut used = [0; 16];
+    let mut pending = [0; 16];
+    let mut scratch = [0; BLOCK];
+    let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+    let mut fs = Fs::format(disk.clone(), memory).unwrap();
+    let old = fs.create(b"/home.pdf", 0).unwrap();
+    fs.write(old, 0, b"opened PDF", 0).unwrap();
+    fs.commit().unwrap();
+
+    // Files copies into home and checks the destination within one request.
+    // A power cut before its only commit must leave neither a hidden stage nor
+    // a partial replacement in the mounted namespace.
+    let staged = fs.create(b"/.vellum-conditional-stage.tmp", 0).unwrap();
+    fs.write(staged, 0, b"signed PDF", 0).unwrap();
+    let expected: [u8; 32] = Sha256::digest(b"opened PDF").into();
+    fs.rename_if_sha256(b"/.vellum-conditional-stage.tmp", b"/home.pdf", &expected).unwrap();
+    drop(fs);
+
+    let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+    let mut reopened = Fs::mount(disk, memory).unwrap();
+    let current = reopened.open(b"/home.pdf").unwrap();
+    let mut actual = [0u8; 10];
+    reopened.read(current.id, 0, &mut actual).unwrap();
+    assert_eq!(&actual, b"opened PDF");
+    assert_eq!(reopened.open(b"/.vellum-conditional-stage.tmp"), Err(Error::NotFound));
+}
+
+#[test]
+fn stale_home_style_request_rolls_back_internal_stage() {
+    let disk = Disk(Rc::new(RefCell::new(vec![[0; BLOCK]; 1024])));
+    let mut cache = [[0; BLOCK]; 16];
+    let mut slots = [Slot::EMPTY; 16];
+    let mut used = [0; 16];
+    let mut pending = [0; 16];
+    let mut scratch = [0; BLOCK];
+    let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+    let mut fs = Fs::format(disk.clone(), memory).unwrap();
+    let old = fs.create(b"/home.pdf", 0).unwrap();
+    fs.write(old, 0, b"newer  PDF", 0).unwrap();
+    fs.commit().unwrap();
+
+    let staged = fs.create(b"/.vellum-conditional-stage.tmp", 0).unwrap();
+    fs.write(staged, 0, b"signed PDF", 0).unwrap();
+    let expected: [u8; 32] = Sha256::digest(b"opened PDF").into();
+    assert_eq!(fs.rename_if_sha256(b"/.vellum-conditional-stage.tmp", b"/home.pdf", &expected), Err(Error::Stale));
+    fs.rollback().unwrap();
+    drop(fs);
+
+    let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+    let mut reopened = Fs::mount(disk, memory).unwrap();
+    let current = reopened.open(b"/home.pdf").unwrap();
+    let mut actual = [0u8; 10];
+    reopened.read(current.id, 0, &mut actual).unwrap();
+    assert_eq!(&actual, b"newer  PDF");
+    assert_eq!(reopened.open(b"/.vellum-conditional-stage.tmp"), Err(Error::NotFound));
+}
