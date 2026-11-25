@@ -66,8 +66,6 @@ fn dispatch(msg: pdx::ReplayMsg) {
         return;
     }
     let caller = msg.caller_pd;
-    // The trampoline's idle reply_recv shortcut never applies under a pending recording turn.
-    macro_rules! reply_fast_queued { ($caller:expr, $word:expr) => { crate::fs_service::reply_later($caller, $word) }; }
     include!(env!("RECORDING_ORDINARY_DISPATCH_SOURCE"));
 }
 fn bind() -> w::BindRequest {

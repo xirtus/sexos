@@ -18,17 +18,17 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 
 ## Microkernel servers
 - Files: 4 MiB CLOCK page cache and 8-stream read-ahead (`page_cache.rs`), IPC v2
-  endpoint serving (`ipc_v2.rs`), reply-and-receive (syscall 103) on its reply paths.
+  endpoint serving (`ipc_v2.rs`).
   Host gate: `scripts/sexfiles_page_cache_host_gate.sh`.
 - Fault recovery: every exit, fault, retirement and restart path purges per-core
   handoff slots naming the dead task (`scheduler::purge_handoff_for_task/_pd`) and
   tears down its IPC v2 state (`ipc_v2::syscall::teardown_task/_pd`), waking blocked
   clients with `E_RESTARTED` or `E_CLOSED`. Clients retry idempotent calls across a
   restart (`sex_pdx::ipc_recv::retry_on_peer_restart_with`, used by `sex-app`).
-- One-hop window open: `OP_WINDOW_OPEN_COMBINED` replaces the separate create, clear and
-  present calls of `Window::open`.
-- Drive, Bell and Files reply with syscall 103 where they already blocked in
-  listen; Display, Input and USB declare deadline classes with syscall 104.
+- One-hop window open: Shell and Display serve `OP_WINDOW_OPEN_COMBINED` (create, clear
+  and present in one request). `Window::open` does not use it yet (see review changes).
+- Bell replies with syscall 103 where it already blocked in listen; Display, Input and
+  USB declare deadline classes with syscall 104.
 
 ## Review changes (Claude)
 - `take_handoff` no longer drops a live task of a service being restarted (that lost its
@@ -49,8 +49,17 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 - Gemini's program-store directory cache (`DIRECTORY_SECTORS`) was dropped: it kept
   serving a directory after it was deleted or found corrupt, which the recording image
   loader test catches. Files reads the directory from disk on each load, as before.
-- The recording runtime host doubles gained `ipc_recv::pdx_call_recv` and the
-  trampoline's `reply_fast_queued!` for the new block call and reply paths.
+- Drive's reply-and-receive loop, Files' block calls through syscall 102 and the wider
+  reply-and-receive use in Files' trampoline were taken back out. With them in, Drive
+  restarted during boot (a second `[sexdrive.init.start]` in the app-resource proof) and
+  a Polyamour save never finished, on Gemini's run and on the re-land. Files keeps
+  master's reply-and-receive for `fs::OP` and serves the IPC v2 bind request.
+- `Window::open` is back to its separate calls. With the combined open, Display never
+  admitted the program as its surface's owner (no `[display.app.admitted]`), its first
+  text was never committed (the Jot gate timed out), and a program replaced by a new
+  run of itself kept running, so five Qupid runs used up program memory (the Kodi gate
+  failed with `no_memory`). Both failed on Gemini's run too. The combined open needs the
+  app's own admission to Display before it can replace the calls.
 
 ## ABI
 - New: `sex_pdx::endpoint::E_RESTARTED = 0xFFFF_FFFF_FFFF_FFF7`, `OP_BIND_ENDPOINT =
