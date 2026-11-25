@@ -1700,11 +1700,16 @@ mod tests {
                 assert!(book.set_section_running_text(bad).is_err(), "accepted {bad:?}");
             }
             book.set_section_running_text("header First heading").unwrap();
+            assert!(book.editing_header_footer());
+            book.close_header_footer().unwrap();
             book.set_section_running_text("footer First footer").unwrap();
+            book.close_header_footer().unwrap();
             book.run("layout.break", json!({ "kind": "nextPage" })).unwrap();
             book.type_text("Second section").unwrap();
             book.set_section_running_text("header Second heading").unwrap();
+            book.close_header_footer().unwrap();
             book.set_section_running_text("footer Second footer").unwrap();
+            book.close_header_footer().unwrap();
             assert!(book.set_section_running_text("header Overwrite").is_err(), "rich existing story must be edited, not replaced");
             let running = |b: &Book| b.session.doc.sections().into_iter().map(|(_, sec)| {
                 [sec.headers.default, sec.footers.default].map(|id| {

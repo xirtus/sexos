@@ -316,6 +316,8 @@ def main():
   time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-section-running-header.ppm')})
   running_header=(a.out/'assuit-section-running-header.ppm').read_bytes()
   assert running_header.startswith(b'P6\n') and running_header!=running_prompt
+  s=len(t());q.key('esc')  # Return from the header story to the body before the next edit.
+  g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   s=len(t());press('ctrl','alt','n')
