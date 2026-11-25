@@ -664,6 +664,21 @@ unsafe fn render_scrollback(fb: &mut WindowBuffer, sb: &Scrollback) {
 
 // ── Command tokenizer ──────────────────────────────────────────────────────
 
+/// Only fixed command words may appear in a receipt. An unknown token can be
+/// a pasted address or other private text.
+fn command_receipt_name(word: &[u8]) -> &'static str {
+    match word {
+        b"echo" => "echo", b"run" => "run", b"kaleidoscope" => "kaleidoscope",
+        b"web" => "web", b"browser" => "browser", b"filldocx" => "filldocx",
+        b"net-probe" => "net-probe", b"ls" => "ls", b"status" => "status",
+        b"help" => "help", b"history" => "history", b"fetch" => "fetch",
+        b"save" => "save", b"load" => "load", b"files" => "files",
+        b"daily" => "daily", b"calc" => "calc", b"pkg" => "pkg",
+        b"wifi" => "wifi", b"spindle" => "spindle", b"clear" => "clear",
+        _ => "other",
+    }
+}
+
 /// Split a command line into (command_name, args_rest).
 /// Command name is the first whitespace-delimited token.
 /// Args is the remainder after the space (trimmed of leading spaces).
@@ -2990,8 +3005,8 @@ pub extern "C" fn _start() -> ! {
             }
         }
         if msg.type_id == 0x202 {
-            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
-            sex_pdx::serial_record!("[spindle.probe.input] target={} pending={} key={} down={}",instance_pd(),unsafe{STORAGE_PROBE.busy()}as u8,msg.arg0,msg.arg1);
+            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} payload=redacted",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8);
+            sex_pdx::serial_record!("[spindle.probe.input] target={} pending={} payload=redacted",instance_pd(),unsafe{STORAGE_PROBE.busy()}as u8);
             let scancode = msg.arg0 as u8;
             let shift = (msg.arg0 >> 8) & 1 == 1;
             let value = msg.arg1;
@@ -2999,7 +3014,7 @@ pub extern "C" fn _start() -> ! {
                 static mut SPINDLE_KEY_RECV_BUDGET: u32 = 64;
                 if SPINDLE_KEY_RECV_BUDGET > 0 {
                     SPINDLE_KEY_RECV_BUDGET -= 1;
-                    serial_println!("[spindle.key.recv] code={} down={} mod=0", scancode, value);
+                    serial_println!("[spindle.key.recv] payload=redacted");
                 }
             }
             if value != 1 { continue; }
@@ -3017,25 +3032,26 @@ pub extern "C" fn _start() -> ! {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
                 let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"|b"probe-status"|b"probe-cancel"|b"probe-retry");
-                if !control{let idx=hist.push(wifi_command::without_passphrase(line.as_bytes()));serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
+                let private_launch = sex_pdx::private_launch::is_private_browser_launch(line.as_bytes());
+                if !control && !private_launch{let idx=hist.push(wifi_command::without_passphrase(line.as_bytes()));serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
-                if !control{unsafe{HISTORY_IO.mark_dirty();}}
+                if !control && !private_launch{unsafe{HISTORY_IO.mark_dirty();}}
                 let lines_after = sb.total_lines;
                 let output_lines = lines_after.saturating_sub(lines_before);
                 // Approximate output bytes: each line up to 80 bytes + overhead
                 let output_bytes = (output_lines as u32).saturating_mul(84);
                 serial_println!("[spindle.stargate.segment] kind=status ok={}", recognized as u8);
-                sex_pdx::serial_record!("[spindle.instance.command] target={} task={} name={} ok={}",instance_pd(),catalog.task_id,core::str::from_utf8(cmd_name).unwrap_or("?"),recognized as u8);
+                sex_pdx::serial_record!("[spindle.instance.command] target={} task={} name={} ok={}",instance_pd(),catalog.task_id,command_receipt_name(cmd_name),recognized as u8);
                 serial_println!(
                     "[spindle.cmd.exec] name={} ok={} reason={}",
-                    core::str::from_utf8(cmd_name).unwrap_or("?"),
+                    command_receipt_name(cmd_name),
                     recognized as u8,
                     if recognized { "ok" } else { "unknown_command" }
                 );
                 serial_println!(
                     "[spindle.cmd.output] name={} bytes={}",
-                    core::str::from_utf8(cmd_name).unwrap_or("?"),
+                    command_receipt_name(cmd_name),
                     output_bytes
                 );
                 if recognized {
@@ -3049,7 +3065,7 @@ pub extern "C" fn _start() -> ! {
                 static mut SPINDLE_ECHO_BUDGET: u32 = 16;
                 if SPINDLE_ECHO_BUDGET > 0 {
                     SPINDLE_ECHO_BUDGET -= 1;
-                    serial_println!("[spindle.input.echo.ok] key={}", scancode);
+                    serial_println!("[spindle.input.echo.ok] payload=redacted");
                 }
                 content_render(&line, sb);
             }
@@ -3074,8 +3090,7 @@ fn handle_key(scancode: u8, shift: bool, line: &mut CmdLine, hist: &History) {
 fn handle_key_insert(scancode: u8, shift: bool, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — caller handles dispatch; just clear
-            serial_println!("[spindle.line.enter] len={} mode=insert text={:?}",
-                line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.line.enter] len={} mode=insert payload=redacted", line.len);
             serial_println!("[spindle.key.enter]");
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();
@@ -3115,11 +3130,11 @@ fn handle_key_insert(scancode: u8, shift: bool, line: &mut CmdLine, hist: &Histo
             if let Some(ch) = scancode_to_ascii(scancode).map(|c| if shift { shifted(c) } else { c }) {
                 line.insert_at(line.cur, ch);
                 line.hist_nav = None;
-                serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
-                serial_println!("[spindle.text.append] ch={}", ch);
-                serial_println!("[spindle.input.recv] key=printable ch={} len={}", ch as char, line.len);
+                serial_println!("[spindle.line.append] payload=redacted len={}", line.len);
+                serial_println!("[spindle.text.append] payload=redacted");
+                serial_println!("[spindle.input.recv] key=printable payload=redacted len={}", line.len);
                 serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
-                serial_println!("[spindle.line.edit.ok] op=insert ch={}", ch as char);
+                serial_println!("[spindle.line.edit.ok] op=insert payload=redacted");
             }
         }
     }
@@ -3140,8 +3155,7 @@ fn scrollback_page(up: bool) {
 fn handle_key_normal(scancode: u8, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — clear (dispatch handled by caller)
-            serial_println!("[spindle.line.enter] len={} mode=normal text={:?}",
-                line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.line.enter] len={} mode=normal payload=redacted", line.len);
             serial_println!("[spindle.key.enter]");
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();

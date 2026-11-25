@@ -323,6 +323,7 @@ impl Client {
         let mut path = [0u8; w::PATH_BYTES];
         let mut named = [0u8; 64];
         let target = renamed(target);
+        let private_launch = sex_pdx::private_launch::is_private_browser_target(target, args);
         self.bare_len = 0;
         if !target.contains(&b'/') && target.len() <= self.bare.len() { self.bare[..target.len()].copy_from_slice(target); self.bare_len = target.len(); }
         let target = if target.contains(&b'/') { target } else {
@@ -359,7 +360,7 @@ impl Client {
         region[..n].copy_from_slice(&path[..n]);
         region[w::PATH_BYTES..w::PATH_BYTES + m].copy_from_slice(&given[..m]);
         // The session keeps this run's line, to open it again after a restart.
-        if count == 0 { unsafe { crate::session_command::SESSION.submitted(&path[..n], &given[..m], flags); } }
+        if count == 0 && !private_launch { unsafe { crate::session_command::SESSION.submitted(&path[..n], &given[..m], flags); } }
         self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, m as u64);
     }
     /// `silk layout WS plugin:WHAT` (slice S4 follow-up): Files prepares a run of
