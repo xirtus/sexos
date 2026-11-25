@@ -2209,6 +2209,7 @@ pub extern "C" fn _start() -> ! {
     // `--private` makes the window's first tab private (a private window).
     if given.split_ascii_whitespace().any(|a| a == "--private") { b.jarbox = profile::Jarbox::Private; }
     (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());
+    if b.jarbox != profile::Jarbox::Private { b.load_downloads(); }
     b.shields = shields::Shields::load(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);

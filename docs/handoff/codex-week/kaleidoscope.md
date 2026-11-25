@@ -6,8 +6,10 @@ and Shields. The remaining gaps are:
 
 - The Ctrl+J downloads panel now shows failed transfers with an exact URL retry
   link. A failed stream clears the progress bar and removes its hidden partial
-  file, so retry can take the original name. Pause/resume, cancellation while a
-  synchronous transfer is active, and lasting source history remain open.
+  file, so retry can take the original name. Completed public downloads now have
+  a bounded, staged history with source URL and size that survives restart;
+  private-tab addresses stay out of the stored history. Pause/resume and
+  cancellation while a synchronous transfer is active remain open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an
