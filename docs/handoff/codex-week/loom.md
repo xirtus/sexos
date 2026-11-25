@@ -6,6 +6,9 @@ rename, trash and undo, and network places. The current quick-look gap is
 reading a text file in place without launching an editor. F3 now opens a
 read-only, bounded UTF-8 preview with line scrolling; the QEMU gate captures
 the actual preview.
+F3 now also shows a selected PNG, JPEG, GIF or WebP at window size inside Loom,
+using the bounded native image decoder. Escape returns to the folder without
+starting another app. Picture inputs over 16 MiB are refused.
 
 Remaining gaps: multiple folder tabs, richer document previews, archive
 creation beyond zip, drag selection and multi-item operations, and a full

@@ -82,6 +82,7 @@ enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: V
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
 enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
+struct PicturePreview { path: Vec<u8>, width: usize, height: usize, pixels: Vec<u32> }
 /// Something that can't be undone, waiting for the same key a second time.
 #[derive(PartialEq, Eq)]
 enum Confirm { DeleteForever(Vec<u8>), EmptyTrash(Vec<u8>) }
@@ -130,6 +131,7 @@ struct App {
     /// A file Enter opened, until its program has started (or couldn't).
     opening: Option<(u32, Vec<u8>)>,
     preview: Option<(Vec<u8>, loom_core::preview::TextPreview)>,
+    picture_preview: Option<PicturePreview>,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -238,16 +240,18 @@ impl App {
 
     fn preview_open(&mut self, window: &mut Window) {
         let Some(e) = self.entries.get(self.cursor) else { return };
-        if e.dir { self.status = "Select a text file for F3 preview.".into(); return; }
-        let path = join(&self.cwd, &e.name);
+        if e.dir { self.status = "Select a file for F3 preview.".into(); return; }
+        let (name, size) = (e.name.clone(), e.size);
+        let path = join(&self.cwd, &name);
+        if thumbs::kind(&name, false).is_none() { self.picture_preview_open(window, path, size); return; }
         let max = loom_core::preview::MAX_BYTES;
-        let mut bytes = vec![0; (e.size as usize).min(max)];
+        let mut bytes = vec![0; (size as usize).min(max)];
         let n = match files::read(window, &at(&path), &mut bytes) {
             Ok(n) => n,
-            Err(err) => { self.status = format!("Couldn't preview {}: {}.", shown(&e.name), shown(files::message(err))); return; }
+            Err(err) => { self.status = format!("Couldn't preview {}: {}.", shown(&name), shown(files::message(err))); return; }
         };
         bytes.truncate(n);
-        match loom_core::preview::TextPreview::parse(&bytes, e.size > max as u64) {
+        match loom_core::preview::TextPreview::parse(&bytes, size > max as u64) {
             Some(preview) => {
                 sex_pdx::serial_record!("[files.app.preview.opened] path={} lines={} truncated={}", shown(&path), preview.len(), preview.truncated as u8);
                 self.preview = Some((path, preview));
@@ -255,8 +259,35 @@ impl App {
             None => self.status = "F3 preview opens UTF-8 text only; use Enter for this file.".into(),
         }
     }
+    fn picture_preview_open(&mut self, window: &mut Window, path: Vec<u8>, size: u64) {
+        const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+        if size == 0 || size > MAX_IMAGE_BYTES { self.status = "F3 previews pictures up to 16 MiB.".into(); return; }
+        let mut bytes = Vec::new();
+        if bytes.try_reserve_exact(size as usize).is_err() { self.status = "There isn't room to preview this picture.".into(); return; }
+        bytes.resize(size as usize, 0);
+        let n = match files::read(window, &at(&path), &mut bytes) {
+            Ok(n) => n,
+            Err(e) => { self.status = format!("Couldn't preview {}: {}.", shown(base(&path)), shown(files::message(e))); return; }
+        };
+        bytes.truncate(n);
+        let (width, height) = window.size();
+        let image = sex_image::decode(&bytes, &sex_image::Limits::PHOTO)
+            .and_then(|image| image.fit_within(width.saturating_sub(32).max(1), height.saturating_sub(80).max(1)));
+        match image {
+            Ok(image) => {
+                sex_pdx::serial_record!("[files.app.picture.preview.opened] path={} w={} h={}", shown(&path), image.width, image.height);
+                self.picture_preview = Some(PicturePreview { path, width: image.width, height: image.height, pixels: image.pixels });
+            }
+            Err(_) => self.status = "F3 couldn't decode this picture; use Enter to open it.".into(),
+        }
+    }
 
     fn render(&mut self, window: &mut Window) {
+        if let Some(p) = &self.picture_preview {
+            self.thumbs.preview(window, &p.path, p.width, p.height, &p.pixels);
+            self.showing_pixels = true;
+            return;
+        }
         if let Some((path, preview)) = &self.preview {
             if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; }
             let mut t = format!("Loom  Preview: {}\n\n", shown(path));
@@ -818,6 +849,13 @@ impl App {
         if before && !again && self.confirm.is_some() { self.confirm = None; self.status = "Kept.".into(); }
     }
     fn key_inner(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
+        if self.picture_preview.is_some() {
+            if matches!(key.code, ESC | F3) {
+                self.picture_preview = None;
+                sex_pdx::serial_record!("[files.app.picture.preview.closed]");
+            }
+            return;
+        }
         if self.preview.is_some() {
             if matches!(key.code, ESC | F3) {
                 self.preview = None;
@@ -980,13 +1018,13 @@ pub extern "C" fn _start() -> ! {
     let given = files::args(&mut window, &mut args);
     let root = given.split(|b| *b == b' ').find_map(|t| t.strip_prefix(b"@")).filter(|p| p.first() == Some(&b'/')).map(|p| p.to_vec());
     let Some(root) = root else {
-        window.show(b"Files needs a folder to look after. Start it from Spindle with:  files  (everything)  or  files DIR\n\nF11 closes.");
+        window.show(b"Loom needs a folder to look after. Start it from Spindle with:  loom  (everything)  or  loom DIR\n\nF11 closes.");
         sex_pdx::serial_record!("[files.app.ready] root=none");
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, preview: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, preview: None, picture_preview: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
@@ -1031,7 +1069,7 @@ pub extern "C" fn _start() -> ! {
                 let _ = files::sync(&mut window); sex_pdx::serial_record!("[files.app.closed]"); window.close()
             }
             Some(Event::Key(key)) => { app.key(&mut window, key); app.render(&mut window); }
-            Some(Event::Resize { .. }) if app.thumbs.on => app.render(&mut window),
+            Some(Event::Resize { .. }) if app.thumbs.on || app.picture_preview.is_some() => app.render(&mut window),
             // Dragging out of the window carries the selected item to another program.
             Some(Event::Pointer(p)) => {
                 use sex_pdx::app_pointer::Kind as K;
