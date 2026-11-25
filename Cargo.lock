@@ -5942,6 +5942,7 @@ dependencies = [
  "sex-std",
  "sex-theme",
  "sha2 0.10.9",
+ "unicode-segmentation",
  "vellum-edit",
 ]
 

@@ -32,6 +32,8 @@ Vellum's light, dark, and high-contrast colors.
 
 In Find, a single space can match words separated by a line break in the PDF.
 The bar shows whether Match Case is on. Toggling it reruns the current query.
+Find accepts the active keyboard layout and committed input-method text;
+Backspace removes the previous displayed character, including its accents.
 
 Editable combo boxes retain their existing Ctrl+A clear command. For a focused
 combo or list field, click its value in the form bar to open

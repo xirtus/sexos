@@ -22,7 +22,7 @@ def esc(text):
 def content(n):
     lines = [f'Page {n} of {PAGES}', '', 'The quick brown fox jumps over the lazy dog.', f'This is filler text for page number {n}.']
     if n == UNIQUE_PAGE:
-        lines += ['', f'The hidden word is {UNIQUE} and nowhere else.']
+        lines += ['', f'The hidden word is {UNIQUE} and nowhere else.', 'A café appears only on this page.']
     lines += ['', 'Every page repeats the word lantern so search can step through hits.']
     body = ' T*\n'.join(f'({esc(line)}) Tj' for line in lines)
     return f'BT /F1 14 Tf 72 720 Td 20 TL\n{body} ET\n0.2 0.4 0.8 rg 72 100 {40 * n} 20 re f\n'
@@ -37,7 +37,7 @@ def document():
     objects = {
         1: '<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R /PageMode /UseOutlines >>',
         2: f'<< /Type /Pages /Kids [{" ".join(f"{p} 0 R" for p in page_ids)}] /Count {PAGES} >>',
-        3: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        3: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
         4: f'<< /Type /Outlines /First {item_ids[0]} 0 R /Last {item_ids[-1]} 0 R /Count {len(OUTLINE)} >>',
     }
     for i, pid in enumerate(page_ids):

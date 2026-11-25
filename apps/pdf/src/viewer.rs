@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 use sex_theme::Tokens;
 use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, ContentIntegrity, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::marks;
 use crate::history::{EditHistory, EditStep};
@@ -271,6 +272,21 @@ fn mix(under: u32, over: u32, a: u32) -> u32 {
 fn find_bar_edges(width: usize, status_chars: usize) -> (usize, usize) {
     let status_x = width.saturating_sub(8 + status_chars.saturating_mul(CW));
     (status_x.saturating_sub(CW), status_x)
+}
+
+/// Apply one Shell text event to Find. The bound counts characters, not UTF-8 bytes.
+/// Backspace removes the displayed grapheme, including any combining marks.
+fn find_text_key(term: &mut String, key: sex_std::sex_pdx::app_key::Key) -> bool {
+    if key.code == BACKSPACE {
+        let Some((start, _)) = term.grapheme_indices(true).next_back() else { return false };
+        term.truncate(start);
+        return true;
+    }
+    if sex_app::nav(key).is_some() || key.control { return false; }
+    let Some(c) = sex_app::text(key).filter(|c| !c.is_control()) else { return false };
+    if term.chars().count() >= 64 { return false; }
+    term.push(c);
+    true
 }
 
 /// `p` seen through a coloured filter: white becomes the filter's colour, black stays.
@@ -845,10 +861,7 @@ impl Viewer {
             self.hit = None;
         } else if self.finding && key.code == ENTER {
             self.find(key.shift);
-        } else if self.finding && key.code == BACKSPACE {
-            self.term.pop();
-        } else if let (true, Some(c), None) = (self.finding, sex_app::typed(key), sex_app::nav(key)) {
-            if self.term.len() < 64 { self.term.push(c as char); }
+        } else if self.finding && find_text_key(&mut self.term, key) {
         } else if self.panel == Panel::Outline && matches!(sex_app::nav(key), Some(Nav::Up | Nav::Down)) || self.panel == Panel::Outline && key.code == ENTER {
             let n = self.outline.as_ref().map_or(0, |o| o.len());
             match sex_app::nav(key) {
@@ -2045,6 +2058,23 @@ fn open(name: &str) -> Result<(Vec<u8>, Pdf), String> {
 #[cfg(test)]
 mod render_cache_tests {
     use super::*;
+
+    #[test]
+    fn find_accepts_layout_and_ime_text_and_erases_one_grapheme() {
+        use sex_std::sex_pdx::app_key::{Key, Text, KEY_TEXT};
+        let mut term = String::new();
+        let german_dead_key = Key::new(0x12, false, false).typing(Some('é'));
+        assert!(find_text_key(&mut term, german_dead_key));
+        assert!(find_text_key(&mut term, Key { code: KEY_TEXT, shift: false, control: false, alt: false, keypad: false, text: Text::Char('好') }));
+        assert_eq!(term, "é好");
+        assert!(find_text_key(&mut term, Key::new(BACKSPACE, false, false)));
+        assert_eq!(term, "é");
+        assert!(find_text_key(&mut term, Key { code: KEY_TEXT, shift: false, control: false, alt: false, keypad: false, text: Text::Char('\u{301}') }));
+        assert_eq!(term, "é\u{301}");
+        assert!(find_text_key(&mut term, Key::new(BACKSPACE, false, false)));
+        assert!(term.is_empty());
+        assert!(!find_text_key(&mut term, Key::new(0x12, false, true)));
+    }
 
     #[test]
     fn find_bar_keeps_a_long_query_visible_before_case_status() {
