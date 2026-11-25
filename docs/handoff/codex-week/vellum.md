@@ -49,3 +49,4 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 Each remaining feature needs a focused host test and CI guest evidence before being called complete.
 
 - **Signing request identity:** Files now certifies only an exact SHA-256 match to the Vellum ELF staged in the release build, and Shell binds that result to the live row and task before allowing `BEGIN`. A replaced binary at `/bin/vellum` or another program row cannot start a signing request. The signer still receives opaque CMS attributes; independently reviewing the exact PDF inside Shibari remains required before signing can claim document-bound consent.
+- **Document consent plumbing:** the native Files picker now offers a nonblocking begin/poll path so Shibari can ask for a document grant while continuing to answer the signing broker. Shibari does not use that path yet; exact-document review and consent remain open.
