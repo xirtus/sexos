@@ -11,7 +11,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::PdxMessage;
 
-const SLOTS: usize = 32;
+const SLOTS: usize = 128;
 static LOCK: AtomicBool = AtomicBool::new(false);
 static mut BOX: [Option<(u64, PdxMessage)>; SLOTS] = [None; SLOTS];
 static mut NEXT: u64 = 0;

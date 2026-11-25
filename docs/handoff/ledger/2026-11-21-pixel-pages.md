@@ -36,3 +36,11 @@
 - Qupid's Kodi add-on path is marked for later review, not part of this change. This
   change only made the Kodi gate fit in 512 MB again (half pages); the add-on itself
   (sources, playback through Kodi plug-ins) gets its own review later.
+
+## Keys lost while waiting for Display (2026-11-25)
+
+- `pages::settle` moved everything in the inbox into the program mailbox while it
+  waited for Display's answer. The mailbox held 32 messages and drops its oldest, and
+  Chastity handles one key per frame, so a typed master password lost keys on CI
+  (Chastity autofill gate). A wait now moves at most 8 messages and then paints; the
+  rest stay in the inbox, in order. The mailbox holds 128.

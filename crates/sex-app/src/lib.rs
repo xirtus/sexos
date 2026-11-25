@@ -104,6 +104,9 @@ mod pages {
     /// something else may have taken the first answer and dropped it.
     const ASK_AFTER_MS: u64 = 4;
     static LATE: AtomicUsize = AtomicUsize::new(0);
+    /// How many other messages one wait may move from the inbox to the mailbox. A burst
+    /// of keys stays in the inbox (which keeps them all, in order) instead.
+    const KEEP_AT_MOST: usize = 8;
     /// The page Display is not reading. When it reads the whole region (which starts
     /// with page 0), that is page 1.
     pub fn back() -> u64 { if FRONT.load(Relaxed) == 1 { 0 } else { 1 } }
@@ -143,9 +146,11 @@ mod pages {
     pub fn ready() -> bool {
         while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
         if !OWED.load(Relaxed) { return true; }
+        let mut kept = 0;
         while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
             if told(&m) { continue; }
-            if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); }
+            if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); kept += 1; }
+            if kept >= KEEP_AT_MOST { break; }
         }
         if !OWED.load(Relaxed) { return true; }
         let now = sex_pdx::get_ticks();
@@ -161,16 +166,20 @@ mod pages {
         let began = sex_pdx::get_ticks();
         let mut ask = began.saturating_add(ASK_AFTER_MS);
         let mut asked = 0u32;
+        let mut kept = 0;
         while OWED.load(Relaxed) {
             while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
                 if told(&m) { continue; }
                 // Keys, closes and answers wait in the mailbox; the rest the window
                 // would drop too.
-                if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); }
+                if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); kept += 1; }
+                if kept >= KEEP_AT_MOST { break; }
             }
             while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
             let now = sex_pdx::get_ticks();
-            if !OWED.load(Relaxed) || now >= began.saturating_add(PATIENCE_MS) { break; }
+            // Typing faster than the program paints: stop moving the inbox into the
+            // small mailbox (which drops its oldest when full) and paint now.
+            if !OWED.load(Relaxed) || now >= began.saturating_add(PATIENCE_MS) || kept >= KEEP_AT_MOST { break; }
             if now >= ask {
                 // Display answers which page it shows; it changes nothing.
                 let _ = sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::pixel_region::OP, SURFACE.load(Relaxed), sex_pdx::pixel_region::ASK, 0);
