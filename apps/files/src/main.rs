@@ -153,6 +153,8 @@ struct App {
     loom: loom::Loom,
     /// A file Enter opened, until its program has started (or couldn't).
     opening: Option<(u32, Vec<u8>)>,
+    /// Startup loads saved tabs before folder navigation starts persisting paths.
+    session_ready: bool,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -272,6 +274,9 @@ impl App {
         self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window);
         let root = disk_root(&self.cwd);
         self.watching = (root != b"/" && self.status.is_empty()).then_some(root);
+        if self.session_ready && files::stat(window, &at(&self.cwd)).is_ok_and(|st| st.dir) {
+            self.session_save(window);
+        }
     }
     fn open_quick_places(&mut self, window: &mut Window) {
         if !self.tab_ready() { self.status = "Finish the current view before opening Places.".into(); return; }
@@ -1401,12 +1406,13 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, selection_marks: Vec::new(), top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, session_ready: false };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
     app.go(&mut window, start);
     app.session_load(&mut window);
+    app.session_ready = true;
     // A locked home asks for its password first: Files opened at login unlocks it.
     if portal && files::home_state(&mut window) == Ok(sex_pdx::home_lock::STATE_LOCKED) {
         sex_pdx::serial_record!("[files.app.home] state=locked");
