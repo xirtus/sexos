@@ -39,7 +39,7 @@ use draw::Face;
 use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
-use sex_calendar::history::{EventEdit, EventHistory, ReplyDraftHistory, ZoneHistory, ZoneState};
+use sex_calendar::history::{ClockEditKind, ClockHistory, ClockState, EventEdit, EventHistory, ReplyDraftHistory};
 use sex_calendar::conflicts;
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
@@ -67,7 +67,7 @@ pub struct App {
     pub cal: Calendar,
     event_history: EventHistory,
     pub reply_history: ReplyDraftHistory,
-    zone_history: ZoneHistory,
+    clock_history: ClockHistory,
     pub clock: Clock,
     pub today: Date,
     pub selected: Date,
@@ -437,7 +437,9 @@ impl App {
                 let (time, label) = text.split_once(' ').unwrap_or((&text, ""));
                 match clock::parse_time(time) {
                     Some(minute) => {
+                        let before = ClockState::from_clock(&self.clock);
                         self.clock.alarms.push(Alarm { minute, days: 0, enabled: true, label: label.trim().into() });
+                        self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Alarm);
                         sex_pdx::serial_record!("[date.alarm.added] time={:02}:{:02} label={}", minute / 60, minute % 60, label.trim());
                         self.status = format!("Alarm at {:02}:{:02}.", minute / 60, minute % 60);
                         self.save_clock(window);
@@ -460,12 +462,12 @@ impl App {
             }
             Ask::Zone | Ask::Home => match tz::find(&text) {
                 Some(z) => {
-                    let before = ZoneState::from_clock(&self.clock);
+                    let before = ClockState::from_clock(&self.clock);
                     if ask == Ask::Home { self.clock.home = z.name.into(); } else if !self.clock.zones.iter().any(|n| n == z.name) {
                         if self.clock.zones.is_empty() { self.clock.zones = self.clock.world().iter().map(|z| String::from(z.name)).collect(); }
                         self.clock.zones.push(z.name.into());
                     }
-                    self.zone_history.push(before, ZoneState::from_clock(&self.clock));
+                    self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Zone);
                     sex_pdx::serial_record!("[date.zone] zone={} home={}", z.name, (ask == Ask::Home) as u8);
                     self.status = format!("{} ({})", z.city, z.name);
                     self.save_clock(window);
@@ -542,13 +544,16 @@ impl App {
         if key.control && (key.code == 0x2C || key.code == 0x15) {
             let redo = key.code == 0x15 || key.shift;
             if self.view == View::Clock {
-                let changed = if redo { self.zone_history.redo(&mut self.clock) }
-                    else { self.zone_history.undo(&mut self.clock) };
-                if changed {
+                let changed = if redo { self.clock_history.redo(&mut self.clock) }
+                    else { self.clock_history.undo(&mut self.clock) };
+                if let Some(kind) = changed {
                     self.picked = self.picked.min(self.clock_rows().saturating_sub(1));
-                    self.status = String::from(if redo { "Redid zone change." } else { "Undid zone change." });
+                    self.status = format!("{} {} change.", if redo { "Redid" } else { "Undid" }, if kind == ClockEditKind::Zone { "zone" } else { "alarm" });
                     self.save_clock(window);
-                    sex_pdx::serial_record!("[date.zone.{}] home={} zones={}", if redo { "redo" } else { "undo" }, self.clock.home, self.clock.zones.len());
+                    match kind {
+                        ClockEditKind::Zone => sex_pdx::serial_record!("[date.zone.{}] home={} zones={}", if redo { "redo" } else { "undo" }, self.clock.home, self.clock.zones.len()),
+                        ClockEditKind::Alarm => sex_pdx::serial_record!("[date.alarm.{}] alarms={}", if redo { "redo" } else { "undo" }, self.clock.alarms.len()),
+                    }
                 } else { self.status = String::from(if redo { "Nothing to redo in Clock." } else { "Nothing to undo in Clock." }); }
                 return;
             }
@@ -638,19 +643,25 @@ impl App {
                     (_, Some(b'z')) => { self.ask = Some(Ask::Zone); self.input.clear(); }
                     (_, Some(b'h')) => { self.ask = Some(Ask::Home); self.input.clear(); }
                     (_, Some(b' ')) if self.picked < na => {
+                        let before = ClockState::from_clock(&self.clock);
                         let a = &mut self.clock.alarms[self.picked];
                         a.enabled = !a.enabled;
+                        self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Alarm);
                         self.save_clock(window);
                     }
                     (Some(Nav::Delete), _) => {
                         let p = self.picked;
-                        if p < na { self.clock.alarms.remove(p); }
+                        if p < na {
+                            let before = ClockState::from_clock(&self.clock);
+                            self.clock.alarms.remove(p);
+                            self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Alarm);
+                        }
                         else if p < na + nt { self.clock.timers.remove(p - na); }
                         else {
-                            let before = ZoneState::from_clock(&self.clock);
+                            let before = ClockState::from_clock(&self.clock);
                             if self.clock.zones.is_empty() { self.clock.zones = self.clock.world().iter().map(|z| String::from(z.name)).collect(); }
                             if p - na - nt < self.clock.zones.len() { self.clock.zones.remove(p - na - nt); }
-                            self.zone_history.push(before, ZoneState::from_clock(&self.clock));
+                            self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Zone);
                         }
                         self.picked = self.picked.min(self.clock_rows().saturating_sub(1));
                         self.save_clock(window);
@@ -734,7 +745,7 @@ pub extern "C" fn _start() -> ! {
     let palette = views::Palette::from_tokens(theme);
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
-    let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), zone_history: ZoneHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
+    let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];

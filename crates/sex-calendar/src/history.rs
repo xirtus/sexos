@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! In-session undo for Date's local event, reply-choice, and world-zone edits.
+//! In-session undo for Date's local event, reply-choice, and clock edits.
 //! Server sync changes the event list outside this history, so Date clears it then.
 use alloc::vec::Vec;
-use crate::{clock::Clock, Event, PartStat};
+use crate::{clock::{Alarm, Clock}, Event, PartStat};
 
 const LIMIT: usize = 32;
 
@@ -81,39 +81,47 @@ impl ReplyDraftHistory {
     pub fn clear(&mut self) { self.current = None; self.redo = None; }
 }
 
-/// Only the world-zone list and home zone participate. Alarms and timers can
-/// fire between keystrokes, so a whole-clock snapshot would resurrect them.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ZoneState { home: alloc::string::String, zones: Vec<alloc::string::String> }
+/// A clock edit changes zones or alarms. Timers remain live outside the history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockEditKind { Zone, Alarm }
 
-impl ZoneState {
-    pub fn from_clock(clock: &Clock) -> Self { Self { home: clock.home.clone(), zones: clock.zones.clone() } }
-    fn restore(&self, clock: &mut Clock) { clock.home = self.home.clone(); clock.zones = self.zones.clone(); }
+/// A fired one-time alarm changes the current alarm list and invalidates older
+/// history, so undo cannot re-enable it. Timers are never restored from history.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ClockState { home: alloc::string::String, zones: Vec<alloc::string::String>, alarms: Vec<Alarm> }
+
+impl ClockState {
+    pub fn from_clock(clock: &Clock) -> Self { Self { home: clock.home.clone(), zones: clock.zones.clone(), alarms: clock.alarms.clone() } }
+    fn restore(&self, clock: &mut Clock) {
+        clock.home = self.home.clone();
+        clock.zones = self.zones.clone();
+        clock.alarms = self.alarms.clone();
+    }
 }
 
 #[derive(Default)]
-pub struct ZoneHistory { undo: Vec<(ZoneState, ZoneState)>, redo: Vec<(ZoneState, ZoneState)> }
+pub struct ClockHistory { undo: Vec<(ClockState, ClockState, ClockEditKind)>, redo: Vec<(ClockState, ClockState, ClockEditKind)> }
 
-impl ZoneHistory {
-    pub fn push(&mut self, before: ZoneState, after: ZoneState) {
+impl ClockHistory {
+    pub fn push(&mut self, before: ClockState, after: ClockState, kind: ClockEditKind) {
         if before == after { return; }
         if self.undo.len() == LIMIT { self.undo.remove(0); }
-        self.undo.push((before, after));
+        self.undo.push((before, after, kind));
         self.redo.clear();
     }
-    pub fn undo(&mut self, clock: &mut Clock) -> bool { self.apply(clock, true) }
-    pub fn redo(&mut self, clock: &mut Clock) -> bool { self.apply(clock, false) }
-    fn apply(&mut self, clock: &mut Clock, backward: bool) -> bool {
+    pub fn undo(&mut self, clock: &mut Clock) -> Option<ClockEditKind> { self.apply(clock, true) }
+    pub fn redo(&mut self, clock: &mut Clock) -> Option<ClockEditKind> { self.apply(clock, false) }
+    fn apply(&mut self, clock: &mut Clock, backward: bool) -> Option<ClockEditKind> {
         let source = if backward { &mut self.undo } else { &mut self.redo };
-        let Some((before, after)) = source.pop() else { return false };
+        let (before, after, kind) = source.pop()?;
         let (current, wanted) = if backward { (&after, &before) } else { (&before, &after) };
-        if ZoneState::from_clock(clock) != *current {
+        if ClockState::from_clock(clock) != *current {
             self.undo.clear(); self.redo.clear();
-            return false;
+            return None;
         }
         wanted.restore(clock);
-        if backward { self.redo.push((before, after)); } else { self.undo.push((before, after)); }
-        true
+        if backward { self.redo.push((before, after, kind)); } else { self.undo.push((before, after, kind)); }
+        Some(kind)
     }
 }
 
@@ -191,21 +199,60 @@ mod tests {
     }
 
     #[test]
-    fn zone_history_keeps_live_timers_and_refuses_stale_zones() {
+    fn clock_history_orders_zone_and_alarm_edits_without_restoring_timers() {
         let mut clock = Clock::default();
-        let mut history = ZoneHistory::default();
-        let before = ZoneState::from_clock(&clock);
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
         clock.zones.push("America/Chicago".into());
-        history.push(before, ZoneState::from_clock(&clock));
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Zone);
+        let before = ClockState::from_clock(&clock);
+        clock.alarms.push(crate::clock::Alarm { minute: 450, days: 0, enabled: true, label: "wake".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Alarm);
         clock.timers.push(crate::clock::Timer { ends_ms: 1000, seconds: 1, label: "tea".into() });
-        assert!(history.undo(&mut clock));
+        assert_eq!(history.undo(&mut clock), Some(ClockEditKind::Alarm));
+        assert!(clock.alarms.is_empty());
+        assert_eq!(history.undo(&mut clock), Some(ClockEditKind::Zone));
         assert!(clock.zones.is_empty());
         assert_eq!(clock.timers.len(), 1);
-        assert!(history.redo(&mut clock));
+        assert_eq!(history.redo(&mut clock), Some(ClockEditKind::Zone));
         assert_eq!(clock.zones, vec!["America/Chicago"]);
+        assert_eq!(history.redo(&mut clock), Some(ClockEditKind::Alarm));
+        assert_eq!(clock.alarms.len(), 1);
         clock.home = "Europe/London".into();
-        assert!(!history.undo(&mut clock));
+        assert_eq!(history.undo(&mut clock), None);
         assert_eq!(clock.home, "Europe/London");
-        assert!(!history.redo(&mut clock));
+        assert_eq!(history.redo(&mut clock), None);
+    }
+
+    #[test]
+    fn fired_one_time_alarm_cannot_be_restored_by_undo() {
+        let mut clock = Clock::default();
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.alarms.push(crate::clock::Alarm { minute: 450, days: 0, enabled: true, label: "wake".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Alarm);
+        clock.alarms[0].enabled = false;
+        assert_eq!(history.undo(&mut clock), None);
+        assert!(!clock.alarms[0].enabled);
+    }
+
+    #[test]
+    fn alarm_toggle_and_deletion_are_reversible_in_order() {
+        let mut clock = Clock::default();
+        clock.alarms.push(crate::clock::Alarm { minute: 540, days: 0, enabled: true, label: "stand up".into() });
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.alarms[0].enabled = false;
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Alarm);
+        let before = ClockState::from_clock(&clock);
+        clock.alarms.remove(0);
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Alarm);
+        assert_eq!(history.undo(&mut clock), Some(ClockEditKind::Alarm));
+        assert!(!clock.alarms[0].enabled);
+        assert_eq!(history.undo(&mut clock), Some(ClockEditKind::Alarm));
+        assert!(clock.alarms[0].enabled);
+        assert_eq!(history.redo(&mut clock), Some(ClockEditKind::Alarm));
+        assert_eq!(history.redo(&mut clock), Some(ClockEditKind::Alarm));
+        assert!(clock.alarms.is_empty());
     }
 }
