@@ -111,6 +111,7 @@ impl Browser {
     /// Shows tab `i`.
     pub(super) fn show_tab(&mut self, i: usize) {
         if i >= self.tabs.len() || i == self.active || self.in_frame.is_some() { return; }
+        self.cancel_autofill();
         // Showing a tab of a folded group unfolds it, as in Chrome.
         if let Some(g) = self.tabs[i].group.filter(|g| self.groups.get(*g).is_some_and(|g| g.folded)) {
             self.groups[g].folded = false;
@@ -182,6 +183,7 @@ impl Browser {
     /// last tab closing closes the window.
     pub(super) fn close_tab(&mut self) {
         if self.in_frame.is_some() { return; }
+        self.cancel_autofill();
         // Ctrl+W in the side panel closes the panel.
         if self.panel_shown() { return self.close_panel(); }
         if self.strip_len() <= 1 { self.quit(); }
