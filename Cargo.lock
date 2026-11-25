@@ -6447,6 +6447,7 @@ dependencies = [
  "sex-app",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]

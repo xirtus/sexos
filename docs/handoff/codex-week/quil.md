@@ -12,4 +12,5 @@ Remaining gaps:
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the
   same volume. Cross-volume saves need an explicit safe copy strategy.
-- Draft recovery and light/dark theme controls need a complete app-level audit.
+- Draft recovery needs a complete app-level audit. Quil now follows the system's
+  light, dark and high-contrast colors, including accent changes while open.
