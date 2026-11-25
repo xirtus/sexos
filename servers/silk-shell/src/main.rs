@@ -14129,6 +14129,10 @@ unsafe fn close_focused_tab_or_frame_safe() -> bool {
 /// framebuffer ownership / shell policy ownership are NOT representable as
 /// capability bits (they are denied-by-default).
 unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, caller_pd: u32) -> bool {
+    handle_app_surface_req_inner(surface_id, title_id, arg2, caller_pd, false)
+}
+
+unsafe fn handle_app_surface_req_inner(surface_id: u64, title_id: u64, arg2: u64, caller_pd: u32, combined: bool) -> bool {
     // Unpack and validate manifest from combined args.
     let manifest = match AppManifest::unpack(surface_id, title_id, arg2) {
         Ok(m) => m,
@@ -14226,12 +14230,13 @@ unsafe fn handle_app_surface_req(surface_id: u64, title_id: u64, arg2: u64, call
     // Register lifecycle as Visible
     lifecycle_register(frame_surface, if hidden { LifecycleState::Hidden } else { LifecycleState::Visible });
 
-    // Upsert on sexdisplay via 0xEC (geometry packed: arg1=(y<<32)|x, arg2=(h<<32)|w)
+    // Upsert on sexdisplay via 0xEC (or combined upsert+clear+present via OP_WINDOW_OPEN_COMBINED)
     if hidden {
         pdx_call(SLOT_DISPLAY, 0xEE, frame_surface, 0, 0);
         sex_pdx::serial_record!("[shell.launch.placed] target={} surface={} scene={}", caller_pd, frame_surface, scene);
     } else {
-        pdx_call(SLOT_DISPLAY, 0xEC, frame_surface,
+        let display_op = if combined { sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED } else { 0xEC };
+        pdx_call(SLOT_DISPLAY, display_op, frame_surface,
             (100u64) << 32 | 200u64,
             (400u64) << 32 | 600u64);
     }
@@ -27167,7 +27172,9 @@ pub extern "C" fn _start() -> ! {
         // drained burst instead of one IPC per HID event.
         config_watch::poll();
         lock::poll();
-        let mut msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
+        static mut SHELL_NEXT_MSG: Option<sex_pdx::PdxMessage> = None;
+        let mut fast_reply: Option<(u32, u64)> = None;
+        let mut msg = match unsafe { (*core::ptr::addr_of_mut!(SHELL_NEXT_MSG)).take() }.or_else(pop_startup_message).or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
                 unsafe { flush_pending_cursor_send(); }
@@ -27233,7 +27240,7 @@ pub extern "C" fn _start() -> ! {
         match msg.type_id {
                 OP_AUTODEMO_TICK => {
                     unsafe { maybe_run_cursor_autodemo(); }
-                    pdx_reply(msg.caller_pd, 0);
+                    fast_reply = Some((msg.caller_pd, 0));
                 }
                 OP_SHELL_BIND_BUFFER => {
                     if !app_custody::buffer_sender(msg.caller_pd) { continue; }
@@ -29051,9 +29058,10 @@ pub extern "C" fn _start() -> ! {
                     // PUT acks are fire-and-forget — ignored.
                 }
             }
-            0xFA => { // OP_APP_SURFACE_REQ
+            0xFA | sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED => { // OP_APP_SURFACE_REQ / one-hop combined open
                 unsafe {
-                    let accepted = handle_app_surface_req(msg.arg0, msg.arg1, msg.arg2, msg.caller_pd);
+                    let combined = msg.type_id == sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED;
+                    let accepted = handle_app_surface_req_inner(msg.arg0, msg.arg1, msg.arg2, msg.caller_pd, combined);
                     if accepted {
                         mutated = true;
                     }
@@ -29075,6 +29083,20 @@ pub extern "C" fn _start() -> ! {
 
         // A3: Sync FocusRef from FOCUSED_SURFACE_ID after all state changes.
         unsafe { sync_focus_ref(); }
+
+        if let Some((reply_pd, reply_val)) = fast_reply {
+            let shell_idle = !shell_ready_publisher.is_pending()
+                && !unsafe { DESKTOP_RECORDING.pending() || RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || silk_ctl_glue::busy() || restricted_routes::pending() || APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) || autofill_routes::wake().is_some() || tray_wake().is_some() }
+                && lock::next_wake().is_none();
+            if shell_idle {
+                match sex_pdx::ipc_recv::pdx_reply_recv(reply_pd, reply_val) {
+                    Ok(m) => { unsafe { *core::ptr::addr_of_mut!(SHELL_NEXT_MSG) = m; } continue; }
+                    Err(()) => { pdx_reply(reply_pd, reply_val); }
+                }
+            } else {
+                pdx_reply(reply_pd, reply_val);
+            }
+        }
 
         sys_yield();
     }

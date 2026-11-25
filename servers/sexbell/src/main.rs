@@ -567,6 +567,8 @@ unsafe fn retire_app_resources(target:u32)->usize {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Declare audio buffer deadline class explicitly from userspace (syscall 104).
+    let _ = sex_pdx::sched::deadline(10_000);
     let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
     restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
     restricted::publish(&restriction);
@@ -602,6 +604,7 @@ pub extern "C" fn _start() -> ! {
 
     serial_println!("[sexbell.ready]");
     let mut app_custody=sex_pdx::app_lifecycle::ServiceCustody::new();
+    let mut next_msg: Option<sex_pdx::PdxMessage> = None;
     #[cfg(paging_exit_cleanup_proof)]
     let mut exit_probe_pending = false;
     loop {
@@ -611,7 +614,7 @@ pub extern "C" fn _start() -> ! {
             paging_probe::exit_reuse();
         }
         // While sound plays or policy waits, keep maintenance bounded.
-        let msg = loop {
+        let msg = if let Some(m) = next_msg.take() { m } else { loop {
             restriction.poll(&mut restricted::Kernel,|effect|match effect {
                 sex_pdx::restricted_helper_provider::Effect::Scrub(subject)=>{
                     unsafe{retire_app_resources(subject.pd);}
@@ -631,7 +634,7 @@ pub extern "C" fn _start() -> ! {
                 let ticks = sound::wait_ticks();
                 let _ = sex_pdx::sys_wait_self_ticks(if restriction.pending() { 1 } else { ticks });
             }
-        };
+        } };
         paging_probe::check_retained();
         if msg.type_id==sex_pdx::power::OP_DEVICE_SLEEP&&msg.caller_pd==0{let groups=sound::device_sleep(msg.arg0==1);sex_pdx::serial_record!("[bell.sleep] asleep={} codec_groups={}",msg.arg0,groups);continue;}
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
@@ -1408,7 +1411,14 @@ pub extern "C" fn _start() -> ! {
                             caller_pd, target_pd, active_flags, privacy_val, lane_val, mute_val);
                     }
                 }
-                pdx_reply(caller_pd, 0);
+                if !sound::busy() && !restriction.pending() {
+                    match sex_pdx::ipc_recv::pdx_reply_recv(caller_pd, 0) {
+                        Ok(m) => { next_msg = m; }
+                        Err(()) => { pdx_reply(caller_pd, 0); }
+                    }
+                } else {
+                    pdx_reply(caller_pd, 0);
+                }
             }
 
             OP_BELL_SUBSCRIBE => {
@@ -1427,7 +1437,6 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 }
                 let gen = unsafe { BELL_GENERATION };
-                pdx_reply(caller_pd, gen);
                 unsafe {
                     static mut BELL_SUBSCRIBE_REPLY_BUDGET: u32 = 4;
                     let b = &mut BELL_SUBSCRIBE_REPLY_BUDGET;
@@ -1435,6 +1444,14 @@ pub extern "C" fn _start() -> ! {
                         *b -= 1;
                         serial_println!("[bell.subscribe.reply] gen={}", gen);
                     }
+                }
+                if !sound::busy() && !restriction.pending() {
+                    match sex_pdx::ipc_recv::pdx_reply_recv(caller_pd, gen) {
+                        Ok(m) => { next_msg = m; }
+                        Err(()) => { pdx_reply(caller_pd, gen); }
+                    }
+                } else {
+                    pdx_reply(caller_pd, gen);
                 }
             }
 
@@ -1448,8 +1465,15 @@ pub extern "C" fn _start() -> ! {
                     sex_pdx::serial_record!("[bell.mixer.denied] caller_pd={}", caller);
                     sex_pdx::sound_mixer::REFUSED
                 };
-                pdx_reply(msg.caller_pd, reply);
                 if msg.arg0 == sex_pdx::sound_mixer::STEP_MASTER && reply != sex_pdx::sound_mixer::REFUSED { sound::tick(); }
+                if !sound::busy() && !restriction.pending() {
+                    match sex_pdx::ipc_recv::pdx_reply_recv(msg.caller_pd, reply) {
+                        Ok(m) => { next_msg = m; }
+                        Err(()) => { pdx_reply(msg.caller_pd, reply); }
+                    }
+                } else {
+                    pdx_reply(msg.caller_pd, reply);
+                }
             }
 
             sex_pdx::sound_ring::OP_PLAY => {

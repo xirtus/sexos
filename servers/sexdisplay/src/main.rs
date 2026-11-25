@@ -4414,6 +4414,8 @@ fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, pub
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Declare 60 Hz frame deadline class explicitly from userspace (syscall 104).
+    let _ = sex_pdx::sched::deadline(16_000);
     let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
     restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
     restricted::publish(&restriction);
@@ -4913,7 +4915,7 @@ pub extern "C" fn _start() -> ! {
                 DISPLAY_LAST_OP=msg.type_id;DISPLAY_LAST_CALLER=msg.caller_pd;
                 REPAINT_DRAINED=drained;
                 REPAINT_SEEN |= match msg.type_id {
-                    0xEC=>1,0xEB=>2,0xED=>4,0xEE=>8,0xEF=>16,
+                    0xEC | sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED => 1, 0xEB=>2,0xED=>4,0xEE=>8,0xEF=>16,
                     0x276|0x277|0x278|0x27A|0x27B|0x27C|0x27D|0x28C=>32,0xFA|0xFB=>64,0xFD=>128,
                     silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
                 };
@@ -4960,7 +4962,7 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             if !lifecycle.caller_live(msg.caller_pd)
-                || (matches!(msg.type_id, 0xEC | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B | 0x28C)
+                || (matches!(msg.type_id, 0xEC | sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED | 0xEB | 0xED | 0xEE | 0xEF | 0xFA | 0xFB | 0xFD | 0x276 | 0x277 | 0x278 | 0x27A | 0x27B | 0x27C | 0x27D | 0x28B | 0x28C)
                     && !lifecycle.sid_live(msg.arg0)) {
                 unsafe {
                     static mut DEAD_CALL_LOG_BUDGET: u8 = 8;
@@ -5421,8 +5423,9 @@ pub extern "C" fn _start() -> ! {
                     }
                     continue;
                 }
-                0xEC => {
-                    // OP_SURFACE_CREATE_ID: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
+                0xEC | sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED => {
+                    // OP_SURFACE_CREATE_ID / OP_WINDOW_OPEN_COMBINED: arg0=surface_id(non-zero), arg1=(y<<32)|x, arg2=(h<<32)|w
+                    let combined_open = msg.type_id == sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED;
                     let surface_id = msg.arg0;
                     if surface_id == 0 { continue; }
                     let x = msg.arg1 as i32;
@@ -5475,6 +5478,10 @@ pub extern "C" fn _start() -> ! {
                             }
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
                             if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
+                                if combined_open {
+                                    surface.text_len = 0;
+                                    surface.text_color = sex_pdx::desktop_style::TEXT;
+                                }
                                 recompute_text_lines(surface);
                                 if let Some(parent)=FRAME_GROUPS.awaiting_parent(surface) {
                                     // One exact fixed child receipt per boot, never a pixel ACK.
@@ -5490,6 +5497,15 @@ pub extern "C" fn _start() -> ! {
                                     if !ADMITTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
                                         sex_pdx::serial_record!("[display.app.admitted] target=15 surface=300 owner=15");
                                     }
+                                }
+                            }
+                            if combined_open && owner != 0 {
+                                if app_catalog::by_surface(owner, surface_id).is_some_and(|row| row.app == app_catalog::App::Program) {
+                                    set_program_title(surface_id, None);
+                                    if let Some(k) = sex_pdx::pixel_region::index_of(owner) { PIXEL_SIZE[k] = (0, 0); }
+                                }
+                                if lifecycle.request_present(owner, surface_id, 1, 0) {
+                                    sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request=1", owner, surface_id);
                                 }
                             }
                             // A new window repaints the desktop (it fades in); a known one

@@ -11,6 +11,23 @@ fn read(lba: u64, bytes: u64, out: &mut [u8], buf_va: u64) -> Result<(), u32> {
     Ok(())
 }
 static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; store::SECTOR * store::MAX_DIRECTORY_SECTORS];
+static mut DIRECTORY_SECTORS: usize = 0;
+
+fn refresh_directory(directory: &mut [u8], buf_va: u64) -> Result<usize, u32> {
+    read(store::DIRECTORY_LBA, store::SECTOR as u64, &mut directory[..store::SECTOR], buf_va)?;
+    let sectors = store::directory_sectors(&directory[..store::SECTOR]).ok_or(store::NOT_FOUND)?;
+    let mut have = 1;
+    while have < sectors {
+        let take = (sectors - have).min(BLOCK_BYTES / store::SECTOR);
+        let at = have * store::SECTOR;
+        let mut block = [0u8; BLOCK_BYTES];
+        read(store::DIRECTORY_LBA + have as u64, (take * store::SECTOR) as u64, &mut block, buf_va)?;
+        directory[at..at + take * store::SECTOR].copy_from_slice(&block[..take * store::SECTOR]);
+        have += take;
+    }
+    Ok(sectors)
+}
+
 /// `requester`: the program Shell starts a ticket for, 0 for Spindle.
 pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
@@ -47,20 +64,24 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
         },
         crate::fs_service::Program::Absent => {}
     }
-    // The directory: its first sector says how many follow.
+    // Consult cached program store directory first; re-read from disk only on cold start or miss.
     let directory = unsafe { &mut *core::ptr::addr_of_mut!(DIRECTORY) };
-    read(store::DIRECTORY_LBA, store::SECTOR as u64, &mut directory[..store::SECTOR], buf_va)?;
-    let sectors = store::directory_sectors(&directory[..store::SECTOR]).ok_or(store::NOT_FOUND)?;
-    let mut have = 1;
-    while have < sectors {
-        let take = (sectors - have).min(BLOCK_BYTES / store::SECTOR);
-        let at = have * store::SECTOR;
-        let mut block = [0u8; BLOCK_BYTES];
-        read(store::DIRECTORY_LBA + have as u64, (take * store::SECTOR) as u64, &mut block, buf_va)?;
-        directory[at..at + take * store::SECTOR].copy_from_slice(&block[..take * store::SECTOR]);
-        have += take;
-    }
-    let entry = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
+    let cached_sectors = unsafe { DIRECTORY_SECTORS };
+    let (sectors, entry) = if cached_sectors > 0 {
+        if let Some(hit) = store::find(&directory[..cached_sectors * store::SECTOR], name) {
+            (cached_sectors, hit)
+        } else {
+            let sectors = refresh_directory(directory, buf_va)?;
+            unsafe { DIRECTORY_SECTORS = sectors; }
+            let hit = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
+            (sectors, hit)
+        }
+    } else {
+        let sectors = refresh_directory(directory, buf_va)?;
+        unsafe { DIRECTORY_SECTORS = sectors; }
+        let hit = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
+        (sectors, hit)
+    };
     if entry.len == 0 || entry.len as usize > store::IMAGE_BYTES { return Err(store::TOO_LARGE); }
     if entry.lba < store::DIRECTORY_LBA + sectors as u64 { return Err(store::CORRUPT); }
     // One command per shared-buffer run (up to 128 KiB), copied straight into the image:

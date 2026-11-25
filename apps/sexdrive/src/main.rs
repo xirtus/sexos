@@ -3755,9 +3755,9 @@ fn device_sleep(asleep: bool) {
     sex_pdx::serial_record!("[sexdrive.sleep] asleep={} flush={:#x}", asleep as u8, flush);
 }
 
-fn service_next_request(){
-    let msg=pdx_listen_raw(0);
-    if msg.type_id == sex_pdx::power::OP_DEVICE_SLEEP && msg.caller_pd == 0 { device_sleep(msg.arg0 == 1); return; }
+fn service_next_request(pre: Option<sex_pdx::PdxMessage>) -> Option<sex_pdx::PdxMessage> {
+    let msg = pre.unwrap_or_else(|| pdx_listen_raw(0));
+    if msg.type_id == sex_pdx::power::OP_DEVICE_SLEEP && msg.caller_pd == 0 { device_sleep(msg.arg0 == 1); return None; }
     // BLOCK_READ is numeric 1 in the public ABI, not a receipt kind.
     let cmd = msg.type_id;
     let offset = msg.arg0;
@@ -3897,7 +3897,13 @@ fn service_next_request(){
         "[sexblock.abi.reply.encode] caller={} status={}",
         msg.caller_pd, reply_val
     ); }
-    pdx_reply(msg.caller_pd, reply_val);
+    let next = match sex_pdx::ipc_recv::pdx_reply_recv(msg.caller_pd, reply_val) {
+        Ok(m) => m,
+        Err(()) => {
+            pdx_reply(msg.caller_pd, reply_val);
+            None
+        }
+    };
     if hot_log() { serial_println!(
         "[sexdrive.block.typed.reply] cmd={} caller={} status={}",
         cmd, msg.caller_pd, reply_val
@@ -3933,6 +3939,7 @@ fn service_next_request(){
             ); }
         }
     }
+    next
 }
 
 // Initialize the existing BOOT-paired demonstration buffer once before the
@@ -3984,5 +3991,6 @@ pub extern "C" fn _start() -> ! {
     if hot_log() { serial_println!("[sexdrive.ready]"); }
     sex_pdx::serial_record!("[sexdrive.boot.serving]");
     SERVING.store(true, Ordering::Relaxed);
-    loop { service_next_request(); }
+    let mut next = None;
+    loop { next = service_next_request(next); }
 }

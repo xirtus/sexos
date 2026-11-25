@@ -85,6 +85,8 @@ jobs:
       run: bash scripts/lanes_host_gate.sh
     - name: IPC v2 endpoints, reply capabilities and notifications on the host
       run: bash scripts/ipc_v2_host_gate.sh
+    - name: Core microkernel server IPC fast-path (syscalls 102-104) and one-hop Window::open() gate
+      run: bash scripts/ipc_fastpath_ci_gate.sh
     - name: Display model (KMS, EDID), Intel Gen12 and AMD DCN display engines on the host
       run: bash scripts/kms_host_gate.sh
     - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host

@@ -299,31 +299,36 @@ impl DiskFs {
         let began = sex_pdx::get_ticks();
         let mut resent = 0u32;
         'send: loop {
-        let (send_status, _) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
-        if send_status == sex_pdx::ERR_SERVICE_NOT_READY
-            && sex_pdx::get_ticks().saturating_sub(began) < 60_000
-            && !matches!(sex_pdx::crash_log::peer_state(SLOT_BLOCK as u64), Ok(p) if p.life == sex_pdx::crash_log::PeerLife::GaveUp) {
-            sys_yield();
-            continue 'send;
-        }
-        if send_status != 0 {
-            if hot_log() { serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status); }
-            if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
-                let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
-                if hot_log() { serial_println!(
-                    "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
-                    op, send_status, arg1
-                ); }
+        let mut first_msg = match sex_pdx::ipc_recv::pdx_call_recv(SLOT_BLOCK, opcode, arg0, arg1, arg2) {
+            Ok(msg) => msg,
+            Err(send_status) => {
+                if send_status == sex_pdx::ERR_SERVICE_NOT_READY
+                    && sex_pdx::get_ticks().saturating_sub(began) < 60_000
+                    && !matches!(sex_pdx::crash_log::peer_state(SLOT_BLOCK as u64), Ok(p) if p.life == sex_pdx::crash_log::PeerLife::GaveUp) {
+                    sys_yield();
+                    continue 'send;
+                }
+                if hot_log() { serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status); }
+                if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
+                    let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
+                    if hot_log() { serial_println!(
+                        "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
+                        op, send_status, arg1
+                    ); }
+                }
+                return send_status;
             }
-            return send_status;
-        }
+        };
         // Loop until we get the IPC reply (type_id=0x1) from sexdrive.
-        // type_id=0x1 = kernel IPC reply; incoming_replies has priority in pdx_listen_raw(0).
+        // type_id=0x1 = kernel IPC reply; incoming_replies has priority in pdx_call_recv/pdx_listen_raw(0).
         // SEXFILES_DEFER_V1: non-reply messages here are LIVE client requests
         // arriving mid-roundtrip (the old "stale startup message" discard ate
         // them — vanished-request root cause). Stash for the main loop.
         loop {
-            let msg = pdx_listen_raw(0);
+            let msg = match first_msg.take() {
+                Some(m) => m,
+                None => pdx_listen_raw(0),
+            };
             if msg.type_id == 0x1 && msg.caller_pd==2 && msg.arg0 == sex_pdx::crash_log::PEER_RESTARTED {
                 resent += 1;
                 sex_pdx::serial_record!("[sexfiles.block.resend] opcode={:#x} lba={} bytes={} attempt={}", opcode, arg0 / BLOCK_SECTOR_SIZE, arg1, resent);
