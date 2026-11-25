@@ -34,5 +34,7 @@ Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
 supported file operations in the current Loom run; redo is not yet available.
 Delete moves a selected range to trash as one action, and one Ctrl+Z restores
-the range. Copy and cut currently accept one item; Ctrl+Shift+R opens the batch
-rename preview.
+the range. Ctrl+X cuts a selected text-list range; Ctrl+V moves it into another
+folder on the same disk, and one Ctrl+Z moves it back. A taken name receives
+`(copy)` or `(copy 2)` before its extension. Ctrl+C still copies one item;
+Ctrl+Shift+R opens the batch rename preview.
