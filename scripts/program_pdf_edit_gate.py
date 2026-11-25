@@ -20,6 +20,7 @@ from make_pdf_fixture import form_document,FORM_WORD
 ROOT=Path(__file__).resolve().parents[1]
 FORM=form_document()
 FILES={'/form.pdf':FORM}
+FILES['/certificate.der']=(ROOT/'crates/vellum-edit/tests/fixtures/cms-test-cert.der').read_bytes()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -43,13 +44,14 @@ def thumb_ok(data,want_w,want_h):
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  pdf=(ROOT/'iso_root/programs/vellum').read_bytes();assert pdf[:4]==b'\x7fELF'
+ signer=(ROOT/'iso_root/programs/shibari-sign').read_bytes();assert signer[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  signed_fixture=a.out/'cms-signed.pdf'
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','detached_cms_in_pdf_verifies_over_its_byte_range','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_CMS_PDF_FIXTURE':str(signed_fixture)},check=True)
  FILES['/cms-signed.pdf']=signed_fixture.read_bytes()
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('vellum',pdf)])
+ install(disk,[('vellum',pdf),('shibari-sign',signer)])
  extractor=a.out/'sexfs-extract';subprocess.run(['rustc','--edition=2021','-O','-A','dead_code','-A','unused_attributes',str(ROOT/'scripts/sexfs_extract.rs'),'-o',str(extractor)],check=True)
  g=boot(a.iso,disk,a.out,'pdf-edit',a.resolution);t=g['text'];q=g['q']
  def chord(*k):q.cmd('send-key',{'keys':[{'type':'qcode','data':x} for x in k],'hold-time':80});time.sleep(.15)
@@ -174,6 +176,32 @@ def main():
   s=len(t());chord('ctrl','shift','v')
   g['wait'](r'\[pdf\.signatures\] fields=1 signed=0 malformed=0 verified=0 content_intact=0 content_changed=0 unsupported=0\n',s,120)
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # Shibari imports a public certificate and the owner types the matching
+  # scalar into its own window. No key bytes travel through Shell or Vellum.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/certificate.der certificate.der')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run shibari-sign @certificate.der')
+  launched=g['wait'](r'\[shell\.program\.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,300)
+  signer_sid=int(launched[3]);g['focus'](signer_sid);time.sleep(.5)
+  # This is a published test key for the repository's synthetic certificate.
+  fixture_scalar='15b6eb1d2fa7ec84fc8d80ef31bc5f6c37db2e8887945932ee00c7322c42a7ce'
+  s=len(t());keys(fixture_scalar);q.key('ret')
+  g['wait'](r'\[shibari\.pdf\.ready\] row=\d+ certificate_bytes=\d+\n',s,120)
+  s=len(t());line('run vellum @signature-field.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=signature-field\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(.5);g['focus'](sid)
+  step(lambda:chord('ctrl','shift','b'),r'\[pdf\.sign\.choice\] field=Vellum signature 1 certificate_bytes=\d+ confirmed=0\n')
+  time.sleep(.4);q.cmd('screendump',{'filename':str(a.out/'pdf-digital-signature-consent.ppm')})
+  s=len(t());q.key('ret')
+  g['wait'](r'\[pdf\.sign\.request\] client=\d+ signer=\d+ attrs=\d+\n',s,120)
+  g['focus'](signer_sid);time.sleep(.5);q.key('y')
+  g['wait'](r'\[shibari\.pdf\.approved\] ok=1\n',s,120)
+  g['wait'](r'\[pdf\.sign\.saved\] field=Vellum signature 1 bytes=\d+ content_intact=1 verified=0\n',s,300)
+  g['focus'](sid);time.sleep(.5)
+  step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-digital-signature.ppm')})
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A separate source stays untouched while a complete unsaved PDF is kept.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
@@ -210,6 +238,12 @@ def main():
  assert NOTE.encode() in update and NAME.encode() in update
  recovered_pdf=a.out/'recover-saved.pdf';subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/recover.pdf',str(recovered_pdf)],check=True)
  recovered_data=recovered_pdf.read_bytes();assert recovered_data.startswith(FORM) and b'crash note' in recovered_data[len(FORM):]
+ signed_pdf=a.out/'signature-field-signed.pdf'
+ subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/signature-field.pdf',str(signed_pdf)],check=True)
+ signed_data=signed_pdf.read_bytes()
+ assert signed_data.startswith(FORM) and b'/ByteRange' in signed_data[len(FORM):] and b'/Contents <' in signed_data[len(FORM):]
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_verifies_independently_when_supplied','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_SIGNED_PDF':str(signed_pdf)},check=True)
  checked='bytes'
  try:import pypdf
  except ImportError:pypdf=None
