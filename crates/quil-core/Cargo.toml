@@ -9,3 +9,4 @@ description = "Quil's editing engine apart from any window: a lazy piece-table b
 # MIT/Unlicense: SIMD byte and substring search, no_std with alloc.
 memchr = { version = "2", default-features = false, features = ["alloc"] }
 sha1 = { version = "0.10.7", default-features = false, features = ["force-soft"] }
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }

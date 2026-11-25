@@ -6456,6 +6456,7 @@ name = "quil-core"
 version = "0.1.0"
 dependencies = [
  "memchr",
+ "miniz_oxide 0.9.1",
  "sha1 0.10.7",
 ]
 

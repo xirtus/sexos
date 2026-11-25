@@ -2,7 +2,7 @@
 """Quil, the code editor program: installed as a file, it opens a large file lazily, jumps to
 its end, edits both ends and saves it byte for byte; finds a file with Go to File; types with
 three cursors; deletes a line with Vim's dd and saves with :w; and searches the project folder."""
-import argparse,http.server,os,re,shutil,threading,time
+import argparse,hashlib,http.server,os,re,shutil,threading,time,zlib
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DEMO=b'fn main() {\n    let needle = 1;\n    println!("{}", needle);\n}\n'
@@ -10,7 +10,10 @@ OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
 BROKEN=b'fn main() {\n    let value = 1;\n'
 COMPLETE=b'ret'
 INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/git-index':INDEX}
+GIT_BLOB=b'blob '+str(len(DEMO)).encode()+b'\0'+DEMO
+GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
+assert bytes.fromhex(GIT_ID)==INDEX[52:72]
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/git-index':INDEX,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -64,6 +67,9 @@ def main():
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   line('mkdir /data/quil/.git')
   m=expect(f'fetch http://10.0.2.2:{PORT}/git-index /data/quil/.git/index',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  line('mkdir /data/quil/.git/objects')
+  line(f'mkdir /data/quil/.git/objects/{GIT_ID[:2]}')
+  m=expect(f'fetch http://10.0.2.2:{PORT}/git-blob /data/quil/.git/objects/{GIT_ID[:2]}/{GIT_ID[2:]}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   target,task,sid=m[1],m[2],int(m[3])
   g['wait'](r'\[quil.theme\] mode=Light accent=d6336c',s,60)
@@ -89,6 +95,10 @@ def main():
   g['wait'](r'\[quil.code.git\] tracked_changes=1 note=\n',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-status.ppm')})
   assert (a.out/'quil-git-status.ppm').stat().st_size>100000
+  s=len(t());q.key('right')
+  g['wait'](r'\[quil.code.git.diff\] path=demo.rs lines=\d+ note=\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-diff.ppm')})
+  assert (a.out/'quil-git-diff.ppm').stat().st_size>100000
   q.key('esc')
   # Vim mode from the command palette; dd deletes the first line, :w saves.
   s=len(t());q.key('esc');send('ctrl','shift','p');time.sleep(.3);keys('vim mode');q.key('ret');g['wait'](r'\[quil.code.keymap\] vim',s,30)

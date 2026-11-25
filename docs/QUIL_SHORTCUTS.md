@@ -50,5 +50,7 @@ The desktop handles F11 to close a Quil window; Quil asks before discarding edit
 
 Ctrl+Shift+V reads `.git/index` inside the opened project's Files grant and
 compares tracked files with the index. The panel marks modified, deleted,
-conflicted, or too-large-to-check files. Enter opens a selected existing file.
-It does not yet show untracked/ignored files, diffs, staging, commits or branches.
+conflicted, or too-large-to-check files. Right opens a read-only line diff for a
+modified or deleted UTF-8 file whose indexed blob is loose; Up/Down scroll it.
+The diff is bounded to 64 KiB and 300 lines per side. Enter opens an existing file.
+Packed blobs, untracked/ignored files, staging, commits and branches need later work.

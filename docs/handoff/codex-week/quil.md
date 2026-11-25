@@ -15,9 +15,11 @@ Remaining gaps:
   language-service protocol slice, not semantic completion. Continuous
   diagnostics, identifier and semantic completion, navigation, rename, and
   full language-server implementations remain gaps.
-- Ctrl+Shift+V now shows tracked modified, deleted and conflicted files from a
-  checked Git index in the project's Files grant. Untracked/ignored files,
-  diffs, staging, commit and branches still need native controls.
+- Ctrl+Shift+V shows tracked modified, deleted and conflicted files from a
+  checked Git index in the project's Files grant. Right shows a bounded,
+  read-only line diff against an authenticated loose Git blob for UTF-8 files.
+  Packed blobs, untracked/ignored files, staging, commit and branches still
+  need native controls.
 - Tree-sitter style structural editing, debugging and extensions.
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the
