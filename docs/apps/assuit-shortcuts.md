@@ -15,6 +15,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+T | Edit the table at the caret: select/insert/delete rows or columns; `merge cells` for a selected range; `split 2` through `split 10` for the current cell; `shade RRGGBB` for cell fill; `border all`, `outside`, `inside`, or `none` for DOCX table borders |
 | Ctrl+Shift+I | Insert an image from Assuit's granted folder |
 | Ctrl+Shift+R | Describe the selected picture with alternative text (1–500 characters) |
+| Ctrl+Shift+O | Set the selected picture's width in inches, preserving proportions |
 | Ctrl+Shift+S | Choose a paragraph style |
 | Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
