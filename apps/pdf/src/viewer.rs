@@ -13,7 +13,7 @@ use sex_theme::Tokens;
 use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
 
 use crate::marks;
-use crate::history::FieldHistory;
+use crate::history::{AnnotationHistory, FieldHistory};
 use crate::search::{self, Hit};
 use crate::text::{self, PageText};
 use crate::zoom::{self, Zoom};
@@ -79,7 +79,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Type in text fields; Space toggles checkbox; Escape ends",
-    "Ctrl+Z / Ctrl+Shift+Z undo / redo committed form fields",
+    "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or new markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
     "Ctrl+S saves edits; Ctrl+Shift+/ opens this help",
@@ -225,6 +225,7 @@ struct Viewer {
     /// The editing engine over the file's bytes, or why this file cannot be edited.
     editor: Result<Editor, String>,
     field_history: FieldHistory,
+    annotation_history: AnnotationHistory,
     /// The region Ctrl+R chose: shown points `[left, top, right, bottom]` on the page.
     region: Option<[f64; 4]>,
     /// A sticky note being typed.
@@ -717,7 +718,12 @@ impl Viewer {
     fn edit_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         let ctrl = |code: u8| key.control && key.code == code;
         if self.signature.is_some() { self.signature_key(key); return true; }
-        if ctrl(KEY_Z) { self.field_history_step(key.shift); return true; }
+        if ctrl(KEY_Z) {
+            self.commit_field();
+            if self.annotation_history.has_step(key.shift) { self.annotation_history_step(key.shift); }
+            else { self.field_history_step(key.shift); }
+            return true;
+        }
         if ctrl(KEY_G) && key.shift {
             if self.editor().is_some() { self.signature = Some(String::new()); }
             return true;
@@ -835,8 +841,9 @@ impl Viewer {
         let annot = NewAnnot { kind: AnnotKind::Highlight { rects }, style: AnnotStyle { date: Some(now_date()), ..AnnotStyle::default() } };
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
-            Ok(_) => {
+            Ok(id) => {
                 self.field_history.clear();
+                self.annotation_history.record_add(page, annot, id);
                 self.region = None;
                 self.refresh();
                 self.status = Some("Highlighted. Ctrl+S saves.".into());
@@ -892,8 +899,9 @@ impl Viewer {
         let page = self.page;
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
-            Ok(_) => {
+            Ok(id) => {
                 self.field_history.clear();
+                self.annotation_history.record_add(page, annot, id);
                 self.region = None;
                 self.refresh();
                 self.status = Some("Visual signature placed. Ctrl+S saves; no digital signature".into());
@@ -924,8 +932,9 @@ impl Viewer {
         };
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
-            Ok(_) => {
+            Ok(id) => {
                 self.field_history.clear();
+                self.annotation_history.record_add(page, annot, id);
                 self.region = None;
                 self.refresh();
                 self.status = Some("Note added. Ctrl+S saves.".into());
@@ -959,6 +968,7 @@ impl Viewer {
                 match editor.delete_annotation(page, a.index) {
                     Ok(()) => {
                         self.field_history.clear();
+                        self.annotation_history.clear();
                         self.refresh();
                         self.load_annots(false);
                         sex_std::record(&format!("[pdf.annotate] kind=delete page={} was={} annots={}", page + 1, a.subtype, self.annotation_count()));
@@ -1016,6 +1026,7 @@ impl Viewer {
         match result {
             Ok((before, fields)) => {
                 if let Some(before) = before { self.field_history.record(name, before, value); }
+                self.annotation_history.clear();
                 if let Some(form) = self.form.as_mut() { form.fields = fields; }
                 self.refresh();
                 sex_std::record(&format!("[pdf.field] name={name} kind={kind} value={shown}"));
@@ -1045,6 +1056,24 @@ impl Viewer {
             }
             Ok(None) => self.status = Some(format!("No form field edit to {}", if redo { "redo" } else { "undo" })),
             Err(e) => self.status = Some(format!("Could not {} form field: {e}", if redo { "redo" } else { "undo" })),
+        }
+    }
+
+    fn annotation_history_step(&mut self, redo: bool) {
+        let result = match self.editor.as_mut() {
+            Ok(editor) => self.annotation_history.step(editor, redo),
+            Err(why) => { self.status = Some(format!("This file cannot be edited: {why}")); return; }
+        };
+        match result {
+            Ok(Some(page)) => {
+                self.refresh();
+                if self.panel == Panel::Annots { self.load_annots(false); }
+                self.status = Some(format!("{} new markup. Ctrl+S saves.", if redo { "Redid" } else { "Undid" }));
+                sex_std::record(&format!("[pdf.annotate.history] action={} page={} annots={}",
+                    if redo { "redo" } else { "undo" }, page + 1, self.annotation_count()));
+            }
+            Ok(None) => self.status = Some(format!("No new markup to {}", if redo { "redo" } else { "undo" })),
+            Err(e) => self.status = Some(format!("Could not {} markup: {e}", if redo { "redo" } else { "undo" })),
         }
     }
 
@@ -1123,6 +1152,7 @@ impl Viewer {
         };
         self.editor = Editor::open(back.clone()).map_err(|e| e.to_string());
         self.field_history.clear();
+        self.annotation_history.clear();
         self.pdf = pdf;
         self.clear_page_cache();
         self.thumbs = vec![None; self.pages()];
@@ -1227,7 +1257,7 @@ pub fn main() {
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
-        path: name, editor, field_history: FieldHistory::default(), region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
+        path: name, editor, field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
         shortcuts: false, shortcuts_top: 0,
     };
     viewer.draw(window);

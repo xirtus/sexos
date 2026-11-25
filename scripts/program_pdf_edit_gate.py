@@ -86,6 +86,9 @@ def main():
   # A sticky note, typed.
   s=len(t());chord('ctrl','n');keys(NOTE);q.key('ret')
   g['wait'](rf'\[pdf\.annotate\] kind=note page=1 chars={len(NOTE)} annots=2\n',s)
+  step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=1\n')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-note-undone.ppm')})
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
   # A region: shown, moved right twice, made taller, highlighted with Enter.
   step(lambda:chord('ctrl','r'),r'\[pdf\.region\] shown=1\n')
   for k in ('right','right'):step(lambda:q.key(k),r'\[pdf\.region\] shown=1 x=')
