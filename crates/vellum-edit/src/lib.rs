@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, HashSet};
 pub use annot::{AnnotInfo, AnnotKind, AnnotStyle, NewAnnot, NoteIcon, RemovedAnnot};
 pub use cos::{Dict, ObjId, Object, Stream};
 pub use doc::XrefStyle;
-pub use form::{FieldInfo, FieldKind, FieldValue, SignatureInfo};
+pub use form::{ContentIntegrity, FieldInfo, FieldKind, FieldValue, SignatureInfo};
 pub use text::PdfDate;
 
 /// What went wrong.

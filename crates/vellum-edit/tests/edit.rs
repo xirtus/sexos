@@ -286,6 +286,7 @@ fn signatures_are_reported_and_survive() {
     assert_eq!(s.reason.as_deref(), Some("Approved"));
     assert_eq!(s.sub_filter.as_deref(), Some("adbe.pkcs7.detached"));
     assert!(s.byte_range_well_formed);
+    assert_eq!(ed.signature_content_integrity("sig").unwrap(), ContentIntegrity::Unsupported);
     assert!(s.covers_whole_file, "{:?}", s.byte_range);
     assert!(ed.fields().unwrap().iter().any(|f| f.name == "sig" && f.kind == FieldKind::Signature));
     assert!(matches!(ed.set_field("sig", FieldValue::Empty), Err(Error::ReadOnly(_))));
@@ -375,6 +376,15 @@ fn detached_cms_in_pdf_verifies_over_its_byte_range() {
         }).map_err(|e| Error::BadValue(format!("CMS: {e:?}")))?;
         Ok(cms.clone())
     }).unwrap();
+    assert_eq!(Editor::open(signed.clone()).unwrap().signature_content_integrity("sig").unwrap(), ContentIntegrity::Intact);
+    let mut tampered = signed.clone();
+    let old_value = b"/V null  ";
+    let at = tampered.windows(old_value.len()).position(|w| w == old_value).unwrap();
+    tampered[at + 7] = b'\t'; // PDF whitespace remains valid, but the covered bytes changed.
+    assert_eq!(Editor::open(tampered).unwrap().signature_content_integrity("sig").unwrap(), ContentIntegrity::Changed);
+    let mut appended = signed.clone();
+    appended.extend_from_slice(b"\n%later revision\n");
+    assert_eq!(Editor::open(appended).unwrap().signature_content_integrity("sig").unwrap(), ContentIntegrity::Unsupported);
     if let Some(destination) = std::env::var_os("SEXOS_VELLUM_CMS_PDF_FIXTURE") {
         fs::write(destination, &signed).unwrap();
     }

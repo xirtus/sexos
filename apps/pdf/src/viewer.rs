@@ -10,7 +10,7 @@ use sex_std::sex_pdx::app_pointer::Kind;
 use std::collections::HashMap;
 use std::time::Instant;
 use sex_theme::Tokens;
-use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
+use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, ContentIntegrity, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
 
 use crate::marks;
 use crate::history::{AnnotationHistory, FieldHistory};
@@ -767,14 +767,30 @@ impl Viewer {
             Some(signatures) => {
                 let signed = signatures.iter().filter(|s| s.signed).count();
                 let malformed = signatures.iter().filter(|s| s.signed && !s.byte_range_well_formed).count();
+                let mut intact = 0;
+                let mut changed = 0;
+                let mut unsupported = 0;
+                if let Ok(editor) = &self.editor {
+                    for signature in signatures.iter().filter(|s| s.signed) {
+                        match editor.signature_content_integrity(&signature.field_name) {
+                            Ok(ContentIntegrity::Intact) => intact += 1,
+                            Ok(ContentIntegrity::Changed) => changed += 1,
+                            _ => unsupported += 1,
+                        }
+                    }
+                }
                 self.status = Some(if signatures.is_empty() {
                     "No digital signature fields in this PDF".into()
                 } else if malformed > 0 {
                     format!("{signed} stored signature(s), {malformed} with invalid byte ranges; trust unverified")
+                } else if changed > 0 {
+                    format!("{changed} signature content check(s) failed; signer trust unverified")
+                } else if intact > 0 {
+                    format!("{intact} signature content intact, {unsupported} unsupported; signer trust unverified")
                 } else {
-                    format!("{signed} stored signature(s); cryptographic identity and content unverified")
+                    format!("{signed} stored signature(s); content check unsupported, signer trust unverified")
                 });
-                sex_std::record(&format!("[pdf.signatures] fields={} signed={signed} malformed={malformed} verified=0", signatures.len()));
+                sex_std::record(&format!("[pdf.signatures] fields={} signed={signed} malformed={malformed} verified=0 content_intact={intact} content_changed={changed} unsupported={unsupported}", signatures.len()));
             }
             None => self.status = Some("Cannot inspect signatures in this PDF".into()),
         }
