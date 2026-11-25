@@ -36,6 +36,10 @@ pub enum Error {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// One in-memory IMAP message/attachment. Larger mail needs a streamed Files
+/// path before the online account service can expose it to Valentine.
+pub const MAX_IMAP_LITERAL: usize = 64 << 20;
+
 /// A byte stream: a TLS flow on SexOS, an in-memory server in tests.
 pub trait Conn {
     fn write_all(&mut self, data: &[u8]) -> Result<()>;
@@ -72,6 +76,7 @@ impl<C: Conn> Lines<C> {
 
     /// Exactly `n` bytes (an IMAP literal).
     pub fn bytes(&mut self, n: usize) -> Result<Vec<u8>> {
+        if n > MAX_IMAP_LITERAL { return Err(Error::Protocol("IMAP literal too large".into())); }
         while self.buf.len() < n { self.fill()?; }
         Ok(self.buf.drain(..n).collect())
     }

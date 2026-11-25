@@ -22,7 +22,10 @@ Remaining gaps:
   contract remains unimplemented and would need a flow ownership transfer.
   The broker-owned path still needs a boot-routed Multipass service, a verified
   TLS SexNet dialer, account setup and grant UI, and a Valentine client. Bell
-  has no mail event source yet.
+  has no mail event source yet. The IMAP core now bounds any one announced
+  literal and the accumulated response to 64 MiB, with 2 MiB of response
+  framing text. Larger attachments need a streamed Files path rather than an
+  in-memory response.
 - JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
 - Search across accounts, conversation view, filters, and signatures.

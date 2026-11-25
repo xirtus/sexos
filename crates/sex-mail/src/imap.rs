@@ -7,6 +7,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use zeroize::Zeroizing;
 
+/// Bound both copied response text and all announced literals before reading
+/// them. A single FETCH body can be large, but a server cannot grow this parser
+/// without limit through continuations or multiple literals.
+const MAX_RESPONSE_TEXT: usize = 2 << 20;
+const MAX_RESPONSE_TOTAL: usize = 64 << 20;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token { Atom(String), Str(Vec<u8>), List(Vec<Token>), Nil }
 
@@ -78,9 +84,17 @@ impl<C: Conn> Client<C> {
     pub fn read_response(&mut self) -> Result<Response> {
         let mut data = Vec::new();
         let mut literals: Vec<Vec<u8>> = Vec::new();
+        let mut total = 0usize;
         loop {
             let line = self.io.line()?;
             let lit = literal_len(&line);
+            let text_len = data.len().checked_add(line.len()).and_then(|n| n.checked_add(usize::from(lit.is_some())))
+                .ok_or_else(|| Error::Protocol("IMAP response too large".into()))?;
+            total = total.checked_add(line.len()).and_then(|n| n.checked_add(lit.unwrap_or(0)))
+                .ok_or_else(|| Error::Protocol("IMAP response too large".into()))?;
+            if text_len > MAX_RESPONSE_TEXT || total > MAX_RESPONSE_TOTAL {
+                return Err(Error::Protocol("IMAP response too large".into()));
+            }
             data.extend_from_slice(&line);
             match lit {
                 Some(n) => {
