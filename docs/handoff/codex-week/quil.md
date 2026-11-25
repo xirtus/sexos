@@ -26,9 +26,11 @@ Remaining gaps:
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the
   same volume. Cross-volume saves need an explicit safe copy strategy.
-- Named files up to 4 MiB now get staged, checksummed recovery drafts every two
-  seconds while edited; reopening the file restores its draft. Untitled and larger
-  files still need recovery. Quil now follows the system's
-  light, dark and high-contrast colors, including accent changes while open.
+- Named files and up to eight untitled tabs, each no larger than 4 MiB, now get
+  staged, checksummed recovery drafts every two seconds while edited. Restarting
+  Quil restores the untitled tabs; reopening a named file restores its draft.
+  Saving or explicitly discarding a tab clears its draft. Larger files still
+  need recovery. Quil follows the system's light, dark and high-contrast colors,
+  including accent changes while open.
 - The keyboard reference is available in Quil with Ctrl+Shift+/, including the
   active keymap and scrolling; the complete user guide is `docs/QUIL_SHORTCUTS.md`.

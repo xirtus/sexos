@@ -157,6 +157,25 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'quil-draft-recovered.ppm')})
   assert (a.out/'quil-draft-recovered.ppm').stat().st_size>100000
   s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={relaunched[1]} task={relaunched[2]}',s,60)
+  # A nameless tab has its own checked recovery identity. Cut power after the
+  # draft receipt, then reboot the same disk and recover it without a file name.
+  s=len(t());line('run quil')
+  unnamed=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(unnamed[3]));time.sleep(.5)
+  s=len(t());q.key('u')
+  kept=g['wait'](r'\[quil.code.draft.saved\] untitled=(\d+) bytes=(\d+)',s,90)
+  assert kept[2]=='1',kept[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-untitled-before-powercut.ppm')})
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'quil-untitled-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  s=len(t());line('run quil')
+  restored=g['wait'](rf'\[quil.code.draft.recovered\] untitled={kept[1]} bytes=1',s,120)
+  relaunched=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(relaunched[3]));time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'quil-untitled-recovered.ppm')})
+  assert (a.out/'quil-untitled-recovered.ppm').stat().st_size>100000
+  s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={relaunched[1]} task={relaunched[2]}',s,60)
   assert 'KERNEL PANIC'not in t() and 'panicked' not in t() and '[quil.code.fatal]' not in t()
  finally:g['stop']()
  print({'ok':True,'large_mb':a.large_mb})

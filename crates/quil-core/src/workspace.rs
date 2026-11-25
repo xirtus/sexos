@@ -11,6 +11,8 @@ pub struct Tab {
     pub ed: Editor,
     /// Empty for a new file never saved.
     pub path: Vec<u8>,
+    /// Stable recovery slot for an untitled tab; absent for named files.
+    pub untitled_slot: Option<u8>,
     pub lang: Lang,
     /// Byte offset of the first line shown, and the first column.
     pub top: usize,
@@ -18,7 +20,7 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(path: &[u8], ed: Editor) -> Tab { Tab { lang: Lang::from_path(path), ed, path: path.to_vec(), top: 0, left: 0 } }
+    pub fn new(path: &[u8], ed: Editor) -> Tab { Tab { lang: Lang::from_path(path), ed, path: path.to_vec(), untitled_slot: None, top: 0, left: 0 } }
     pub fn name(&self) -> &[u8] {
         if self.path.is_empty() { return b"untitled"; }
         self.path.rsplit(|b| *b == b'/').next().unwrap_or(&self.path)
