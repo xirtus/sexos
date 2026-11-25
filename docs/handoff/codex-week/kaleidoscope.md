@@ -24,3 +24,6 @@ matching keyboard reference in `docs/apps/kaleidoscope-shortcuts.md`.
 Reader view now extracts the article from the currently shown DOM. It keeps
 script-added text and avoids a second request for a page that may have changed
 or required a sign-in. Direct `about:reader?url=` addresses still fetch once.
+
+The browser's own controls now follow SexOS light, dark and high-contrast
+appearance and accent changes. Site content keeps its own CSS colors.
