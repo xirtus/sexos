@@ -131,6 +131,31 @@ def main():
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
   step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,FreeText\n')
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # A separate source stays untouched while a complete unsaved PDF is kept.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @recover.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=recover\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  s=len(t());chord('ctrl','n');keys('crash note');q.key('ret')
+  g['wait'](r'\[pdf\.annotate\] kind=note page=1 chars=10 annots=1\n',s)
+  g['wait'](r'\[pdf\.recovery\.kept\] name=vellum-recovered-[0-9a-f]{16}\.pdf bytes=\d+\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-recovery-unsaved.ppm')})
+  assert 'KERNEL PANIC' not in t() and '[std.abort]' not in t()
+  g['stop']()  # No Close or Ctrl+S reaches Vellum.
+  g=boot(a.iso,disk,a.out,'pdf-recovery-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  s=len(t());line('run vellum @recover.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=recover\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.recovery\.restored\] name=vellum-recovered-[0-9a-f]{16}\.pdf bytes=\d+\n',s,60)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=1 kinds=Text\n')
+  time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'pdf-recovery-restored.ppm')})
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.saved\] path=@/recover\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=1 filled=0 ms=\d+\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   assert 'KERNEL PANIC' not in t() and '[std.abort]' not in t() and 'panicked' not in t()
  finally:g['stop']()
  # On the host, from the disk the system wrote.
@@ -140,6 +165,8 @@ def main():
  update=data[len(FORM):]
  for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/Subtype /FreeText',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
  assert NOTE.encode() in update and NAME.encode() in update
+ recovered_pdf=a.out/'recover-saved.pdf';subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/recover.pdf',str(recovered_pdf)],check=True)
+ recovered_data=recovered_pdf.read_bytes();assert recovered_data.startswith(FORM) and b'crash note' in recovered_data[len(FORM):]
  checked='bytes'
  try:import pypdf
  except ImportError:pypdf=None

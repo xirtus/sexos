@@ -12,8 +12,10 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Performance and polish:** the viewer chrome now follows Settings' light,
   dark and high-contrast colors. This slice retains up to two retired rendered
   pages under a 48 MiB cache cap, so a same-zoom revisit avoids Hayro rendering.
-  Document the cold-render latency target with a fixture and prove crash
-  recovery on interrupted saves. Ctrl+Shift+/ now opens an in-app shortcut
+  Document the cold-render latency target with a fixture. Vellum now keeps
+  complete unsaved markup/form edits in a staged recovery PDF and checks the
+  source prefix before restoring it after a crash. The QEMU gate cuts power,
+  reboots the same disk and commits a restored note. Ctrl+Shift+/ opens an in-app shortcut
   reference; `docs/apps/vellum-shortcuts.md` lists the active keys.
   Thumbnail pairs now share Hayro's glyph/interpreter cache within one panel
   draw; the QEMU fixture records cold-batch milliseconds without a runner-speed
