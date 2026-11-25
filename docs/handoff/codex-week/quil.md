@@ -3,6 +3,9 @@
 Compared with VS Code and Zed, the current SDK Quil already has large files,
 tabs, a project tree, project search, multi-cursor editing, undo, Vim/Emacs
 keymaps, and Rust/Python/JavaScript syntax colors.
+Ctrl+D now continues past already selected matches after wrapping, so starting
+in the middle of a file can reach every occurrence. Bounded multi-cursor
+selection and undo are covered by focused tests and the QEMU editor gate.
 
 Remaining gaps:
 

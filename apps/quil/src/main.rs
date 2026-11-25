@@ -820,7 +820,11 @@ impl App {
             Command::ToggleNumbers => self.numbers = !self.numbers,
             Command::AddCursorAbove => self.tabs.list[i].ed.add_cursor(false),
             Command::AddCursorBelow => self.tabs.list[i].ed.add_cursor(true),
-            Command::AddNextOccurrence => { self.tabs.list[i].ed.add_next_occurrence(); }
+            Command::AddNextOccurrence => {
+                let ed = &mut self.tabs.list[i].ed;
+                let added = ed.add_next_occurrence();
+                sex_pdx::serial_record!("[quil.code.multicursor] action=next added={} count={}", added as u8, ed.sels.len());
+            }
             Command::SelectAllOccurrences => { let n = self.tabs.list[i].ed.select_all_occurrences(); self.status = format!("{n} selections"); }
             Command::SplitIntoLines => self.tabs.list[i].ed.split_into_lines(),
             Command::Collapse => { self.tabs.list[i].ed.collapse(); self.mark = false; }

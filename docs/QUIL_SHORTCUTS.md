@@ -35,6 +35,8 @@ Default editing also supports Ctrl+Shift+Up for a cursor above, Ctrl+Shift+I
 for a cursor on each selected line, Ctrl+G for next match, Ctrl+L for a line,
 Ctrl+PageUp/PageDown for tabs, Ctrl+Shift+D to duplicate a line, and Ctrl+Shift+K
 to delete a line. Ctrl+Z/Ctrl+Y undo and redo edits.
+Ctrl+D starts with the word at the cursor, then adds each remaining occurrence,
+wrapping through the document and skipping matches already selected.
 
 Ctrl+Shift+J starts Quil's native language-service helper with a run-scoped pipe,
 sends the current Rust, Python or JavaScript text through LSP 3.17 JSON-RPC, and

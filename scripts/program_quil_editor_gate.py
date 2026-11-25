@@ -12,13 +12,15 @@ COMPLETE=b'ret'
 REFERENCE=b'fn helper() {}\nfn main() { helper(); }\n'
 IDENTIFIER=b'fn helper() {}\nhel'
 IDENTIFIER_DONE=b'fn helper() {}\nhelper'
+OCCURRENCES=b'foo foo foo foo\n'
+OCCURRENCES_DONE=b'bar bar bar bar\n'
 INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
 GIT_BLOB=b'blob '+str(len(DEMO)).encode()+b'\0'+DEMO
 GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
 GIT_HEAD=b'ref: refs/heads/quil/demo\n'
 UNTRACKED=b'Quil work note\n'
 assert bytes.fromhex(GIT_ID)==INDEX[52:72]
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/occurrences.rs':OCCURRENCES,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -68,7 +70,7 @@ def main():
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','identifier.rs'):
+  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','identifier.rs','occurrences.rs'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   m=expect(f'fetch http://10.0.2.2:{PORT}/untracked /data/quil/notes.txt',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   line('mkdir /data/quil/.git')
@@ -181,6 +183,18 @@ def main():
   assert (a.out/'quil-lsp-identifier-completion.ppm').stat().st_size>100000
   s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.inserted\] label=helper version=\d+',s,30)
   s=len(t());ctrl('s');g['wait'](rf'\[quil.code.saved\] path=identifier.rs bytes={len(IDENTIFIER_DONE)} hash={fnv(IDENTIFIER_DONE):016x}',s,60)
+  # Starting at the third word, Ctrl+D must skip previously selected hits
+  # after wrapping and still reach the second word.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('occurrences');q.key('ret');time.sleep(.5)
+  ctrl('home')
+  for _ in range(8):q.key('right')
+  s=len(t())
+  for _ in range(4):ctrl('d')
+  g['wait'](r'\[quil.code.multicursor\] action=next added=1 count=4',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-multicursor-wrap.ppm')})
+  assert (a.out/'quil-multicursor-wrap.ppm').stat().st_size>100000
+  keys('bar');s=len(t());ctrl('s')
+  g['wait'](rf'\[quil.code.saved\] path=occurrences.rs bytes={len(OCCURRENCES_DONE)} hash={fnv(OCCURRENCES_DONE):016x}',s,60)
   s=len(t());send('ctrl','shift','p');time.sleep(.3);keys(f'large {a.large_mb}');q.key('ret')
   big=large_expected(a.large_mb)
   m=g['wait'](rf'\[quil.code.large\] mb={a.large_mb} write_ms=(\d+) open_ms=(\d+) pieces=(\d+)',s,1200)
