@@ -89,6 +89,8 @@ pub struct AnnotInfo {
     pub contents: Option<String>,
     pub author: Option<String>,
     pub color: Option<[f32; 3]>,
+    /// `/CA`; absent means fully opaque.
+    pub opacity: Option<f32>,
     /// `/M`, raw.
     pub modified: Option<String>,
     /// `/CreationDate`, raw.
@@ -148,6 +150,7 @@ impl Editor {
                 contents: s(b"Contents"),
                 author: s(b"T"),
                 color,
+                opacity: self.lookup(&d, b"CA").and_then(|o| o.as_f64()).map(|v| v as f32),
                 modified: s(b"M"),
                 created: s(b"CreationDate"),
                 name: s(b"NM"),

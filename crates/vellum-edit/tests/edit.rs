@@ -161,6 +161,37 @@ fn colored_highlight_renders_and_survives_incremental_save() {
 }
 
 #[test]
+fn translucent_highlight_renders_and_survives_incremental_save() {
+    let original = simple(Style::Table);
+    let mut opaque = Editor::open(original.clone()).unwrap();
+    let mut translucent = Editor::open(original).unwrap();
+    let rect = [18.0, 145.0, 140.0, 170.0];
+    for (editor, opacity) in [(&mut opaque, 1.0), (&mut translucent, 0.5)] {
+        editor.add_annotation(0, &NewAnnot {
+            kind: AnnotKind::Highlight { rects: vec![rect] },
+            style: AnnotStyle { color: [0.45, 0.9, 0.45], opacity, ..Default::default() },
+        }).unwrap();
+    }
+    let opaque = opaque.save_incremental().unwrap();
+    let saved = translucent.save_incremental().unwrap();
+    assert_eq!(Editor::open(saved.clone()).unwrap().annotations(0).unwrap()[0].opacity, Some(0.5));
+    let solid = px(&render(&opaque), 135.0, 165.0);
+    let light = px(&render(&saved), 135.0, 165.0);
+    assert!(light[0] > solid[0] && light[0] < 255,
+        "50% green must be lighter than opaque green: {solid:?} vs {light:?}");
+}
+
+#[test]
+fn guest_highlight_opacity_survives_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_OPACITY_PDF") else { return };
+    let editor = Editor::open(std::fs::read(path).unwrap()).unwrap();
+    let highlights: Vec<_> = editor.annotations(0).unwrap().into_iter()
+        .filter(|annot| annot.subtype == "Highlight").collect();
+    assert_eq!(highlights.len(), 1);
+    assert_eq!(highlights[0].opacity, Some(0.75));
+}
+
+#[test]
 fn guest_highlight_color_survives_guest_save() {
     let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_COLOR_PDF") else { return };
     let saved = std::fs::read(path).unwrap();
