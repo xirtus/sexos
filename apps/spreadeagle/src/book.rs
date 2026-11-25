@@ -301,9 +301,17 @@ impl Book {
     /// Adds a column chart of `range` (its first row and column as labels) with its
     /// top-left corner at (`row`, `col`).
     pub fn add_chart(&mut self, range: Range, row: u32, col: u32) -> Result<(), String> {
+        self.add_chart_kind(range, row, col, "column")
+    }
+
+    /// Insert one of the chart types offered by the native grid.
+    pub fn add_chart_kind(&mut self, range: Range, row: u32, col: u32, kind: &str) -> Result<(), String> {
+        if !matches!(kind, "column" | "line" | "bar" | "pie") {
+            return Err("Choose column, line, bar or pie".into());
+        }
         self.select(range)?;
         let at = CellRef::new(row, col).a1();
-        self.run("insert.chart", json!({ "range": range.a1(), "type": "column", "at": at })).map(|_| ())
+        self.run("insert.chart", json!({ "range": range.a1(), "type": kind, "at": at })).map(|_| ())
     }
 
     /// The active sheet's charts: where each sits and how big it is.
@@ -736,6 +744,25 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(Book::open(&path).unwrap().0.charts().len(), 1);
+    }
+
+    #[test]
+    fn chart_types_round_trip_in_xlsx() {
+        let mut book = budget("chart-types.xlsx");
+        let range = Range { r0: 0, c0: 0, r1: 3, c1: 1 };
+        assert!(book.add_chart_kind(range, 1, 3, "unsupported").is_err());
+        for kind in ["column", "line", "bar", "pie"] {
+            book.add_chart_kind(range, 1, 3, kind).unwrap();
+        }
+        let kinds = |book: &Book| -> Vec<String> {
+            book.session.doc().unwrap().wb.active().unwrap().charts.iter()
+                .map(|chart| format!("{:?}", chart.kind)).collect()
+        };
+        assert_eq!(kinds(&book).join(","), "ColumnClustered,Line,BarClustered,Pie");
+        let path = book.path.clone();
+        book.save().unwrap();
+        let (reopened, _) = Book::open(&path).unwrap();
+        assert_eq!(kinds(&reopened).join(","), "ColumnClustered,Line,BarClustered,Pie");
     }
 
     #[test]

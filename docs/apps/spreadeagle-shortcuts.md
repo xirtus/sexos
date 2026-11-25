@@ -16,7 +16,8 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+=, Ctrl+- | Insert or delete rows or columns |
 | Ctrl+Shift+A, Ctrl+Shift+D | Sort ascending or descending |
 | Ctrl+Shift+L, Ctrl+Shift+E | Toggle filter; show rows matching the selected cell |
-| Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert chart |
+| Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert a column chart |
+| Ctrl+Shift+M | Choose a column, line, bar or pie chart for the selection |
 | Ctrl+PageUp, Ctrl+PageDown | Previous or next sheet |
 
 The status line also shows common operations. While entering a formula, Enter

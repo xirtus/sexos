@@ -94,6 +94,12 @@ def main():
   m2=ctrl_shift('c',r'\[spreadeagle\.chart\] at=D1 width=(\d+) height=(\d+)\n')
   assert int(m2[1])>200 and int(m2[2])>150,m2[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart.ppm')})
+  ctrl_shift('m',r'\[spreadeagle\.chart\.choose\]\n')
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart-chooser.ppm')})
+  s=len(t());q.key('p')
+  m3=g['wait'](r'\[spreadeagle\.chart\.type\] kind=pie at=D1 width=(\d+) height=(\d+)\n',s,120)
+  assert int(m3[1])>200 and int(m3[2])>150,m3[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-pie-chart.ppm')})
   q.key('esc');time.sleep(.3)
   s=len(t());q.key('left');column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)
   q.key('up');time.sleep(.3)
@@ -105,7 +111,7 @@ def main():
   g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
   close(o)
   s=len(t());o=opened(r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|')
-  g['wait'](r'\[spreadeagle\.view\] charts=1 frozen=1,1\n',s,60)
+  g['wait'](r'\[spreadeagle\.view\] charts=2 frozen=1,1\n',s,60)
   # Find, copy, paste, undo.
   q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.5)
   s=len(t());type_line('rent');q.key('ret')
