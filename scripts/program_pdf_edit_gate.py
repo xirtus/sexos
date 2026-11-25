@@ -171,6 +171,14 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-form-pointer-caret.ppm')})
   assert (a.out/'pdf-form-pointer-caret.ppm').stat().st_size>10000
   q.key('backspace');time.sleep(.2)
+  # Drag across the form bar's value. The highlighted span replaces just the
+  # selected surname, and the committed PDF still gets the complete name.
+  s=len(t());drag(bx+round((name_vx+4*9+2)*ui),by+round(BAR//2*ui),
+                 bx+round((name_vx+12*9+2)*ui),by+round(BAR//2*ui))
+  g['wait'](r'\[pdf\.form\.drag\.selection\] name=name start=4 end=12 chars=12\n',s)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-form-drag-selection.ppm')})
+  assert (a.out/'pdf-form-drag-selection.ppm').stat().st_size>10000
+  keys('X');q.key('backspace');keys('Lovelace')
   # Shell keeps Tab (it moves focus between windows): Ctrl+Down is the next field.
   s=len(t());chord('ctrl','down')
   g['wait'](rf'\[pdf\.field\] name=name kind=text value={NAME}\n',s);g['wait'](r'\[pdf\.field\.focus\] name=agree index=2 page=1\n',s)

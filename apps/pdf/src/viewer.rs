@@ -347,6 +347,8 @@ struct Viewer {
     signing: Option<SigningChoice>,
     close_after_sign: bool,
     form: Option<Form>,
+    /// The focused text field whose form-bar drag began with the primary button.
+    text_drag: Option<usize>,
     /// The current page's annotations, while Ctrl+L lists them.
     annots: Vec<AnnotInfo>,
     /// A line of news in the bar until the next key: saved, refused, ...
@@ -854,7 +856,7 @@ impl Viewer {
         let (x, y) = (p.x.max(0) as usize, p.y.max(0) as usize);
         let popup_was_open = self.form.as_ref().is_some_and(|f| f.popup);
         if self.choice_pointer(p.kind, (x, y), size, l.bar) { return true; }
-        if self.text_pointer(p.kind, (x, y), l.bar) { return true; }
+        if self.text_pointer(p.kind, p.buttons, (x, y), l.bar) { return true; }
         if self.region_pointer(p.kind, p.buttons, (x, y), &l) { return true; }
         if self.widget_pointer(p.kind, (x, y), &l, size) { return true; }
         if popup_was_open && self.form.as_ref().is_some_and(|f| !f.popup) { return true; }
@@ -930,16 +932,41 @@ impl Viewer {
         self.region = Some(dragged_region(start, end, (w as f64, h as f64)));
     }
 
-    fn text_pointer(&mut self, kind: Kind, (x, y): (usize, usize), bar: usize) -> bool {
-        if !matches!(kind, Kind::Down { button: 0 }) || y >= bar || self.shortcuts { return false; }
-        let Some(form) = self.form.as_mut() else { return false };
-        let Some((field, _, _)) = form.fields.get(form.at) else { return false };
-        if !matches!(field.kind, FieldKind::Text { .. }) { return false; }
+    fn text_pointer(&mut self, kind: Kind, buttons: u8, (x, y): (usize, usize), bar: usize) -> bool {
+        if self.shortcuts { self.text_drag = None; return false; }
+        let Some(form) = self.form.as_mut() else { self.text_drag = None; return false };
+        let Some((field, _, _)) = form.fields.get(form.at) else { self.text_drag = None; return false };
+        if !matches!(field.kind, FieldKind::Text { .. }) { self.text_drag = None; return false; }
         let value_x = 8 + (field.name.chars().count() + 2) * CW;
-        form.caret = text_caret_at_x(x, value_x, form.text.chars().count());
-        form.anchor = None;
-        sex_std::record(&format!("[pdf.form.pointer] name={} at={} chars={}", field.name, form.caret, form.text.chars().count()));
-        true
+        let at = text_caret_at_x(x, value_x, form.text.chars().count());
+        match kind {
+            Kind::Down { button: 0 } if y < bar => {
+                form.caret = at;
+                form.anchor = Some(at);
+                self.text_drag = Some(form.at);
+                sex_std::record(&format!("[pdf.form.pointer] name={} at={} chars={}", field.name, at, form.text.chars().count()));
+                true
+            }
+            Kind::Move if self.text_drag == Some(form.at) => {
+                if buttons & 1 == 0 { self.text_drag = None; form.anchor = None; return true; }
+                form.caret = at;
+                if let Some((start, end)) = text_selection(form.anchor, form.caret) {
+                    sex_std::record(&format!("[pdf.form.drag.selection] name={} start={} end={} chars={}", field.name, start, end, form.text.chars().count()));
+                }
+                true
+            }
+            Kind::Up { button: 0 } if self.text_drag == Some(form.at) => {
+                form.caret = at;
+                self.text_drag = None;
+                let selected = text_selection(form.anchor, form.caret);
+                if let Some((start, end)) = selected {
+                    sex_std::record(&format!("[pdf.form.drag.selection] name={} start={} end={} chars={}", field.name, start, end, form.text.chars().count()));
+                } else { form.anchor = None; }
+                true
+            }
+            Kind::Leave if self.text_drag.is_some() => { self.text_drag = None; true }
+            _ => false,
+        }
     }
 
     fn widget_pointer(&mut self, kind: Kind, point: (usize, usize), l: &Layout, size: (usize, usize)) -> bool {
@@ -1529,6 +1556,7 @@ impl Viewer {
 
     /// A pointer already sits on a widget's shown page; keyboard focus uses the first widget.
     fn focus_at(&mut self, at: usize, pointer_page: Option<usize>) {
+        self.text_drag = None;
         let Some(form) = self.form.as_mut() else { return };
         form.at = at;
         form.popup = false;
@@ -1647,6 +1675,7 @@ impl Viewer {
     fn end_form(&mut self) {
         self.commit_field();
         self.form = None;
+        self.text_drag = None;
         sex_std::record("[pdf.form] done=1");
     }
 
@@ -1933,6 +1962,19 @@ mod render_cache_tests {
     }
 
     #[test]
+    fn form_bar_reverse_drag_selects_unicode_characters_for_replacement() {
+        let mut text = String::from("Ada naïve");
+        let vx = 62;
+        let anchor = text_caret_at_x(vx + 9 * CW, vx, text.chars().count());
+        let mut caret = text_caret_at_x(vx + 4 * CW, vx, text.chars().count());
+        let mut selected = Some(anchor);
+        assert_eq!(text_selection(selected, caret), Some((4, 9)));
+        assert!(replace_text_selection(&mut text, &mut caret, &mut selected));
+        text_insert(&mut text, &mut caret, 'é');
+        assert_eq!((text.as_str(), caret, selected), ("Ada é", 5, None));
+    }
+
+    #[test]
     fn dragged_region_normalizes_reverse_drag_and_stays_on_page() {
         assert_eq!(dragged_region((160.0, 140.0), (40.0, 70.0), (200.0, 180.0)),
             [40.0, 70.0, 160.0, 140.0]);
@@ -2033,7 +2075,7 @@ pub fn main() {
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
-        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, region_drag: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, annots: Vec::new(),
+        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, region_drag: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
         status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };
