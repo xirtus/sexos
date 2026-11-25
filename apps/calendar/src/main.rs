@@ -110,7 +110,7 @@ pub struct App {
     last_minute: i64,
     cursor_ready: bool,
     notice_retry: NoticeRetry,
-    receipts: ReceiptJournal,
+    receipts: Option<ReceiptJournal>,
     uid_counter: u32,
 }
 
@@ -219,10 +219,11 @@ fn poll_visible_notices(window: &mut Window, app: &mut App, store: &mut [u8],
         *notice_owner = Some(owns);
     }
     if !owns { app.now_ms = now; return false; }
-    if became_owner {
+    if became_owner || app.receipts.is_none() {
         app.receipts = match files::read(window, NOTICE_RECEIPTS, store) {
-            Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
-            Err(_) => ReceiptJournal::default(),
+            Ok(n) => ReceiptJournal::open(Some(&String::from_utf8_lossy(&store[..n]))),
+            Err(e) if e == files::NOT_FOUND => ReceiptJournal::open(None),
+            Err(_) => None,
         };
     }
     if let Ok(n) = files::read(window, FILE, store) {
@@ -302,10 +303,11 @@ fn notice_worker() -> ! {
             Err(_) => NoticeCursor::bootstrap(None, now, saved_events || saved_clock, |_| false),
         };
         let mut receipts = match fs::read_at(NOTICE_RECEIPTS, 0, &mut store[..]) {
-            Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
-            Err(_) => ReceiptJournal::default(),
+            Ok(n) => ReceiptJournal::open(Some(&String::from_utf8_lossy(&store[..n]))),
+            Err(e) if e == files::NOT_FOUND => ReceiptJournal::open(None),
+            Err(_) => None,
         };
-        sex_pdx::serial_record!("[date.notice.receipts.loaded] owner=worker count={}", receipts.len());
+        sex_pdx::serial_record!("[date.notice.receipts.loaded] owner=worker count={}", receipts.as_ref().map_or(0, ReceiptJournal::len));
         if !cursor_ready { sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor-initial"); }
         let mut retry = NoticeRetry::default();
         sex_pdx::serial_record!("[date.notice.worker.resumed]");
@@ -317,6 +319,13 @@ fn notice_worker() -> ! {
                 break;
             }
             if now == 0 { let _ = sex_pdx::sys_wait_self_ticks(500); continue; }
+            if receipts.is_none() {
+                receipts = match fs::read_at(NOTICE_RECEIPTS, 0, &mut store[..]) {
+                    Ok(n) => ReceiptJournal::open(Some(&String::from_utf8_lossy(&store[..n]))),
+                    Err(e) if e == files::NOT_FOUND => ReceiptJournal::open(None),
+                    Err(_) => None,
+                };
+            }
             if !cursor_ready {
                 match fs::read_at(NOTICE_CURSOR, 0, &mut store[..]) {
                     Ok(n) => {
@@ -343,15 +352,16 @@ fn notice_worker() -> ! {
                     let (kind, title, body) = due_text(&cal, notice, offset);
                     let key = notice.semantic_key(&cal);
                     let digest = key.as_deref().map(receipt_digest);
-                    if digest.is_some_and(|digest| receipts.contains(notice.at(), digest)) {
+                    if digest.is_some() && receipts.is_none() { return false; }
+                    if digest.is_some_and(|digest| receipts.as_ref().is_some_and(|journal| journal.contains(notice.at(), digest))) {
                         sex_pdx::serial_record!("[date.notice.receipt.reused] kind={} minute={}", kind, notice.at());
                         return true;
                     }
                     let disposition = sex_app::notify::post_confirmed_keyed(title.as_bytes(), body.as_bytes(),
                         sex_pdx::notify::URGENCY_CRITICAL, key.as_deref().map(str::as_bytes));
                     let settled = disposition.settles_due() && digest.map_or(true, |digest|
-                        receipts.record_after_ack(notice.at(), digest,
-                            |text| save_notice_direct(NOTICE_RECEIPTS, text.as_bytes())));
+                        receipts.as_mut().is_some_and(|journal| journal.record_after_ack(notice.at(), digest,
+                            |text| save_notice_direct(NOTICE_RECEIPTS, text.as_bytes()))));
                     sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
                         (disposition == sex_pdx::notify::Disposition::Accepted) as u8, settled as u8);
                     settled
@@ -794,15 +804,16 @@ impl App {
                 let (kind, title, body) = due_text(&self.cal, notice, offset);
                 let key = notice.semantic_key(&self.cal);
                 let digest = key.as_deref().map(receipt_digest);
-                if digest.is_some_and(|digest| self.receipts.contains(notice.at(), digest)) {
+                if digest.is_some() && self.receipts.is_none() { return false; }
+                if digest.is_some_and(|digest| self.receipts.as_ref().is_some_and(|journal| journal.contains(notice.at(), digest))) {
                     sex_pdx::serial_record!("[date.notice.receipt.reused] kind={} minute={}", kind, notice.at());
                     return true;
                 }
                 let disposition = sex_app::notify::post_confirmed_keyed(title.as_bytes(), body.as_bytes(),
                     sex_pdx::notify::URGENCY_CRITICAL, key.as_deref().map(str::as_bytes));
                 let settled = disposition.settles_due() && digest.map_or(true, |digest|
-                    self.receipts.record_after_ack(notice.at(), digest,
-                        |text| save_file(window, NOTICE_RECEIPTS, text.as_bytes()).is_ok()));
+                    self.receipts.as_mut().is_some_and(|journal| journal.record_after_ack(notice.at(), digest,
+                        |text| save_file(window, NOTICE_RECEIPTS, text.as_bytes()).is_ok())));
                 sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
                     (disposition == sex_pdx::notify::Disposition::Accepted) as u8, settled as u8);
                 if settled && disposition == sex_pdx::notify::Disposition::Accepted { banner = Some(format!("{title}: {body}")); }
@@ -1216,10 +1227,11 @@ pub extern "C" fn _start() -> ! {
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
     let receipts = match files::read(&mut window, NOTICE_RECEIPTS, store) {
-        Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
-        Err(_) => ReceiptJournal::default(),
+        Ok(n) => ReceiptJournal::open(Some(&String::from_utf8_lossy(&store[..n]))),
+        Err(e) if e == files::NOT_FOUND => ReceiptJournal::open(None),
+        Err(_) => None,
     };
-    sex_pdx::serial_record!("[date.notice.receipts.loaded] owner=visible count={}", receipts.len());
+    sex_pdx::serial_record!("[date.notice.receipts.loaded] owner=visible count={}", receipts.as_ref().map_or(0, ReceiptJournal::len));
     let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, review_choice: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, cursor_ready, notice_retry: NoticeRetry::default(), receipts, uid_counter: 0 };

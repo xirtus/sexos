@@ -11,6 +11,10 @@
   checks Shell key routing and handling, captures its banner, then restarts
   Date and requires a nonempty receipt journal from disk. Full build, QEMU and
   screenshots run in GitHub CI only.
+- A missing receipt file starts empty. A read error or malformed existing file
+  leaves the journal unavailable; Date retries loading it and holds keyed
+  reminders pending instead of replacing past receipts with an empty journal.
+  A host regression covers missing, valid and damaged file states.
 - Shell and Bell have no Files storage authority. The journal closes replay
   after Date's receipt commit, not the Shell-handled-to-Date-commit crash gap.
   It holds at most 256 entries within seven days, and 128-bit digests can

@@ -22,6 +22,11 @@ pub const RECEIPT_LIMIT: usize = 256;
 pub struct ReceiptJournal { entries: Vec<(i64, u128)> }
 impl ReceiptJournal {
     pub fn len(&self) -> usize { self.entries.len() }
+    /// A missing file starts an empty journal. An existing but unreadable or
+    /// malformed file must never be treated as empty by a reminder owner.
+    pub fn open(raw: Option<&str>) -> Option<Self> {
+        raw.map_or_else(|| Some(Self::default()), Self::parse)
+    }
     pub fn parse(text: &str) -> Option<Self> {
         let mut lines = text.lines();
         if lines.next() != Some(RECEIPT_HEADER) { return None; }
@@ -330,6 +335,14 @@ mod tests {
         assert!(!reopened.contains(101, 42));
         assert!(!reopened.contains(100, 43));
         assert!(ReceiptJournal::parse("# date-receipts 1\n100 bad\n").is_none());
+    }
+
+    #[test]
+    fn existing_damaged_receipts_do_not_open_as_empty() {
+        assert_eq!(ReceiptJournal::open(None), Some(ReceiptJournal::default()));
+        assert!(ReceiptJournal::open(Some("# date-receipts 1\n100 bad\n")).is_none());
+        let saved = "# date-receipts 1\n100 0000000000000000000000000000002a\n";
+        assert!(ReceiptJournal::open(Some(saved)).unwrap().contains(100, 42));
     }
 
     #[test]
