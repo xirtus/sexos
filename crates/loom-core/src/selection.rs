@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Contiguous list selection for Loom's native folder view.
+//! Text-list selection for Loom's native folder view.
 use core::ops::RangeInclusive;
 use alloc::vec::Vec;
 
@@ -13,6 +13,33 @@ pub fn rows(anchor: Option<usize>, focus: usize, len: usize) -> Option<RangeIncl
     let focus = focus.min(len - 1);
     let anchor = anchor.unwrap_or(focus).min(len - 1);
     Some(anchor.min(focus)..=anchor.max(focus))
+}
+
+/// Selected rows in folder order. Explicit marks exclude the focus unless it
+/// was itself marked; an empty selection still acts on the focused row.
+pub fn selected_rows(anchor: Option<usize>, focus: usize, marks: &[usize], len: usize) -> Vec<usize> {
+    let Some(range) = rows(anchor, focus, len) else { return Vec::new() };
+    let mut selected: Vec<usize> = if anchor.is_some() { range.collect() } else { Vec::new() };
+    selected.extend(marks.iter().copied().filter(|&row| row < len));
+    selected.sort_unstable();
+    selected.dedup();
+    if selected.is_empty() { selected.push(focus.min(len - 1)); }
+    selected
+}
+
+/// Toggle a focused row, materializing an existing Shift range first. Returns
+/// explicit marks, which may be empty after the last mark is removed.
+pub fn toggle_row(anchor: Option<usize>, focus: usize, marks: &[usize], len: usize) -> Vec<usize> {
+    if len == 0 { return Vec::new(); }
+    let focus = focus.min(len - 1);
+    let mut selected: Vec<usize> = if anchor.is_some() {
+        selected_rows(anchor, focus, marks, len)
+    } else { marks.iter().copied().filter(|&row| row < len).collect() };
+    if let Some(at) = selected.iter().position(|&row| row == focus) { selected.remove(at); }
+    else { selected.push(focus); }
+    selected.sort_unstable();
+    selected.dedup();
+    selected
 }
 
 /// A cut group can move only to a different folder outside every selected
@@ -68,6 +95,17 @@ mod tests {
         assert_eq!(rows(Some(3), 1, 5).unwrap().collect::<alloc::vec::Vec<_>>(), alloc::vec![1, 2, 3]);
         assert_eq!(rows(Some(1), 4, 3).unwrap().collect::<alloc::vec::Vec<_>>(), alloc::vec![1, 2]);
         assert!(rows(Some(0), 0, 0).is_none());
+    }
+
+    #[test]
+    fn disjoint_marks_skip_middle_and_toggle_without_duplicates() {
+        let first = toggle_row(None, 0, &[], 4);
+        assert_eq!(first, alloc::vec![0]);
+        let disjoint = toggle_row(None, 2, &first, 4);
+        assert_eq!(selected_rows(None, 2, &disjoint, 4), alloc::vec![0, 2]);
+        assert_eq!(toggle_row(None, 2, &disjoint, 4), alloc::vec![0]);
+        assert_eq!(selected_rows(None, 2, &[2, 0, 2, 99], 4), alloc::vec![0, 2]);
+        assert_eq!(toggle_row(Some(0), 2, &[], 4), alloc::vec![0, 1]);
     }
 
     #[test]

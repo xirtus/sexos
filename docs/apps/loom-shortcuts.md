@@ -9,6 +9,7 @@ open prompt determine which keys act. F11 closes the window.
 | Go to the parent folder | Backspace |
 | Rename the selected item | F2 |
 | Select a range in the text folder list | Shift+Up/Down/Home/End |
+| Toggle a row in a text-list selection; move focus without clearing marks | Ctrl+Space; Ctrl+Up/Down/Home/End |
 | Show size and checksum | Ctrl+I |
 | Copy, cut and paste | Ctrl+C, Ctrl+X, Ctrl+V |
 | Create a folder | Ctrl+N |
@@ -34,13 +35,13 @@ Enter confirms a prompt and Escape cancels it. When a background job is active,
 Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
 supported file operations in the current Loom run; redo is not yet available.
-Delete moves a selected range to trash as one action, and one Ctrl+Z restores
-the range. Ctrl+X cuts a selected text-list range; Ctrl+V moves it into another
+Delete moves selected text-list rows to trash as one action, and one Ctrl+Z restores
+them. Ctrl+X cuts selected text-list rows; Ctrl+V moves them into another
 folder on the same disk, and one Ctrl+Z moves it back. Ctrl+C copies a selected
-text-list range of up to 64 items into this or another folder; Ctrl+V starts
+text-list selection of up to 64 items into this or another folder; Ctrl+V starts
 one background job and Ctrl+Z removes the completed group. A taken name receives
 `(copy)` or `(copy 2)` before its extension. Copied ratings and tags follow
-the new items. Grid and noncontiguous batch selection remain open.
+the new items. Plain arrows clear marks; Ctrl+arrows preserve them. Grid batch selection remains open.
 Ctrl+Shift+R opens the batch rename preview.
 In split grid view, a click in either pane focuses that folder. Clicking a tile
 also selects it; Ctrl+Page Up/Down changes the active folder from the keyboard.

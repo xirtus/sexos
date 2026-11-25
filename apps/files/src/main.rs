@@ -58,6 +58,7 @@ const BACKSPACE: u8 = 0x0E;
 const ESC: u8 = 0x01;
 const F2: u8 = 0x3C;
 const F5: u8 = 0x3F;
+const SPACE: u8 = 0x39;
 // Letters, PS/2 set 1, used with Ctrl.
 const KEY_C: u8 = 0x2E;
 const KEY_X: u8 = 0x2D;
@@ -101,6 +102,7 @@ struct App {
     entries: Vec<Entry>,
     cursor: usize,
     selection_anchor: Option<usize>,
+    selection_marks: Vec<usize>,
     top: usize,
     tabs: Vec<FolderTab>,
     active_tab: usize,
@@ -261,6 +263,7 @@ impl App {
         }
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         self.selection_anchor = None;
+        self.selection_marks.clear();
         sex_pdx::serial_record!("[files.app.list] dir={} count={}", shown(&self.cwd), self.entries.len());
         self.thumbs.folder(&self.cwd, &self.entries);
     }
@@ -332,23 +335,43 @@ impl App {
         self.status = format!("{} was pulled out without Ctrl+E Eject: a file being written to it may be cut short. Plug it back in and copy again.", shown(&name));
         true
     }
-    fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
-    fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; self.selection_anchor = None; } }
+    fn selected(&self) -> Option<Vec<u8>> {
+        let rows = self.selected_rows();
+        let row = if self.selection_active() && rows.len() == 1 { rows[0] } else { self.cursor };
+        self.entries.get(row).map(|e| join(&self.cwd, &e.name))
+    }
+    fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; self.selection_anchor = None; self.selection_marks.clear(); } }
     fn selection(&self) -> Option<core::ops::RangeInclusive<usize>> {
         loom_core::selection::rows(self.selection_anchor, self.cursor, self.entries.len())
     }
     fn selected_paths(&self) -> Vec<Vec<u8>> {
-        self.selection().into_iter().flatten().filter_map(|i| self.entries.get(i))
+        self.selected_rows().into_iter().filter_map(|i| self.entries.get(i))
             .map(|e| join(&self.cwd, &e.name)).collect()
+    }
+    fn selected_rows(&self) -> Vec<usize> {
+        loom_core::selection::selected_rows(self.selection_anchor, self.cursor, &self.selection_marks, self.entries.len())
+    }
+    fn selection_active(&self) -> bool { self.selection_anchor.is_some() || !self.selection_marks.is_empty() }
+    fn marked(&self, row: usize) -> bool {
+        self.selection_marks.contains(&row) || self.selection_anchor.is_some()
+            && self.selection().is_some_and(|range| range.contains(&row))
+    }
+    fn toggle_focus(&mut self) {
+        if self.thumbs.on || self.entries.is_empty() { return; }
+        self.selection_marks = loom_core::selection::toggle_row(self.selection_anchor, self.cursor,
+            &self.selection_marks, self.entries.len());
+        self.selection_anchor = None;
+        sex_pdx::serial_record!("[files.app.selection.disjoint] count={} focus={}", self.selection_marks.len(), self.cursor);
     }
     fn move_selection(&mut self, to: usize, extend: bool) {
         let old = self.cursor;
         self.cursor = to.min(self.entries.len().saturating_sub(1));
+        if !extend { self.selection_marks.clear(); }
         self.selection_anchor = if extend && !self.thumbs.on && !self.entries.is_empty() {
             Some(self.selection_anchor.unwrap_or(old))
         } else { None };
         if extend {
-            let count = self.selection().map(|r| r.count()).unwrap_or(0);
+            let count = self.selected_rows().len();
             sex_pdx::serial_record!("[files.app.selection] count={} first={} last={}", count,
                 self.selection().map(|r| *r.start()).unwrap_or(0), self.selection().map(|r| *r.end()).unwrap_or(0));
         }
@@ -368,7 +391,7 @@ impl App {
         if self.cursor >= self.top + ROWS { self.top = self.cursor + 1 - ROWS; }
         let left: Vec<String> = self.entries.iter().enumerate().skip(self.top).take(ROWS)
             .map(|(i, e)| format!("{}{} {}{}", if i == self.cursor { ">" } else { " " },
-                if self.selection().is_some_and(|r| r.contains(&i)) && self.selection_anchor.is_some() { "*" } else { " " },
+                if self.marked(i) { "*" } else { " " },
                 shown(&e.name), if e.dir { "/" } else { "" }))
             .collect();
         let right: Vec<String> = match files::list(window, &at(&other_tab.cwd)) {
@@ -454,7 +477,8 @@ impl App {
         }
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
         t.push_str(&format!("Loom [{}/{}]  {}{}\n", self.active_tab + 1, self.tabs.len(), shown(&self.cwd), space));
-        if let Some(count) = self.selection_anchor.and_then(|_| self.selection().map(|r| r.count())) {
+        if self.selection_active() {
+            let count = self.selected_rows().len();
             t.push_str(&format!("{count} selected  ·  Ctrl+C copies  ·  Ctrl+X cuts  ·  Delete trashes  ·  Ctrl+Z undoes the batch\n"));
         }
         if self.tabs.len() > 1 {
@@ -477,7 +501,7 @@ impl App {
         if self.cursor < self.top { self.top = self.cursor; }
         if self.cursor >= self.top + ROWS { self.top = self.cursor + 1 - ROWS; }
         for (i, e) in self.entries.iter().enumerate().skip(self.top).take(ROWS) {
-            let marked = self.selection_anchor.is_some() && self.selection().is_some_and(|r| r.contains(&i));
+            let marked = self.marked(i);
             let mark = match (i == self.cursor, marked) { (true, true) => ">*", (true, false) => "> ", (false, true) => " *", (false, false) => "  " };
             let mut from = match self.origins.get(i) { Some(Some(o)) => format!("   from {}", shown(o)), _ => String::new() };
             from.push_str(&self.loom_badge(&e.name));
@@ -879,7 +903,7 @@ impl App {
     }
     /// Shift+Del: removes the selected item for good, after a second Shift+Del.
     fn delete_forever(&mut self, window: &mut Window) {
-        if self.selection_anchor.is_some() && self.selected_paths().len() > 1 {
+        if self.selected_paths().len() > 1 {
             self.status = "Permanent deletion currently takes one item. Move the selection to trash with Delete.".into();
             return;
         }
@@ -1176,7 +1200,25 @@ impl App {
         }
         self.status.clear();
         if key.control {
+            if !self.thumbs.on && !self.entries.is_empty() {
+                let target = match sex_app::nav(key) {
+                    Some(Nav::Up) => Some(self.cursor.saturating_sub(1)),
+                    Some(Nav::Down) => Some((self.cursor + 1).min(self.entries.len() - 1)),
+                    Some(Nav::Home) => Some(0),
+                    Some(Nav::End) => Some(self.entries.len() - 1),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    if self.selection_anchor.is_some() {
+                        self.selection_marks = self.selected_rows();
+                        self.selection_anchor = None;
+                    }
+                    self.cursor = target;
+                    return;
+                }
+            }
             match key.code {
+                SPACE => self.toggle_focus(),
                 KEY_B if key.shift => self.open_quick_places(window),
                 0x2B if key.shift => {
                     if !self.tab_ready() {
@@ -1193,7 +1235,7 @@ impl App {
                 KEY_W if key.shift => self.close_tab(window),
                 0x49 => { let next = (self.active_tab + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(window, next); }
                 0x51 => { let next = (self.active_tab + 1) % self.tabs.len(); self.show_tab(window, next); }
-                KEY_C | KEY_X if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+                KEY_C | KEY_X if self.selected_paths().len() > 1 => {
                     let paths = self.selected_paths();
                     let cut = key.code == KEY_X;
                     sex_pdx::serial_record!("[files.app.{}.batch] count={}", if cut { "cut" } else { "copy" }, paths.len());
@@ -1233,6 +1275,7 @@ impl App {
                 },
                 KEY_G => {
                     self.selection_anchor = None;
+                    self.selection_marks.clear();
                     self.thumbs.on = !self.thumbs.on;
                     sex_pdx::serial_record!("[files.app.grid] on={} dir={}", self.thumbs.on as u8, shown(&self.cwd));
                     if self.thumbs.on { self.thumbs.folder(&self.cwd, &self.entries); }
@@ -1294,7 +1337,7 @@ impl App {
                 }
             }
             (ESC, _) => if self.found.is_some() { self.load(window); } else if self.question.is_some() && !confirming { self.answer(window, None); },
-            (F2, _) if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+            (F2, _) if self.selected_paths().len() > 1 => {
                 self.status = "F2 renames one item. Ctrl+Shift+R previews batch rename.".into();
             }
             (F2, _) => if let Some(p) = self.selected() { let name = base(&p).to_vec(); self.input = Some((Input::Rename(p), name)); },
@@ -1330,7 +1373,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, selection_marks: Vec::new(), top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
