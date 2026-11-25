@@ -392,6 +392,7 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
   s=len(t());line('run vellum @signature-field.pdf')
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=signature-field\.pdf pages=1\n',s,600)
+  g['wait'](rf'\[pdf\.sign\.image\] row={o[1]} task={o[2]} approved=1\n',s,120)
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
   step(lambda:chord('ctrl','shift','d'),r'\[pdf\.sign\.field\] page=1 name=Vellum signature 1 empty=1\n')
@@ -421,6 +422,7 @@ def main():
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=signature-field\.pdf pages=1\n',s,600)
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(.5);g['focus'](sid)
+  assert re.search(rf'\[pdf\.sign\.image\] row={o[1]} task={o[2]} approved=1\n',t()[s:]),'signing run lacked image attestation'
   step(lambda:chord('ctrl','shift','b'),r'\[pdf\.sign\.choice\] field=Vellum signature 1 certificate_bytes=\d+ confirmed=0\n')
   time.sleep(.4);q.cmd('screendump',{'filename':str(a.out/'pdf-digital-signature-consent.ppm')})
   step(lambda:q.key('esc'),r'\[pdf\.sign\.cancelled\] stage=viewer\n')
@@ -441,7 +443,10 @@ def main():
   step(lambda:chord('ctrl','shift','b'),r'\[pdf\.sign\.choice\] field=Vellum signature 1 certificate_bytes=\d+ confirmed=0\n')
   s=len(t());q.key('ret')
   g['wait'](r'\[pdf\.sign\.request\] client=\d+ signer=\d+ attrs=\d+\n',s,120)
-  g['focus'](signer_sid);time.sleep(.5);q.key('y')
+  g['focus'](signer_sid);time.sleep(.5)
+  q.cmd('screendump',{'filename':str(a.out/'pdf-shibari-approval.ppm')})
+  assert (a.out/'pdf-shibari-approval.ppm').stat().st_size>10000
+  q.key('y')
   g['wait'](r'\[shibari\.pdf\.approved\] ok=1\n',s,120)
   g['wait'](r'\[pdf\.sign\.saved\] field=Vellum signature 1 bytes=\d+ content_intact=1 verified=0\n',s,300)
   g['focus'](sid);time.sleep(.5)

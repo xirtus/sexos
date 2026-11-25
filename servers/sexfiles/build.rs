@@ -1,8 +1,11 @@
 #[path = "build/helper_pin.rs"]
 mod helper_pin;
+#[path = "build/vellum_pin.rs"]
+mod vellum_pin;
 fn main() {
     release_key();
     helper_pin::generate();
+    vellum_pin::generate();
     println!("cargo:rerun-if-env-changed=SEXFILES_RAMFS_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_DISKFS_OBJECT_TABLE_PROOF");
     println!("cargo:rerun-if-env-changed=SEXOS_SEXFILES_JOURNAL_PROOF");

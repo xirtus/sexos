@@ -17773,6 +17773,8 @@ fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
     program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY))
 }
 static mut PROGRAM_READING: bool = false;
+/// Files certified the bytes in the image region for this pending load only.
+static mut PROGRAM_APPROVED_VELLUM: bool = false;
 /// Background copies still to start from the file Files last read, and its length.
 static mut RECORD_SPAWN_LEFT: u64 = 0;
 static mut RECORD_SPAWN_WANTED: u64 = 0;
@@ -17797,6 +17799,8 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    let approved=unsafe{core::mem::take(&mut PROGRAM_APPROVED_VELLUM)};
+    unsafe{pdf_sign::bind_approved(target,task,approved);}
     unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
@@ -17891,6 +17895,7 @@ unsafe fn launch_started(target:u32,task:u32,network:bool){
 /// A run ended: what it started is no longer its to end, and its starter hears how it
 /// ended once its status is in, or the grace for it has passed.
 unsafe fn launch_ended(target:u32,task:u32){
+    pdf_sign::retire(target,task);
     for slot in NETWORK_RUNS.iter_mut().chain(HIDDEN_RUNS.iter_mut()){if *slot==Some((target,task)){*slot=None;}}
     for slot in PLACED_RUNS.iter_mut(){if slot.is_some_and(|p|p.0==target&&p.1==task){*slot=None;}}
     session_tell(sex_pdx::session_restore::ENDED,target,task,0);
@@ -18066,23 +18071,25 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         return true;
     }
     if !PROGRAM_READING||msg.caller_pd!=11||msg.type_id!=1{return false}
-    let Some(result)=store::decode_reply(msg.arg0)else{return false};
+    let Some(result)=store::decode_attested_reply(msg.arg0)else{return false};
     PROGRAM_READING=false;
+    PROGRAM_APPROVED_VELLUM=false;
     if RECORD_SPAWN_WANTED!=0{
         match result{
-            Ok(len)=>{RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;},
+            Ok((len,_))=>{RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;},
             Err(error)=>{sex_pdx::serial_record!("[shell.records.denied] reason=store error={}",error);program_refused(error);},
         }
         RECORD_SPAWN_WANTED=0;
         return true;
     }
-    let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
+    let (len,approved)=match result{Ok(v)=>v,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
     let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true};
     launcher_focus_discard();
     let loaded=a::load_program(slot,len);
     if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);program_refused(store::NOT_A_PROGRAM);return true}
+    PROGRAM_APPROVED_VELLUM=approved;
     if state==a::ACTIVATION_READY{
-        let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
+        let Ok(active)=a::activation(slot,true)else{PROGRAM_APPROVED_VELLUM=false;sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
         program_bind(active.successor,active.task);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
@@ -18097,13 +18104,13 @@ unsafe fn program_rebirth_poll(){
     match a::rebirth(slot){
         Ok(active) if active.state==a::ACTIVATION_ACTIVE=>{
             PROGRAM_REBIRTH=None;
-            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{return};
+            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{PROGRAM_BIND_PENDING=false;PROGRAM_APPROVED_VELLUM=false;return};
             sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
             if core::mem::take(&mut PROGRAM_BIND_PENDING){program_bind(active.successor,active.task);}
             launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         },
         Ok(_)|Err(a::RETRY)=>{},
-        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
+        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;PROGRAM_APPROVED_VELLUM=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
     }
 }
 unsafe fn open_browser_in_active_scene()->bool{
