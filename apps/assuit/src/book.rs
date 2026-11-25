@@ -75,11 +75,33 @@ impl Book {
 
     /// Runs one WordCraft command, such as `text.insert` or `format.bold`.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let before = self.session.rev();
         let r = self.session.run(id, &params).map_err(|e| format!("{e:?}"))?;
-        if self.session.registry.get(id).is_some_and(|spec| spec.mutates) { self.edits += 1; }
+        // Some navigation commands create/remove an empty header through a
+        // nested mutating command. Count the actual revision for autosave.
+        if self.session.rev() != before || self.session.registry.get(id).is_some_and(|spec| spec.mutates) {
+            self.edits += 1;
+        }
         Ok(r)
     }
     pub fn type_text(&mut self, text: &str) -> Result<(), String> { self.run("text.insert", json!({ "text": text })).map(|_| ()) }
+
+    pub fn editing_header_footer(&self) -> bool { self.session.in_header_footer() }
+
+    /// Enter the header or footer actually shown on the caret's page. WordCraft
+    /// keeps its rich story, including any dynamic page-number field.
+    pub fn edit_header_footer(&mut self, header: bool) -> Result<(), String> {
+        if self.editing_header_footer() { return Err("Press Esc to leave the current header or footer".into()); }
+        let page = self.caret().map_or(0, |caret| caret.page);
+        self.run(if header { "insert.editHeader" } else { "insert.editFooter" }, json!({ "page": page }))?;
+        Ok(())
+    }
+
+    pub fn close_header_footer(&mut self) -> Result<(), String> {
+        if !self.editing_header_footer() { return Ok(()); }
+        self.run("insert.closeHeader", json!({}))?;
+        Ok(())
+    }
 
     /// Plain text for SexOS's shared clipboard. WordCraft also retains its
     /// formatted fragment so a same-document paste can preserve styling.
@@ -1165,6 +1187,41 @@ mod tests {
             book.save().unwrap();
             let reopened = Book::open(&path).unwrap();
             assert_eq!(fields(&reopened), ["PAGE"], "{ext} lost its dynamic page field");
+        }
+    }
+
+    #[test]
+    fn edit_header_footer_keeps_page_field_and_round_trips() {
+        use wordcraft_engine::doc::InlineObject;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("header-footer-edit.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Body").unwrap();
+            book.insert_page_numbers("bottom right").unwrap();
+            let before = book.draw(0, 2.0).unwrap().pixels;
+            book.edit_header_footer(false).unwrap();
+            assert!(book.editing_header_footer());
+            assert!(book.edit_header_footer(true).is_err(), "nested editing must keep the body return point");
+            book.type_text(" Confidential").unwrap();
+            book.close_header_footer().unwrap();
+            assert!(!book.editing_header_footer());
+            assert!(book.draw(0, 2.0).unwrap().pixels != before, "footer text must render");
+            let edits = book.edits;
+            book.edit_header_footer(true).unwrap();
+            assert!(book.edits > edits, "creating a header must schedule autosave");
+            book.type_text("Draft").unwrap();
+            book.close_header_footer().unwrap();
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            let footer = reopened.session.doc.last_section.footers.default.unwrap();
+            let blocks = reopened.session.doc.story(StoryRef::Part(footer)).unwrap();
+            let para = blocks[0].as_para().unwrap();
+            assert!(para.text.contains("Confidential"), "{ext} lost footer text");
+            assert!(para.objects.iter().any(|obj| matches!(obj, InlineObject::Field { instr, .. } if instr == "PAGE")),
+                "{ext} lost dynamic page field");
+            let header = reopened.session.doc.last_section.headers.default.unwrap();
+            assert!(reopened.session.doc.plain_text(StoryRef::Part(header)).contains("Draft"), "{ext} lost header text");
+            assert!(reopened.draw(0, 2.0).is_some());
         }
     }
 

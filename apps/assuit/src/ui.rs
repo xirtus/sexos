@@ -136,6 +136,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+L", "Paper size and orientation"),
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+Alt+N", "Add page numbers to header or footer"),
+    ("Ctrl+Alt+H / F", "Edit shown header / footer; Esc returns to body"),
     ("Ctrl+Alt+S", "Paragraph line and before/after spacing"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
@@ -438,8 +439,12 @@ impl Ui {
                     proof.word, proof.suggestions[proof.at], proof.at + 1, proof.suggestions.len())
             }
         } else if self.message.is_empty() {
+            if self.book.editing_header_footer() {
+                format!("Editing header/footer on page {}  ·  Esc returns to body  ·  Ctrl+S saves", page + 1)
+            } else {
             format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  Ctrl+Shift+Y spelling  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
                 self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
+            }
         } else {
             self.message.clone()
         };
@@ -817,8 +822,27 @@ impl Ui {
         if self.picker.is_some() { return self.picker_key(key); }
         if self.table_gallery.is_some() { return self.table_gallery_key(key); }
         if self.proof.is_some() { return self.proof_key(key); }
-        if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         self.message.clear();
+        if key.code == code::ESC && !key.control && self.book.editing_header_footer() {
+            match self.book.close_header_footer() {
+                Ok(()) => { self.invalidate(); self.message = "Returned to document body".into(); sex_std::record("[assuit.header-footer.close]"); }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
+        if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
+        if key.control && key.alt && !key.shift && matches!(key.code, code::H | code::F) {
+            let header = key.code == code::H;
+            match self.book.edit_header_footer(header) {
+                Ok(()) => {
+                    self.invalidate();
+                    self.message = format!("Editing {} · Esc returns to body", if header { "header" } else { "footer" });
+                    sex_std::record(if header { "[assuit.header.edit]" } else { "[assuit.footer.edit]" });
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if key.code == code::U && key.control && key.shift {
             let enabled = !self.book.proofing_marks();
             match self.book.set_proofing_preference(Book::PROOFING_PREFERENCE, enabled) {
