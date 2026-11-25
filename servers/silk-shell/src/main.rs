@@ -10768,6 +10768,8 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Bluetooth => bt_panel::toggle(),
         A::Widgets => widgets_glue::toggle(),
         A::Group | A::Ungroup | A::NextTab | A::PrevTab | A::ToggleDwindle => layouts_glue::action(action),
+        A::CycleWindowTint => cycle_focused_window_tint(),
+        A::ToggleThemeMode => toggle_theme_mode(),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -16938,6 +16940,48 @@ unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
     theme_glue::sent(theme, ok);
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
+}
+const FRAME_TINT_SHIFT: u32 = 24;
+const FRAME_TINT_MASK: u32 = 0x0F << FRAME_TINT_SHIFT;
+/// Returns the per-window candy swatch for `frame_id` (0 = Auto, 1..=8 = swatch).
+pub unsafe fn frame_candy_tint(frame_id: u32) -> u8 {
+    let flags = wm_frame_flags(frame_id).unwrap_or(0);
+    let t = ((flags & FRAME_TINT_MASK) >> FRAME_TINT_SHIFT) as u8;
+    if t as usize <= sex_pdx::window_menu::SWATCH_COUNT { t } else { 0 }
+}
+/// Sets `frame_id`'s candy swatch (0 = Auto, 1..=8 = swatch) and immediately repaints its chrome.
+pub unsafe fn set_frame_candy_tint(frame_id: u32, swatch: u8) -> bool {
+    let swatch = if swatch as usize <= sex_pdx::window_menu::SWATCH_COUNT { swatch } else { 0 };
+    let mut found = false;
+    for slot in FRAMES.iter_mut() {
+        if let Some(f) = slot {
+            if f.frame_id == frame_id {
+                f.flags = (f.flags & !FRAME_TINT_MASK) | ((swatch as u32) << FRAME_TINT_SHIFT);
+                found = true;
+                break;
+            }
+        }
+    }
+    if !found { return false; }
+    send_frame_tab_info(frame_id);
+    sex_pdx::serial_record!("[shell.frame.tint] frame={} swatch={}", frame_id, swatch);
+    true
+}
+/// Cycles the focused window's candy swatch (0 -> 1 -> ... -> 8 -> 0).
+unsafe fn cycle_focused_window_tint() -> bool {
+    let Some(fid) = selected_frame_id() else { return false };
+    let cur = frame_candy_tint(fid);
+    let next = (cur + 1) % (sex_pdx::window_menu::SWATCH_COUNT as u8 + 1);
+    set_frame_candy_tint(fid, next)
+}
+/// Quickly toggles between Light (0) and Dark (1) desktop modes and pushes the look to Display.
+unsafe fn toggle_theme_mode() -> bool {
+    use sex_pdx::config::schema::id;
+    let cur = config_watch::value(id::THEME);
+    let next = if cur == 1 { 0 } else { 1 };
+    config_watch::changed_here(id::THEME, next);
+    let (w, n) = DESKTOP_LOOK;
+    desktop_look_apply(w, n)
 }
 /// A notice from the Shell itself ("System"), kept in history like Bell's.
 unsafe fn shell_notice(text: &[u8], urgency: u8) {
@@ -24011,8 +24055,9 @@ unsafe fn frame_chrome_operation(frame_id: u32) -> Option<linen_text_delivery::O
         | (light_hovered << 2)
         | (light_kind << 3)
         | (close_allowed << 5);
-    // Pack: low 8 bits = active_tab, bits 8-15 = chrome_flags byte.
-    let arg2 = (active_tab as u64) | (chrome_flags << 8);
+    // Pack: low 8 bits = active_tab, bits 8-15 = chrome_flags byte, bits 16-19 = candy_tint.
+    let candy_tint = frame_candy_tint(frame_id) as u64;
+    let arg2 = (active_tab as u64) | (chrome_flags << 8) | (candy_tint << 16);
     Some(linen_text_delivery::Operation {opcode:OP_SURFACE_TAB_INFO,surface:surface_id,packed:tab_count as u64,control:arg2})
 }
 
@@ -24218,7 +24263,8 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
         }
     };
 
-    let changed = HOVERED_FRAME_ID != new_frame_id || HOVER_KIND != new_kind;
+    let prev_frame_id = HOVERED_FRAME_ID;
+    let changed = prev_frame_id != new_frame_id || HOVER_KIND != new_kind;
     let light_changed = HOVERED_FRAME_LIGHT != new_light;
     if changed || light_changed {
         unsafe {
@@ -24258,8 +24304,6 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
         }
 
         // B4: Update tab chrome visibility on hover change.
-        // Only the hovered frame's chrome state may change (multi-tab is stable;
-        // single-tab toggles on hover enter/leave).
         if new_frame_id != 0 && frame_tab_count(new_frame_id) <= 1 {
             let chrome_on = frame_chrome_visible(new_frame_id);
             if chrome_on {
@@ -24281,8 +24325,6 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
                     }
                 }
             }
-            // Notify sexdisplay of chrome visibility change.
-            send_frame_tab_info(new_frame_id);
         }
         // Multi-tab frames emit persist.multi on first hover if not already set.
         if new_frame_id != 0 && frame_tab_count(new_frame_id) > 1 && new_kind != HOVER_NONE {
@@ -24295,23 +24337,12 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
                 }
             }
         }
-    }
-    // Notify sexdisplay of hover state change via OP_SURFACE_TAB_INFO.
-    if changed || light_changed {
-        unsafe {
-            // Clear hover on previous frame.
-            if HOVERED_FRAME_ID != 0 && HOVERED_FRAME_ID != new_frame_id {
-                let prev_id = HOVERED_FRAME_ID;
-                HOVERED_FRAME_ID = 0;
-                HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
-                send_frame_tab_info(prev_id);
-                HOVERED_FRAME_ID = prev_id;
-                HOVERED_FRAME_LIGHT = new_light;
-            }
-            // Send hover on new frame.
-            if new_frame_id != 0 {
-                send_frame_tab_info(new_frame_id);
-            }
+        // Notify sexdisplay immediately: clear hover on previous frame, set on new frame.
+        if prev_frame_id != 0 && prev_frame_id != new_frame_id {
+            send_frame_tab_info(prev_frame_id);
+        }
+        if new_frame_id != 0 {
+            send_frame_tab_info(new_frame_id);
         }
     }
     changed || light_changed
@@ -24998,6 +25029,13 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
                 return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_TAB_STRIP });
             }
         }
+    }
+
+    // Title-bar window control buttons (Close, Minimise, Maximise, Float):
+    // always take priority over the top-left resize corner so clicks on the
+    // Red Close button are never stolen by resize.
+    if top_bar && y >= sy && y < sy + band_height && x >= sx && x < sx + tab_exclusion {
+        return Some(HitTarget::FrameChrome { frame_id, kind: FRAME_CHROME_RIM });
     }
 
     // Resize edge/corner zones: left, right, bottom edges and top-rim corners.
