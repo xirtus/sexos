@@ -25,5 +25,6 @@ Remaining gaps:
 - The in-app controls have a standalone reference in `docs/apps/loom-shortcuts.md`.
   Ctrl+Y now replays undone batch renames and trash moves, with metadata and trash
   origin notes restored. Ordinary rename and empty-folder creation are now
-  replayable too, as are same-volume cut-and-paste moves. Redo for copy and
-  cross-disk move, plus a forced power-cut session recovery gate, remain.
+  replayable too, as are cut-and-paste moves across and within volumes.
+  Cross-volume undo and redo wait for their background transfer before changing
+  history. Redo for copy, plus a forced power-cut session recovery gate, remain.

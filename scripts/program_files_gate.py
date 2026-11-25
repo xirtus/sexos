@@ -115,6 +115,17 @@ def main():
   s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={jt} task={jtask} ',s,90)
   expect('cat /media/FLOPPY/HELLO.TXT',r'\[spindle.fs.cat\] hello from fat12')
   g['wait'](r'\[spindle.fs.cat\] again',0,30)
+  # Cross-volume history waits for each background transfer to finish. The
+  # chosen HELLO.TXT is still selected in Loom after Jot's picker closes.
+  g['focus'](fa_sid);time.sleep(.5)
+  chord('x');time.sleep(.3)
+  step(lambda:chord('h'),r'\[files.app.list\] dir=/ count=')
+  step(lambda:chord('v'),r'\[files.app.pasted\] from=/media/FLOPPY/HELLO.TXT to=/HELLO \(copy\).TXT cut=1',90)
+  step(lambda:chord('z'),r'\[files.app.undone\] left=',90)
+  step(lambda:chord('y'),r'\[files.app.redone\] left=',90)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'files-cross-volume-redone.ppm')})
+  step(lambda:chord('z'),r'\[files.app.undone\] left=',90)
+  expect('cat /media/FLOPPY/HELLO.TXT',r'\[spindle.fs.cat\] hello from fat12')
   expect('unmount FLOPPY',r'\[spindle.fs.line\] Safe to remove\.')
   s=len(t());line('ls /media');g['wait'](r'\[spindle.fs.result\] kind=2 status=0',s,60);time.sleep(1)
   assert 'FLOPPY/' not in re.findall(r'\[spindle.fs.line\] ([^\n]*)',t()[s:])

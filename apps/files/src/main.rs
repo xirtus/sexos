@@ -80,6 +80,7 @@ const HOME_MIB: u64 = 256;
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, MovedSame { from: Vec<u8>, to: Vec<u8> }, RenamedOne { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
     /// A batch rename in `dir`: the moves that take it back, in order.
     Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
+enum HistoryJob { Undo(Undo), Redo(Undo) }
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
 enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
@@ -112,6 +113,8 @@ struct App {
     job: Option<Job>,
     /// What Ctrl+Z will take back once the job finishes.
     job_undo: Option<Undo>,
+    /// Cross-volume history becomes final only when its background transfer completes.
+    history_job: Option<HistoryJob>,
     /// Name to select once the job finishes.
     job_select: Option<Vec<u8>>,
     last_drawn: u64,
@@ -448,7 +451,20 @@ impl App {
                 if kind == Kind::Copy || kind == Kind::Move {
                     sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&job.from), shown(&job.to), (kind == Kind::Move) as u8);
                 }
-                if let Some(u) = self.job_undo.take() { self.record_undo(u); }
+                if let Some(history) = self.history_job.take() {
+                    match history {
+                        HistoryJob::Undo(step) => {
+                            if self.redo.len() == 64 { self.redo.remove(0); }
+                            self.redo.push(step);
+                            sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
+                        }
+                        HistoryJob::Redo(step) => {
+                            if self.undo.len() == 64 { self.undo.remove(0); }
+                            self.undo.push(step);
+                            sex_pdx::serial_record!("[files.app.redone] left={}", self.redo.len());
+                        }
+                    }
+                } else if let Some(u) = self.job_undo.take() { self.record_undo(u); }
                 self.status = summary;
                 self.load(window);
                 if let Some(name) = self.job_select.take() { self.select(&name); }
@@ -456,9 +472,19 @@ impl App {
             }
             Outcome::Failed(kind, why) => {
                 sex_pdx::serial_record!("[files.app.job.failed] kind={:?} why={}", kind, why);
+                let committed = self.job.as_ref().is_some_and(|job| job.committed);
                 self.job = None;
                 self.job_undo = None;
-                self.status = format!("Couldn't finish: {}. Nothing half-done was left.", why);
+                if let Some(history) = self.history_job.take() {
+                    // Once source removal began, both locations may hold data.
+                    // The old history step no longer describes a safe replay.
+                    if !committed { self.restore_history(history); }
+                }
+                self.status = if committed {
+                    format!("Couldn't finish moving: {}. Check both locations before trying again.", why)
+                } else {
+                    format!("Couldn't finish: {}. Nothing half-done was left.", why)
+                };
                 if !self.look_for_pulled(window) { self.load(window); }
                 true
             }
@@ -538,6 +564,7 @@ impl App {
         sex_pdx::serial_record!("[files.app.job.cancelled] kind={:?} what={} pct={}", job.kind, shown(&job.what), job.percent());
         self.job = None;
         self.job_undo = None;
+        if let Some(history) = self.history_job.take() { self.restore_history(history); }
         self.load(window);
     }
     fn remove_all(&mut self, window: &mut Window, path: &[u8]) -> Result<(), u8> {
@@ -546,11 +573,28 @@ impl App {
         }
         files::remove(window, &at(path))
     }
-    /// Rename where the disk allows it, else a background move.
-    fn move_path(&mut self, window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), u8> {
+    fn restore_history(&mut self, history: HistoryJob) {
+        match history {
+            HistoryJob::Undo(step) => self.undo.push(step),
+            HistoryJob::Redo(step) => self.redo.push(step),
+        }
+    }
+    /// Rename where the disk allows it, else start a background move. The caller
+    /// keeps the history entry pending until that move reports completion.
+    fn move_path(&mut self, window: &mut Window, from: &[u8], to: &[u8]) -> Result<bool, u8> {
+        match files::stat(window, &at(to)) {
+            Ok(_) => return Err(w::EXISTS),
+            Err(w::NOT_FOUND) => {},
+            Err(e) => return Err(e),
+        }
         match files::rename(window, &at(from), &at(to)) {
-            Err(w::OTHER_DISK) => { let job = Job::move_across(window, from, to); self.start(window, job, None, None); Ok(()) }
-            other => other,
+            Err(w::OTHER_DISK) => {
+                let job = Job::move_across(window, from, to)?;
+                self.start(window, Ok(job), None, None);
+                Ok(true)
+            }
+            Ok(()) => Ok(false),
+            Err(e) => Err(e),
         }
     }
     /// A name not yet taken in `dir`: `name`, `name (copy)`, `name (copy 2)`...
@@ -709,7 +753,11 @@ impl App {
     fn undo(&mut self, window: &mut Window) {
         let Some(step) = self.undo.pop() else { self.status = "Nothing to undo.".into(); return };
         let result = match &step {
-            Undo::Moved { from, to } => self.move_path(window, to, from),
+            Undo::Moved { from, to } => match self.move_path(window, to, from) {
+                Ok(true) => { self.history_job = Some(HistoryJob::Undo(step)); return; }
+                Ok(false) => Ok(()),
+                Err(e) => Err(e),
+            },
             Undo::MovedSame { from, to } => match files::stat(window, &at(from)) {
                 Ok(_) => Err(w::EXISTS),
                 Err(w::NOT_FOUND) => files::rename(window, &at(to), &at(from)),
@@ -720,7 +768,7 @@ impl App {
                 Err(w::NOT_FOUND) => files::rename(window, &at(to), &at(from)),
                 Err(e) => Err(e),
             },
-            Undo::Trashed { from, to, info } => self.move_path(window, to, from).map(|_| { let _ = files::remove(window, &at(info)); }),
+            Undo::Trashed { from, to, info } => files::rename(window, &at(to), &at(from)).map(|_| { let _ = files::remove(window, &at(info)); }),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
             Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
@@ -730,7 +778,7 @@ impl App {
                 self.meta_undone(window, &step);
                 sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
                 self.status = "Undone.".into();
-                if matches!(&step, Undo::Renamed { .. } | Undo::RenamedOne { .. } | Undo::MovedSame { .. } | Undo::Trashed { .. } | Undo::Made { .. }) {
+                if matches!(&step, Undo::Renamed { .. } | Undo::RenamedOne { .. } | Undo::Moved { .. } | Undo::MovedSame { .. } | Undo::Trashed { .. } | Undo::Made { .. }) {
                     if self.redo.len() == 64 { self.redo.remove(0); }
                     self.redo.push(step);
                 } else { self.redo.clear(); }
@@ -747,6 +795,11 @@ impl App {
             return;
         };
         let result = match &step {
+            Undo::Moved { from, to } => match self.move_path(window, from, to) {
+                Ok(true) => { self.history_job = Some(HistoryJob::Redo(step)); return; }
+                Ok(false) => Ok(()),
+                Err(e) => Err(e),
+            },
             Undo::Renamed { dir, moves } => {
                 let forward: Vec<(Vec<u8>, Vec<u8>)> = moves.iter().rev()
                     .map(|(from, to)| (to.clone(), from.clone())).collect();
@@ -1141,7 +1194,7 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), redo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
+                        job: None, job_undo: None, history_job: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
