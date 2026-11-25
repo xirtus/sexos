@@ -153,6 +153,7 @@ pub fn reject_fault(target_pd: u32, pager_pd: u32, token: u64) -> Result<(), u64
     let record = unsafe { (*task).fault.reject(pager_pd, token)? };
     validate_record(task, target_pd, record)?;
     unsafe { (*task).state.exit(); }
+    crate::scheduler::purge_handoff_for_task(task);
     crate::serial_println!("[paging.fault.rejected] target={} task={} token={} terminal=1", target_pd, record.task_id, token);
     Ok(())
 }

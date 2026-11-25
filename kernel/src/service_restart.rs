@@ -43,18 +43,34 @@ static GAVE_UP: [core::sync::atomic::AtomicBool; SERVICES] = [const { core::sync
 /// The tick a dead service's device reset settles; 0 while it is not being reset.
 static RESET_AT: [core::sync::atomic::AtomicU64; SERVICES] = [const { core::sync::atomic::AtomicU64::new(0) }; SERVICES];
 
+const DISPLAY_PD: u32 = 1;
 const DRIVE_PD: u32 = 2;
+const SHELL_PD: u32 = 3;
+const INPUT_PD: u32 = 4;
 const USB_PD: u32 = 5;
+const BELL_PD: u32 = 10;
+const FILES_PD: u32 = 11;
+const NET_PD: u32 = 13;
 /// `sex_pdx::pci_command::SADDLE_PD` (init.rs asserts they match).
 pub(crate) const SADDLE_PD: u32 = 54;
 /// How long a service may hold one message before it counts as hung, in ticks; 0: not
-/// watched. Drive's own command deadline is 30 s, so it gets longer than that.
-fn hang_limit(pd: u32) -> u64 { match pd { DRIVE_PD => 45_000, 4 | USB_PD | 10 | 13 => 10_000, _ => 0 } }
+/// watched. Drive's own command deadline is 30 s, so it gets longer than that; Files,
+/// Display, and Shell get 60_000 ticks so heavy TCG/compositor work never false-trips.
+pub(crate) fn hang_limit(pd: u32) -> u64 {
+    match pd {
+        DRIVE_PD => 45_000,
+        INPUT_PD | USB_PD | BELL_PD | NET_PD => 10_000,
+        FILES_PD | DISPLAY_PD | SHELL_PD => 60_000,
+        _ => 0,
+    }
+}
 /// Services that answer every call they take, so every owed reply was really awaited.
-fn answers_every_call(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD) }
+pub(crate) fn answers_every_call(pd: u32) -> bool {
+    matches!(pd, DISPLAY_PD | DRIVE_PD | SHELL_PD | USB_PD | BELL_PD | FILES_PD | NET_PD)
+}
 /// Drivers whose devices get a function-level reset before they run again (Saddle too,
 /// for the outside drivers it hosts; not Display: that would drop the firmware's screen).
-fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | 10 | 13 | SADDLE_PD) }
+fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | BELL_PD | NET_PD | SADDLE_PD) }
 
 /// By domain id: the tick it last looked at its inbox, and whether it then took something.
 static INBOX_AT: [core::sync::atomic::AtomicU64; 64] = [const { core::sync::atomic::AtomicU64::new(0) }; 64];
@@ -192,9 +208,7 @@ pub fn end_requested(pd: u32) -> bool {
 /// Display and Shell hold the whole desktop. Both start again in place; one that
 /// keeps dying is given up on, and then the machine stops (screen, record,
 /// restart) instead of leaving a frozen desktop.
-const DESKTOP: [u32; 2] = [1, 3];
-const SHELL_PD: u32 = 3;
-const DISPLAY_PD: u32 = 1;
+const DESKTOP: [u32; 2] = [DISPLAY_PD, SHELL_PD];
 static DESKTOP_STOPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// From the timer, IF masked: a service whose task has ended starts again.
@@ -240,6 +254,7 @@ fn poll_one(index: usize) -> bool {
         let since = if HOLDING[s.pd as usize].load(Ordering::Relaxed) { at }
             else { match queued.load(Ordering::Relaxed) { 0 => now, q => q.max(at) } };
         if limit != 0 && at != 0 && now.saturating_sub(since) > limit && unsafe { (*main).state.exit() } {
+            crate::scheduler::purge_handoff_for_task(main);
             crate::serial_println!("[service.hung] pd={} held_ticks={} queued={}", s.pd, now - since, unsafe { (*pd.message_ring).len() });
             crate::crash_log::fault(s.pd, 0xfd, unsafe { (*main).context.rip }, 0, now - since, "no answer (hung)");
             crate::scheduler::unpark_thread(main);
@@ -252,14 +267,19 @@ fn poll_one(index: usize) -> bool {
     if LOOP[index].load(Ordering::Relaxed) >= MAX_RESTARTS {
         GAVE_UP[index].store(true, Ordering::Relaxed);
         DOWN.fetch_or(1 << s.pd, Ordering::AcqRel);
+        crate::scheduler::purge_handoff_for_pd(s.pd);
+        let _ = crate::ipc_v2::syscall::teardown_pd(s.pd, sex_pdx::endpoint::E_CLOSED);
         crate::crash_log::service(s.pd, MAX_RESTARTS, true);
         return false;
     }
     // First the device: no more DMA, no loans, and a reset where it has one.
     if RESET_AT[index].load(Ordering::Relaxed) == 0 {
         DOWN.fetch_or(1 << s.pd, Ordering::AcqRel);
+        crate::scheduler::purge_handoff_for_pd(s.pd);
         // Worker tasks the dead run started (per-core driver queues) end with it.
         crate::program_workers::end(s.pd);
+        let v2_woken = crate::ipc_v2::syscall::teardown_pd(s.pd, sex_pdx::endpoint::E_RESTARTED);
+        if v2_woken != 0 { crate::serial_println!("[service.restart.ipc_v2] pd={} woken={}", s.pd, v2_woken); }
         crate::pci_command::quiesce(pd);
         crate::iommu::revoke(s.pd);
         let flr = resets_devices(s.pd) && crate::device_irq::reset_begin(s.pd);
@@ -275,13 +295,14 @@ fn poll_one(index: usize) -> bool {
     let late = now > RESET_AT[index].load(Ordering::Relaxed) + 1000;
     // Take every waiting caller's reply queue now and keep it until its answer is in, so
     // none can fill or be taken between this check and the push below (other cores).
-    const MAX_TOLD: usize = 8;
+    const MAX_TOLD: usize = 32;
     let mut held: [Option<(u32, _)>; MAX_TOLD] = core::array::from_fn(|_| None);
     let mut missed = 0;
     if answers_every_call(s.pd) {
         for caller in credits.owed() {
+            let Some(c) = crate::ipc::DOMAIN_REGISTRY.get(caller) else { continue };
             let slot = held.iter().position(|h| h.is_none());
-            let guard = crate::ipc::DOMAIN_REGISTRY.get(caller).and_then(|c| c.incoming_replies.try_lock()).filter(|q| q.len() < q.capacity());
+            let guard = c.incoming_replies.try_lock().filter(|q| q.len() < q.capacity());
             match (slot, guard) {
                 (Some(i), Some(q)) => held[i] = Some((caller, q)),
                 _ if late => missed += 1,

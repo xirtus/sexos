@@ -151,6 +151,82 @@ fn free(entry: usize, object: u32, endpoint: bool) {
     }
 }
 
+/// Detaches a single crashed, exiting, or rearmed task from every IPC v2 wait
+/// queue and wakes any client waiting on an unanswered reply capability it held
+/// with `status` (e.g. `E_RESTARTED` or `E_CLOSED`). Returns clients woken.
+pub fn teardown_task(task: *mut Task, status: u64) -> usize {
+    if task.is_null() { return 0; }
+    let tid = task as TaskId;
+    let state = ipc(tid);
+    let mut woken = 0;
+    if let Ok(cap) = state.reply.take(&OBJECTS) {
+        if cap.caller != 0 && cap.caller != tid {
+            complete(cap.caller, [status, 0, 0, 0, 0, 0], false);
+            woken += 1;
+        }
+    }
+    for entry in 0..POOL {
+        let _ = ENDPOINTS[entry].detach_task(tid);
+        let _ = NOTIFICATIONS[entry].cancel_wait(tid);
+    }
+    state.parked.store(false, Ordering::Release);
+    state.ready.store(false, Ordering::Release);
+    woken
+}
+
+/// Tears down all IPC v2 state for protection domain `pd` on server restart or
+/// PD retirement: detaches its tasks from all endpoint/notification wait queues,
+/// closes every endpoint/notification owned by `pd`, wakes every foreign client
+/// blocked on them (or awaiting an unanswered reply from `pd`) with `status`,
+/// and ends `pd`'s object incarnation. Returns total clients woken.
+pub fn teardown_pd(pd: u32, status: u64) -> usize {
+    if pd == 0 { return 0; }
+    let mut woken = 0;
+    if let Some(domain) = crate::ipc::DOMAIN_REGISTRY.get(pd) {
+        woken += teardown_task(domain.main_task.load(Ordering::Acquire), status);
+    }
+    for entry in 0..POOL {
+        let ep_obj = ENDPOINT_OBJECT[entry].load(Ordering::Acquire);
+        if ep_obj != 0 && OBJECTS.owner(ep_obj - 1) == Some(pd) {
+            let obj = ep_obj - 1;
+            OBJECTS.destroy(obj);
+            POOL_OF[obj as usize % MAX_OBJECTS].store(0, Ordering::Release);
+            ENDPOINTS[entry].close(|rel| {
+                let task = match rel { Released::Receiver(t) => t, Released::Caller(s) => s.task };
+                if task != 0 && pd_of(task) != pd {
+                    complete(task, [status, 0, 0, 0, 0, 0], false);
+                    woken += 1;
+                }
+            });
+            ENDPOINT_OBJECT[entry].store(0, Ordering::Release);
+        } else {
+            if let Some(w) = ENDPOINTS[entry].waiter() {
+                if w != 0 && pd_of(w) == pd { let _ = ENDPOINTS[entry].cancel_recv(w); }
+            }
+            let _ = ENDPOINTS[entry].cancel_send_if(|s| s.task != 0 && pd_of(s.task) == pd);
+        }
+
+        let n_obj = NOTIFICATION_OBJECT[entry].load(Ordering::Acquire);
+        if n_obj != 0 && OBJECTS.owner(n_obj - 1) == Some(pd) {
+            let obj = n_obj - 1;
+            OBJECTS.destroy(obj);
+            POOL_OF[obj as usize % MAX_OBJECTS].store(0, Ordering::Release);
+            if let Some(t) = NOTIFICATIONS[entry].waiter() {
+                if NOTIFICATIONS[entry].cancel_wait(t) && t != 0 && pd_of(t) != pd {
+                    complete(t, [status, 0, 0, 0, 0, 0], false);
+                    woken += 1;
+                }
+            }
+            NOTIFICATIONS[entry].poll();
+            NOTIFICATION_OBJECT[entry].store(0, Ordering::Release);
+        } else if let Some(w) = NOTIFICATIONS[entry].waiter() {
+            if w != 0 && pd_of(w) == pd { let _ = NOTIFICATIONS[entry].cancel_wait(w); }
+        }
+    }
+    OBJECTS.end_incarnation(pd);
+    woken
+}
+
 /// OP_CREATE: a new object owned by the caller's domain; its root capability goes in
 /// the caller's table (slot in rsi).
 fn create(regs: &mut SyscallRegs, endpoint: bool) -> u64 {
