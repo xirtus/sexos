@@ -11,3 +11,5 @@
   sessions; the Loom QEMU gate opens two tabs, restarts the app, verifies the
   restored active folder and captures `folder-tabs-restored.ppm`.
 - Scope: `loom-core` session codec, Loom app, its QEMU gate, gap list and ledger.
+- CI fix: compare the root as a byte slice when validating restored tab paths;
+  the target Rust toolchain requires a slice pattern for `strip_prefix`.

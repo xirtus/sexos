@@ -72,7 +72,7 @@ impl App {
         for (i, tab) in state.tabs.iter().enumerate() {
             let inside = self.root == b"/"
                 || tab.path == self.root
-                || tab.path.strip_prefix(&self.root).is_some_and(|tail| tail.starts_with(b"/"));
+                || tab.path.strip_prefix(self.root.as_slice()).is_some_and(|tail| tail.starts_with(b"/"));
             if !inside || !files::stat(window, &at(&tab.path)).is_ok_and(|st| st.dir) { continue; }
             if i == state.active { active = Some(tabs.len()); }
             tabs.push(FolderTab { cwd: tab.path.clone(), cursor: tab.cursor as usize, top: tab.top as usize });
