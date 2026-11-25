@@ -203,6 +203,18 @@ def main():
   assert int(m[1],16)==fnv(b'B'*(1024*1024)) and Handler.changed_ranges==[('bytes=65536-','"change-v1"')],Handler.changed_ranges
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-resumed.ppm')})
   assert (a.out/'browser-download-resumable.ppm').stat().st_size>10000 and (a.out/'browser-download-resumed.ppm').stat().st_size>10000
+  # Clear the panel's saved list without removing the downloaded files.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.panel\] done=\d+ failed=0',s,120)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'alt'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.history.cleared\] count=\d+ kept=1',s,120)
+  g['wait'](r'\[web.download.panel\] done=0 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-history-cleared.ppm')})
+  assert (a.out/'browser-download-history-cleared.ppm').stat().st_size>10000
+  s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.history.loaded\] count=0',s,300)
+  g['wait'](r'\[web.download.panel\] done=0 failed=0',s,120)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fnv':m.group(0)})
  finally:g['stop']()

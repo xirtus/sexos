@@ -11,7 +11,7 @@
 //! Ctrl+Shift+G the tab into a new group or out of its group (a click on a group's
 //! label folds it), Ctrl+Shift+B the side panel, Ctrl+Shift+E site settings,
 //! Ctrl+Shift+K asks Chastity to fill a visible HTTPS login form; Ctrl+Shift+U asks it to save one.
-//! Ctrl+Shift+/ opens Kaleidoscope's keyboard reference.
+//! Ctrl+Alt+J clears download history in the panel. Ctrl+Shift+/ opens Kaleidoscope's keyboard reference.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -101,6 +101,7 @@ impl Browser {
                 }
             }
             0x13 => { let u = self.url.clone(); self.open(&u, false); }
+            0x24 if key.alt => self.clear_download_history(),
             0x24 => self.open("about:downloads", true),
             // Ctrl+Shift+S: Shields down for this site, or up again; the page reloads.
             0x1F if key.shift => {
