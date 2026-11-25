@@ -176,6 +176,12 @@ def main():
   g['wait'](r'\[spreadeagle\.filter\.condition\] col=A rule=contains oo\n',s,120)
   column('A',r'Item\|Food\|~\|~\|~\|~\|\|',s)
   time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-condition.ppm')})
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=A\n')
+  s=len(t());type_line('starts F or contains oo');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=A rule=starts F or contains oo\n',s,120)
+  column('A',r'Item\|Food\|Fun\|~\|~\|~\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-compound.ppm')})
+  assert (a.out/'spreadeagle-filter-compound.ppm').stat().st_size>10000
   ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=5\n')
   s=len(t());q.key('ret')
   g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=all\n',s,120)

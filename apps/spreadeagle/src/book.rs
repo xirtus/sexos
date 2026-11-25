@@ -356,23 +356,49 @@ impl Book {
         self.run("data.filterBy", params).map(|_| ())
     }
 
-    /// Apply one native AutoFilter comparison to a column. GridCraft evaluates
-    /// the criterion against cells, including numeric values and formula results.
+    /// Apply one or two AutoFilter comparisons to a column. GridCraft evaluates
+    /// the criteria against cells, including numeric values and formula results.
     pub fn filter_by_condition(&mut self, at: Range, col: u32, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter contains text, starts text, ends text, notcontains text, or >, >=, <, <= number";
-        let (name, value) = input.trim().split_once(' ').ok_or(HELP)?;
-        let value = value.trim();
-        if value.is_empty() || value.chars().count() > 128 { return Err(HELP.into()); }
-        let op = match name.to_ascii_lowercase().as_str() {
-            "contains" => "contains", "notcontains" => "notContains",
-            "starts" => "beginsWith", "ends" => "endsWith",
-            ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=",
-            _ => return Err(HELP.into()),
+        const HELP: &str = "Enter contains/starts/ends/notcontains text or >, >=, <, <= number; join two with and/or";
+        fn criterion(input: &str) -> Result<(&'static str, &str), String> {
+            let (name, value) = input.trim().split_once(' ').ok_or(HELP)?;
+            let value = value.trim();
+            if value.is_empty() || value.chars().count() > 128 { return Err(HELP.into()); }
+            let op = match name.to_ascii_lowercase().as_str() {
+                "contains" => "contains", "notcontains" => "notContains",
+                "starts" => "beginsWith", "ends" => "endsWith",
+                ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=",
+                _ => return Err(HELP.into()),
+            };
+            if matches!(op, ">" | ">=" | "<" | "<=")
+                && !value.parse::<f64>().is_ok_and(f64::is_finite) { return Err(HELP.into()); }
+            Ok((op, value))
+        }
+        let input = input.trim();
+        // Ordinary text may contain "and" or "or". A join exists only when
+        // its right side starts a second comparison. Reject three comparisons.
+        let mut joins = Vec::new();
+        for (delimiter, and) in [(" and ", true), (" or ", false)] {
+            for (at, _) in input.match_indices(delimiter) {
+                let right = &input[at + delimiter.len()..];
+                if right.split_once(' ').is_some_and(|(op, _)| matches!(op.to_ascii_lowercase().as_str(),
+                    "contains" | "notcontains" | "starts" | "ends" | ">" | ">=" | "<" | "<=")) {
+                    joins.push((at, delimiter.len(), and));
+                }
+            }
+        }
+        if joins.len() > 1 { return Err(HELP.into()); }
+        let (first, second) = match joins.pop() {
+            Some((at, len, and)) => (&input[..at], Some((&input[at + len..], and))),
+            None => (input, None),
         };
-        if matches!(op, ">" | ">=" | "<" | "<=")
-            && !value.parse::<f64>().is_ok_and(f64::is_finite) { return Err(HELP.into()); }
+        let (op, value) = criterion(first)?;
+        let second = second.map(|(input, and)| criterion(input).map(|(op, value)| (op, value, and))).transpose()?;
         if self.filter_range().is_none() { self.toggle_filter(at)?; }
-        self.run("data.filterBy", json!({ "column": column_name(col), "custom": { "op": op, "value": value } })).map(|_| ())
+        let custom = if let Some((op2, value2, and)) = second {
+            json!({ "op": op, "value": value, "op2": op2, "value2": value2, "and": and })
+        } else { json!({ "op": op, "value": value }) };
+        self.run("data.filterBy", json!({ "column": column_name(col), "custom": custom })).map(|_| ())
     }
 
     /// Rows above and columns left of the frozen corner, if panes are frozen.
@@ -917,6 +943,31 @@ mod tests {
         book.filter_by_values(Range::cell(1, 0), 0, &[]).unwrap();
         book.filter_by_condition(Range::cell(1, 1), 1, "> 200").unwrap();
         assert_eq!((book.row_height(1) > 0, book.row_height(2) > 0, book.row_height(3)), (true, true, 0));
+    }
+
+    #[test]
+    fn compound_filter_conditions_match_and_or_and_reopen() {
+        let mut book = budget("compound-condition.xlsx");
+        let at = Range::cell(1, 0);
+        for bad in ["starts f or > many", "> 1 and <= infinity", "starts F or contains oo and notcontains Food"] {
+            assert!(book.filter_by_condition(at, 0, bad).is_err(), "{bad}");
+        }
+        assert!(book.filter_range().is_none());
+        book.filter_by_condition(at, 0, "contains and").unwrap();
+        book.filter_by_condition(at, 0, "contains or").unwrap();
+        book.filter_by_condition(at, 0, "contains Food and Rent").unwrap();
+        assert_eq!((book.row_height(1), book.row_height(2), book.row_height(3)), (0, 0, 0));
+        book.filter_by_condition(at, 0, "contains oo or starts R").unwrap();
+        assert_eq!((book.row_height(1) > 0, book.row_height(2) > 0, book.row_height(3) > 0), (true, true, false));
+        book.filter_by_condition(at, 0, "starts F and notcontains oo").unwrap();
+        assert_eq!((book.row_height(1) > 0, book.row_height(2) > 0, book.row_height(3) > 0), (false, false, true));
+        book.filter_by_values(at, 0, &[]).unwrap();
+        book.filter_by_condition(at, 1, ">= 150 and <= 300").unwrap();
+        assert_eq!((book.row_height(1) > 0, book.row_height(2) > 0, book.row_height(3) > 0), (false, true, true));
+        let path = book.path.clone();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap().0;
+        assert_eq!((reopened.row_height(1) > 0, reopened.row_height(2) > 0, reopened.row_height(3) > 0), (false, true, true));
     }
 
     #[test]
