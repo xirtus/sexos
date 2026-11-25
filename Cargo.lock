@@ -8596,6 +8596,7 @@ dependencies = [
  "serde_json",
  "sex-office",
  "sex-std",
+ "sex-theme",
  "zip 3.0.0",
 ]
 
