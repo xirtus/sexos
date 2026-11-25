@@ -16,13 +16,16 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | Private tab, container tab 1–4 | Ctrl+Shift+P, Ctrl+Shift+1–4 |
 | Vertical tabs, split view, group, side panel | Ctrl+Shift+,, Ctrl+Shift+\\, Ctrl+Shift+G, Ctrl+Shift+B |
 | Site settings, Shields, clear site data | Ctrl+Shift+E, Ctrl+Shift+S, Ctrl+Shift+Backspace |
+| Clear only site cookies / local storage (in site settings) | Ctrl+Alt+C / Ctrl+Alt+S |
 | Request Chastity fill for a visible HTTPS login | Ctrl+Shift+K |
 | Ask Chastity to review saving a visible HTTPS login | Ctrl+Shift+U |
 | Keyboard reference | Ctrl+Shift+/ |
 
 The reader view shortcut returns to the source page when used in reader view.
 Site settings shows the current container's cookie and local-storage counts for
-the site. Clearing site data refreshes those counts.
+the site. Clearing site data refreshes those counts. On the site settings page,
+Ctrl+Alt+C clears only that site's cookies and Ctrl+Alt+S clears only its local
+storage in the current container; the full clear also removes saved code.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
 Ctrl+Alt+J clears the panel's saved history and failed-transfer list. It keeps
