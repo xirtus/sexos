@@ -16,8 +16,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Page numbering:** WordCraft can insert dynamic page fields in a header or
   footer, but Assuit has no native control for it. This slice exposes bounded
   top/bottom and left/center/right choices, checks the visible page and
-  DOCX/ODT save/reopen. Removing an existing page number and section-specific
-  numbering controls remain.
+  DOCX/ODT save/reopen. This slice adds safe removal of a generated page-number
+  header/footer in a single-section document, refusing unrelated header/footer
+  content. Section-specific numbering controls remain.
 - **List editing:** WordCraft can create bullet and numbered lists, but Assuit
   exposes no native way to choose numbered formats, remove a list, or restart
   numbering. This slice adds a bounded list prompt for those document edits and
