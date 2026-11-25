@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use sex_app::files;
 use sex_web::download_history::{self, Record};
 use sex_web::download_pause::Transfer;
+use sex_web::download_promotion::{self, Step};
 
 const DIR: &str = "Downloads";
 /// Largest download.
@@ -215,8 +216,23 @@ impl Browser {
             return Err(b"Download ended before all bytes arrived.");
         }
         let check = self.check_file(&part, transfer.written());
-        if files::rename(&mut self.window, part.as_bytes(), path.as_bytes()).is_err() { return Err(b"Can't save in Downloads."); }
-        let _ = files::sync(&mut self.window);
+        let promoted = download_promotion::promote(|step| {
+            let result = match step {
+                Step::SyncPart | Step::SyncName => files::sync(&mut self.window),
+                Step::Rename => files::rename(&mut self.window, part.as_bytes(), path.as_bytes()),
+            };
+            if result.is_ok() {
+                let stage = match step { Step::SyncPart => "part", Step::Rename => "rename", Step::SyncName => "name" };
+                sex_pdx::serial_record!("[web.download.promote] step={} path={}", stage, path);
+            }
+            result
+        });
+        match promoted {
+            Ok(()) => {}
+            Err((Step::SyncPart, _)) => return Err(b"Could not make the download bytes durable."),
+            Err((Step::Rename, _)) => return Err(b"Can't save in Downloads."),
+            Err((Step::SyncName, _)) => return Err(b"The file may be in Downloads, but its save could not be confirmed."),
+        }
         sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, transfer.written(), sex_pdx::get_ticks() - began, check);
         Ok((transfer.written(), check))
         })();

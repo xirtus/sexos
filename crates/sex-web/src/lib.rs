@@ -24,6 +24,7 @@ pub mod mse;
 pub mod reader;
 pub mod download_history;
 pub mod download_pause;
+pub mod download_promotion;
 pub mod autofill_policy;
 pub mod session;
 pub use sex_image::Image;

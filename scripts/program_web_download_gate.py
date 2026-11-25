@@ -74,6 +74,9 @@ def main():
   g['wait'](r'\[web.download.progress\] bytes=\d+ total=20971520',s,300)
   m=g['wait'](r'\[web.download.done\] path=Downloads/big.bin bytes=(\d+) ticks=\d+ fnv=([0-9a-f]+)',s,900)
   assert int(m[1])==len(DATA) and int(m[2],16)==fnv(DATA),(m.group(0),hex(fnv(DATA)))
+  trace=t()[s:]
+  ordered=[trace.find(f'[web.download.promote] step={step} path=Downloads/big.bin') for step in ('part','rename','name')]
+  assert all(at>=0 for at in ordered) and ordered==sorted(ordered) and ordered[-1]<trace.find('[web.download.done] path=Downloads/big.bin'),ordered
   g['wait'](r'\[web.loaded\] ',s,60)
   # The same name again lands beside it; a zip type is a download too.
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/big.bin?again');q.key('ret')
@@ -81,6 +84,10 @@ def main():
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/small.zip');q.key('ret')
   g['wait'](r'\[web.download.done\] path=Downloads/small.zip bytes=9 ',s,300)
   m=g['wait'](r'\[web.loaded\] bytes_ok=1 items=(\d+) links=(\d+)',s,60);assert int(m[2])>=3,m.group(0)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.panel\] done=3 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-durable.ppm')})
+  assert (a.out/'browser-download-durable.ppm').stat().st_size>10000
   # A truncated transfer leaves no hidden .part file, and the panel offers retry.
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/retry.bin');q.key('ret')
   g['wait'](r'\[web.download.failed\] name=retry.bin reason=',s,300)
