@@ -8,6 +8,17 @@ pub const MAX_FILE: u64 = 1 << 16;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record { pub url: String, pub path: String, pub etag: String, pub total: u64 }
 
+/// A crash can leave the browser's just-created hidden part with no bytes and
+/// no durable resume record. Only that empty, unreferenced part is disposable.
+pub fn empty_orphan_part(name: &[u8], dir: bool, size: u64, valid_ticket: bool, records: &[Record]) -> bool {
+    const PREFIX: &[u8] = b".kaleidoscope-";
+    if !valid_ticket || dir || size != 0 || name.len() < PREFIX.len() + 6 || name.len() > PREFIX.len() + 256 + 5
+        || !name.starts_with(PREFIX) || !name.ends_with(b".part") { return false; }
+    let stem = &name[PREFIX.len()..name.len() - 5];
+    if stem.is_empty() || stem.iter().any(|b| *b == b'/' || *b == b'\\' || *b < 0x20 || *b == 0x7f) { return false; }
+    !records.iter().any(|r| r.path.as_bytes().strip_prefix(b"Downloads/") == Some(stem))
+}
+
 fn safe(r: &Record) -> bool {
     let Some(name) = r.path.strip_prefix("Downloads/") else { return false };
     !name.is_empty() && name.len() <= 256 && !name.starts_with('.')
@@ -82,6 +93,18 @@ pub fn decode(text: &str) -> Result<Vec<Record>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reaps_only_empty_unreferenced_browser_parts() {
+        let saved = Record { url: "https://example.test/a".into(), path: "Downloads/kept.bin".into(), etag: "\"v1\"".into(), total: 100 };
+        assert!(empty_orphan_part(b".kaleidoscope-lost.bin.part", false, 0, true, &[saved.clone()]));
+        assert!(!empty_orphan_part(b".kaleidoscope-lost.bin.part", false, 0, false, &[saved.clone()]));
+        for (name, dir, size) in [(b".kaleidoscope-kept.bin.part".as_slice(), false, 0),
+            (b".kaleidoscope-lost.bin.part", false, 1), (b".kaleidoscope-lost.bin.part", true, 0),
+            (b".notes.part", false, 0), (b".lost.bin.part", false, 0),
+            (b".notes", false, 0), (b"lost.bin.part", false, 0)] {
+            assert!(!empty_orphan_part(name, dir, size, true, &[saved.clone()]));
+        }
+    }
     fn head(status: u16, etag: &str, range: Option<&str>, len: u64) -> Head {
         let mut h = Head { status, ..Head::default() };
         h.headers.push(("etag".into(), etag.into()));

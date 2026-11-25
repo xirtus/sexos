@@ -17,7 +17,9 @@ and Shields. The remaining gaps are:
   synced again after rename. A failed sync is reported as a failed download;
   it cannot enter completed history. If the second sync fails, the visible
   file may remain but is explicitly marked unconfirmed for retry.
-  A network-interrupted or window-close partial with a strong ETag now stays hidden and is
+  A zero-byte hidden part left by an interrupted create is cleaned on browser
+  start only when a durable ticket names it; unticketed and nonempty parts stay available for
+  manual recovery. A network-interrupted or window-close partial with a strong ETag now stays hidden and is
   synced alongside bounded resume metadata. Retrying its exact URL, including
   after a browser restart, sends Range/If-Range and appends only after a matching
   `206` with exact start, total, ETag, and identity body length. A changed reply
@@ -28,7 +30,7 @@ and Shields. The remaining gaps are:
   checks its previous durable copy before abandoning a synced hidden part.
   The downloads panel now offers Ctrl+Alt+J to clear saved history and current
   failures after a durable state write. Downloaded files and resumable transfers
-  remain available; orphan hidden-part cleanup is still open.
+  remain available; nonempty orphan hidden-part cleanup is still open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an

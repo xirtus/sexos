@@ -17,9 +17,16 @@ use sex_web::download_resume::{self, Record as Resume};
 const DIR: &str = "Downloads";
 /// Largest download.
 const DOWNLOAD_MAX: usize = 4 << 30;
-fn part_name(path: &str) -> String { alloc::format!("{DIR}/.{}.part", &path[DIR.len() + 1..]) }
+fn part_name(path: &str) -> String { alloc::format!("{DIR}/.kaleidoscope-{}.part", &path[DIR.len() + 1..]) }
+fn legacy_part_name(path: &str) -> String { alloc::format!("{DIR}/.{}.part", &path[DIR.len() + 1..]) }
+const TICKET_DIR: &str = "Kaleidoscope/empty-parts";
+fn ticket_name(path: &str) -> String { alloc::format!("{TICKET_DIR}/{}.ticket", &path[DIR.len() + 1..]) }
+fn resume_part(window: &mut sex_app::Window, path: &str) -> String {
+    let owned = part_name(path);
+    if files::size(window, owned.as_bytes()).is_ok() { owned } else { legacy_part_name(path) }
+}
 fn part_offset(window: &mut sex_app::Window, r: &Resume) -> Option<u64> {
-    let part = part_name(&r.path);
+    let part = resume_part(window, &r.path);
     let n = files::size(window, part.as_bytes()).ok()?;
     if n == 0 || n >= r.total { return None; }
     let mut byte = [0];
@@ -106,6 +113,36 @@ impl Browser {
             .unwrap_or_default();
         self.download_resumes.retain(|r| part_offset(&mut self.window, r).is_some());
         web_record!("[web.download.resume.loaded] count={}", self.download_resumes.len());
+        // A durable ticket written before CREATE proves which empty part was
+        // ours. Unknown names, including our own prefix without a ticket,
+        // remain available for recovery.
+        let mut cleaned = 0usize;
+        if let Ok(entries) = files::list(&mut self.window, TICKET_DIR.as_bytes()) {
+            for e in entries {
+                if e.dir || !e.name.ends_with(b".ticket") { continue; }
+                let stem = &e.name[..e.name.len() - 7];
+                let mut name = Vec::from(&b".kaleidoscope-"[..]);
+                name.extend_from_slice(stem);
+                name.extend_from_slice(b".part");
+                let mut ticket = Vec::from(TICKET_DIR.as_bytes());
+                ticket.push(b'/'); ticket.extend_from_slice(&e.name);
+                let bounded = e.size == name.len() as u64 || e.size == (name.len() + 1) as u64;
+                let mut value = vec![0u8; if bounded { e.size as usize } else { 0 }];
+                let valid = bounded
+                    && files::read(&mut self.window, &ticket, &mut value).ok() == Some(e.size as usize)
+                    && (value == name || value.last() == Some(&b'\n') && value[..value.len() - 1] == name);
+                if !valid { continue; }
+                let mut part = Vec::from(&b"Downloads/"[..]); part.extend_from_slice(&name);
+                let size = files::size(&mut self.window, &part).ok();
+                let eligible = download_resume::empty_orphan_part(&name, false, 0, true, &self.download_resumes);
+                if size == Some(0) && eligible
+                    && files::remove(&mut self.window, &part).is_ok() { cleaned += 1; }
+                if size != Some(0) || !eligible || files::size(&mut self.window, &part).is_err() {
+                    let _ = files::remove(&mut self.window, &ticket);
+                }
+            }
+        }
+        web_record!("[web.download.empty_parts.cleaned] count={}", cleaned);
     }
 
     fn keep_resumes(&mut self) -> bool {
@@ -115,7 +152,10 @@ impl Browser {
 
     fn drop_resume(&mut self, url: &str) {
         if !self.download_resumes.iter().any(|r| r.url == url) { return; }
-        let old: Vec<_> = self.download_resumes.iter().filter(|r| r.url == url).map(|r| part_name(&r.path)).collect();
+        let old: Vec<_> = self.download_resumes.iter().filter(|r| r.url == url).filter_map(|r| {
+            let part = resume_part(&mut self.window, &r.path);
+            part_offset(&mut self.window, r).map(|_| part)
+        }).collect();
         self.download_resumes.retain(|r| r.url != url);
         for part in old { let _ = files::remove(&mut self.window, part.as_bytes()); }
         let _ = self.keep_resumes();
@@ -224,16 +264,28 @@ impl Browser {
     }
 
     /// Streams the rest of `ex` into `Downloads/NAME` (a free name), showing progress.
-    /// The bytes go to `Downloads/.NAME.part` and take the real name only once whole, so
+    /// The bytes go to `Downloads/.kaleidoscope-NAME.part` and take the real name only once whole, so
     /// nothing (the Organizer, Loom, another program) ever sees half a download as a file.
     fn save_stream(&mut self, mut ex: net::Exchange, head: &sex_fetch::Head, name: &str, url: &str, resume: Option<Resume>) -> Result<(), &'static [u8]> {
         let _ = files::mkdir(&mut self.window, DIR.as_bytes());
         let path = resume.as_ref().map(|r| r.path.clone()).unwrap_or_else(|| self.free_name(name));
-        let part = part_name(&path);
-        if resume.is_none() { let _ = files::remove(&mut self.window, part.as_bytes()); }
+        let part = if resume.is_some() { resume_part(&mut self.window, &path) } else { part_name(&path) };
+        let ticket = if resume.is_none() && self.jarbox != super::profile::Jarbox::Private {
+            let _ = files::mkdir(&mut self.window, b"Kaleidoscope");
+            let _ = files::mkdir(&mut self.window, TICKET_DIR.as_bytes());
+            let path = ticket_name(&path);
+            if files::write(&mut self.window, path.as_bytes(), &part.as_bytes()[DIR.len() + 1..]).is_err()
+                || files::sync(&mut self.window).is_err() {
+                ex.cancel(&mut self.window);
+                self.failed_download(name, url, b"Can't prepare a durable download.");
+                return Err(b"Can't prepare a durable download.");
+            }
+            Some(path)
+        } else { None };
         if resume.is_none() && files::write(&mut self.window, part.as_bytes(), &[]).is_err() {
             ex.cancel(&mut self.window);
             let _ = files::remove(&mut self.window, part.as_bytes());
+            if let Some(ticket) = &ticket { let _ = files::remove(&mut self.window, ticket.as_bytes()); }
             self.failed_download(name, url, b"Can't save in Downloads.");
             return Err(b"Can't save in Downloads.");
         }
@@ -339,9 +391,13 @@ impl Browser {
         Ok((transfer.written(), check))
         })();
         self.download_status = None;
+        if let Some(ticket) = &ticket { let _ = files::remove(&mut self.window, ticket.as_bytes()); }
         match result {
             Ok((wrote, _)) => {
-                if resumable.is_some() { self.drop_resume(url); }
+                if resumable.is_some() {
+                    self.download_resumes.retain(|r| r.url != url);
+                    let _ = self.keep_resumes();
+                }
                 self.download_failures.retain(|f| f.url != url);
                 let private = self.jarbox == super::profile::Jarbox::Private;
                 self.downloads.push(Record { path, bytes: wrote, url: String::from(url), private });
@@ -405,7 +461,8 @@ impl Browser {
         for n in 1..1000 {
             let p = if n == 1 { alloc::format!("{DIR}/{name}") } else { alloc::format!("{DIR}/{stem} ({n}){ext}") };
             if files::size(&mut self.window, p.as_bytes()).is_err()
-                && files::size(&mut self.window, part_name(&p).as_bytes()).is_err() { return p; }
+                && files::size(&mut self.window, part_name(&p).as_bytes()).is_err()
+                && files::size(&mut self.window, legacy_part_name(&p).as_bytes()).is_err() { return p; }
         }
         alloc::format!("{DIR}/{stem}-{}{ext}", sex_pdx::get_ticks())
     }
@@ -455,6 +512,15 @@ impl Browser {
                 for e in list.iter().filter(|e| !e.name.starts_with(b".")) {
                     let n = String::from_utf8_lossy(&e.name).into_owned();
                     html.push_str(&alloc::format!("<li><a href=\"@{DIR}/{}\">{}</a></li>", esc(&n), esc(&n)));
+                }
+                html.push_str("</ul>");
+            }
+            let partials: Vec<_> = list.iter().filter(|e| !e.dir && e.name.starts_with(b".") && e.name.ends_with(b".part")).collect();
+            if !partials.is_empty() {
+                html.push_str("<h3>Hidden files to review in Loom</h3><ul>");
+                for e in partials {
+                    let name = String::from_utf8_lossy(&e.name);
+                    html.push_str(&alloc::format!("<li>{} — {} bytes</li>", esc(&name), e.size));
                 }
                 html.push_str("</ul>");
             }
