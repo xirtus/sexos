@@ -78,6 +78,7 @@ const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
+    CopiedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     MovedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     TrashedBatch(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>),
     /// A batch rename in `dir`: the moves that take it back, in order.
@@ -101,8 +102,8 @@ struct App {
     /// Show this tab beside the next tab in the list; keys act in the active tab.
     split: bool,
     clip: Option<(Vec<u8>, bool)>,
-    /// A contiguous cut range; it moves together on one disk.
-    clip_batch: Option<Vec<Vec<u8>>>,
+    /// A contiguous copied or cut range; it pastes as one undoable action.
+    clip_batch: Option<(Vec<Vec<u8>>, bool)>,
     undo: Vec<Undo>,
     input: Option<(Input, Vec<u8>)>,
     status: String,
@@ -382,7 +383,7 @@ impl App {
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
         t.push_str(&format!("Loom [{}/{}]  {}{}\n", self.active_tab + 1, self.tabs.len(), shown(&self.cwd), space));
         if let Some(count) = self.selection_anchor.and_then(|_| self.selection().map(|r| r.count())) {
-            t.push_str(&format!("{count} selected  ·  Ctrl+X cuts  ·  Delete trashes  ·  Ctrl+Z undoes the batch\n"));
+            t.push_str(&format!("{count} selected  ·  Ctrl+C copies  ·  Ctrl+X cuts  ·  Delete trashes  ·  Ctrl+Z undoes the batch\n"));
         }
         if self.tabs.len() > 1 {
             t.push_str("Tabs:");
@@ -474,10 +475,17 @@ impl App {
                     _ => sex_pdx::serial_record!("[files.app.job.done] kind={:?} what={} from={} to={} bytes={}", kind, shown(&job.what), shown(&job.from), shown(&job.to), job.done),
                 }
                 if kind == Kind::Move { self.meta_moved(window, &job.from, &job.to); }
-                if kind == Kind::Copy || kind == Kind::Move {
+                if job.batch_count > 0 {
+                    sex_pdx::serial_record!("[files.app.pasted.batch] count={} cut=0", job.batch_count);
+                } else if kind == Kind::Copy || kind == Kind::Move {
                     sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&job.from), shown(&job.to), (kind == Kind::Move) as u8);
                 }
-                if let Some(u) = self.job_undo.take() { self.undo.push(u); }
+                if let Some(u) = self.job_undo.take() {
+                    if let Undo::CopiedBatch(items) = &u {
+                        for (from, to) in items { self.meta_copied(window, from, to); }
+                    }
+                    self.undo.push(u);
+                }
                 self.status = summary;
                 self.load(window);
                 if let Some(name) = self.job_select.take() { self.select(&name); }
@@ -595,7 +603,11 @@ impl App {
     }
 
     fn paste(&mut self, window: &mut Window) {
-        if let Some(paths) = self.clip_batch.clone() { self.paste_cut_batch(window, &paths); return; }
+        if let Some((paths, cut)) = self.clip_batch.clone() {
+            if cut { self.paste_cut_batch(window, &paths); }
+            else { self.paste_copy_batch(window, &paths); }
+            return;
+        }
         let Some((from, cut)) = self.clip.clone() else { self.status = "Nothing to paste: Ctrl+C or Ctrl+X a file first.".into(); return };
         if self.cwd.starts_with(&from) && (self.cwd.len() == from.len() || self.cwd[from.len()] == b'/') { self.status = "A folder can't go inside itself.".into(); return; }
         let to = self.free_name(window, &self.cwd.clone(), base(&from), "copy");
@@ -626,6 +638,27 @@ impl App {
             }
             Err(e) => self.status = format!("Couldn't paste: {}.", shown(files::message(e))),
         }
+    }
+
+    fn paste_copy_batch(&mut self, window: &mut Window, paths: &[Vec<u8>]) {
+        if paths.is_empty() || paths.len() > loom_core::selection::MAX_BATCH_COPY {
+            self.status = "Select between 2 and 64 text-list items to copy together.".into(); return;
+        }
+        if paths.iter().any(|p| self.cwd == *p || (self.cwd.starts_with(p) && self.cwd.get(p.len()) == Some(&b'/'))) {
+            self.status = "A folder can't be copied inside itself.".into(); return;
+        }
+        if paths.iter().any(|p| files::stat(window, &at(p)).is_err()) {
+            self.status = "A selected item is no longer there; select the range again.".into(); return;
+        }
+        let cwd = self.cwd.clone();
+        let names: Vec<Vec<u8>> = paths.iter().map(|p| base(p).to_vec()).collect();
+        let Some(chosen) = loom_core::selection::copy_names(&names, |name| files::stat(window, &at(&join(&cwd, name))).is_ok()) else {
+            self.status = "No free destination name; no items copied.".into(); return;
+        };
+        let places: Vec<(Vec<u8>, Vec<u8>)> = paths.iter().cloned().zip(chosen.iter().map(|name| join(&cwd, name))).collect();
+        let destinations = places.clone();
+        let job = Job::copy_many(window, &places);
+        self.start(window, job, Some(Undo::CopiedBatch(destinations)), None);
     }
 
     fn paste_cut_batch(&mut self, window: &mut Window, paths: &[Vec<u8>]) {
@@ -684,6 +717,13 @@ impl App {
                 return Err(e);
             }
             restored.push((from, to));
+        }
+        Ok(())
+    }
+    fn undo_copy_batch(&mut self, window: &mut Window, items: &[(Vec<u8>, Vec<u8>)]) -> Result<(), u8> {
+        // A retry after a partial undo skips copies already removed.
+        for (_, to) in items.iter().rev() {
+            if files::stat(window, &at(to)).is_ok() { self.remove_all(window, to)?; }
         }
         Ok(())
     }
@@ -853,6 +893,7 @@ impl App {
             Undo::Trashed { from, to, info } => self.move_path(window, to, from).map(|_| { let _ = files::remove(window, &at(info)); }),
             Undo::TrashedBatch(items) => self.undo_trash_batch(window, items),
             Undo::MovedBatch(items) => self.undo_move_batch(window, items),
+            Undo::CopiedBatch(items) => self.undo_copy_batch(window, items),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
             Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
@@ -1078,14 +1119,12 @@ impl App {
                 KEY_W if key.shift => self.close_tab(window),
                 0x49 => { let next = (self.active_tab + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(window, next); }
                 0x51 => { let next = (self.active_tab + 1) % self.tabs.len(); self.show_tab(window, next); }
-                KEY_C if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
-                    self.status = "Batch copy remains open; cut this range with Ctrl+X or copy one item.".into();
-                }
-                KEY_X if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+                KEY_C | KEY_X if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
                     let paths = self.selected_paths();
-                    sex_pdx::serial_record!("[files.app.cut.batch] count={}", paths.len());
-                    self.status = format!("Cut {} items. Open a destination folder and press Ctrl+V.", paths.len());
-                    self.clip_batch = Some(paths); self.clip = None;
+                    let cut = key.code == KEY_X;
+                    sex_pdx::serial_record!("[files.app.{}.batch] count={}", if cut { "cut" } else { "copy" }, paths.len());
+                    self.status = format!("{} {} items. Open a destination folder and press Ctrl+V.", if cut { "Cut" } else { "Copied" }, paths.len());
+                    self.clip_batch = Some((paths, cut)); self.clip = None;
                 }
                 KEY_C | KEY_X => if let Some(p) = self.selected() {
                     let cut = key.code == KEY_X;

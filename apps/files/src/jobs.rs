@@ -44,6 +44,7 @@ pub enum Outcome {
 
 pub struct Job {
     pub kind: Kind,
+    pub batch_count: usize,
     /// What it is about, as shown: the top file or folder.
     pub what: Vec<u8>,
     pub from: Vec<u8>,
@@ -94,7 +95,7 @@ impl Job {
     fn new(kind: Kind, what: &[u8], from: &[u8], to: &[u8]) -> Self {
         let started_at = ticks();
         let tid = TRANSFER_IDS.fetch_add(1, Ordering::Relaxed);
-        Job { kind, what: what.to_vec(), from: from.to_vec(), to: to.to_vec(), steps: VecDeque::new(), made: Vec::new(), open_part: None,
+        Job { kind, batch_count: 0, what: what.to_vec(), from: from.to_vec(), to: to.to_vec(), steps: VecDeque::new(), made: Vec::new(), open_part: None,
               done: 0, total: 0, removed: 0, items_done: 0, started_at, hash: None, buf: Vec::new(), committed: false,
               transfer: TransferProgress::new(tid, what, 0, 1, started_at) }
     }
@@ -125,6 +126,14 @@ impl Job {
     pub fn copy(window: &mut Window, from: &[u8], to: &[u8]) -> Result<Self, u8> {
         let mut job = Job::new(Kind::Copy, base(to), from, to);
         job.plan_copy(window, from, to)?;
+        Ok(job)
+    }
+    /// Plans every selected source before writing any destination. One job owns
+    /// the whole group, so failure or Escape removes all paths it made.
+    pub fn copy_many(window: &mut Window, paths: &[(Vec<u8>, Vec<u8>)]) -> Result<Self, u8> {
+        let mut job = Job::new(Kind::Copy, b"selected items", b"", b"");
+        for (from, to) in paths { job.plan_copy(window, from, to)?; }
+        job.batch_count = paths.len();
         Ok(job)
     }
     /// Moves between disks: copies, then removes the source once every copy is whole.
