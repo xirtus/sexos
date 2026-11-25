@@ -101,8 +101,9 @@ const TRIAL_MAX_MS: u64 = 240_000;
 const SWEEP_ROUNDS: u32 = 4;
 const SWEEP_MAX_ROUNDS: u32 = 50;
 const RESULTS_MAX: usize = 200 * 1024;
-static mut RESULTS: [u8; RESULTS_MAX] = [0; RESULTS_MAX];
-static mut RESULTS_LEN: usize = 0;
+/// The sweep's results, allocated when a sweep starts: a 200 KiB static cost every
+/// Spindle 50 pages at boot (about 2 MiB in all), enough to refuse Qupid's fifth window.
+static mut RESULTS: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
 
 /// Trial `k`'s shape and switch setting, as indexes: all four switch settings of a shape
 /// run together. `only`: every trial uses that shape.
@@ -375,7 +376,11 @@ impl Tether {
             self.sweep.only = only;
             self.sweep.total = rounds * if only.is_some() { KNOBS.len() as u32 } else { TRIALS_PER_ROUND };
             self.sweep.gap_step = 2;
-            unsafe { *core::ptr::addr_of_mut!(RESULTS_LEN) = 0; }
+            unsafe {
+                let r = &mut *core::ptr::addr_of_mut!(RESULTS);
+                r.clear();
+                let _ = r.try_reserve_exact(RESULTS_MAX);
+            }
             let mut t = Text { buf: [0; 160], len: 0 };
             let _ = core::fmt::Write::write_fmt(&mut t, format_args!("SexOS Wi-Fi sweep to {}:{}, {} trials ({} rounds)", core::str::from_utf8(host).unwrap_or("?"), port, self.sweep.total, rounds));
             let (b, n) = (t.buf, t.len);
@@ -735,16 +740,16 @@ impl Tether {
 
     /// Adds a line to the sweep's results file.
     fn note(&mut self, line: &[u8]) {
-        let (buf, len) = unsafe { (&mut *core::ptr::addr_of_mut!(RESULTS), &mut *core::ptr::addr_of_mut!(RESULTS_LEN)) };
-        if *len + line.len() + 1 > RESULTS_MAX { return; }
-        buf[*len..*len + line.len()].copy_from_slice(line);
-        buf[*len + line.len()] = b'\n';
-        *len += line.len() + 1;
+        let buf = unsafe { &mut *core::ptr::addr_of_mut!(RESULTS) };
+        // Only into the room reserved at the start: the results never grow the heap mid-sweep.
+        if buf.len() + line.len() + 1 > RESULTS_MAX.min(buf.capacity()) { return; }
+        buf.extend_from_slice(line);
+        buf.push(b'\n');
     }
 
     /// Writes the results so far to the stick (replacing the file).
     fn save(&mut self, sb: &mut Scrollback) {
-        let len = unsafe { *core::ptr::addr_of!(RESULTS_LEN) };
+        let len = unsafe { (*core::ptr::addr_of!(RESULTS)).len() };
         let written = unsafe { crate::fs_commands::FS.start_write_with(SWEEP_FILE, RESULTS_MAX, |room| {
             let n = len.min(room.len());
             let all = &*core::ptr::addr_of!(RESULTS); room[..n].copy_from_slice(&all[..n]);
