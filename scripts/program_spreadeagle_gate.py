@@ -229,7 +229,7 @@ def main():
   s=len(t());type_line('B desc, A asc');q.key('ret')
   g['wait'](r'\[spreadeagle\.sort\.multi\] range=A1:B4 keys=B desc, A asc\n',s,120)
   time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-multikey-sort.ppm')})
-  g['chord']('ctrl','z',r'\[spreadeagle\.command\] edit\.undo\n')
+  g['chord']('ctrl','z',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|meals\|Fun\|Rent\|Total\|Per year\|\|\n')
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1]),'powercut_recovered':True})
