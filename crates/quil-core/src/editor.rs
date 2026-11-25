@@ -62,6 +62,7 @@ impl Editor {
     pub fn from_bytes(text: &[u8]) -> Editor { Editor::new(Buffer::from_bytes(text)) }
     pub fn text(&self) -> Vec<u8> { self.buf.to_vec() }
     pub fn modified(&self) -> bool { self.version != self.saved }
+    pub fn version(&self) -> u64 { self.version }
     pub fn mark_saved(&mut self) { self.saved = self.version; }
     /// After a save that rebased the buffer on the new file, old steps point at text
     /// that is gone.
@@ -315,17 +316,23 @@ impl Editor {
         }
         let needle = self.selected(&p);
         let last = self.sels.iter().map(|s| s.end()).max().unwrap_or(0);
-        let hit = self.buf.find(&needle, last, false).or_else(|| self.buf.find(&needle, 0, false));
-        match hit {
-            Some(at) if !self.sels.iter().any(|s| s.start() == at) => {
+        let (mut from, mut wrapped) = (last, false);
+        loop {
+            let at = match self.buf.find(&needle, from, false) {
+                Some(at) => at,
+                None if !wrapped => { wrapped = true; from = 0; continue; }
+                None => return false,
+            };
+            if wrapped && at >= last { return false; }
+            if !self.sels.iter().any(|s| s.start() == at) {
                 self.sels.push(Sel { anchor: at, head: at + needle.len(), col: None });
                 self.primary = self.sels.len() - 1;
                 let pr = self.sels[self.primary];
                 self.normalize();
                 self.primary = self.sels.iter().position(|s| *s == pr).unwrap_or(0);
-                true
+                return true;
             }
-            _ => false,
+            from = at + needle.len();
         }
     }
     /// Ctrl+Shift+L: a selection on every occurrence of the selection (or the word).

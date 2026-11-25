@@ -178,6 +178,21 @@ fn ctrl_d_selects_the_word_then_each_next_occurrence() {
 }
 
 #[test]
+fn ctrl_d_skips_selected_hits_after_wrapping() {
+    let mut ed = Editor::from_bytes(b"foo foo foo foo\n");
+    ed.set_cursor(9); // third word
+    for expected in 1..=4 {
+        assert!(ed.add_next_occurrence());
+        assert_eq!(ed.sels.len(), expected);
+    }
+    assert!(!ed.add_next_occurrence());
+    ed.type_text(b"bar");
+    assert_eq!(s(&ed), "bar bar bar bar\n");
+    ed.undo();
+    assert_eq!(s(&ed), "foo foo foo foo\n");
+}
+
+#[test]
 fn select_all_occurrences_and_paste_one_line_per_cursor() {
     let mut ed = Editor::from_bytes(b"a1 a2 a3");
     ed.set_selection(0, 1);
@@ -581,6 +596,139 @@ fn highlighting_marks_keywords_strings_and_block_comments() {
     assert_eq!(out[0], (0, 3, Kind::Keyword));
     assert_eq!(*out.last().unwrap(), (9, 15, Kind::Comment));
     assert_eq!(Lang::from_path(b"a/b.rs"), Lang::Rust);
+}
+
+#[test]
+fn rust_inline_raw_strings_keep_comment_markers_inside_string() {
+    let text = b"let a = r#\"// note\"#; let b = br##\"/* note */\"##;";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Rust, text, false, &mut out));
+    for token in [b"r#\"// note\"#".as_slice(), b"br##\"/* note */\"##".as_slice()] {
+        let start = text.windows(token.len()).position(|part| part == token).unwrap();
+        assert!(out.contains(&(start, start + token.len(), Kind::String)));
+    }
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::Comment));
+    highlight::line(Lang::Rust, b"let read = 1;", false, &mut out);
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::String));
+}
+
+#[test]
+fn rust_multiline_raw_string_carries_hash_delimiter_across_lines() {
+    let mut out = Vec::new();
+    let state = highlight::line_state(Lang::Rust, b"let text = br##\" // /*", highlight::State::Normal, &mut out);
+    assert_eq!(state, highlight::State::RustRawString(2));
+    assert_eq!(*out.last().unwrap(), (11, 22, Kind::String));
+    let state = highlight::line_state(Lang::Rust, b"fn fake() {} \"# still raw", state, &mut out);
+    assert_eq!(state, highlight::State::RustRawString(2));
+    assert_eq!(out, [(0, b"fn fake() {} \"# still raw".len(), Kind::String)]);
+    let state = highlight::line_state(Lang::Rust, b"close\"##; fn real() {}", state, &mut out);
+    assert_eq!(state, highlight::State::Normal);
+    assert_eq!(out[0], (0, 8, Kind::String));
+    assert!(out.contains(&(10, 12, Kind::Keyword)));
+    let state = highlight::line_state(Lang::Rust, b"// comment", state, &mut out);
+    assert_eq!(state, highlight::State::Normal);
+    assert_eq!(out, [(0, 10, Kind::Comment)]);
+}
+
+#[test]
+fn syntax_state_survives_scroll_and_invalidates_after_edit() {
+    fn line_at(bytes: &[u8], line: usize) -> usize {
+        bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n').nth(line - 1).unwrap().0 + 1
+    }
+    let mut text = b"let s = br##\"begin\n".to_vec();
+    for _ in 0..40_000 { text.extend_from_slice(b"raw body\n"); }
+    text.extend_from_slice(b"end\"##; fn real() {}\n");
+    let mut tab = Tab::new(b"a.rs", Editor::from_bytes(&text));
+    tab.top = line_at(&text, 39_999);
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Pending);
+    let mut state = crate::workspace::SyntaxAt::Pending;
+    for _ in 0..12 {
+        state = tab.syntax_state_at_top();
+        if matches!(state, crate::workspace::SyntaxAt::Ready(_)) { break; }
+    }
+    assert_eq!(state, crate::workspace::SyntaxAt::Ready(highlight::State::RustRawString(2)));
+    tab.scroll(1);
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Ready(highlight::State::RustRawString(2)));
+    tab.ed.set_cursor(0);
+    tab.ed.type_text(b"// ");
+    tab.top = line_at(&tab.ed.text(), 40_000);
+    let mut after_edit = crate::workspace::SyntaxAt::Pending;
+    for _ in 0..12 {
+        after_edit = tab.syntax_state_at_top();
+        if !matches!(after_edit, crate::workspace::SyntaxAt::Pending) { break; }
+    }
+    assert_eq!(after_edit, crate::workspace::SyntaxAt::Ready(highlight::State::Normal));
+}
+
+#[test]
+fn syntax_scan_sees_raw_openers_past_drawn_columns() {
+    let mut text = vec![b' '; 5000];
+    text.extend_from_slice(b"br##\"begin\nbody\nend\"##\n");
+    let mut tab = Tab::new(b"a.rs", Editor::from_bytes(&text));
+    tab.top = text.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Ready(highlight::State::RustRawString(2)));
+}
+
+#[test]
+fn syntax_scan_reports_unavailable_for_oversized_line() {
+    let mut text = vec![b' '; crate::workspace::SYNTAX_LINE_MAX + 1];
+    text.extend_from_slice(b"\nfn real() {}\n");
+    let mut tab = Tab::new(b"a.rs", Editor::from_bytes(&text));
+    tab.top = crate::workspace::SYNTAX_LINE_MAX + 2;
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Unavailable);
+    assert!(!tab.syntax_pending);
+}
+
+#[test]
+fn python_inline_f_string_prefixes_are_colored_with_the_string() {
+    let text = b"label = f\"#value\"; path = rf'//name'; other = Fr\"ok\"";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Python, text, false, &mut out));
+    for token in [b"f\"#value\"".as_slice(), b"rf'//name'".as_slice(), b"Fr\"ok\"".as_slice()] {
+        let start = text.windows(token.len()).position(|part| part == token).unwrap();
+        assert!(out.contains(&(start, start + token.len(), Kind::String)));
+    }
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::Comment));
+    highlight::line(Lang::Python, b"format = 1", false, &mut out);
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::String));
+}
+
+#[test]
+fn python_f_string_colors_simple_references() {
+    let text = b"label = f\"Hello {name}, {True}!\"";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Python, text, false, &mut out));
+    for (token, kind) in [(b"name".as_slice(), Kind::Plain), (b"True".as_slice(), Kind::Keyword)] {
+        let start = text.windows(token.len()).position(|part| part == token).unwrap();
+        assert!(out.contains(&(start, start + token.len(), kind)));
+        assert!(out.contains(&(start - 1, start, Kind::Punct)));
+        assert!(out.contains(&(start + token.len(), start + token.len() + 1, Kind::Punct)));
+    }
+    for fallback in [b"f\"{{name}}\"".as_slice(), b"f\"{person.name}\"".as_slice()] {
+        highlight::line(Lang::Python, fallback, false, &mut out);
+        assert_eq!(out, vec![(0, fallback.len(), Kind::String)]);
+    }
+}
+
+#[test]
+fn js_inline_template_colors_simple_identifier_substitutions() {
+    let text = b"const greeting = `Hello ${name}, ${this}!`;";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Js, text, false, &mut out));
+    let name = text.windows(4).position(|part| part == b"name").unwrap();
+    let this = text.windows(4).position(|part| part == b"this").unwrap();
+    assert!(out.contains(&(name, name + 4, Kind::Plain)));
+    assert!(out.contains(&(this, this + 4, Kind::Keyword)));
+    assert!(out.contains(&(name - 2, name, Kind::Punct)));
+    assert!(out.contains(&(name + 4, name + 5, Kind::Punct)));
+    let escaped = b"const s = `\\${name}`;";
+    highlight::line(Lang::Js, escaped, false, &mut out);
+    let ticks: Vec<usize> = escaped.iter().enumerate().filter_map(|(i, b)| (*b == b'`').then_some(i)).collect();
+    assert!(out.contains(&(ticks[0], ticks[1] + 1, Kind::String)));
+    let complex = b"const s = `${person.name}`;";
+    highlight::line(Lang::Js, complex, false, &mut out);
+    let ticks: Vec<usize> = complex.iter().enumerate().filter_map(|(i, b)| (*b == b'`').then_some(i)).collect();
+    assert!(out.contains(&(ticks[0], ticks[1] + 1, Kind::String)));
 }
 
 #[test]

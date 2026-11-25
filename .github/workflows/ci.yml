@@ -803,8 +803,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Quil engine on the host (1 GB lazy file, multi-cursor, Vim, keymaps, fuzzy, project search)
-      run: cargo test --locked --release -p quil-core
+    - name: Quil engine and language-service protocol on the host
+      run: cargo test --locked --release -p quil-core -p quil-ls
     - uses: ./.github/actions/image
     - name: Quil in QEMU (200 MB file, Go to File, cursors, Vim dd, project search)
       run: |

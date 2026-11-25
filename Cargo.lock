@@ -6448,9 +6448,11 @@ name = "quil-app"
 version = "0.1.0"
 dependencies = [
  "quil-core",
+ "serde_json",
  "sex-app",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -6458,6 +6460,17 @@ name = "quil-core"
 version = "0.1.0"
 dependencies = [
  "memchr",
+ "miniz_oxide 0.9.1",
+ "sha1 0.10.7",
+]
+
+[[package]]
+name = "quil-ls"
+version = "0.1.0"
+dependencies = [
+ "quil-core",
+ "serde_json",
+ "sex-std",
 ]
 
 [[package]]

@@ -90,6 +90,7 @@ members = [
     "crates/quil-core",
     "crates/burlesque-core",
     "apps/quil",
+    "apps/quil-ls",
     "crates/sex-mesh",
     "crates/sex-keymap",
     "crates/sex-shape",

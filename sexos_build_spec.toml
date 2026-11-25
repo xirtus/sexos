@@ -55,6 +55,7 @@ crates = [
   "apps/voice/Cargo.toml",
   "apps/term/Cargo.toml",
   "apps/quil/Cargo.toml",
+  "apps/quil-ls/Cargo.toml",
   "apps/files/Cargo.toml",
   "apps/peek/Cargo.toml",
   "apps/shuttle/Cargo.toml",
@@ -347,6 +348,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/quil/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/quil"
 dest_artifact = "iso_root/programs/quil"
+
+[[stage]]
+id = "build_quil_ls"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/quil-ls/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/quil-ls"
+dest_artifact = "iso_root/programs/quil-ls"
 
 [[stage]]
 id = "build_files"
