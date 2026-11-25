@@ -19,9 +19,9 @@ fn shot(mode: Mode) -> Vec<u32> {
 fn chrome_changes_with_theme_while_site_pixels_stay_the_same() {
     let (light, dark, contrast) = (shot(Mode::Light), shot(Mode::Dark), shot(Mode::HighContrast));
     let at = |pixels: &[u32], x: usize, y: usize| pixels[y * 400 + x];
-    assert_eq!(at(&light, 0, 0), tokens(Mode::Light, DEFAULT_ACCENT).surface);
-    assert_eq!(at(&dark, 0, 0), tokens(Mode::Dark, DEFAULT_ACCENT).surface);
-    assert_eq!(at(&contrast, 0, 0), tokens(Mode::HighContrast, DEFAULT_ACCENT).surface);
+    assert_eq!(at(&light, 0, 0), tokens(Mode::Light, DEFAULT_ACCENT).surface & 0x00FF_FFFF);
+    assert_eq!(at(&dark, 0, 0), tokens(Mode::Dark, DEFAULT_ACCENT).surface & 0x00FF_FFFF);
+    assert_eq!(at(&contrast, 0, 0), tokens(Mode::HighContrast, DEFAULT_ACCENT).surface & 0x00FF_FFFF);
     assert_ne!(at(&light, 0, 0), at(&dark, 0, 0));
     for y in 50..250 {
         for x in [0, 50, 200, 399] {
