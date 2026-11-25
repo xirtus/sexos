@@ -282,6 +282,14 @@ def main():
   time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart-presentation.ppm')})
   assert (a.out/'spreadeagle-chart-presentation.ppm').stat().st_size>10000
   ctrl_shift('q',r'\[spreadeagle\.chart\.edit-prompt\] id=\d+ at=D1\n')
+  s=len(t());type_line('switch rows/columns');q.key('ret')
+  g['wait'](r'\[spreadeagle\.chart\.edit\] id=\d+ action=switch rows/columns\n',s,120)
+  time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart-switched.ppm')})
+  assert (a.out/'spreadeagle-chart-switched.ppm').stat().st_size>10000
+  ctrl_shift('q',r'\[spreadeagle\.chart\.edit-prompt\] id=\d+ at=D1\n')
+  s=len(t());type_line('switch rows/columns');q.key('ret')
+  g['wait'](r'\[spreadeagle\.chart\.edit\] id=\d+ action=switch rows/columns\n',s,120)
+  ctrl_shift('q',r'\[spreadeagle\.chart\.edit-prompt\] id=\d+ at=D1\n')
   s=len(t());type_line('type doughnut');q.key('ret')
   g['wait'](r'\[spreadeagle\.chart\.edit\] id=\d+ action=type doughnut\n',s,120)
   ctrl_shift('q',r'\[spreadeagle\.chart\.edit-prompt\] id=\d+ at=D1\n')
