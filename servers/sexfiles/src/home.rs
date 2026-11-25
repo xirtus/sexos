@@ -18,7 +18,7 @@ use alloc::vec;
 use sex_crypt::{Cost, Xts, HEADER, KEY};
 use sex_pdx::fs as w;
 use sex_pdx::home_lock as h;
-use sexfs::{Device, Error, Fs, Memory, Slot, BLOCK};
+use sexfs::{Device, Error, Fs, Kind, Memory, Slot, BLOCK};
 
 /// The system filesystem, lent for the length of one request on `/home`.
 static mut MAIN: *mut Fs<'static, FsDisk> = core::ptr::null_mut();
@@ -269,6 +269,64 @@ fn crypt_status(e: sex_crypt::Error) -> u8 {
 }
 
 /// A request on `/home` or under it; `inner` is the path inside the volume.
+/// Vellum's staged file lives in its primary-filesystem folder while the chosen
+/// PDF can live in the encrypted home. Files owns this one request: it copies
+/// the complete staged bytes to a home-private staging name, commits them, then
+/// compares and replaces the home destination in a second home commit. No other
+/// Files request can write the destination between the comparison and rename.
+pub fn replace_from_main_if_sha256(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<u32, u8> {
+    deep(|| replace_from_main_here(main, from, to, expected))
+}
+fn replace_from_main_here(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<u32, u8> {
+    let source = main.open(from).map_err(crate::fs_service::status)?;
+    if source.kind != Kind::File { return Err(w::IS_DIR); }
+    let Some(inner) = to.strip_prefix(h::HOME) else { return Err(w::OTHER_DISK) };
+    if inner.is_empty() || inner == b"/" { return Err(w::DENIED); }
+    let Some(fs) = home().as_mut() else { return Err(h::LOCKED); };
+    static mut NEXT_STAGE: u64 = 0;
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
+    let mut stage = None;
+    for _ in 0..16 {
+        let n = unsafe { NEXT_STAGE = NEXT_STAGE.wrapping_add(1); NEXT_STAGE };
+        let candidate = alloc::format!("/.vellum-conditional-{n:016x}.tmp").into_bytes();
+        match lend(main, || fs.create(&candidate, now)) {
+            Ok(id) => { stage = Some((candidate, id)); break; }
+            Err(Error::Exists) => continue,
+            Err(e) => return Err(crate::fs_service::status(e)),
+        }
+    }
+    let Some((stage, id)) = stage else { return Err(w::EXISTS) };
+    let copied = (|| -> Result<(), Error> {
+        let mut at = 0u64;
+        let mut chunk = [0u8; BLOCK];
+        while at < source.size {
+            let n = main.read(source.id, at, &mut chunk[..((source.size - at) as usize).min(BLOCK)])?;
+            if n == 0 { return Err(Error::Corrupt); }
+            let mut written = 0;
+            while written < n {
+                let count = lend(main, || fs.write(id, at + written as u64, &chunk[written..n], now))?;
+                if count == 0 { return Err(Error::NoSpace); }
+                written += count;
+            }
+            at += n as u64;
+        }
+        lend(main, || fs.commit())
+    })();
+    if let Err(e) = copied {
+        let _ = lend(main, || fs.rollback());
+        return Err(crate::fs_service::status(e));
+    }
+    let promoted = lend(main, || fs.rename_if_sha256(&stage, inner, expected).and_then(|_| fs.commit()));
+    if let Err(e) = promoted {
+        // A mismatch leaves the destination intact. The internal stage has
+        // already been committed, so clean it up in its own transaction.
+        let _ = lend(main, || fs.rollback());
+        let _ = lend(main, || fs.remove_path(&stage).and_then(|_| fs.commit()));
+        return Err(crate::fs_service::status(e));
+    }
+    Ok(0)
+}
+
 pub fn run(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
     deep(|| run_here(main, r, path, data))
 }
@@ -276,7 +334,7 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
     let strip = |p: &[u8]| -> alloc::vec::Vec<u8> { let i = &p[h::HOME.len().min(p.len())..]; if i.is_empty() { b"/".to_vec() } else { i.to_vec() } };
     // A rename's two halves both lose the prefix.
     let inner = match path.iter().position(|b| *b == 0) {
-        Some(i) if r.kind == w::RENAME => { let mut v = strip(&path[..i]); v.push(0); v.extend_from_slice(&strip(&path[i + 1..])); v }
+        Some(i) if matches!(r.kind, w::RENAME | w::REPLACE_IF_SHA256) => { let mut v = strip(&path[..i]); v.push(0); v.extend_from_slice(&strip(&path[i + 1..])); v }
         _ => strip(path),
     };
     let inner = &inner[..];

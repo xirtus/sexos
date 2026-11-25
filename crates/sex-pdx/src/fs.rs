@@ -74,6 +74,12 @@ pub const ORGANIZE_RULE: u8 = 50;
 /// The post-commit event log: files that arrived in organized folders since sequence
 /// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
 pub const ORGANIZE_LOG: u8 = 51;
+/// Replace one saved file with a durable staged file only if the destination's
+/// complete current bytes still have the supplied SHA-256 digest. `source\0destination`
+/// is scoped on both halves, and the 32-byte digest occupies the data region.
+/// Files checks and promotes within one request. Removable volumes refuse this
+/// operation until their replacement transactions can preserve the old file.
+pub const REPLACE_IF_SHA256: u8 = 52;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;

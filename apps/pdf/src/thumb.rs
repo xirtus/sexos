@@ -124,7 +124,7 @@ pub fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Refuse to replace a PDF if its saved source changed while Vellum was open.
-/// The comparison happens after staging, immediately before promotion.
+/// On SexOS, Files compares the full digest and promotes in one request.
 pub fn write_whole_if_unchanged(path: &str, bytes: &[u8], original: &[u8]) -> std::io::Result<()> {
     write_whole_matching(path, bytes, Some(original))
 }
@@ -155,16 +155,38 @@ fn write_whole_matching(path: &str, bytes: &[u8], original: Option<&[u8]>) -> st
         sync_staged(&file)
     })();
     drop(file);
-    let result = write_result.and_then(|()| {
-        if let Some(original) = original {
-            if std::fs::read(path)? != original {
-                return Err(Error::new(ErrorKind::Other, "PDF changed on disk; reopen before saving"));
-            }
-        }
-        rename_staged(&name, path)
+    let result = write_result.and_then(|()| match original {
+        Some(original) => promote_if_unchanged(&name, path, original),
+        None => rename_staged(&name, path),
     });
-    if result.is_err() { let _ = std::fs::remove_file(&name); }
+    // A Files-owned copy into encrypted home leaves the app-folder stage behind;
+    // a primary-filesystem promotion has already moved it away.
+    if result.is_err() || original.is_some() { let _ = std::fs::remove_file(&name); }
     result
+}
+
+#[cfg(target_os = "hermit")]
+fn promote_if_unchanged(from: &str, to: &str, original: &[u8]) -> std::io::Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Error, ErrorKind};
+    use sex_std::{sex_app::files::direct, sex_pdx::fs as w};
+    let digest: [u8; 32] = Sha256::digest(original).into();
+    direct::replace_if_sha256(from.as_bytes(), to.as_bytes(), &digest).map_err(|status| {
+        match status {
+            w::STALE => Error::new(ErrorKind::Other, "PDF changed on disk; reopen before saving"),
+            w::UNSUPPORTED => Error::new(ErrorKind::Unsupported, "signed replacement on removable storage is not yet supported"),
+            _ => Error::new(ErrorKind::Other, format!("Files could not conditionally replace PDF (status {status})")),
+        }
+    })
+}
+
+#[cfg(not(target_os = "hermit"))]
+fn promote_if_unchanged(from: &str, to: &str, original: &[u8]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    if std::fs::read(to)? != original {
+        return Err(Error::new(ErrorKind::Other, "PDF changed on disk; reopen before saving"));
+    }
+    rename_staged(from, to)
 }
 
 /// Save a complete PDF and require Files to confirm the promoted name before
