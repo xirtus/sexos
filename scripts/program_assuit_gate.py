@@ -139,7 +139,11 @@ def main():
   s=len(t());press('ctrl','shift','t')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-edit-prompt.ppm')})
   assert (a.out/'assuit-table-edit-prompt.ppm').stat().st_size>10000
-  type_line('row below');q.key('ret')
+  type_line('header on');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=header on\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-repeat-header.ppm')})
+  assert (a.out/'assuit-table-repeat-header.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','t');type_line('row below');q.key('ret')
   g['wait'](r'\[assuit\.table-edit\] action=row below\n',s,120)
   s=len(t());press('ctrl','shift','t');type_line('column right');q.key('ret')
   g['wait'](r'\[assuit\.table-edit\] action=column right\n',s,120)
