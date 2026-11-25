@@ -307,6 +307,19 @@ def main():
   assert nested.startswith(b'P6\n') and nested!=numbered,'Nested level did not change the document view'
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','shift','h')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-section-running-prompt.ppm')})
+  running_prompt=(a.out/'assuit-section-running-prompt.ppm').read_bytes()
+  assert running_prompt.startswith(b'P6\n') and len(running_prompt)>10000
+  type_line('header Team report');q.key('ret')
+  g['wait'](r'\[assuit\.section\.running-text\]\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-section-running-header.ppm')})
+  running_header=(a.out/'assuit-section-running-header.ppm').read_bytes()
+  assert running_header.startswith(b'P6\n') and running_header!=running_prompt
+  s=len(t());q.key('esc')  # Return from the header story to the body before the next edit.
+  g['wait'](r'\[assuit\.header-footer\.close\]',s,120)
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   s=len(t());press('ctrl','alt','n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-prompt.ppm')})
   assert (a.out/'assuit-page-number-prompt.ppm').stat().st_size>10000

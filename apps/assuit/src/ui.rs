@@ -107,6 +107,8 @@ enum Ask {
     Margins(String),
     /// Ctrl+Alt+N: page number location and alignment.
     PageNumbers(String),
+    /// Ctrl+Alt+Shift+H: a distinct running header or footer for this section.
+    SectionRunning(String),
     /// Ctrl+Alt+S: line multiple, space before and after in points.
     Spacing(String),
     /// Ctrl+Alt+I: left, right and first-line indents in inches.
@@ -158,6 +160,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+Alt+N", "Add page numbers to header or footer"),
     ("Ctrl+Alt+H / F", "Edit shown header / footer; Esc returns to body"),
+    ("Ctrl+Alt+Shift+H", "Start a distinct header / footer in this section"),
     ("Ctrl+Alt+S", "Paragraph line multiple or exact/minimum height"),
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
@@ -446,6 +449,7 @@ impl Ui {
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
                 Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("place, remove, start N, continue, format TYPE, first/even on/off")),
+                Ask::SectionRunning(value) => format!("This section: {value}_   {}", said("header TEXT or footer TEXT; Ctrl+Alt+H/F edits later")),
                 Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("multiple 1.5 0 8, exact 18 0 8, or minimum 18 0 8")),
                 Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
                 Ask::Footnote(note) => format!("Footnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
@@ -612,7 +616,7 @@ impl Ui {
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
         let link_prompt = matches!(ask, Ask::Link(_));
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PictureWrap(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Endnote(t) | Ask::NoteConvert(t) | Ask::NoteOptions(t) | Ask::Link(t) | Ask::Contents(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PictureWrap(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::SectionRunning(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Endnote(t) | Ask::NoteConvert(t) | Ask::NoteOptions(t) | Ask::Link(t) | Ask::Contents(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -794,6 +798,18 @@ impl Ui {
                     self.invalidate();
                     sex_std::record(&format!("[assuit.page-numbers] {typed}"));
                     self.message = format!("Page numbers: {typed}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
+        if matches!(ask, Ask::SectionRunning(_)) {
+            match self.book.set_section_running_text(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record("[assuit.section.running-text]");
+                    self.message = "Started this section's own running text".into();
                 }
                 Err(e) => self.message = e,
             }
@@ -1056,6 +1072,7 @@ impl Ui {
                     return;
                 }
                 (code::F, _) if key.alt && key.shift => { self.ask = Some(Ask::NoteOptions(String::new())); return; }
+                (code::H, _) if key.alt && key.shift => { self.ask = Some(Ask::SectionRunning(String::new())); return; }
                 (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }
                 (code::G, _) if !key.shift => { self.ask = Some(Ask::GoTo(String::new())); return; }
                 (code::P, _) if !key.shift => return self.export_pdf(),

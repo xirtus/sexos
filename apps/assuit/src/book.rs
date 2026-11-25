@@ -124,6 +124,39 @@ impl Book {
         Ok(())
     }
 
+    /// Start a distinct running header/footer in the section at the body caret.
+    /// WordCraft's ordinary edit command follows the header inherited from the
+    /// previous section; inserting here makes this section's own story first.
+    pub fn set_section_running_text(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter header TEXT or footer TEXT for this section (1–160 characters)";
+        let (kind, text) = input.trim().split_once(' ').ok_or(HELP)?;
+        let header = if kind.eq_ignore_ascii_case("header") { true }
+            else if kind.eq_ignore_ascii_case("footer") { false }
+            else { return Err(HELP.into()); };
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > 160 || text.chars().any(char::is_control) {
+            return Err(HELP.into());
+        }
+        if self.editing_header_footer() || self.session.sel.focus.story != StoryRef::Body
+            || !self.session.sel.is_collapsed() {
+            return Err("Place the body caret in one section first".into());
+        }
+        let page = self.caret().ok_or("Could not locate the current page")?.page;
+        if !self.layout().pages.get(page).is_some_and(|p| p.hf_slot == wordcraft_engine::layout::HfSlot::Default) {
+            return Err("Move the caret to a regular page in this section first".into());
+        }
+        let block = self.session.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+        let index = self.session.doc.section_index_of(block);
+        let sections = self.session.doc.sections();
+        let section = sections.get(index).ok_or("Could not locate the current section")?.1;
+        let own = if header { section.headers.default } else { section.footers.default };
+        if own.is_some() {
+            return Err("This section already has its own running text; use Ctrl+Alt+H/F to edit it".into());
+        }
+        self.run(if header { "insert.header" } else { "insert.footer" }, json!({ "text": text }))?;
+        Ok(())
+    }
+
     pub fn editing_inserted_note(&self) -> Option<&'static str> {
         let StoryRef::Part(id) = self.session.sel.focus.story else { return None };
         if self.note_return.is_none() { return None; }
@@ -1654,6 +1687,42 @@ mod tests {
             let header = reopened.session.doc.last_section.headers.default.unwrap();
             assert!(reopened.session.doc.plain_text(StoryRef::Part(header)).contains("Draft"), "{ext} lost header text");
             assert!(reopened.draw(0, 2.0).is_some());
+        }
+    }
+
+    #[test]
+    fn running_text_can_start_in_one_section_without_replacing_previous_section() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("section-running-text.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First section").unwrap();
+            for bad in ["header", "footer ", "side Text", "header Unsafe\nLine", "header "] {
+                assert!(book.set_section_running_text(bad).is_err(), "accepted {bad:?}");
+            }
+            book.set_section_running_text("header First heading").unwrap();
+            assert!(book.editing_header_footer());
+            book.close_header_footer().unwrap();
+            book.set_section_running_text("footer First footer").unwrap();
+            book.close_header_footer().unwrap();
+            book.run("layout.break", json!({ "kind": "nextPage" })).unwrap();
+            book.type_text("Second section").unwrap();
+            book.set_section_running_text("header Second heading").unwrap();
+            book.close_header_footer().unwrap();
+            book.set_section_running_text("footer Second footer").unwrap();
+            book.close_header_footer().unwrap();
+            assert!(book.set_section_running_text("header Overwrite").is_err(), "rich existing story must be edited, not replaced");
+            let running = |b: &Book| b.session.doc.sections().into_iter().map(|(_, sec)| {
+                [sec.headers.default, sec.footers.default].map(|id| {
+                    b.session.doc.plain_text(StoryRef::Part(id.unwrap()))
+                })
+            }).collect::<Vec<_>>();
+            assert_eq!(running(&book), vec![["First heading".into(), "First footer".into()],
+                ["Second heading".into(), "Second footer".into()]]);
+            book.run("edit.undo", json!({})).unwrap();
+            assert_eq!(book.session.doc.sections()[1].1.footers.default, None, "one undo removes only this section's new footer");
+            book.run("edit.redo", json!({})).unwrap();
+            book.save().unwrap();
+            assert_eq!(running(&Book::open(&path).unwrap()), running(&book), "{ext} lost independent section running text");
         }
     }
 
