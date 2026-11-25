@@ -69,8 +69,12 @@ impl Client{
    Phase::CloseSave=>{if value!=0{return self.fail(w::INVALID)}return Some(self.finish(Outcome::Saved,0))},
    Phase::CloseLoad=>{if value!=0{return self.fail(w::INVALID)}if h.revision!=self.revision{return Some(self.finish(Outcome::Conflict,w::STALE))}
     // Validation has completed; publish the entire replacement history now.
-    h.clear();let mut off=w::HEADER;for _ in 0..self.count{let n=u16::from_le_bytes([self.buf[off],self.buf[off+1]])as usize;off+=2;h.push(&self.buf[off..off+n]);off+=n;}
-    return Some(self.finish(Outcome::Loaded,0))},
+    h.clear();let mut off=w::HEADER;let mut dropped=false;for _ in 0..self.count{let n=u16::from_le_bytes([self.buf[off],self.buf[off+1]])as usize;off+=2;let entry=&self.buf[off..off+n];if sex_pdx::private_launch::is_private_browser_launch(entry){dropped=true}else{h.push(entry);}off+=n;}
+    let event=self.finish(Outcome::Loaded,0);
+    // Older snapshots may contain private launches. Rewrite without them after
+    // the validated load closes, so Up/Ctrl+R and the next boot cannot recall them.
+    if dropped{self.mark_dirty();}
+    return Some(event)},
    Phase::CloseFail(e)=>{if value!=0{return self.fail(w::INVALID)}return Some(self.finish(Outcome::Failed,e))},_=>return None,
   }None
  }

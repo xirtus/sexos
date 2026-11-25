@@ -10,6 +10,8 @@
   wipe both prompts' vi undo buffers and Spindle's navigation snapshot so a
   private launch cannot be recalled. Yarn also excludes an unfinished browser
   command from session snapshots, since its URL may precede `--private`.
+  Spindle filters private launches from older validated history snapshots on
+  load and queues a scrubbed replacement for disk persistence.
 - **Proof:** Unit tests cover exact private launch recognition and false
   positives. The existing Kaleidoscope private QEMU gate now types a private
   launch through Spindle, waits for the browser, captures a screenshot, and

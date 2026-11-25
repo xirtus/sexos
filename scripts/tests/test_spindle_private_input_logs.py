@@ -34,6 +34,11 @@ class TerminalPrivateInput(unittest.TestCase):
         self.assertIn('SPINDLE_VI_PREV_BUF = [0u8; YARN_CMD_BUF_CAP]', source)
         self.assertIn('is_browser_launch_candidate(&yarn.cmd_buf[..yarn.cmd_len])', source)
 
+    def test_old_history_snapshots_drop_private_launches_on_load(self):
+        source = (ROOT / 'apps/spindle/src/history_persistence.rs').read_text()
+        self.assertIn('is_private_browser_launch(entry)', source)
+        self.assertIn('if dropped{self.mark_dirty();}', source)
+
 
 if __name__ == '__main__':
     unittest.main()
