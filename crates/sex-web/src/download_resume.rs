@@ -107,4 +107,11 @@ mod tests {
         ambiguous.headers.push(("etag".into(), "\"v2\"".into()));
         assert!(!appendable(&ambiguous, &r, 40));
     }
+    #[test]
+    fn corrupted_primary_metadata_cannot_be_accepted_as_a_resume() {
+        let valid = eligible(&head(200, "\"v1\"", None, 100), "https://example.test/file", "Downloads/file").unwrap();
+        let previous = encode(&[valid.clone()]);
+        assert!(decode("v1\nnot-a-record\n").is_err());
+        assert_eq!(decode(&previous).unwrap(), [valid]);
+    }
 }

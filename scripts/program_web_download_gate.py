@@ -19,6 +19,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
  changed_calls=0
  changed_ranges=[]
  def do_GET(self):
+  if self.path=='/files/resumable-valid':
+   url=f'http://10.0.2.2:{self.server.server_port}/files/resume.bin'.encode()
+   body=b'v1\n'+str(2*1024*1024).encode()+b'\t'+b'Downloads/resume.bin'.hex().encode()+b'\t'+url.hex().encode()+b'\t'+b'"resume-v1"'.hex().encode()+b'\n'
+   self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/files/resumable-corrupt':
+   body=b'v1\nnot-a-record\n'
+   self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path.startswith('/files/big.bin'):
    self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Disposition','attachment; filename="big.bin"');self.send_header('Content-Length',str(len(DATA)));self.end_headers()
@@ -173,8 +180,16 @@ def main():
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/resume.bin');q.key('ret')
   g['wait'](r'\[web.download.resume.kept\] path=Downloads/resume.bin bytes=65536\n',s,300)
   s=len(t());q.key('f11');g['wait'](r'\[web.closed\] target=\d+ task=\d+',s,120)
+  # A readable but malformed live record must fall back to the saved previous
+  # record, preserving the synced part and its exact Range/ETag resume.
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/resumable-valid /Kaleidoscope/resumable.tsv.previous');q.key('ret')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
+  g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch {base}/resumable-corrupt /Kaleidoscope/resumable.tsv');q.key('ret')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
   g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
   g['wait'](r'\[web.download.resume.loaded\] count=1',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-resume-recovered.ppm')})
+  assert (a.out/'browser-download-resume-recovered.ppm').stat().st_size>10000
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-resumable.ppm')})
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/resume.bin');q.key('ret')
   g['wait'](r'\[web.download.resume\] path=Downloads/resume.bin offset=65536 total=2097152',s,300)

@@ -100,7 +100,10 @@ impl Browser {
         sex_pdx::serial_record!("[web.download.history.loaded] count={}", loaded.len());
         self.downloads = loaded;
         self.download_resumes = state_file::read(&mut self.window, "Kaleidoscope/resumable.tsv", download_resume::MAX_FILE)
-            .and_then(|s| download_resume::decode(&s).ok()).unwrap_or_default();
+            .and_then(|s| download_resume::decode(&s).ok())
+            .or_else(|| state_file::read(&mut self.window, "Kaleidoscope/resumable.tsv.previous", download_resume::MAX_FILE)
+                .and_then(|s| download_resume::decode(&s).ok()))
+            .unwrap_or_default();
         self.download_resumes.retain(|r| part_offset(&mut self.window, r).is_some());
         sex_pdx::serial_record!("[web.download.resume.loaded] count={}", self.download_resumes.len());
     }
