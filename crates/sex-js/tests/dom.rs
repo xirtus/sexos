@@ -100,6 +100,32 @@ fn events_bubble_and_handlers_run() {
 }
 
 #[test]
+fn consented_autofill_notifies_reactive_login_without_secret_payload() {
+    let mut s = page("<form><input id=user><input id=pass type=password><button disabled>Sign in</button></form>");
+    s.eval(r#"
+        const u = document.getElementById('user'), p = document.getElementById('pass');
+        let events = [];
+        for (const el of [u, p]) for (const type of ['input', 'change'])
+            el.addEventListener(type, e => {
+                events.push(el.id + ':' + e.type + ':' + (e.data === null || e.data === undefined));
+                if (u.value && p.value) document.querySelector('button').disabled = false;
+            });
+        window.events = events;
+    "#, "login.js").unwrap();
+    let (user, pass) = {
+        let dom = &s.page().dom;
+        let find = |name| dom.descendants(sex_html::dom::Dom::ROOT).into_iter()
+            .find(|&id| dom.attr(id, "id") == Some(name)).unwrap();
+        (find("user"), find("pass"))
+    };
+    s.page_mut().dom.values.insert(user, "alice".into());
+    s.page_mut().dom.values.insert(pass, "fictional-secret".into());
+    assert_eq!(s.dispatch(&format!("autofill\t{user}\t{pass}")).unwrap(), 1);
+    s.eval("console.log(events.join(','), document.querySelector('button').disabled)", "check.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:user:input:true,user:change:true,pass:input:true,pass:change:true false"]);
+}
+
+#[test]
 fn timers_run_in_order() {
     let mut s = page("");
     s.eval(r#"

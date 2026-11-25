@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! What the browser keeps between runs, in Files under `Web/`: history, bookmarks,
+//! What the browser keeps between runs, in Files under `Kaleidoscope/`: history, bookmarks,
 //! cookies that outlast the session, and each origin's `localStorage`. Changes are
 //! saved a moment after they happen (pages may write storage every frame), and at once
 //! when the window closes.
@@ -17,6 +17,7 @@ use core::cell::RefCell;
 use sex_app::{files, Window};
 use sex_js::storage::WebStorage;
 use sex_web::sex_html;
+use super::state_file;
 
 const DIR_STR: &str = "Kaleidoscope";
 const DIR: &[u8] = DIR_STR.as_bytes();
@@ -97,12 +98,8 @@ pub fn key(url: &str) -> u64 { url.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b|
 fn clean(s: &str) -> String { s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect() }
 
 fn read(window: &mut Window, path: &[u8]) -> Option<String> {
-    let size = files::size(window, path).ok()?;
-    if size == 0 || size > MAX_FILE { return None; }
-    let mut buf = alloc::vec![0u8; size as usize];
-    let n = files::read(window, path, &mut buf).ok()?;
-    buf.truncate(n);
-    String::from_utf8(buf).ok()
+    let path = core::str::from_utf8(path).ok()?;
+    state_file::read(window, path, MAX_FILE)
 }
 
 const LAYOUT: &[u8] = b"Kaleidoscope/layout.tsv";
@@ -115,7 +112,7 @@ pub fn vertical_tabs(window: &mut Window) -> bool {
 /// Keeps the tab layout for next time.
 pub fn set_vertical_tabs(window: &mut Window, on: bool) {
     let _ = files::mkdir(window, DIR);
-    let _ = files::write(window, LAYOUT, if on { b"tabs\tvertical\n" } else { b"tabs\tacross\n" });
+    let _ = state_file::replace(window, "Kaleidoscope/layout.tsv", if on { b"tabs\tvertical\n" } else { b"tabs\tacross\n" });
 }
 
 impl Profile {
@@ -142,7 +139,7 @@ impl Profile {
         if let Some(t) = read(window, COOKIES) { *jar = sex_fetch::Jar::load(&t, now); }
         if let Some(t) = read(window, STORAGE) { p.storage = Rc::new(RefCell::new(WebStorage::load(&t))); }
         p.saved_jar = jar.changes();
-        sex_pdx::serial_record!("[web.profile.loaded] history={} bookmarks={} cookies={} origins={}", p.history.len(), p.bookmarks.len(), jar.len(), p.storage.borrow().origins().count());
+        web_record!("[web.profile.loaded] history={} bookmarks={} cookies={} origins={}", p.history.len(), p.bookmarks.len(), jar.len(), p.storage.borrow().origins().count());
         p
     }
 
@@ -241,7 +238,7 @@ impl Profile {
             if let Some(t) = read(window, alloc::format!("{}/containers/{n}/cookies.tsv", DIR_STR).as_bytes()) { jar = sex_fetch::Jar::load(&t, now); }
             if let Some(t) = read(window, alloc::format!("{}/containers/{n}/storage.tsv", DIR_STR).as_bytes()) { storage = WebStorage::load(&t); }
         }
-        sex_pdx::serial_record!("[web.jarbox.opened] box={} cookies={} origins={}", kind.tag(), jar.len(), storage.origins().count());
+        web_record!("[web.jarbox.opened] box={} cookies={} origins={}", kind.tag(), jar.len(), storage.origins().count());
         let s = Store { kind, saved_jar: jar.changes(), saved_storage: storage.changes, jar: Rc::new(RefCell::new(jar)), storage: Rc::new(RefCell::new(storage)) };
         let out = (s.jar.clone(), s.storage.clone());
         self.boxes.push(s);
@@ -263,6 +260,46 @@ impl Profile {
         self.later();
     }
 
+    /// A browser-only site settings action, scoped to the shown tab's box.
+    pub fn clear_site_part(&mut self, window: &mut Window, jar: &mut sex_fetch::Jar, storage: &mut WebStorage,
+        box_kind: Jarbox, url: &str, part: sex_web::site_data::Part, now: u64) -> Option<(usize, bool)> {
+        let cleared = sex_web::site_data::clear(jar, storage, url, part)?;
+        if cleared == 0 || box_kind == Jarbox::Private { return Some((cleared, true)); }
+        let (kind, data) = match part {
+            sex_web::site_data::Part::Cookies => ("cookies", jar.save(now)),
+            sex_web::site_data::Part::Storage => ("storage", storage.save()),
+        };
+        let path = match box_kind {
+            Jarbox::Own => alloc::format!("Kaleidoscope/{kind}.tsv"),
+            Jarbox::Container(n) if CONTAINERS.get(n as usize - 1).is_some() => {
+                let _ = files::mkdir(window, DIR);
+                let _ = files::mkdir(window, b"Kaleidoscope/containers");
+                let folder = alloc::format!("Kaleidoscope/containers/{n}");
+                let _ = files::mkdir(window, folder.as_bytes());
+                alloc::format!("{folder}/{kind}.tsv")
+            }
+            _ => return Some((cleared, false)),
+        };
+        let _ = files::mkdir(window, DIR);
+        let kept = state_file::replace_and_forget_previous(window, &path, data.as_bytes());
+        if kept {
+            match box_kind {
+                Jarbox::Own => match part {
+                    sex_web::site_data::Part::Cookies => self.saved_jar = jar.changes(),
+                    sex_web::site_data::Part::Storage => self.saved_storage = storage.changes,
+                },
+                Jarbox::Container(n) => if let Some(s) = self.boxes.iter_mut().find(|s| s.kind == Jarbox::Container(n)) {
+                    match part {
+                        sex_web::site_data::Part::Cookies => s.saved_jar = jar.changes(),
+                        sex_web::site_data::Part::Storage => s.saved_storage = storage.changes,
+                    }
+                },
+                Jarbox::Private => {}
+            }
+        } else { self.later(); }
+        Some((cleared, kept))
+    }
+
     /// Notes that storage or cookies may have changed.
     pub fn touched(&mut self) {
         let own = self.storage.borrow().changes != self.saved_storage || self.jar.borrow().changes() != self.saved_jar;
@@ -282,18 +319,18 @@ impl Profile {
         if self.history_dirty {
             let mut t = String::new();
             for v in &self.history { t.push_str(&alloc::format!("{}\t{}\t{}\n", v.visits, v.url, v.title)); }
-            if files::write(window, HISTORY, t.as_bytes()).is_ok() { self.history_dirty = false; wrote += 1; }
+            if state_file::replace(window, "Kaleidoscope/history.tsv", t.as_bytes()) { self.history_dirty = false; wrote += 1; }
         }
         if self.bookmarks_dirty {
             let mut t = String::new();
             for (u, title) in &self.bookmarks { t.push_str(&alloc::format!("{}\t{}\n", u, title)); }
-            if files::write(window, BOOKMARKS, t.as_bytes()).is_ok() { self.bookmarks_dirty = false; wrote += 1; }
+            if state_file::replace(window, "Kaleidoscope/bookmarks.tsv", t.as_bytes()) { self.bookmarks_dirty = false; wrote += 1; }
         }
-        if jar.changes() != self.saved_jar && files::write(window, COOKIES, jar.save(now).as_bytes()).is_ok() { self.saved_jar = jar.changes(); wrote += 1; }
+        if jar.changes() != self.saved_jar && state_file::replace(window, "Kaleidoscope/cookies.tsv", jar.save(now).as_bytes()) { self.saved_jar = jar.changes(); wrote += 1; }
         let changes = self.storage.borrow().changes;
         if changes != self.saved_storage {
             let text = self.storage.borrow().save();
-            if files::write(window, STORAGE, text.as_bytes()).is_ok() { self.saved_storage = changes; wrote += 1; }
+            if state_file::replace(window, "Kaleidoscope/storage.tsv", text.as_bytes()) { self.saved_storage = changes; wrote += 1; }
         }
         // Containers keep theirs in their own folders; the private box never reaches Files.
         for s in self.boxes.iter_mut() {
@@ -303,11 +340,10 @@ impl Profile {
             if jc == s.saved_jar && sc == s.saved_storage { continue; }
             let _ = files::mkdir(window, alloc::format!("{}/containers", DIR_STR).as_bytes());
             let _ = files::mkdir(window, dir.as_bytes());
-            if jc != s.saved_jar && files::write(window, alloc::format!("{dir}/cookies.tsv").as_bytes(), s.jar.borrow().save(now).as_bytes()).is_ok() { s.saved_jar = jc; wrote += 1; }
-            if sc != s.saved_storage && files::write(window, alloc::format!("{dir}/storage.tsv").as_bytes(), s.storage.borrow().save().as_bytes()).is_ok() { s.saved_storage = sc; wrote += 1; }
+            if jc != s.saved_jar && state_file::replace(window, &alloc::format!("{dir}/cookies.tsv"), s.jar.borrow().save(now).as_bytes()) { s.saved_jar = jc; wrote += 1; }
+            if sc != s.saved_storage && state_file::replace(window, &alloc::format!("{dir}/storage.tsv"), s.storage.borrow().save().as_bytes()) { s.saved_storage = sc; wrote += 1; }
             sex_pdx::serial_record!("[web.jarbox.saved] box={} cookies={} origins={}", n, s.jar.borrow().len(), s.storage.borrow().origins().count());
         }
-        if wrote > 0 { let _ = files::sync(window); }
-        sex_pdx::serial_record!("[web.profile.saved] files={} history={} bookmarks={} cookies={}", wrote, self.history.len(), self.bookmarks.len(), jar.len());
+        web_record!("[web.profile.saved] files={} history={} bookmarks={} cookies={}", wrote, self.history.len(), self.bookmarks.len(), jar.len());
     }
 }

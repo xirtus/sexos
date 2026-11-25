@@ -74,6 +74,7 @@ fn input(key: sex_pdx::app_key::Key) -> Option<Input> {
 
 // Pure Weft is deliberate: std owns the allocator and the existing window.
 use chastity_core::{autofill::Candidate, vault::EntryId};
+use chastity_core::save_login::Choice as SaveChoice;
 use sex_app::autofill::Provider;
 use weft::paint::Painter;
 use weft::text::{Face, Fonts};
@@ -87,6 +88,18 @@ struct Consent {
     index: usize,
     body: String,
 }
+struct SaveConsent {
+    token: u32,
+    origin: String,
+    username: String,
+    target: Option<EntryId>,
+    replace: bool,
+    body: String,
+}
+fn save_body(o: &sex_app::autofill::SaveOffer<'_>, replace: bool) -> Option<String> {
+    crate::consent::body(o.name, o.consumer.pd, o.consumer.task, o.origin,
+        if replace { "Replace this matching account password" } else { "Add a new account" }, o.username)
+}
 struct Scene {
     ui: Weft,
     deny: Id,
@@ -97,7 +110,7 @@ struct Scene {
     field: Id,
     actions: Vec<(Id, Input)>,
 }
-fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scene {
+fn scene(size: (usize, usize), consent: Option<&Consent>, save: Option<&SaveConsent>, pending: bool) -> Scene {
     let mut ui = Weft::new(
         size.0 as u32,
         size.1 as u32,
@@ -106,7 +119,7 @@ fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scen
     );
     let root = ui.root();
     ui.set_layout(root, Layout::column());
-    let root = if consent.is_none() {
+    let root = if consent.is_none() && save.is_none() {
         let scroll = ui.scroll(root);
         ui.set_layout(scroll, Layout::column().fill());
         ui.group(
@@ -132,7 +145,7 @@ fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scen
     );
     ui.set_enabled(lock, !pending);
     let mut actions = Vec::new();
-    if consent.is_none() && !pending {
+    if consent.is_none() && save.is_none() && !pending {
         let row = ui.row(root);
         for (label, key) in [
             ("Add", Input::Char('a')),
@@ -147,7 +160,7 @@ fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scen
     }
     let screen = ui.paragraph(root, "");
     let field = ui.field(root, "", "Type with the keyboard; Enter continues");
-    ui.set_visible(field, consent.is_none() && !pending);
+    ui.set_visible(field, consent.is_none() && save.is_none() && !pending);
     let (deny, allow, next) = if let Some(c) = consent {
         ui.label(root, "Autofill request — release this login once?");
         ui.paragraph(root, &c.body);
@@ -160,6 +173,19 @@ fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scen
         let next = ui.button(row, "Next matching entry");
         ui.set_enabled(allow, ready);
         ui.set_enabled(next, c.candidates.len() > 1);
+        ui.focus(Some(deny));
+        (deny, allow, next)
+    } else if let Some(c) = save {
+        ui.label(root, "Save password request — store this login?");
+        ui.paragraph(root, &c.body);
+        let ready = crate::consent::reviewable(size.0, size.1, &c.body);
+        if !ready { ui.paragraph(root, "Enlarge Chastity to at least 800 × 600 to review the complete request. Save is disabled."); }
+        let row = ui.row(root);
+        let deny = ui.button(row, "Deny");
+        let allow = ui.button(row, "Save in Chastity");
+        ui.set_enabled(allow, ready);
+        let next = ui.button(row, if c.replace { "Add instead" } else { "Replace matching account" });
+        ui.set_enabled(next, c.target.is_some());
         ui.focus(Some(deny));
         (deny, allow, next)
     } else {
@@ -230,10 +256,11 @@ pub fn main() {
     let mut model = Ui::new(&mut host, Kdf::STANDARD);
     let mut provider: Option<Provider> = None;
     let mut consent: Option<Consent> = None;
+    let mut save_consent: Option<SaveConsent> = None;
     let mut lock_reason = "asked";
     let mut last_key = Instant::now();
     let mut fonts = Fonts::new();
-    let mut view = scene(window.size(), None, false);
+    let mut view = scene(window.size(), None, None, false);
     let mut ready_logged = false;
     let mut control_receipt = None;
     loop {
@@ -251,7 +278,8 @@ pub fn main() {
                 if !p.closing() {
                     p.close();
                     consent = None;
-                    view = scene(window.size(), None, true);
+                    save_consent = None;
+                    view = scene(window.size(), None, None, true);
                     window.pixels().fill(0);
                 }
             }
@@ -265,9 +293,10 @@ pub fn main() {
             if p.revoked() {
                 provider = None;
                 consent = None;
+                save_consent = None;
                 ready_logged = false;
                 sex_std::record(&format!("[chastity.locked] reason={lock_reason}"));
-                view = scene(window.size(), None, false);
+                view = scene(window.size(), None, None, false);
             }
         }
         if let Some(p) = &mut provider {
@@ -294,7 +323,7 @@ pub fn main() {
                                 index: 0,
                                 body,
                             });
-                            view = scene(window.size(), consent.as_ref(), false);
+                            view = scene(window.size(), consent.as_ref(), save_consent.as_ref(), false);
                         } else {
                             p.deny();
                             sex_std::record("[chastity.autofill.refused] reason=scope_size");
@@ -305,14 +334,34 @@ pub fn main() {
                     }
                 }
             } else if consent.take().is_some() {
-                view = scene(window.size(), None, p.closing());
+                view = scene(window.size(), None, None, p.closing());
+            }
+        }
+        if let Some(p) = &mut provider {
+            if let Some(o) = p.save_offer() {
+                if save_consent.as_ref().map(|c| c.token) != Some(o.token) {
+                    if chastity_core::save_login::exact_https_origin(o.origin) {
+                        let target = model.browser_save_target(o.origin, o.username);
+                        if let Some(body) = save_body(&o, false) {
+                            sex_std::record(&format!("[chastity.save.prompt] token={} domain={} task={}",
+                                o.token, o.consumer.pd, o.consumer.task));
+                            save_consent = Some(SaveConsent {
+                                token: o.token, origin: o.origin.into(), username: o.username.into(),
+                                target, replace: false, body,
+                            });
+                            view = scene(window.size(), None, save_consent.as_ref(), false);
+                        } else { p.deny(); sex_std::record("[chastity.save.refused] reason=scope_size"); }
+                    } else { p.deny(); sex_std::record("[chastity.save.refused] reason=scope"); }
+                }
+            } else if save_consent.take().is_some() {
+                view = scene(window.size(), None, None, p.closing());
             }
         }
         let (w, h) = window.size();
         // Shared Weft lays out and paints the actual screen, controls and masked
         // input. Typed secrets stay in the canonical bounded zeroizing editor;
         // Weft receives only stars, so its ordinary undo history holds no secrets.
-        if consent.is_none() {
+        if consent.is_none() && save_consent.is_none() {
             let text = if provider.as_ref().is_some_and(Provider::closing) {
                 Zeroizing::new(
                     "Locking: waiting for broker acknowledgement. Unlock is disabled.".into(),
@@ -333,7 +382,7 @@ pub fn main() {
         view.ui.paint(&mut pixels[..w * h]);
         // Explicitly revealed password/TOTP is transient: never copied into a
         // retained widget String. Weft's shared Painter draws the disclosure.
-        if consent.is_none() && model.unlocked() {
+        if consent.is_none() && save_consent.is_none() && model.unlocked() {
             let text = model.disclosed(&host);
             let y = view.ui.rect(view.screen).bottom() + 20.0;
             let mut painter = Painter::new(pixels, w, h, 1.0);
@@ -347,20 +396,20 @@ pub fn main() {
                 Color(0xff202020),
             );
         }
-        if let Some(c) = &consent {
-            if control_receipt != Some((c.token, w, h)) {
+        if let Some(token) = consent.as_ref().map(|c| c.token).or_else(|| save_consent.as_ref().map(|c| c.token)) {
+            if control_receipt != Some((token, w, h)) {
                 for (name, id) in [("deny", view.deny), ("allow", view.allow)] {
                     let center = view.ui.rect(id).center();
                     sex_std::record(&format!(
                         "[chastity.consent.control] token={} name={} x={} y={} enabled={}",
-                        c.token,
+                        token,
                         name,
                         center.x as i32,
                         center.y as i32,
                         view.ui.is_enabled(id) as u8
                     ));
                 }
-                control_receipt = Some((c.token, w, h));
+                control_receipt = Some((token, w, h));
             }
         } else {
             control_receipt = None;
@@ -390,6 +439,7 @@ pub fn main() {
                 view = scene(
                     window.size(),
                     consent.as_ref(),
+                    save_consent.as_ref(),
                     provider.as_ref().is_some_and(Provider::closing),
                 );
                 sex_std::record(&format!(
@@ -403,7 +453,7 @@ pub fn main() {
             if provider.as_ref().is_some_and(Provider::closing) {
                 continue;
             }
-            if consent.is_none() {
+            if consent.is_none() && save_consent.is_none() {
                 if let Event::Key(k) = event {
                     if let Some(i) = input(k) {
                         model.key(&mut host, i);
@@ -423,13 +473,56 @@ pub fn main() {
                         model.lock(&mut host, "asked");
                         continue;
                     }
+                    if let Some(c) = &mut save_consent {
+                        let Some(p) = &mut provider else { continue };
+                        if id == view.deny {
+                            let token = c.token;
+                            p.deny();
+                            save_consent = None;
+                            view = scene(window.size(), None, None, false);
+                            sex_std::record(&format!("[chastity.save.denied] token={token}"));
+                        } else if id == view.next {
+                            if let Some(o) = p.save_offer() {
+                                if o.token == c.token && c.target.is_some() {
+                                    c.replace = !c.replace;
+                                    if let Some(body) = save_body(&o, c.replace) {
+                                        c.body = body;
+                                        view = scene(window.size(), None, Some(c), false);
+                                    } else { p.deny(); save_consent = None; view = scene(window.size(), None, None, false); }
+                                }
+                            }
+                        } else if id == view.allow
+                            && crate::consent::reviewable(window.size().0, window.size().1, &c.body)
+                        {
+                            let token = c.token;
+                            let valid = p.save_offer().is_some_and(|o| o.token == token
+                                && o.origin == c.origin && o.username == c.username
+                                && save_body(&o, c.replace).as_deref() == Some(c.body.as_str())
+                                && model.browser_save_target(o.origin, o.username) == c.target);
+                            if valid {
+                                let choice = if c.replace { c.target.map(SaveChoice::Replace) } else { Some(SaveChoice::Add) };
+                                if let (Some(choice), Some(o)) = (choice, p.save_offer()) {
+                                    if model.browser_save(&mut host, o.origin, o.username, o.password, choice)
+                                        && p.approve_save().is_ok() {
+                                        sex_std::record(&format!("[chastity.save.approved] token={token}"));
+                                    } else {
+                                        p.deny();
+                                        sex_std::record(&format!("[chastity.save.failed] token={token}"));
+                                    }
+                                }
+                            } else { p.deny(); sex_std::record("[chastity.save.refused] reason=stale"); }
+                            save_consent = None;
+                            view = scene(window.size(), None, None, false);
+                        }
+                        continue;
+                    }
                     let Some(c) = &mut consent else { continue };
                     let Some(p) = &mut provider else { continue };
                     if id == view.deny {
                         let token = c.token;
                         p.deny();
                         consent = None;
-                        view = scene(window.size(), None, false);
+                        view = scene(window.size(), None, None, false);
                         sex_std::record(&format!("[chastity.autofill.denied] token={token}"));
                     } else if id == view.next {
                         c.index = (c.index + 1) % c.candidates.len();
@@ -444,11 +537,11 @@ pub fn main() {
                             &chosen.username,
                         ) {
                             c.body = body;
-                            view = scene(window.size(), Some(c), false);
+                            view = scene(window.size(), Some(c), None, false);
                         } else {
                             p.deny();
                             consent = None;
-                            view = scene(window.size(), None, false);
+                            view = scene(window.size(), None, None, false);
                         }
                     } else if id == view.allow
                         && crate::consent::reviewable(window.size().0, window.size().1, &c.body)
@@ -469,7 +562,7 @@ pub fn main() {
                             }
                         }
                         consent = None;
-                        view = scene(window.size(), None, false);
+                        view = scene(window.size(), None, None, false);
                     }
                 }
             }

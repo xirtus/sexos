@@ -47,6 +47,170 @@ fn endpoint(subject: Subject, provider: bool) -> Endpoint {
         },
     }
 }
+fn drain_broker(b: &mut Broker, now: u64) -> Vec<(Subject, u64, [u64; 3])> {
+    let mut delivered = Vec::new();
+    for _ in 0..32 {
+        if !b.pending() { break; }
+        b.poll(now, |_| Some(true), |e, p| {
+            delivered.push((e.subject, p.opcode, p.args));
+            Admission::Accepted
+        });
+    }
+    delivered
+}
+
+#[test]
+fn save_write_relay_requires_attested_browser_and_vault_consent() {
+    use autofill as w;
+    for op in [w::SAVE_BEGIN, w::SAVE_HEADER, w::SAVE_DATA, w::SAVE_FINISH, w::SAVE_ALLOW] {
+        assert!(w::request(op), "save request opcode {op:#x}");
+    }
+    for op in [w::SAVE_OFFER, w::SAVE_HEADER, w::SAVE_DATA, w::SAVE_COMPLETE, w::SAVE_APPROVED] {
+        assert!(w::response(op), "save response opcode {op:#x}");
+    }
+    let mut b = Broker::new();
+    b.bind(endpoint(P, true));
+    b.bind(endpoint(C, false));
+    assert_eq!(b.receive(P, &Packet::new(w::REGISTER, 99, 0, 0), true, 0), w::Status::Ok);
+    drain_broker(&mut b, 0);
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_BEGIN, 1, 19, 0), true, 1), w::Status::Denied);
+    b.label(C, *b"kaleidoscope\0\0\0\0");
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_BEGIN, 1, 19, 0), false, 2), w::Status::Denied);
+    drain_broker(&mut b, 2);
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_BEGIN, 2, 19, 0), true, 3), w::Status::Ok);
+    let mut messages = drain_broker(&mut b, 3);
+    let ready = messages.iter().find(|(s, op, _)| *s == C && *op == w::READY).unwrap();
+    let token = (ready.2[0] >> 32) as u32;
+    assert_ne!(token, 0);
+    assert!(messages.iter().any(|(s, op, _)| *s == P && *op == w::SAVE_OFFER));
+    let scope = b"https://example.org";
+    for (i, bytes) in scope.chunks(8).enumerate() {
+        let packet = w::chunk(w::ORIGIN, token, 99, i * 8, bytes).unwrap();
+        assert_eq!(b.receive(C, &packet, true, 4 + i as u64), w::Status::Ok);
+        messages = drain_broker(&mut b, 4 + i as u64);
+        assert!(messages.iter().any(|(s, op, _)| *s == P && *op == w::ORIGIN));
+    }
+    assert_eq!(b.receive(P, &Packet::new(w::SAVE_ALLOW, token as u64, 99, 0), true, 10), w::Status::Denied,
+        "approval before a complete proposal is refused");
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_HEADER, token as u64, 99, 5 | 6 << 16), true, 11), w::Status::Ok);
+    messages = drain_broker(&mut b, 11);
+    assert!(messages.iter().any(|(s, op, _)| *s == P && *op == w::SAVE_HEADER));
+    let data = b"alicesecret";
+    assert_eq!(data.len(), 11);
+    // Header promises 5 + 6 bytes; an overlong chunk is refused.
+    assert_eq!(b.receive(C, &w::chunk(w::SAVE_DATA, token, 99, 0, &data[..8]).unwrap(), true, 12), w::Status::Ok);
+    drain_broker(&mut b, 12);
+    assert_eq!(b.receive(X, &w::chunk(w::SAVE_DATA, token, 99, 8, &data[8..]).unwrap(), true, 13), w::Status::Denied);
+    assert_eq!(b.receive(C, &w::chunk(w::SAVE_DATA, token, 98, 8, &data[8..]).unwrap(), true, 13), w::Status::Denied);
+    assert_eq!(b.receive(C, &w::chunk(w::SAVE_DATA, token, 99, 8, b"xxxx").unwrap(), true, 13), w::Status::Denied);
+    assert_eq!(b.receive(C, &w::chunk(w::SAVE_DATA, token, 99, 8, &data[8..]).unwrap(), true, 13), w::Status::Ok);
+    drain_broker(&mut b, 13);
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_FINISH, token as u64, 99, 0), true, 14), w::Status::Ok);
+    messages = drain_broker(&mut b, 14);
+    assert!(messages.iter().any(|(s, op, _)| *s == P && *op == w::SAVE_COMPLETE));
+    assert!(!messages.iter().any(|(_, op, _)| *op == w::SAVE_APPROVED));
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_ALLOW, token as u64, 99, 0), true, 15), w::Status::Denied);
+    assert_eq!(b.receive(P, &Packet::new(w::SAVE_ALLOW, token as u64, 99, 0), true, 16), w::Status::Ok);
+    messages = drain_broker(&mut b, 16);
+    assert!(messages.iter().any(|(s, op, _)| *s == C && *op == w::SAVE_APPROVED));
+    assert_eq!(b.receive(C, &Packet::new(w::SAVE_FINISH, token as u64, 99, 0), true, 17), w::Status::Stale);
+}
+
+#[test]
+fn browser_save_sdk_waits_for_vault_commit() {
+    reset();
+    env(|e| e.broker.label(C, *b"kaleidoscope\0\0\0\0"));
+    current(P);
+    let mut provider = sdk::Provider::new(&Window { target: P.pd, task: P.task }, 99).unwrap();
+    provider.poll(0);
+    pump();
+    provider.poll(0);
+    assert!(provider.registered());
+    current(C);
+    let mut client = sdk::SaveClient::request(
+        &Window { target: C.pd, task: C.task }, "https://example.org", "alice", "secret", 0,
+    ).unwrap();
+    assert!(client.matches("alice", "secret"));
+    assert!(!client.matches("alice", "changed"));
+    let mut complete = false;
+    let mut token = 0;
+    for tick in 1..100 {
+        env(|e| e.now = tick);
+        current(C);
+        assert!(client.poll(tick).is_none(), "receipt alone must never report success");
+        pump();
+        current(P);
+        while let Some(m) = pdx_try_listen_raw(0) {
+            if m.type_id == autofill::SAVE_OFFER { token = m.arg0 as u32; }
+            if m.type_id == autofill::SAVE_COMPLETE { complete = true; }
+        }
+        if complete { break; }
+    }
+    assert!(complete, "bounded proposal reaches Chastity");
+    assert_ne!(token, 0);
+    current(C);
+    assert!(client.poll(100).is_none());
+    env(|e| { e.now = 101; e.focus = P; });
+    current(P);
+    assert_eq!(pdx_call(SLOT_SHELL, autofill::SAVE_ALLOW, token as u64, 99, 0).0, 0);
+    pump();
+    current(C);
+    assert!(matches!(client.poll(101), Some(Ok(()))));
+    assert!(!client.matches("alice", "secret"));
+}
+
+#[test]
+fn browser_save_sdk_cancellation_wipes_proposal() {
+    reset();
+    env(|e| e.broker.label(C, *b"kaleidoscope\0\0\0\0"));
+    current(C);
+    let mut client = sdk::SaveClient::request(
+        &Window { target: C.pd, task: C.task }, "https://example.org", "alice", "secret", 0,
+    ).unwrap();
+    client.cancel();
+    assert!(!client.matches("alice", "secret"));
+    assert!(!client.active());
+    assert!(client.poll(1).is_none());
+}
+
+#[test]
+fn vault_provider_exposes_only_complete_save_proposal() {
+    reset();
+    env(|e| e.broker.label(C, *b"kaleidoscope\0\0\0\0"));
+    current(P);
+    let mut provider = sdk::Provider::new(&Window { target: P.pd, task: P.task }, 99).unwrap();
+    provider.poll(0); pump(); provider.poll(0);
+    assert!(provider.registered());
+    current(C);
+    let mut client = sdk::SaveClient::request(
+        &Window { target: C.pd, task: C.task }, "https://example.org", "alice", "secret", 0,
+    ).unwrap();
+    let mut offered = false;
+    for tick in 1..100 {
+        env(|e| e.now = tick);
+        current(P); provider.poll(tick);
+        if let Some(o) = provider.save_offer() {
+            assert_eq!(o.origin, "https://example.org");
+            assert_eq!(o.username, "alice");
+            assert_eq!(o.password, "secret");
+            assert_eq!(o.consumer, C);
+            offered = true;
+            break;
+        }
+        pump();
+        current(C); assert!(client.poll(tick).is_none());
+        pump();
+    }
+    assert!(offered);
+    assert!(provider.busy());
+    env(|e| e.focus = P);
+    current(P);
+    provider.approve_save().unwrap();
+    assert!(!provider.busy());
+    pump();
+    current(C);
+    assert!(matches!(client.poll(100), Some(Ok(()))));
+}
 struct Env {
     broker: Broker,
     current: Subject,

@@ -111,15 +111,17 @@ impl Browser {
     /// Shows tab `i`.
     pub(super) fn show_tab(&mut self, i: usize) {
         if i >= self.tabs.len() || i == self.active || self.in_frame.is_some() { return; }
+        self.cancel_autofill();
+        self.cancel_password_save();
         // Showing a tab of a folded group unfolds it, as in Chrome.
         if let Some(g) = self.tabs[i].group.filter(|g| self.groups.get(*g).is_some_and(|g| g.folded)) {
             self.groups[g].folded = false;
-            sex_pdx::serial_record!("[web.group.folded] group={} on=0", g);
+            web_record!("[web.group.folded] group={} on=0", g);
         }
         // A tab outside the split ends it, as in Edge.
         // With the side panel open, the tab shown takes its place beside it.
         if let Some(p) = self.panel_slot().filter(|p| i != *p) { self.split = Some((i, p)); }
-        else if self.split.is_some_and(|(l, r)| i != l && i != r) { self.split = None; sex_pdx::serial_record!("[web.split] on=0 shown={}", i); }
+        else if self.split.is_some_and(|(l, r)| i != l && i != r) { self.split = None; web_record!("[web.split] on=0 shown={}", i); }
         // The tab going back pauses its sound and remembers its title.
         for m in self.media.iter_mut() { m.hush(); }
         let title = self.page.title.clone();
@@ -146,7 +148,7 @@ impl Browser {
         self.timers_changed();
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
-        sex_pdx::serial_record!("[web.tab.shown] index={} count={} url={}", i, self.tabs.len(), self.url);
+        sex_pdx::serial_record!("[web.tab.shown] index={} count={} url={}", i, self.tabs.len(), crate::PRIVATE_DIAGNOSTICS.address(&self.url));
         // A restored tab loads the first time it shows.
         if let Some(url) = self.tabs[i].restore.take() { return self.open(&url, false); }
         self.save_session();
@@ -157,6 +159,7 @@ impl Browser {
     /// showing `url` (or a blank page with the address bar ready for typing).
     pub(super) fn new_tab(&mut self, url: Option<&str>, jarbox: Jarbox) {
         if self.tabs.len() >= MAX_TABS || self.in_frame.is_some() { return; }
+        if jarbox == Jarbox::Private { crate::PRIVATE_DIAGNOSTICS.note_private(); }
         // New tabs go before the side panel's slot, and show beside the panel.
         let at = (self.active + 1).min(self.strip_len());
         self.split = None;
@@ -171,7 +174,7 @@ impl Browser {
         if self.panel { self.split = Some((at, self.tabs.len() - 1)); }
         self.show_tab(at);
         sex_pdx::serial_record!("[web.tab.opened] index={} count={} box={}", at, self.tabs.len(), jarbox.tag());
-        if let Some(g) = self.tabs[at].group { sex_pdx::serial_record!("[web.group.joined] tab={} group={}", at, g); }
+        if let Some(g) = self.tabs[at].group { web_record!("[web.group.joined] tab={} group={}", at, g); }
         match url {
             Some(u) => self.open(u, false),
             None => { self.open("about:blank", false); self.editing = Some(String::new()); self.draw(); }
@@ -182,6 +185,8 @@ impl Browser {
     /// last tab closing closes the window.
     pub(super) fn close_tab(&mut self) {
         if self.in_frame.is_some() { return; }
+        self.cancel_autofill();
+        self.cancel_password_save();
         // Ctrl+W in the side panel closes the panel.
         if self.panel_shown() { return self.close_panel(); }
         if self.strip_len() <= 1 { self.quit(); }
@@ -196,7 +201,7 @@ impl Browser {
         self.repair_panel();
         // The last private tab took the private box's cookies and storage with it.
         if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
-        sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
+        web_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
         self.save_session();
         self.draw();
     }
@@ -276,7 +281,7 @@ impl Browser {
     /// Moves tab slot `from` to `to`, the shown tab staying shown. Ends a split view.
     fn move_tab(&mut self, from: usize, to: usize) {
         if from == to || from >= self.tabs.len() || to >= self.tabs.len() { return; }
-        if !self.panel && self.split.take().is_some() { sex_pdx::serial_record!("[web.split] on=0 shown={}", self.active); }
+        if !self.panel && self.split.take().is_some() { web_record!("[web.split] on=0 shown={}", self.active); }
         let t = self.tabs.remove(from);
         self.tabs.insert(to, t);
         self.active = if self.active == from { to } else if from < self.active && to >= self.active { self.active - 1 } else if from > self.active && to <= self.active { self.active + 1 } else { self.active };
@@ -293,7 +298,7 @@ impl Browser {
                 let last = (0..self.tabs.len()).rev().find(|i| self.tabs[*i].group == Some(g)).unwrap_or(at);
                 self.tabs[at].group = None;
                 self.move_tab(at, last);
-                sex_pdx::serial_record!("[web.group.left] group={} from={} to={}", g, at, self.active);
+                web_record!("[web.group.left] group={} from={} to={}", g, at, self.active);
                 self.prune_groups();
                 // A split that ended gives the shown page the whole width again.
                 self.save_session();
@@ -304,7 +309,7 @@ impl Browser {
                 // The next colour no group has yet, as Chrome picks.
                 let colour = sex_web::GROUP_COLOURS.iter().copied().find(|c| !self.groups.iter().any(|g| g.colour == *c)).unwrap_or(sex_web::GROUP_COLOURS[self.groups.len() % 8]);
                 let name = sex_web::group_name(&self.url);
-                sex_pdx::serial_record!("[web.group] group={} tab={} name={}", self.groups.len(), at, name);
+                web_record!("[web.group] group={} tab={} name={}", self.groups.len(), at, name);
                 self.groups.push(sex_web::TabGroup { colour, name, folded: false });
                 self.tabs[at].group = Some(self.groups.len() - 1);
             }
@@ -326,7 +331,7 @@ impl Browser {
             self.show_tab(next);
         }
         self.groups[g].folded = on;
-        sex_pdx::serial_record!("[web.group.folded] group={} on={} tabs={}", g, on as u8, self.tabs.iter().filter(|t| t.group == Some(g)).count());
+        web_record!("[web.group.folded] group={} on={} tabs={}", g, on as u8, self.tabs.iter().filter(|t| t.group == Some(g)).count());
         self.save_session();
         self.draw();
     }
@@ -341,7 +346,7 @@ impl Browser {
         self.suggestions.clear();
         self.chosen = None;
         self.naming = Some((g, old));
-        sex_pdx::serial_record!("[web.group.naming] group={}", g);
+        web_record!("[web.group.naming] group={}", g);
         self.draw();
     }
 
@@ -355,7 +360,7 @@ impl Browser {
             0x1C => {
                 self.naming = None;
                 self.editing = None;
-                sex_pdx::serial_record!("[web.group.named] group={} name={} colour={:08x}", g, self.groups[g].name, self.groups[g].colour);
+                web_record!("[web.group.named] group={} name={} colour={:08x}", g, self.groups[g].name, self.groups[g].colour);
                 self.save_session();
             }
             0x48 | 0x50 | 0x67 | 0x6C => {
@@ -363,7 +368,7 @@ impl Browser {
                 let at = sex_web::GROUP_COLOURS.iter().position(|c| *c == self.groups[g].colour).unwrap_or(0);
                 let next = if matches!(key.code, 0x50 | 0x6C) { (at + 1) % n } else { (at + n - 1) % n };
                 self.groups[g].colour = sex_web::GROUP_COLOURS[next];
-                sex_pdx::serial_record!("[web.group.colour] group={} colour={:08x}", g, self.groups[g].colour);
+                web_record!("[web.group.colour] group={} colour={:08x}", g, self.groups[g].colour);
             }
             0x0E => { if let Some(t) = self.editing.as_mut() { t.pop(); } }
             _ => {
@@ -382,7 +387,7 @@ impl Browser {
             if self.tabs.iter().any(|t| t.group == Some(g)) { g += 1; continue; }
             self.groups.remove(g);
             for t in self.tabs.iter_mut() { if let Some(x) = t.group.as_mut().filter(|x| **x > g) { *x -= 1; } }
-            sex_pdx::serial_record!("[web.group.gone] group={} left={}", g, self.groups.len());
+            web_record!("[web.group.gone] group={} left={}", g, self.groups.len());
         }
     }
 }

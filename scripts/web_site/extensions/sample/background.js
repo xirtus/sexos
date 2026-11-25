@@ -10,6 +10,16 @@ chrome.scripting.registerContentScripts([{ id: 'late', matches: ['*://*/*'], js:
 chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [9], addRules: [{ id: 9, priority: 1, action: { type: 'block' }, condition: { urlFilter: 'blocked-dynamic.png' } }] })
   .then(() => console.log('dynamic rule added'));
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
+  if (m && m.armScriptProbe) {
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (++tries > 20) { clearInterval(timer); return; }
+      chrome.scripting.executeScript({ func: () => console.log('extension explicit injection ran') });
+    }, 500);
+    console.log('script probe armed');
+    reply({ armed: true });
+    return;
+  }
   if (!m || !m.hello) return;
   chrome.storage.local.get('installs').then(v => reply({ ok: true, host: m.hello, installs: v.installs, tab: sender.tab && sender.tab.url }));
   return true;

@@ -68,6 +68,25 @@ fn clean(text: &str) -> String {
     out
 }
 
+fn visible_words(dom: &Dom, n: NodeId) -> usize {
+    fn collect(dom: &Dom, n: NodeId, text: &mut String) {
+        if unwanted(dom, n) { return; }
+        // A table cell is a separate run of text. Keep inline fragments
+        // together, but do not join the last word of one cell to the first
+        // word of the next (including cells in a nested table).
+        let cell = matches!(dom.tag(n), Some("th" | "td" | "caption"));
+        if cell { text.push(' '); }
+        match &dom.nodes[n].kind {
+            Kind::Text(value) => text.push_str(value),
+            _ => for &child in &dom.nodes[n].children { collect(dom, child, text); },
+        }
+        if cell { text.push(' '); }
+    }
+    let mut text = String::new();
+    collect(dom, n, &mut text);
+    clean(&text).split_whitespace().count()
+}
+
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") }
 
 /// The page's article, or `None` when it has too little running text to be one.
@@ -137,6 +156,7 @@ fn emit(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) {
                     *words += text.split_whitespace().count();
                     out.push_str(&alloc::format!("<pre>{}</pre>\n", esc(&text)));
                 }
+                "table" => table(dom, n, base, out, words),
                 "img" => picture(dom, n, base, out),
                 "ul" | "ol" | "dl" | "figure" => {
                     out.push_str(&alloc::format!("<{tag}>"));
@@ -154,6 +174,57 @@ fn emit(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) {
             if t.len() >= 25 { *words += t.split_whitespace().count(); out.push_str(&alloc::format!("<p>{}</p>\n", esc(&t))); }
         }
         _ => {}
+    }
+}
+
+/// Keep data tables in reading order. Only the table structure and bounded
+/// column and row spans survive; page styling, event handlers and other attributes do
+/// not cross into reader view.
+fn table(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) {
+    let mut rows = String::new();
+    table_rows(dom, n, base, &mut rows, words);
+    if !rows.is_empty() {
+        out.push_str("<table>");
+        if let Some(caption) = dom.nodes[n].children.iter().copied()
+            .find(|child| dom.tag(*child) == Some("caption") && !unwanted(dom, *child)) {
+            let mut text = String::new();
+            inline(dom, caption, base, &mut text);
+            if !text.trim().is_empty() {
+                *words += visible_words(dom, caption);
+                out.push_str(&alloc::format!("<caption>{}</caption>", text.trim()));
+            }
+        }
+        out.push_str(&rows);
+        out.push_str("</table>\n");
+    }
+}
+
+fn table_rows(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) {
+    for &child in &dom.nodes[n].children {
+        if unwanted(dom, child) { continue; }
+        match dom.tag(child) {
+            Some("thead" | "tbody" | "tfoot") => table_rows(dom, child, base, out, words),
+            Some("tr") => {
+                let mut cells = String::new();
+                for &cell in &dom.nodes[child].children {
+                    if unwanted(dom, cell) { continue; }
+                    let Some(tag @ ("th" | "td")) = dom.tag(cell) else { continue };
+                    let mut content = String::new();
+                    inline(dom, cell, base, &mut content);
+                    let content = content.trim();
+                    // Empty cells still occupy a column. Dropping one shifts
+                    // every following value under the wrong heading.
+                    *words += visible_words(dom, cell);
+                    let span = |name| dom.attr(cell, name).and_then(|v| v.trim().parse::<usize>().ok())
+                        .filter(|v| (2..=64).contains(v));
+                    let colspan = span("colspan").map_or(String::new(), |v| alloc::format!(" colspan=\"{v}\""));
+                    let rowspan = span("rowspan").map_or(String::new(), |v| alloc::format!(" rowspan=\"{v}\""));
+                    cells.push_str(&alloc::format!("<{tag}{colspan}{rowspan}>{content}</{tag}>"));
+                }
+                if !cells.is_empty() { out.push_str("<tr>"); out.push_str(&cells); out.push_str("</tr>"); }
+            }
+            _ => {},
+        }
     }
 }
 
@@ -189,6 +260,12 @@ fn inline(dom: &Dom, n: NodeId, base: &str, out: &mut String) {
                         out.push_str(&alloc::format!("</{t}>"));
                     }
                     "br" => out.push_str("<br>"),
+                    "table" => {
+                        // A table inside a data cell is still a table. The outer
+                        // cell already accounts for its visible words.
+                        let mut nested_words = 0;
+                        table(dom, c, base, out, &mut nested_words);
+                    }
                     "img" => {}
                     _ => inline(dom, c, base, out),
                 }
@@ -207,7 +284,9 @@ pub fn page(article: &Article, url: &str) -> String {
          main{{max-width:680px;margin:0 auto;padding:28px 24px 64px;font-size:19px;line-height:1.6}}\
          h1{{font-size:32px;line-height:1.2;margin:8px 0 6px}} .meta{{color:#6b665d;font-size:14px;margin-bottom:26px}}\
          .meta a{{color:#6b665d}} img{{max-width:100%}} pre{{background:#efeadf;padding:12px;overflow:auto;font-size:15px}}\
-         blockquote{{border-left:3px solid #d6cfbf;margin-left:0;padding-left:16px;color:#47433c}} a{{color:#8a3b12}}</style>\
+         blockquote{{border-left:3px solid #d6cfbf;margin-left:0;padding-left:16px;color:#47433c}} a{{color:#8a3b12}}\
+         table{{border-collapse:collapse;width:100%;margin:18px 0}} th,td{{border:1px solid #d6cfbf;padding:7px 10px;text-align:left}}\
+         th{{background:#efeadf}}</style>\
          <main><h1>{t}</h1><div class=\"meta\">{m} min read · <a href=\"{u}\">{h}</a></div>\n{body}</main>",
         t = esc(&article.title), m = minutes, u = esc(url), h = esc(host(url)), body = article.html)
 }

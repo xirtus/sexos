@@ -1,0 +1,6 @@
+# Chastity consented browser password save
+
+- Chastity presents a default-deny save dialog showing the Files-attested requesting app/run, exact HTTPS origin, username and Add or Replace action. Replace is offered only when exactly one vault entry has the same canonical origin and username. The password is never painted or logged, and approval is disabled when the complete scope cannot be reviewed at the current window size.
+- On Allow, Chastity rechecks the live provider token, origin, username, action body and matching account, commits the proposal to the unlocked vault, durably stores the encrypted file, then sends `SAVE_ALLOW` to Shell. A failed write does not acknowledge the browser. Deny, cancellation and lock wipe the pending proposal.
+- A host test covers exact-target replacement, failed durable save, retry and reopen. The GitHub CI two-app QEMU gate captures `browser-save-consent.ppm` and `browser-password-saved.ppm`, asserts Chastity and browser approval only after consent, checks tab-change cancellation and scans serial output for the fixture secret. Full image build and QEMU run belong to GitHub CI, not local runs.
+- This first save path requires an explicit Ctrl+Shift+U command on an eligible form. Automatic post-submit prompts and passkeys remain future work.

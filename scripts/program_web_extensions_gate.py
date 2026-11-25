@@ -102,17 +102,34 @@ def main():
   reply=g['wait'](r'\[web.console\] level=0 options reply (\{[^\n]*\})',s,120)[1]
   assert reply==f'{{"ok":true,"host":"options","installs":1,"tab":"{opts}"}}',reply
   assert '[web.extension.content]' not in t()[s:],'content scripts ran on an extension page'
+  # A content script arms the background's explicit executeScript probe. Once
+  # site JavaScript is disabled, that later injection must not create a runtime.
+  s=go(page+'?probe=1');g['wait'](r'\[web.extension.console\] id=recolour-sample level=0 script probe armed',s,120)
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,('ctrl','shift','y')),(False,('y','shift','ctrl'))) for x in ks]})
+  g['wait'](r'\[web.site.scripts\] enabled=0 origin='+re.escape(base),s,120)
+  blocked=g['wait'](r'\[web.site.script.blocked\] origin='+re.escape(base),s,120)
+  blocked_at=s+blocked.end()
+  g['wait'](r'\[web.loaded\] [^\n]*scripted=0',s,120)
+  g['wait'](r'\[web.extension.script.blocked\] id=recolour-sample origin='+re.escape(base),blocked_at,120)
+  assert 'extension explicit injection ran' not in t()[blocked_at:], 'executeScript bypassed the site setting'
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,('ctrl','shift','y')),(False,('y','shift','ctrl'))) for x in ks]})
+  g['wait'](r'\[web.site.scripts\] enabled=1 origin='+re.escape(base),s,120)
+  g['wait'](loaded,s,120)
   s=go('about:extensions?toggle=recolour-sample');g['wait'](r'\[web.extension.toggle\] id=recolour-sample enabled=0',s,120)
   # Let the page finish before closing: a close that lands mid-load is not this gate's subject.
   g['wait'](r'\[web.loaded\] ',s,120);time.sleep(1)
-  s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
+  # Hard-stop after the saved choice, then boot the same disk. Extension
+  # enablement and its dynamic rules must both survive without a clean close.
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'extensions-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   # The next run: still installed, still off; nothing blocked or recoloured.
   hits.clear();g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {page}');q.key('ret')
-  g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=0 ',s,600);g['wait'](loaded,s,1200)
+  g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=0 rules=2 ',s,600);g['wait'](loaded,s,1200)
   g['wait'](r'\[web.console\] level=0 blocked script ran',s,120)
   assert '[web.extension.blocked]' not in t()[s:] and '[web.extension.content]' not in t()[s:] and '[web.extension.background]' not in t()[s:]
   assert sorted(h for h in hits if h in BLOCKED)==sorted(BLOCKED),hits
-  time.sleep(2);off=pink('extension-off');assert off<on/10,(on,off)
+  time.sleep(2);off=pink('extension-off-after-powercut');assert off<on/10,(on,off)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'blocked':blocked,'pink_on':on,'pink_off':off})
  finally:g['stop']()

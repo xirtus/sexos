@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Kaleidoscope reader view (N5): a news-style page (scripts/web_site/reader/article.html)
-opens in Kaleidoscope; Ctrl+Shift+R shows its article on a quiet page of its own, with
+opens in Kaleidoscope; Ctrl+Shift+R shows its article and data table on a quiet page of its own, with
 its picture from the site and without the menu, side bar, share box, comments, footer
 or script; Ctrl+Shift+R again goes back to the page."""
 import argparse,http.server,os,re,shutil,threading,time
@@ -52,8 +52,10 @@ def main():
   hits.clear();s=reader_key()
   m=g['wait'](r'\[web.reader\] words=(\d+) title=([^\n]*) url=(\S+)',s,300)
   words,title,url=int(m[1]),m[2].strip(),m[3]
-  assert 60<words<120 and title=='Why moths fly towards light' and url==page,(words,title,url)
+  assert 70<words<140 and title=='Why moths fly towards light' and url==page,(words,title,url)
+  g['wait'](r'\[web.reader.current\] url=',s,60)
   g['wait'](r'\[web.loaded\] bytes_ok=1 [^\n]*images=1 ',s,120);time.sleep(2)
+  assert '/site/reader/article.html' not in hits,('reader view refetched the source',hits)
   assert '/site/reader/moth.png' in hits,hits
   img=shot('reader')
   # The reader page's warm background fills the view.

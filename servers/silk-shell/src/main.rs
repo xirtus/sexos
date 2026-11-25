@@ -15682,7 +15682,7 @@ unsafe fn yarn_cmd_clear() {
 /// Yarn built-in: echo — echo arguments back.
 unsafe fn yarn_cmd_echo(args: &[u8]) {
     let trimmed = trim_ascii(args);
-    serial_println!("[spindle.command.echo] args={:?}", trimmed);
+    serial_println!("[spindle.command.echo] args_bytes={} payload=redacted", trimmed.len());
     if trimmed.is_empty() {
         yarn_append_output(b"");
     } else {
@@ -16310,8 +16310,13 @@ unsafe fn spindle_dispatch() {
     if len == 0 {
         return;
     }
+    // Yarn cannot run apps, but a private launch pasted here must not enter
+    // session history or scrollback just because it is an unknown command.
+    let private_launch = sex_pdx::private_launch::is_private_browser_launch(&cmd[..len]);
     // Save to history.
-    if yarn.history_count < YARN_HISTORY_CAP {
+    if private_launch {
+        // No history entry.
+    } else if yarn.history_count < YARN_HISTORY_CAP {
         yarn.history[yarn.history_count] = cmd;
         yarn.history_count += 1;
     } else {
@@ -16325,11 +16330,11 @@ unsafe fn spindle_dispatch() {
 
     // Echo command to output.
     let mut echo_buf = [0u8; YARN_OUTPUT_LINE_CAP];
-    if len > 0 {
+    if len > 0 && !private_launch {
         let copy_len = len.min(YARN_OUTPUT_LINE_CAP - 1);
         echo_buf[..copy_len].copy_from_slice(&cmd[..copy_len]);
     }
-    yarn_append_output(&echo_buf[..len.min(YARN_OUTPUT_LINE_CAP - 1)]);
+    if !private_launch { yarn_append_output(&echo_buf[..len.min(YARN_OUTPUT_LINE_CAP - 1)]); }
 
     // Match first whitespace-delimited token.
     let args = trim_ascii(&cmd[..len]);
@@ -16337,7 +16342,7 @@ unsafe fn spindle_dispatch() {
     let token = &args[..first_space];
     let rest = if first_space < args.len() { &args[first_space + 1..] } else { &[] };
 
-    serial_println!("[spindle.structured.dispatch] cmd={:?}", token);
+    serial_println!("[spindle.structured.dispatch] token_bytes={} payload=redacted", token.len());
     SPINDLE_LAST_CMD_OK = match token {
         b"help"    => { yarn_cmd_help();                                   true }
         b"clear"   => { yarn_cmd_clear();                                  true }
@@ -16364,6 +16369,11 @@ unsafe fn spindle_dispatch() {
     // Clear command buffer after dispatch.
     yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
     yarn.cmd_len = 0;
+    if private_launch {
+        SPINDLE_VI_PREV_BUF = [0u8; YARN_CMD_BUF_CAP];
+        SPINDLE_VI_PREV_LEN = 0;
+        serial_println!("[spindle.private.input.scrubbed] undo=0 nav=0");
+    }
     SPINDLE_VI_CUR = 0;
     SPINDLE_VI_NORMAL = false; // return to insert mode for next command
     SPINDLE_VI_PENDING_D = false;
@@ -16379,13 +16389,23 @@ unsafe fn spindle_session_save(idx: usize) {
     if idx >= SPINDLE_SESSION_COUNT { return; }
     let s = &mut SPINDLE_SESSIONS[idx];
     let yarn = &YARN;
-    s.cmd_buf = yarn.cmd_buf;
-    s.cmd_len = yarn.cmd_len;
+    if sex_pdx::private_launch::is_browser_launch_candidate(&yarn.cmd_buf[..yarn.cmd_len]) {
+        s.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
+        s.cmd_len = 0;
+    } else {
+        s.cmd_buf = yarn.cmd_buf;
+        s.cmd_len = yarn.cmd_len;
+    }
     s.vi_normal = SPINDLE_VI_NORMAL;
     s.vi_cur = SPINDLE_VI_CUR;
     s.vi_pending_d = SPINDLE_VI_PENDING_D;
-    s.vi_prev_buf = SPINDLE_VI_PREV_BUF;
-    s.vi_prev_len = SPINDLE_VI_PREV_LEN;
+    if sex_pdx::private_launch::is_browser_launch_candidate(&SPINDLE_VI_PREV_BUF[..SPINDLE_VI_PREV_LEN]) {
+        s.vi_prev_buf = [0u8; YARN_CMD_BUF_CAP];
+        s.vi_prev_len = 0;
+    } else {
+        s.vi_prev_buf = SPINDLE_VI_PREV_BUF;
+        s.vi_prev_len = SPINDLE_VI_PREV_LEN;
+    }
     s.output_lines = [[0u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES];
     for i in 0..YARN_OUTPUT_LINES { s.output_lines[i] = yarn.output_lines[i]; }
     s.output_count = yarn.output_count;
@@ -27802,7 +27822,7 @@ pub extern "C" fn _start() -> ! {
                                 static mut MAIN_DISPATCH_SPINDLE_REACH_BUDGET: u32 = 32;
                                 if MAIN_DISPATCH_SPINDLE_REACH_BUDGET > 0 {
                                     MAIN_DISPATCH_SPINDLE_REACH_BUDGET -= 1;
-                                    serial_println!("[silk-shell.main_dispatch.spindle.reach] scancode={:#x}", scancode);
+                                    serial_println!("[silk-shell.main_dispatch.spindle.reach] payload=redacted");
                                 }
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), 1, EV_KEY);
@@ -27875,8 +27895,8 @@ pub extern "C" fn _start() -> ! {
                                             if ch != b' ' || scancode == 0x39 {
                                                 YARN.history_pos = -1;
                                                 spindle_vi_insert_at(SPINDLE_VI_CUR, ch);
-                                                serial_println!("[spindle.key.char] ch={}", ch as char);
-                                                serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                                serial_println!("[spindle.key.char] payload=redacted");
+                                                serial_println!("[spindle.line.edit] op=push payload=redacted len={}", YARN.cmd_len);
                                                 serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
                                             }
                                         }

@@ -1,0 +1,102 @@
+# Kaleidoscope daily-driver gaps
+
+Compared with Firefox and Safari, Kaleidoscope already has persistent tabs, history,
+bookmarks, cookies, downloads with a panel, reader view, private and container tabs,
+and Shields. The remaining gaps are:
+
+- The Ctrl+J downloads panel now shows failed transfers with an exact URL retry
+  link. A failed stream clears the progress bar and removes its hidden partial
+  file, so retry can take the original name. Completed public downloads now have
+  a bounded, staged history with source URL and size that survives restart;
+  private-tab addresses stay out of the stored history. Escape now cancels a
+  synchronous transfer, removes its hidden partial file, and offers a retry.
+  Ctrl+Shift+J now pauses the live request and file writes at the committed
+  offset, then resumes that same connection. A server that closes during a
+  long pause still requires a fresh retry; durable Range/ETag resume remains.
+  The hidden part is now synced before it gets a visible name, and Files is
+  synced again after rename. A failed sync is reported as a failed download;
+  it cannot enter completed history. If the second sync fails, the visible
+  file may remain but is explicitly marked unconfirmed for retry.
+  A zero-byte hidden part left by an interrupted create is cleaned on browser
+  start only when a durable ticket names it; unticketed and nonempty parts stay available for
+  manual recovery. A network-interrupted or window-close partial with a strong ETag now stays hidden and is
+  synced alongside bounded resume metadata. Retrying its exact URL, including
+  after a browser restart, sends Range/If-Range and appends only after a matching
+  `206` with exact start, total, ETag, and identity body length. A changed reply
+  discards the partial and restarts from byte zero. Last-Modified alone and weak
+  ETags still require a fresh transfer; a process killed mid-transfer can leave
+  an orphan hidden part because no confirmed metadata was written yet.
+  When the live resume metadata is readable but malformed, Kaleidoscope now
+  checks its previous durable copy before abandoning a synced hidden part.
+  The downloads panel now offers Ctrl+Alt+J to clear saved history and current
+  failures after a durable state write. Downloaded files and resumable transfers
+  remain available. Individual completed rows can now be removed from history
+  without deleting the saved file; the removal survives restart. Clearing from a
+  private tab or window affects only private rows and current failures, leaving
+  normal saved history intact. Nonempty orphan
+  hidden-part cleanup is still open.
+
+- A password manager with safe autofill and passkeys, integrated with Chastity.
+  **Reactive login:** approved fills now emit `input` and `change` for both
+  controls after writing their values, so a page can enable Sign in from those
+  events. The dispatch carries node IDs rather than credential bytes, and the
+  browser rechecks the page after listeners run. The two-app gate requires the
+  events before its fixture accepts the login.
+  The first autofill slice defines and tests exact top-level HTTPS scope and an
+  unambiguous same-origin POST login pair. This slice wires explicit Ctrl+Shift+K
+  requests to Chastity, rechecks the
+  tab and document after approval, and cancels pending requests on navigation
+  or tab changes. A browser capture policy and Chastity's scoped add/update
+  decision are host-tested; the Shell write transfer, visible Chastity approval,
+  and browser save command now form an end-to-end saved-login path. Passkeys remain.
+  The Shell broker now has an attested, bounded reverse proposal route from
+  Kaleidoscope to Chastity. Ctrl+Shift+U now captures the current eligible
+  login, transfers it through that route, and cancels when the page or values
+  change. Chastity now exposes a fully received proposal only after bounded
+  transfer and can acknowledge it only after the caller's durable commit.
+  Chastity now shows a default-deny save dialog with Add or the one exact
+  matching account as Replace, stores the encrypted vault, and only then
+  acknowledges the browser. The GitHub CI two-app QEMU gate is the runtime
+  evidence for this first end-to-end password save. Passkeys still remain.
+- A visible per-site settings view for Shields and stored data. This change adds a
+  first view and controls. The view now counts cookies matching this host and
+  local storage items and bytes in the current container. Clearing site data
+  updates those counts to zero. The person can now clear only cookies or only
+  local storage from the native site settings page, scoped to the active box.
+  Ctrl+Shift+Y now allows or blocks JavaScript for the exact origin, including
+  inline handlers and content scripts, and saves the choice. Camera,
+  microphone, notifications, and other permission prompts still need browser
+  capability hooks and a full settings catalog.
+- Stronger tab isolation, developer tools, extensions, and browser compatibility.
+- Private URLs and page content previously reached serial diagnostics even though
+  private history, session, cookies and storage stayed out of Files. Kaleidoscope
+  now stops content-bearing diagnostics for the rest of a process once a private
+  tab opens, including delayed callbacks after switching back to a public tab.
+  Numeric lifecycle receipts remain. The private guest gate checks URL, title,
+  console and delayed WebSocket protocol sentinels against the serial stream.
+- Inline PDF, print to PDF, service workers, and web app installation.
+- Profile and session writes previously replaced live files in place. This slice
+  stages and syncs each save, retains a previous copy, and recovers it after an
+  interrupted promotion. Per-site Shields choices now use the same staged save
+  and previous-copy recovery; the QEMU gate cuts power after a toggle and checks
+  the choice on reboot. Extension enablement and saved dynamic rules now use
+  staged replacement and previous-copy recovery; the extension QEMU gate
+  verifies both after a hard reboot. Disposable caches still need review.
+
+Keep browser state and controls within its own capabilities. Do not add a POSIX
+filesystem or network path.
+
+The existing browser controls now have an offline in-app shortcut page and a
+matching keyboard reference in `docs/apps/kaleidoscope-shortcuts.md`.
+
+Reader view now extracts the article from the currently shown DOM. It keeps
+script-added text and avoids a second request for a page that may have changed
+or required a sign-in. Direct `about:reader?url=` addresses still fetch once.
+Article data tables now retain captions, rows, header/data cells including empty
+cells, links, bounded column and row spans, and nested data tables in reader view.
+Hidden rows, page styles, and event handlers stay out. The reader QEMU fixture
+shows a row span and nested table in its screenshot. Tables with more complex
+layout and paged printing still need work.
+
+The browser's own controls now follow SexOS light, dark and high-contrast
+appearance and accent changes. Site content keeps its own CSS colors.

@@ -4,6 +4,7 @@
 use chastity_core::generator::{self, Options};
 use chastity_core::vault::{EntryId, Kdf, NewEntry, Summary, Vault};
 use chastity_core::{fingerprint, OpenError};
+use chastity_core::save_login::{Choice as SaveChoice, Proposal};
 use zeroize::{Zeroize, Zeroizing};
 
 /// Where the vault file lives, and the clipboard. `main.rs` gives SexOS's.
@@ -113,6 +114,25 @@ impl Ui {
     }
     pub fn fill(&self, origin: &str, id: EntryId) -> Option<chastity_core::autofill::Fill> {
         chastity_core::autofill::fill(self.vault.as_ref()?, origin, id)
+    }
+    /// The only replace choice is an exact-origin, same-username account.
+    /// Multiple matches are ambiguous; the dialog then offers Add only.
+    pub fn browser_save_target(&self, origin: &str, username: &str) -> Option<EntryId> {
+        let proposal = Proposal::new(origin, username, Zeroizing::new("x".into())).ok()?;
+        let targets = proposal.update_targets(self.vault.as_ref()?);
+        if targets.len() == 1 { Some(targets[0]) } else { None }
+    }
+    /// Returns true only after the encrypted vault file has been stored.
+    pub fn browser_save(&mut self, host: &mut dyn Host, origin: &str, username: &str,
+        password: &str, choice: SaveChoice) -> bool {
+        let proposal = match Proposal::new(origin, username, Zeroizing::new(password.into())) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        let Some(vault) = self.vault.as_mut() else { return false; };
+        if proposal.commit(vault, choice).is_err() { return false; }
+        self.dirty = true;
+        self.save(host)
     }
     fn shown(&self) -> Vec<Summary> {
         self.vault
@@ -804,6 +824,27 @@ mod tests {
         assert!(!ui.unlocked());
         assert!(host.records.iter().any(|r| r == "[chastity.unsaved.discarded] reason=idle"));
         assert!(ui.render(&host).contains("unsaved changes were lost"));
+    }
+
+    #[test]
+    fn browser_save_requires_exact_target_and_durable_store() {
+        let mut host = Fake::default();
+        let mut ui = Ui::new(&mut host, Kdf::TEST_ONLY);
+        typed(&mut ui, &mut host, "master password");
+        typed(&mut ui, &mut host, "master password");
+        assert!(ui.browser_save(&mut host, "https://example.org", "alice", "first", SaveChoice::Add));
+        let id = ui.browser_save_target("https://example.org", "alice").unwrap();
+        assert!(ui.browser_save_target("https://example.org", "bob").is_none());
+        assert!(!ui.browser_save(&mut host, "https://other.org", "alice", "bad", SaveChoice::Replace(id)));
+        host.full = true;
+        assert!(!ui.browser_save(&mut host, "https://example.org", "alice", "second", SaveChoice::Replace(id)));
+        host.full = false;
+        ui.key(&mut host, Input::Char('s'));
+        assert!(host.records.iter().any(|r| r == "[chastity.save.failed]"));
+        ui.lock(&mut host, "asked");
+        let mut reopened = Ui::new(&mut host, Kdf::TEST_ONLY);
+        typed(&mut reopened, &mut host, "master password");
+        assert_eq!(reopened.fill("https://example.org", id).unwrap().password.as_str(), "second");
     }
 
     #[test]
