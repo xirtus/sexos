@@ -153,6 +153,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
     ("Ctrl+Alt+E", "Insert an endnote; Esc returns to body"),
+    ("Ctrl+Alt+Shift+E", "Edit a note at its body reference; Esc returns"),
     ("Ctrl+Alt+Shift+N", "Convert notes to endnotes, footnotes, or swap"),
     ("Ctrl+K", "Link selected text or insert a labeled link"),
     ("Ctrl+Alt+K", "Remove a link from selected text"),
@@ -464,8 +465,8 @@ impl Ui {
                     proof.word, proof.suggestions[proof.at], proof.at + 1, proof.suggestions.len())
             }
         } else if self.message.is_empty() {
-            if self.book.editing_inserted_footnote() {
-                format!("Editing footnote on page {}  ·  Esc returns to body  ·  Ctrl+S saves", page + 1)
+            if let Some(kind) = self.book.editing_inserted_note() {
+                format!("Editing {kind} on page {}  ·  Esc returns to body  ·  Ctrl+S saves", page + 1)
             } else if self.book.editing_header_footer() {
                 format!("Editing header/footer on page {}  ·  Esc returns to body  ·  Ctrl+S saves", page + 1)
             } else {
@@ -985,6 +986,17 @@ impl Ui {
         }
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
+                (code::E, _) if key.alt && key.shift => {
+                    match self.book.edit_note_at_caret() {
+                        Ok(kind) => {
+                            self.invalidate();
+                            self.message = format!("Editing {kind} · Esc returns to body");
+                            sex_std::record(&format!("[assuit.note.open] kind={kind}"));
+                        }
+                        Err(e) => self.message = e,
+                    }
+                    return;
+                }
                 (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }
                 (code::G, _) if !key.shift => { self.ask = Some(Ask::GoTo(String::new())); return; }
                 (code::P, _) if !key.shift => return self.export_pdf(),

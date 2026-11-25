@@ -381,6 +381,12 @@ def main():
   time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-footnote-edit.ppm')})
   assert (a.out/'assuit-footnote-edit.ppm').stat().st_size>10000
   s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
+  s=len(t());press('ctrl','alt','shift','e')
+  g['wait'](r'\[assuit\.note\.open\] kind=footnote',s,120)
+  type_line(' revisited')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-note-reopened.ppm')})
+  assert (a.out/'assuit-note-reopened.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   s=len(t());press('ctrl','alt','e')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-endnote-prompt.ppm')})
