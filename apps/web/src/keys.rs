@@ -12,6 +12,7 @@
 //! label folds it), Ctrl+Shift+B the side panel, Ctrl+Shift+E site settings,
 //! Ctrl+Shift+K asks Chastity to fill a visible HTTPS login form; Ctrl+Shift+U asks it to save one.
 //! Ctrl+Alt+J clears download history in the panel. Ctrl+Shift+/ opens Kaleidoscope's keyboard reference.
+//! On site settings, Ctrl+Alt+C clears only cookies and Ctrl+Alt+S clears only local storage.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -43,6 +44,10 @@ impl Browser {
             0x22 if key.shift => self.toggle_group(),
             // Ctrl+Shift+B: the side panel with the bookmarks, or closed.
             0x30 if key.shift => self.toggle_panel(),
+            // These actions require the browser's own site settings page. A
+            // site cannot trigger them by navigating to a crafted address.
+            0x2E if key.alt && !key.shift && super::site_settings::target(&self.url).is_some() => self.clear_site_part(sex_web::site_data::Part::Cookies),
+            0x1F if key.alt && !key.shift && super::site_settings::target(&self.url).is_some() => self.clear_site_part(sex_web::site_data::Part::Storage),
             // Ctrl+Shift+E: settings for the current web site; press again to return.
             0x12 if key.shift => {
                 let url = self.url.clone();
@@ -120,6 +125,22 @@ impl Browser {
             _ => return false,
         }
         true
+    }
+
+    fn clear_site_part(&mut self, part: sex_web::site_data::Part) {
+        let Some(url) = super::site_settings::target(&self.url) else { return; };
+        let Some((cleared, kept)) = self.profile.clear_site_part(&mut self.window,
+            &mut self.jar.borrow_mut(), &mut self.storage.borrow_mut(),
+            self.jarbox, &url, part, super::wall()) else { return; };
+        let kind = match part { sex_web::site_data::Part::Cookies => "cookies", sex_web::site_data::Part::Storage => "storage" };
+        web_record!("[web.site.part-cleared] kind={} count={} kept={} url={}", kind, cleared, kept as u8, url);
+        if !kept {
+            self.status = Some("Site data changed here, but Files could not confirm the save.");
+            self.draw();
+            return;
+        }
+        let shown = self.url.clone();
+        self.open(&shown, false);
     }
 
     /// Lays every tab's pages out again at `percent` zoom, keeping the reading place.

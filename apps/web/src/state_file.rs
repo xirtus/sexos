@@ -48,3 +48,15 @@ pub fn replace(window: &mut Window, path: &str, data: &[u8]) -> bool {
     }
     files::sync(window).is_ok()
 }
+
+/// An explicit privacy clear must not be undone by a later damaged live file.
+/// The old snapshot is retired only after the new live file is durable.
+pub fn replace_and_forget_previous(window: &mut Window, path: &str, data: &[u8]) -> bool {
+    if !replace(window, path, data) { return false; }
+    let previous = format!("{path}.previous");
+    match files::remove(window, previous.as_bytes()) {
+        Ok(()) => files::sync(window).is_ok(),
+        Err(files::NOT_FOUND) => true,
+        Err(_) => false,
+    }
+}

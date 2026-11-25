@@ -42,6 +42,7 @@ impl Browser {
             <h1>Site settings</h1><p><strong>{}</strong></p><p>Container: {}</p>\
             <p>Shields: <strong>{}</strong> — Ctrl+Shift+S to change</p>\
             <h2>Stored data</h2><p>{} cookies · {} local storage items ({} bytes)</p>\
+            <p>Ctrl+Alt+C clears only cookies; Ctrl+Alt+S clears only local storage.</p>\
             <p>Ctrl+Shift+Backspace clears this site's cookies, storage and saved code.</p>\
             <p><a href='{}'>Back to site</a></p></body>",
             escape(&origin), escape(box_name), shield, cookies, stored, bytes, escape(&url))

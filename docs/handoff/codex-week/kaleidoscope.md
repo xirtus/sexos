@@ -50,7 +50,9 @@ and Shields. The remaining gaps are:
 - A visible per-site settings view for Shields and stored data. This change adds a
   first view and controls. The view now counts cookies matching this host and
   local storage items and bytes in the current container. Clearing site data
-  updates those counts to zero. Permission prompts and a full settings catalog remain.
+  updates those counts to zero. The person can now clear only cookies or only
+  local storage from the native site settings page, scoped to the active box.
+  Permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
 - Private URLs and page content previously reached serial diagnostics even though
   private history, session, cookies and storage stayed out of Files. Kaleidoscope

@@ -117,6 +117,16 @@ def main():
   s=len(t());chord('ctrl','shift','s')
   g['wait'](r'\[web.shields.toggle\] up=1 host=10\.0\.2\.2',s,60)
   g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=On box=Main cookies=1 storage=1 bytes=9',s,120)
+  # Selectively clear one kind of site data in the active box. The first
+  # action must leave local storage alone, and the second must leave Shields on.
+  s=len(t());chord('ctrl','alt','c')
+  g['wait'](r'\[web.site.part-cleared\] kind=cookies count=1 kept=1 url=http://10\.0\.2\.2:'+str(PORT)+r'/a/page2',s,60)
+  g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=On box=Main cookies=0 storage=1 bytes=9',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'site-cookies-cleared.ppm')})
+  assert (a.out/'site-cookies-cleared.ppm').stat().st_size>100000
+  s=len(t());chord('ctrl','alt','s')
+  g['wait'](r'\[web.site.part-cleared\] kind=storage count=1 kept=1 url=http://10\.0\.2\.2:'+str(PORT)+r'/a/page2',s,60)
+  g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=On box=Main cookies=0 storage=0 bytes=0',s,120)
   s=len(t());chord('ctrl','shift','backspace')
   g['wait'](r'\[web.site.cleared\] url=http://10\.0\.2\.2:'+str(PORT)+r'/a/page2',s,60)
   g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=On box=Main cookies=0 storage=0 bytes=0',s,120)

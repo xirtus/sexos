@@ -260,6 +260,46 @@ impl Profile {
         self.later();
     }
 
+    /// A browser-only site settings action, scoped to the shown tab's box.
+    pub fn clear_site_part(&mut self, window: &mut Window, jar: &mut sex_fetch::Jar, storage: &mut WebStorage,
+        box_kind: Jarbox, url: &str, part: sex_web::site_data::Part, now: u64) -> Option<(usize, bool)> {
+        let cleared = sex_web::site_data::clear(jar, storage, url, part)?;
+        if cleared == 0 || box_kind == Jarbox::Private { return Some((cleared, true)); }
+        let (kind, data) = match part {
+            sex_web::site_data::Part::Cookies => ("cookies", jar.save(now)),
+            sex_web::site_data::Part::Storage => ("storage", storage.save()),
+        };
+        let path = match box_kind {
+            Jarbox::Own => alloc::format!("Kaleidoscope/{kind}.tsv"),
+            Jarbox::Container(n) if CONTAINERS.get(n as usize - 1).is_some() => {
+                let _ = files::mkdir(window, DIR);
+                let _ = files::mkdir(window, b"Kaleidoscope/containers");
+                let folder = alloc::format!("Kaleidoscope/containers/{n}");
+                let _ = files::mkdir(window, folder.as_bytes());
+                alloc::format!("{folder}/{kind}.tsv")
+            }
+            _ => return Some((cleared, false)),
+        };
+        let _ = files::mkdir(window, DIR);
+        let kept = state_file::replace_and_forget_previous(window, &path, data.as_bytes());
+        if kept {
+            match box_kind {
+                Jarbox::Own => match part {
+                    sex_web::site_data::Part::Cookies => self.saved_jar = jar.changes(),
+                    sex_web::site_data::Part::Storage => self.saved_storage = storage.changes,
+                },
+                Jarbox::Container(n) => if let Some(s) = self.boxes.iter_mut().find(|s| s.kind == Jarbox::Container(n)) {
+                    match part {
+                        sex_web::site_data::Part::Cookies => s.saved_jar = jar.changes(),
+                        sex_web::site_data::Part::Storage => s.saved_storage = storage.changes,
+                    }
+                },
+                Jarbox::Private => {}
+            }
+        } else { self.later(); }
+        Some((cleared, kept))
+    }
+
     /// Notes that storage or cookies may have changed.
     pub fn touched(&mut self) {
         let own = self.storage.borrow().changes != self.saved_storage || self.jar.borrow().changes() != self.saved_jar;
