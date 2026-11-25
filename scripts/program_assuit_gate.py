@@ -382,6 +382,16 @@ def main():
   assert (a.out/'assuit-footnote-edit.ppm').stat().st_size>10000
   s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','e')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-endnote-prompt.ppm')})
+  assert (a.out/'assuit-endnote-prompt.ppm').stat().st_size>10000
+  type_line('Reference one');q.key('ret')
+  g['wait'](r'\[assuit\.endnote\.insert\] chars=13',s,120)
+  type_line(' updated')
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-endnote-edit.ppm')})
+  assert (a.out/'assuit-endnote-edit.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.endnote\.close\]',s,120)
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   press('ctrl','end')
   s=len(t());press('ctrl','k')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-prompt.ppm')})

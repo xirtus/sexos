@@ -17,6 +17,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Alt+S | Set the current or selected paragraphs' line multiple (0.5–3), or an `exact` or `minimum` line height (6–72 pt), then space before and after (0–72 pt): `1.5 0 8`, `exact 18 0 8`, or `minimum 18 0 8` |
 | Ctrl+Alt+I | Set left, right, and relative first-line indents in inches. Use `0.5 0 -0.25` for a hanging indent. |
 | Ctrl+Shift+N | Insert a linked footnote at the body caret. Enter its text, continue editing the note on the page, then press Esc to return to the body. |
+| Ctrl+Alt+E | Insert a linked endnote at the body caret. Enter its text, continue editing, then press Esc to return to the body. |
 | Ctrl+K | Link selected text or insert a new link. At a caret inside an existing link, selects its full label and prefills its address for editing. Enter an `https://`, `http://`, or `mailto:` address, optionally followed by display text after a space; Ctrl+A clears the prompt. |
 | Ctrl+Alt+K | Remove the link from selected text while keeping the words. |
 | Ctrl+Alt+T | Insert a generated table of contents from heading styles with `insert 1` through `insert 9` (maximum heading level), `update` after edits, or `remove` it. |
