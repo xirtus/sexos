@@ -167,6 +167,12 @@ fn git_read(path: &[u8], max: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+fn git_head(root: &[u8]) -> String {
+    git_read(&project::join(root, b".git/HEAD"), 256)
+        .and_then(|bytes| git::head_label(&bytes))
+        .unwrap_or_else(|| String::from("unavailable"))
+}
+
 #[derive(Clone)]
 struct GitChange { code: char, path: Vec<u8>, id: [u8; 20] }
 
@@ -370,7 +376,7 @@ enum Overlay {
     Diagnostics { items: Vec<quil_core::lsp::Diagnostic>, sel: usize, version: u64, path: Vec<u8> },
     Symbols { items: Vec<quil_core::lsp::Symbol>, sel: usize, version: u64, path: Vec<u8> },
     Help { scroll: usize },
-    Git { changes: Vec<GitChange>, sel: usize, note: String },
+    Git { changes: Vec<GitChange>, sel: usize, note: String, head: String },
     GitDiff { path: Vec<u8>, lines: Vec<String>, scroll: usize, note: String },
     Palette { query: String, sel: usize },
     QuickOpen { query: String, sel: usize, files: Vec<Vec<u8>> },
@@ -880,7 +886,9 @@ impl App {
                     Err(note) => (Vec::new(), note),
                 };
                 sex_pdx::serial_record!("[quil.code.git] tracked_changes={} note={}", changes.len(), note);
-                self.overlay = Overlay::Git { changes, sel: 0, note };
+                let head = git_head(&self.root);
+                sex_pdx::serial_record!("[quil.code.git.head] label={head}");
+                self.overlay = Overlay::Git { changes, sel: 0, note, head };
             }
             return;
         }
@@ -1033,7 +1041,7 @@ impl App {
                     _ => *scroll,
                 };
             }
-            Overlay::Git { changes, sel, note } => {
+            Overlay::Git { changes, sel, note, head: _ } => {
                 if matches!(typed, Some('u' | 'U')) {
                     let result = self.git_stage_undo.as_ref().ok_or_else(|| String::from("No Quil stage to undo."))
                         .and_then(|(before, after)| git_replace_index(&self.root, after, before));
@@ -1042,7 +1050,7 @@ impl App {
                             self.git_stage_undo = None;
                             let refreshed = git_changes(&self.root).unwrap_or_default();
                             sex_pdx::serial_record!("[quil.code.git.unstaged] tracked_changes={}", refreshed.len());
-                            self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: String::from("Undid last Quil stage.") };
+                            self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: String::from("Undid last Quil stage."), head: git_head(&self.root) };
                             keep = false;
                         }
                         Err(reason) => *note = reason,
@@ -1054,7 +1062,7 @@ impl App {
                             self.git_stage_undo = Some(history);
                             let refreshed = git_changes(&self.root).unwrap_or_default();
                             sex_pdx::serial_record!("[quil.code.git.staged] path={} tracked_changes={}", lossy(&change.path), refreshed.len());
-                            self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: format!("Staged {}. U undoes this stage.", lossy(&change.path)) };
+                            self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: format!("Staged {}. U undoes this stage.", lossy(&change.path)), head: git_head(&self.root) };
                             keep = false;
                         }
                         Err(reason) => *note = reason,
@@ -1427,7 +1435,8 @@ impl App {
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
                 ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
             }
-            Overlay::Git { changes, sel, note } => {
+            Overlay::Git { changes, sel, note, head } => {
+                lines.push((format!("HEAD: {head}"), false));
                 if !note.is_empty() { lines.push((note.clone(), false)); }
                 else if changes.is_empty() { lines.push((String::from("Indexed files match the worktree."), false)); }
                 let first = sel.saturating_sub(9);
