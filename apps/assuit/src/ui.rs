@@ -137,6 +137,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
+    ("Ctrl+Alt+Right / Left", "Move one list level deeper / shallower"),
     ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+R", "Picture alt text"),
     ("Ctrl+Shift+O", "Picture width"),
     ("Ctrl+Shift+C", "Crop selected picture"),
@@ -814,6 +815,24 @@ impl Ui {
             return;
         }
         if key.code == code::Y && key.control && key.shift { return self.check_spelling(); }
+        if key.control && key.alt && !key.shift {
+            let deeper = match sex_app::nav(key) {
+                Some(Nav::Right) => Some(true),
+                Some(Nav::Left) => Some(false),
+                _ => None,
+            };
+            if let Some(deeper) = deeper {
+                match self.book.step_list_level(deeper) {
+                    Ok(level) => {
+                        self.invalidate();
+                        self.message = format!("List level {level}");
+                        sex_std::record(&format!("[assuit.list-level] level={level}"));
+                    }
+                    Err(e) => self.message = e,
+                }
+                return;
+            }
+        }
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
                 (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }

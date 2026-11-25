@@ -199,6 +199,23 @@ impl Book {
         Ok(result)
     }
 
+    /// Move the list item at the caret exactly one of Word's nine levels.
+    /// A collapsed caret avoids choosing a level for a mixed selection.
+    pub fn step_list_level(&mut self, deeper: bool) -> Result<u8, String> {
+        if !self.session.sel.is_collapsed() {
+            return Err("Place the caret in one list item first".into());
+        }
+        let current = self.session.doc.para_at(&self.session.sel.focus)
+            .and_then(|p| p.props.numbering)
+            .ok_or_else(|| "Place the caret in a list item first".to_string())?.level;
+        let next = if deeper { current.checked_add(1).filter(|n| *n <= 8) }
+            else { current.checked_sub(1) }
+            .ok_or_else(|| if deeper { "Already at the deepest list level" }
+                else { "Already at the outermost list level" }.to_string())?;
+        self.run("para.listLevel", json!({ "level": next }))?;
+        Ok(next + 1)
+    }
+
     /// Inserts an editable table at the caret. Keep the UI's dimensions bounded so
     /// one accidental input cannot lay out thousands of cells at once.
     pub fn insert_table(&mut self, rows: usize, cols: usize) -> Result<(), String> {
@@ -860,6 +877,39 @@ mod tests {
             reopened.key(&Chord { name: "End", ctrl: true, shift: false });
             reopened.edit_list("level 1").unwrap();
             assert_eq!(levels(&reopened), [0, 0]);
+        }
+    }
+
+    #[test]
+    fn direct_list_level_steps_are_bounded_and_round_trip() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("list-level-keys.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Parent").unwrap();
+            assert!(book.step_list_level(true).is_err(), "plain paragraph is not a list");
+            book.edit_list("numbered").unwrap();
+            book.key(&Chord { name: "Enter", ctrl: false, shift: false });
+            book.type_text("Child").unwrap();
+            book.key(&Chord { name: "Home", ctrl: false, shift: true });
+            assert!(book.step_list_level(true).is_err(), "selection has no single level");
+            book.key(&Chord { name: "End", ctrl: false, shift: false });
+            let levels = |b: &Book| b.session.doc.body.iter().filter_map(|block| block.as_para())
+                .map(|p| p.props.numbering.unwrap().level).collect::<Vec<_>>();
+            assert_eq!(levels(&book), [0, 0]);
+            assert!(book.step_list_level(false).is_err(), "outermost level has no parent");
+            assert_eq!(book.step_list_level(true).unwrap(), 2);
+            assert_eq!(levels(&book), [0, 1]);
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert_eq!(levels(&book), [0, 0], "one undo restores the previous level");
+            for level in 2..=9 { assert_eq!(book.step_list_level(true).unwrap(), level); }
+            assert!(book.step_list_level(true).is_err(), "ninth level is the limit");
+            assert_eq!(levels(&book), [0, 8]);
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert_eq!(levels(&reopened), [0, 8], "{ext} lost the nested level");
+            reopened.key(&Chord { name: "End", ctrl: true, shift: false });
+            assert_eq!(reopened.step_list_level(false).unwrap(), 8);
+            assert_eq!(levels(&reopened), [0, 7]);
         }
     }
 

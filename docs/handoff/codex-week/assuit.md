@@ -18,8 +18,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   numbering. This slice adds a bounded list prompt for those document edits and
   verifies DOCX/ODT round trips. The same prompt now applies nested levels 1–9
   to an existing list. A host test checks nested-level DOCX/ODT persistence,
-  return to the outer level, and refusal outside a list. Dedicated list-level
-  keyboard gestures and custom list definitions remain.
+  return to the outer level, and refusal outside a list. This slice adds direct
+  Ctrl+Alt+Right/Left gestures for a list item at the caret, with bounded levels
+  and DOCX/ODT persistence. Custom list definitions remain.
 - **Writing aids:** Ctrl+Shift+Y selects the next issue and offers corrections. A adds the selected issue to Assuit's app-owned persistent dictionary. Ctrl+Shift+D lists that dictionary and adds or removes words with a durable save. Ctrl+Shift+K sets the document default and selected text's en-US or en-GB proofing language, preserved in DOCX. Ctrl+Shift+U now shows or hides WordCraft's actual continuous spelling marks on the editable page without changing the document or undo history. This slice keeps the display choice in Assuit's own folder across app restarts, with atomic replacement and a two-launch guest check. More proofing languages remain.
 - **Print workflow:** PDF export and a selected-page range are now available.
   Letter, Legal and A4 paper with portrait/landscape orientation are now available.
