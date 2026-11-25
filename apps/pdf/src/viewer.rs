@@ -17,7 +17,7 @@ use crate::history::{AnnotationHistory, FieldHistory};
 use crate::search::{self, Hit};
 use crate::text::{self, PageText};
 use crate::zoom::{self, Zoom};
-use crate::{outline, sample, thumb};
+use crate::{outline, recovery, sample, thumb};
 
 #[derive(Clone, Copy)]
 struct Palette {
@@ -224,6 +224,11 @@ struct Viewer {
     path: String,
     /// The editing engine over the file's bytes, or why this file cannot be edited.
     editor: Result<Editor, String>,
+    /// The recovered PDF has not yet been committed to its source by Ctrl+S.
+    recovered_pending: bool,
+    /// Last complete copy kept for this open document; unchanged redraws do not
+    /// write it again.
+    recovery_fingerprint: Option<(usize, u64)>,
     field_history: FieldHistory,
     annotation_history: AnnotationHistory,
     /// The region Ctrl+R chose: shown points `[left, top, right, bottom]` on the page.
@@ -1124,8 +1129,9 @@ impl Viewer {
         let started = Instant::now();
         self.commit_field();
         let path = self.path.clone();
+        let recovered_pending = self.recovered_pending;
         let Some(editor) = self.editor() else { return };
-        if !editor.is_modified() {
+        if !editor.is_modified() && !recovered_pending {
             self.status = Some("Nothing to save".into());
             sex_std::record("[pdf.saved] changed=0");
             return;
@@ -1151,6 +1157,10 @@ impl Viewer {
             Err(e) => { self.status = Some(format!("Saved, but it does not open: {e:?}")); sex_std::record("[pdf.save.failed] reopen"); return; }
         };
         self.editor = Editor::open(back.clone()).map_err(|e| e.to_string());
+        self.recovered_pending = false;
+        self.recovery_fingerprint = None;
+        let _ = std::fs::remove_file(recovery::path(&path));
+        let _ = sex_std::sex_app::files::direct::sync();
         self.field_history.clear();
         self.annotation_history.clear();
         self.pdf = pdf;
@@ -1169,6 +1179,32 @@ impl Viewer {
         sex_std::record(&format!("[pdf.saved] path={path} bytes={} original={} prefix={} same={} annots={} filled={filled} ms={}",
             back.len(), original.len(), prefix as u8, (back == bytes) as u8, self.annotation_count(), started.elapsed().as_millis()));
         self.status = Some(format!("Saved {} bytes (an update after the original {})", back.len(), original.len()));
+    }
+
+    /// Keep unsaved markup and committed form values as a complete incremental
+    /// PDF after a quiet interval. The source file is left intact until Ctrl+S.
+    fn keep_recovery(&mut self) {
+        let Ok(editor) = &self.editor else { return };
+        if !editor.is_modified() { return; }
+        let bytes = match editor.save_incremental() {
+            Ok(bytes) => bytes,
+            Err(e) => { sex_std::record(&format!("[pdf.recovery.failed] {e}")); return; }
+        };
+        let fingerprint = recovery::fingerprint(&bytes);
+        if self.recovery_fingerprint == Some(fingerprint) { return; }
+        let name = recovery::path(&self.path);
+        match thumb::write_whole(&name, &bytes) {
+            Ok(()) => {
+                match sex_std::sex_app::files::direct::sync() {
+                    Ok(()) => {
+                        self.recovery_fingerprint = Some(fingerprint);
+                        sex_std::record(&format!("[pdf.recovery.kept] name={name} bytes={}", bytes.len()));
+                    }
+                    Err(e) => sex_std::record(&format!("[pdf.recovery.failed] sync={e:?}")),
+                }
+            }
+            Err(e) => sex_std::record(&format!("[pdf.recovery.failed] {e}")),
+        }
     }
 }
 
@@ -1231,7 +1267,7 @@ pub fn main() {
         }
         "welcome.pdf".to_string()
     });
-    let (bytes, pdf) = match open(&name) {
+    let (source_bytes, _) = match open(&name) {
         Ok(opened) => opened,
         Err(message) => {
             // Said in the window as text; closing it ends the program.
@@ -1239,6 +1275,15 @@ pub fn main() {
             std::process::exit(1);
         }
     };
+    let kept_name = recovery::path(&name);
+    let recovered = std::fs::read(&kept_name).ok().filter(|kept| {
+        recovery::belongs_to(&source_bytes, kept)
+            && Pdf::new(kept.clone()).is_ok()
+            && Editor::open(kept.clone()).is_ok()
+    });
+    let recovered_pending = recovered.is_some();
+    let bytes = recovered.unwrap_or(source_bytes);
+    let pdf = Pdf::new(bytes.clone()).expect("opened or validated recovery PDF");
     // A file the person gave (`@/home/x.pdf`) is named by its last part.
     let short = name.rsplit('/').next().unwrap_or(&name).to_string();
     let (target, task) = sex_std::identity();
@@ -1257,13 +1302,21 @@ pub fn main() {
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
-        path: name, editor, field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
+        path: name, editor, recovered_pending, recovery_fingerprint: None,
+        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, note: None, signature: None, form: None, annots: Vec::new(),
+        status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };
+    if recovered_pending { sex_std::record(&format!("[pdf.recovery.restored] name={kept_name} bytes={}", viewer.editor.as_ref().map_or(0, |e| e.original().len()))); }
     viewer.draw(window);
     let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
+    let mut recovery_next = sex_std::sex_pdx::get_ticks().saturating_add(3000);
     loop {
         let now = sex_std::sex_pdx::get_ticks();
+        if now >= recovery_next {
+            recovery_next = now.saturating_add(3000);
+            viewer.keep_recovery();
+        }
         if now >= theme_next {
             theme_next = now.saturating_add(1000);
             if let Ok(generation) = sex_app::settings::generation() {
@@ -1277,7 +1330,7 @@ pub fn main() {
             }
         }
         let changed = match window.next_within(1000) {
-            Some(Event::Close) => break,
+            Some(Event::Close) => { viewer.keep_recovery(); break },
             Some(Event::Resize { .. }) => true,
             Some(Event::Key(key)) => {
                 let changed = viewer.key(key, window.size());

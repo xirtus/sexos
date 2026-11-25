@@ -33,6 +33,8 @@ mod marks;
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod history;
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
+mod recovery;
+#[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod thumb;
 // The pure parts, and those that need only hayro, build and are tested on the host too.
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
