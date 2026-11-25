@@ -8,6 +8,7 @@ use hayro::{render, PixmapSettings, RenderCache, RenderSettings};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::Kind;
 use sex_std::sex_pdx::pdf_sign;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Instant;
 use sex_theme::Tokens;
@@ -103,7 +104,7 @@ enum Panel { None, Thumbs, Outline, Annots }
 /// Form filling: the fields the keyboard reaches, which one, and its text so far.
 struct Form { fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String }
 
-struct SigningChoice { signer: pdf_sign::Signer, field: String }
+struct SigningChoice { signer: pdf_sign::Signer, field: String, certificate_hash: [u8; 32] }
 
 /// Annotations Ctrl+L lists: markup, not form widgets, links or popups.
 fn listed(a: &AnnotInfo) -> bool { !matches!(a.subtype.as_str(), "Widget" | "Popup" | "Link") }
@@ -459,7 +460,7 @@ impl Viewer {
         let y = (bar.saturating_sub(CH)) / 2;
         // Editing has the bar before find: what is typed goes where the bar says.
         let editing = if let Some(choice) = &self.signing {
-            Some(("Digital signature:".into(), choice.field.clone(), "Enter requests Shibari approval; Escape cancels".into()))
+            Some(("Sole Shibari cert:".into(), format!("{} / {}", choice.field, choice.certificate_hash[..8].iter().map(|b| format!("{b:02X}")).collect::<String>()), "Enter requests approval; Escape cancels".into()))
         } else if let Some(signature) = &self.signature {
             Some(("Visual signature:".to_string(), format!("{signature}_"), "Enter places, Escape cancels; not digital".to_string()))
         } else if let Some(note) = &self.note {
@@ -868,7 +869,13 @@ impl Viewer {
             Ok(None) => { self.status = Some("Open Shibari and load a signing certificate first".into()); return; }
             Err(_) => { self.status = Some("Shibari signer unavailable".into()); return; }
         };
-        self.signing = Some(SigningChoice { signer, field: field_name.clone() });
+        let mut certificate = vec![0; signer.certificate_bytes];
+        if pdf_sign::certificate(signer, &mut certificate).is_err() {
+            self.status = Some("Could not read Shibari's certificate".into());
+            return;
+        }
+        let certificate_hash: [u8; 32] = Sha256::digest(&certificate).into();
+        self.signing = Some(SigningChoice { signer, field: field_name.clone(), certificate_hash });
         self.status = None;
         sex_std::record(&format!("[pdf.sign.choice] field={field_name} certificate_bytes={} confirmed=0", signer.certificate_bytes));
     }
@@ -882,6 +889,11 @@ impl Viewer {
             sex_std::record("[pdf.sign.failed] stage=certificate");
             return;
         }
+        if <[u8; 32]>::from(Sha256::digest(&certificate)) != choice.certificate_hash {
+            self.status = Some("Shibari's certificate changed; choose it again".into());
+            sex_std::record("[pdf.sign.failed] stage=certificate_changed");
+            return;
+        }
         let result = self.editor.as_ref().ok().and_then(|editor| {
             editor.embed_detached_signature_with(&choice.field, 4096, |first, second| {
                 vellum_edit::cms::detached_p256_sha256(first, second, &certificate, &point, |attrs| {
@@ -892,7 +904,7 @@ impl Viewer {
                         match pdf_sign::poll(choice.signer, &mut signature) {
                             Ok(Some(len)) => return Ok(signature[..len].to_vec()),
                             Ok(None) if sex_std::sex_pdx::get_ticks() < deadline => std::thread::sleep(std::time::Duration::from_millis(100)),
-                            _ => return Err(vellum_edit::cms::CmsError::SignerRefused),
+                            _ => { pdf_sign::cancel(choice.signer); return Err(vellum_edit::cms::CmsError::SignerRefused); }
                         }
                     }
                 }).map_err(|e| vellum_edit::Error::BadValue(format!("CMS signing failed: {e:?}")))

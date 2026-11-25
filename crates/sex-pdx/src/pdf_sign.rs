@@ -90,6 +90,10 @@ pub fn poll(signer: Signer, into: &mut [u8; MAX_SIGNATURE]) -> Result<Option<usi
     Ok(Some(len as usize))
 }
 
+/// Release a pending request after a timeout or a viewer cancellation.
+#[cfg(target_arch = "x86_64")]
+pub fn cancel(signer: Signer) { let _ = call(END, signer.row as u64, 0, 0); }
+
 #[cfg(test)]
 mod tests {
     use super::*;

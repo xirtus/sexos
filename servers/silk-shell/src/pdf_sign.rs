@@ -39,6 +39,12 @@ fn selected(msg: &PdxMessage) -> Option<(Run, Signer)> {
 pub unsafe fn receive(msg: &PdxMessage) -> bool {
     let op = msg.type_id;
     if !(p::REGISTER..=p::END).contains(&op) { return false; }
+    if op == p::BEGIN {
+        if let Some(old) = REQUEST.filter(|r| !live(r.client) || !live(r.signer)) {
+            let _ = forward(old.signer, p::END, 0, 0, 0);
+            REQUEST = None;
+        }
+    }
     let answer = match op {
         p::REGISTER => {
             let run = client(msg);
