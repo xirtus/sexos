@@ -21,6 +21,9 @@
   Ctrl+H replaces "food" with "meals"; Ctrl+Shift+4 shows B2:B4 as currency; dragging
   column A's header edge widens it.
   Ctrl+Page Down shows the second sheet.
+* Edit B2 without saving, wait for the idle recovery copy, and cut QEMU power. On the
+  same disk after reboot, Spreadeagle restores B2 and its recalculated totals; Ctrl+S
+  makes that recovery the workbook's saved state, which survives another reopen.
 
 No kernel panic, page fault or std abort anywhere in the record."""
 import argparse,os,re,shutil,time
@@ -154,8 +157,33 @@ def main():
   wd=g['wait'](r'\[spreadeagle\.width\] col=A width=(\d+)\n',s,60)
   assert int(wd[1])>wa+30,(wa,wd[0])
   s=len(t());g['chord']('ctrl','pgdn',r'\[spreadeagle\.column\] sheet=Notes col=A text=Welcome to Spreadeagle, the SexOS spreadsheet\.\|')
+  g['chord']('ctrl','pgup',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
+  g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
+  close(o)
+  # The previous close was orderly. This time no close or Ctrl+S is sent: only the
+  # idle recovery copy can carry the edit through the power cut.
+  o=opened(r'Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
+  s=len(t());q.key('right');q.key('down');type_line('777');q.key('ret')
+  g['wait'](r'\[spreadeagle\.set\] cell=B2 input=777\n',s,120)
+  column('B',r'Cost\|\$777\.00 ?\|\$150\.00 ?\|\$40\.00 ?\|967\|11604\|\|',s)
+  kept=g['wait'](r'\[spreadeagle\.kept\] name=welcome\.xlsx\.recovered\.xlsx\n',s,120)
+  assert kept, 'idle recovery never completed'
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-unsaved.ppm')})
+  text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
+  g['stop']()  # QEMU dies with the app open; no close handler gets to save.
+  g=boot(a.iso,disk,a.out,'spreadeagle-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  s=len(t());o=opened(r'Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
+  g['wait'](r'\[spreadeagle\.recovered\]\n',s,60)
+  s=len(t());q.key('right');column('B',r'Cost\|\$777\.00 ?\|\$150\.00 ?\|\$40\.00 ?\|967\|11604\|\|',s)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-recovered.ppm')})
+  g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
+  close(o)
+  s=len(t());o=opened(r'Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
+  assert '[spreadeagle.recovered]' not in t()[s:], 'saved workbook should open normally'
+  v=len(t());q.key('right');column('B',r'Cost\|\$777\.00 ?\|\$150\.00 ?\|\$40\.00 ?\|967\|11604\|\|',v)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
-  print({'ok':True,'saved_bytes':int(m[1])})
+  print({'ok':True,'saved_bytes':int(m[1]),'powercut_recovered':True})
  finally:g['stop']()
 if __name__=='__main__':main()

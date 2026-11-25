@@ -8,6 +8,8 @@ Baseline: a daily spreadsheet such as LibreOffice Calc or Excel. Checked against
 - **Workbook UX:** Ctrl+Shift+M now offers column, line, bar and pie charts for the selection. AutoFilter headers now offer a native single-value menu with All rows. The native grid still needs a full formula picker, chart editing, multi-column sort, multi-value/condition filter choices, and clear warnings when import loses unsupported workbook features.
 - **Polish:** the grid now follows Settings' light, dark and high-contrast colors
   and accent changes. A shortcut reference is in the app and
-  `docs/apps/spreadeagle-shortcuts.md`. A crash-interrupted save gate remains.
+  `docs/apps/spreadeagle-shortcuts.md`. The Programs QEMU gate now cuts power
+  after idle recovery, reboots the same disk, verifies the unsaved cell and
+  recalculated totals, saves, and verifies an ordinary reopen.
 
 Claim each remaining feature after a focused host test and CI guest evidence.
