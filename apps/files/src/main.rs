@@ -877,14 +877,21 @@ impl App {
         if let Err(e) = files::mkdir(window, &at(&info)).or_else(|e| if e == w::EXISTS { Ok(()) } else { Err(e) }) {
             self.status = format!("Couldn't open trash notes: {}.", shown(files::message(e))); return;
         }
-        let mut prepared = Vec::new();
+        // The last field is the id of a note this transaction actually created.
+        // A failed create must never make rollback delete another writer's note.
+        let mut prepared: Vec<(Vec<u8>, Vec<u8>, Vec<u8>, Option<u64>)> = Vec::new();
         let mut moved = 0usize;
         let result = (|| -> Result<(), u8> {
             for from in paths {
                 let (to, note) = self.free_trash_name(window, &trash, &info, base(from));
                 if to.is_empty() { return Err(w::EXISTS); }
-                prepared.push((from.clone(), to.clone(), note));
-                files::write(window, &at(&prepared.last().unwrap().2), from)?;
+                files::create(window, &at(&note))?;
+                prepared.push((from.clone(), to.clone(), note, None));
+                let note_id = files::file_id(window, &at(&prepared.last().unwrap().2))?;
+                prepared.last_mut().unwrap().3 = Some(note_id);
+                if files::write_at(window, &at(&prepared.last().unwrap().2), 0, from)? != from.len() {
+                    return Err(w::NO_SPACE);
+                }
                 files::sync(window)?;
                 sex_pdx::serial_record!("[files.app.trash.note.synced] from={}", shown(from));
                 // SexFS's ordinary file rename can replace a name claimed
@@ -901,11 +908,15 @@ impl App {
         })();
         if let Err(e) = result {
             let mut rollback_ok = true;
-            for (i, (from, to, note)) in prepared.iter().enumerate().rev() {
+            for (i, (from, to, note, note_id)) in prepared.iter().enumerate().rev() {
                 let restored = i >= moved || files::rename(window, &at(to), &at(from)).is_ok();
                 rollback_ok &= restored;
-                // Keep the origin note when a move could not be rolled back.
-                if restored { rollback_ok &= files::remove(window, &at(note)).is_ok(); }
+                // Keep the origin note when a move could not be rolled back or
+                // another writer now owns its name.
+                if restored {
+                    rollback_ok &= note_id.is_some_and(|id| files::file_id(window, &at(note)) == Ok(id)
+                        && files::remove(window, &at(note)).is_ok());
+                }
             }
             rollback_ok &= files::sync(window).is_ok();
             self.status = format!("Batch trash failed: {}.{}", shown(files::message(e)),
@@ -913,16 +924,16 @@ impl App {
             self.load(window);
             return;
         }
-        for (from, to, _) in &prepared { self.meta_moved(window, from, to); }
+        for (from, to, _, _) in &prepared { self.meta_moved(window, from, to); }
         if prepared.len() == 1 {
-            let (from, to, note) = prepared.pop().unwrap();
+            let (from, to, note, _) = prepared.pop().unwrap();
             sex_pdx::serial_record!("[files.app.trashed] from={} to={}", shown(&from), shown(&to));
             self.status = format!("Moved {} to the trash. Ctrl+Z puts it back.", shown(base(&from)));
             self.undo.push(Undo::Trashed { from, to, info: note });
         } else {
             sex_pdx::serial_record!("[files.app.trashed.batch] count={}", prepared.len());
             self.status = format!("Moved {} items to trash. Ctrl+Z restores them together.", prepared.len());
-            self.undo.push(Undo::TrashedBatch(prepared));
+            self.undo.push(Undo::TrashedBatch(prepared.into_iter().map(|(from, to, note, _)| (from, to, note)).collect()));
         }
         self.load(window);
     }

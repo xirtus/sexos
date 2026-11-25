@@ -11,6 +11,12 @@ then syncs all moved entries before reporting success or offering undo. On an
 error it attempts reverse moves, removes notes only for restored items, and
 syncs the rollback. An unverified rollback gets an explicit status. File
 moves on SexFS use its checked move so a concurrent name claim is not replaced.
+The origin note itself is created with a no-replace `CREATE` before writing
+its path. Rollback tracks the created note's object ID and removes it only if
+that same object still owns the name. This closes a race where a note appeared
+after the free-name check and could have been truncated or deleted. The QEMU
+gate plants a stranded note, then checks that the new trash entry takes a
+different name and the old note keeps its contents.
 
 The Files jobs QEMU gate asserts that the note-sync record precedes the
 successful trash record and continues to restore and checksum the item.

@@ -100,8 +100,14 @@ def main():
   g['wait'](r'\[files.app.list\] dir=/0gate/dst count=0\b',s,30)
   # 5. Empty the trash: the source goes there, then Ctrl+E twice.
   step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/0gate count=2\b')
+  # A stranded origin note keeps its name and contents; the next trash entry
+  # must take a new name instead of overwriting that recovery information.
+  expect('write /.Trash/.info/big.bin stranded-origin',r'\[spindle.fs.result\] kind=8 status=0')
+  g['focus'](fa_sid);time.sleep(.5)
   q.key('down');time.sleep(.3)
-  step(lambda:q.key('delete'),r'\[files.app.trashed\] from=/0gate/big.bin to=/.Trash/big.bin')
+  step(lambda:q.key('delete'),r'\[files.app.trashed\] from=/0gate/big.bin to=/\.Trash/big \(trashed\)\.bin')
+  expect('cat /.Trash/.info/big.bin',r'\[spindle.fs.cat\] stranded-origin')
+  g['focus'](fa_sid);time.sleep(.5)
   step(lambda:ctrl('t'),r'\[files.app.list\] dir=/.Trash count=1\b')
   ctrl('e');time.sleep(.5)
   s=len(t());ctrl('e')
