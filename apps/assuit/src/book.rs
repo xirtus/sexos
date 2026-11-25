@@ -210,6 +210,18 @@ impl Book {
         self.run("insert.picture", json!({ "data": data, "alt": path.rsplit('/').next().unwrap_or(path) })).map(|_| ())
     }
 
+    /// Set useful alternative text on the selected picture. This is stored in
+    /// the document and travels with the image on DOCX and ODT save.
+    pub fn picture_alt_text(&mut self, text: &str) -> Result<(), String> {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > 500 {
+            return Err("Enter 1–500 characters describing the selected picture".into());
+        }
+        self.run("picture.altText", json!({ "text": text }))
+            .map_err(|_| "Select a picture first".to_string())?;
+        Ok(())
+    }
+
     /// Selects the next proofing issue and returns its word and suggestions.
     pub fn next_spelling_issue(&mut self) -> Result<Option<(String, Vec<String>)>, String> {
         let issue = self.run("review.spelling", json!({}))?;
@@ -863,6 +875,26 @@ mod tests {
             let again = Book::open(&path).unwrap();
             assert_eq!(again.session.doc.media.len(), 1, "{ext} lost the picture");
             assert!(again.session.doc.media.values().next().unwrap().starts_with(b"\x89PNG"));
+        }
+    }
+
+    #[test]
+    fn picture_alt_text_round_trips_in_docx_and_odt() {
+        let png = include_bytes!("../../../assets/brand/sexos-lips-badge-64.png");
+        let picture = temp("alt-mark.png");
+        std::fs::write(&picture, png).unwrap();
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("picture-alt.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.picture_alt_text("An image").is_err());
+            book.insert_picture(&picture).unwrap();
+            book.picture_alt_text("SexOS lips badge").unwrap();
+            let alt = |book: &Book| book.session.doc.body.iter().filter_map(|b| b.as_para())
+                .flat_map(|p| p.object_offsets().into_iter().filter_map(|off| p.object_at(off)))
+                .find_map(|o| match o { wordcraft_engine::doc::para::InlineObject::Image { alt, .. } => Some(alt.clone()), _ => None });
+            assert_eq!(alt(&book).as_deref(), Some("SexOS lips badge"));
+            book.save().unwrap();
+            assert_eq!(alt(&Book::open(&path).unwrap()).as_deref(), Some("SexOS lips badge"), "{ext} lost alternative text");
         }
     }
 
