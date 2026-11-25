@@ -41,6 +41,14 @@ fn domain_match(host: &str, domain: &str) -> bool {
     host == domain || (!is_ip(host) && host.len() > domain.len() && host.ends_with(domain) && host.as_bytes()[host.len() - domain.len() - 1] == b'.')
 }
 
+impl Cookie {
+    /// A host-only cookie belongs to its exact host, even when a subdomain
+    /// would match its domain text. This is the same scope used for sending.
+    fn reaches_host(&self, host: &str) -> bool {
+        if self.host_only { host == self.domain } else { domain_match(host, &self.domain) }
+    }
+}
+
 fn path_match(request: &str, cookie: &str) -> bool {
     request == cookie || (request.starts_with(cookie) && (cookie.ends_with('/') || request.as_bytes().get(cookie.len()) == Some(&b'/')))
 }
@@ -57,7 +65,7 @@ impl Jar {
     pub fn iter(&self) -> impl Iterator<Item = &Cookie> { self.cookies.iter() }
     /// Cookies cleared for this host, including parent-domain cookies.
     pub fn count_site(&self, host: &str) -> usize {
-        self.cookies.iter().filter(|c| domain_match(host, &c.domain)).count()
+        self.cookies.iter().filter(|c| c.reaches_host(host)).count()
     }
 
     /// Takes one `Set-Cookie` header from a reply for `url`.
@@ -98,7 +106,7 @@ impl Jar {
     /// Forgets the cookies of `host` and of the domains above it (clearing a site's data).
     pub fn clear_site(&mut self, host: &str) {
         let before = self.cookies.len();
-        self.cookies.retain(|c| !domain_match(host, &c.domain) && c.domain != host);
+        self.cookies.retain(|c| !c.reaches_host(host));
         if self.cookies.len() != before { self.edits += 1; }
     }
 
@@ -174,7 +182,7 @@ impl Jar {
         let path = url.path();
         let mut v: Vec<&Cookie> = self.cookies.iter().filter(|c| {
             c.expires.map_or(true, |e| e > now)
-                && (if c.host_only { url.host == c.domain } else { domain_match(&url.host, &c.domain) })
+                && c.reaches_host(&url.host)
                 && path_match(path, &c.path)
                 && (!c.secure || url.secure)
                 && !(scripts && c.http_only)

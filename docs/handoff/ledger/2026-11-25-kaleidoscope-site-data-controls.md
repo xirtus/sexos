@@ -12,6 +12,10 @@
   damage to the live file cannot restore data the person explicitly cleared.
 - Proof: The shared `site_data::clear` host test covers parent-domain cookies,
   an unrelated site, another container, and a different port's storage. The
-  browser privacy QEMU gate checks the intermediate counts and captures
+  cookie-scope regression also keeps a parent host's host-only cookie when
+  clearing a child site; the count and clear now share send-domain matching.
+  The shortcuts are handled only while the native site settings page is shown,
+  so ordinary site key handling is preserved. The browser privacy QEMU gate
+  checks the intermediate counts and captures
   `site-cookies-cleared.ppm` before clearing storage.
 - Full image build and guest QEMU proof run only on GitHub CI.

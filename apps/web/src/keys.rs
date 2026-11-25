@@ -46,8 +46,8 @@ impl Browser {
             0x30 if key.shift => self.toggle_panel(),
             // These actions require the browser's own site settings page. A
             // site cannot trigger them by navigating to a crafted address.
-            0x2E if key.alt && !key.shift => self.clear_site_part(sex_web::site_data::Part::Cookies),
-            0x1F if key.alt && !key.shift => self.clear_site_part(sex_web::site_data::Part::Storage),
+            0x2E if key.alt && !key.shift && super::site_settings::target(&self.url).is_some() => self.clear_site_part(sex_web::site_data::Part::Cookies),
+            0x1F if key.alt && !key.shift && super::site_settings::target(&self.url).is_some() => self.clear_site_part(sex_web::site_data::Part::Storage),
             // Ctrl+Shift+E: settings for the current web site; press again to return.
             0x12 if key.shift => {
                 let url = self.url.clone();
