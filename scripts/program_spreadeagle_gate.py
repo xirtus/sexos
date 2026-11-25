@@ -568,6 +568,21 @@ def main():
   ctrl_shift('v',r'\[spreadeagle\.paste\] at=C9\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-text-paste.ppm')})
   assert (a.out/'spreadeagle-text-paste.ppm').stat().st_size>10000
+  # Save a validated workbook as ODS, reopen it, and reject a bad entry.
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','shift','s')),(False,('s','shift','ctrl')))for x in ks]})
+  for _ in 'welcome.xlsx': q.key('backspace')
+  type_line('validation-ods.ods');q.key('ret')
+  g['wait'](r'\[spreadeagle\.saved-as\] name=validation-ods\.ods bytes=\d+\n',s,120)
+  close(o)
+  s=len(t());run('run spreadeagle validation-ods.ods')
+  o=g['wait'](r'\[spreadeagle\.open\] target=(\d+) task=(\d+) name=validation-ods\.ods sheets=Budget,Notes\n',s,900)
+  g['focus'](SURFACE[int(o[1])]);time.sleep(.8);q.key('esc')
+  s=len(t());g['chord']('ctrl','g');type_line('A9');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=A9 cell=A9\n',s,120)
+  s=len(t());type_line('Other');q.key('ret')
+  g['wait'](r'\[spreadeagle\.set\.rejected\] cell=A9\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-ods-validation.ppm')})
+  assert (a.out/'spreadeagle-ods-validation.ppm').stat().st_size>10000
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1]),'powercut_recovered':True})

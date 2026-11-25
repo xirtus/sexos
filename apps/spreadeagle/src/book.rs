@@ -196,6 +196,18 @@ impl Book {
             if s != sheet { self.activate(s)?; sheet = s; }
             if (width.round() as u32) != self.col_width(col) { self.set_col_width(col, width.round() as u32)?; }
         }
+        if !extras.validations.is_empty() {
+            let d = self.session.doc_mut().map_err(|e| e.to_string())?;
+            let mut wb = (*d.wb).clone();
+            for (s, range, mut rule) in extras.validations {
+                let formula = format!("={}", rule.f1.trim_start_matches('='));
+                rule.f1 = crate::ods::remap_sheet_names(&formula, &extras.sheet_names, &imported_names)
+                    .trim_start_matches('=').to_string();
+                rule.ranges = vec![range];
+                wb.sheet_mut(s).ok_or("Validation refers to a missing sheet")?.validations.push(rule);
+            }
+            d.wb = std::sync::Arc::new(wb);
+        }
         self.activate(active)?;
         if let Ok(d) = self.session.doc_mut() {
             d.undo.clear();
@@ -1529,6 +1541,78 @@ mod tests {
         assert_eq!(reopened.input(1, 1), "Meals");
         assert!(reopened.set(2, 1, "Food").is_err());
         reopened.set(2, 1, "Meals").unwrap();
+    }
+
+    #[test]
+    fn ods_list_validation_keeps_blank_cells_and_live_sources() {
+        let mut book = Book::blank(&temp("validation-ods.xlsx"));
+        book.set(1, 3, "Food").unwrap();
+        book.set(2, 3, "Fun").unwrap();
+        book.list_validation(Range { r0: 1, c0: 0, r1: 3, c1: 0 }, "Food,Fun").unwrap();
+        book.list_validation(Range { r0: 1, c0: 1, r1: 3, c1: 1 }, "=D2:D3").unwrap();
+        let (path, _) = book.save_as(&temp("validation-ods.ods")).unwrap();
+        let xml = {
+            let bytes = std::fs::read(&path).unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name("content.xml").unwrap(), &mut xml).unwrap();
+            xml
+        };
+        assert!(xml.contains("table:content-validations"));
+        assert!(xml.contains("cell-content-is-in-list"));
+        assert!(xml.contains("table:content-validation-name"));
+        let mut reopened = Book::open(&path).unwrap().0;
+        assert_eq!(reopened.validation_choices(3, 0), Some(vec!["Food".into(), "Fun".into()]));
+        assert_eq!(reopened.validation_choices(3, 1), Some(vec!["Food".into(), "Fun".into()]));
+        assert!(reopened.set(3, 0, "Other").is_err());
+        reopened.set(1, 3, "Rent").unwrap();
+        assert_eq!(reopened.validation_choices(3, 1), Some(vec!["Rent".into(), "Fun".into()]));
+        assert!(reopened.set(3, 1, "Food").is_err());
+    }
+
+    #[test]
+    fn ods_validation_source_follows_renamed_sheet() {
+        use std::io::{Read, Write};
+        let path = temp("validation-renamed-sheet.ods");
+        let mut book = Book::blank(&path);
+        book.run("home.insertSheet", json!({ "name": "Source" })).unwrap();
+        book.activate(1).unwrap();
+        book.set(1, 3, "Food").unwrap();
+        book.set(2, 3, "Fun").unwrap();
+        book.activate(0).unwrap();
+        book.list_validation(Range::cell(1, 0), "Food,Fun").unwrap();
+        {
+            let d = book.session.doc_mut().unwrap();
+            let mut wb = (*d.wb).clone();
+            wb.sheet_mut(0).unwrap().validations[0].f1 = "'Source'!$D$2:$D$3".into();
+            d.wb = std::sync::Arc::new(wb);
+        }
+        assert_eq!(book.validation_choices(1, 0), Some(vec!["Food".into(), "Fun".into()]));
+        book.save().unwrap();
+
+        // ODF permits this sheet name; GridCraft renames it on import to obey its
+        // workbook name rules. Change both the table name and its list source.
+        let bytes = std::fs::read(&path).unwrap();
+        let mut source = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut target = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..source.len() {
+            let mut file = source.by_index(i).unwrap();
+            let name = file.name().to_string();
+            let method = file.compression();
+            let mut data = Vec::new();
+            file.read_to_end(&mut data).unwrap();
+            if name == "content.xml" {
+                data = String::from_utf8(data).unwrap().replace("Source", "Q1:Q2").into_bytes();
+            }
+            target.start_file(name, zip::write::SimpleFileOptions::default().compression_method(method)).unwrap();
+            target.write_all(&data).unwrap();
+        }
+        std::fs::write(&path, target.finish().unwrap().into_inner()).unwrap();
+
+        let (mut reopened, _) = Book::open(&path).unwrap();
+        assert_eq!(reopened.sheets()[1], "Sheet2");
+        assert_eq!(reopened.validation_choices(1, 0), Some(vec!["Food".into(), "Fun".into()]));
+        assert!(reopened.set(1, 0, "Other").is_err());
     }
 
     #[test]
