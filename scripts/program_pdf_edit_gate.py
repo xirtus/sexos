@@ -197,6 +197,13 @@ def main():
   step(lambda:chord('ctrl','shift','b'),r'\[pdf\.sign\.choice\] field=Vellum signature 1 certificate_bytes=\d+ confirmed=0\n')
   s=len(t());q.key('ret')
   g['wait'](r'\[pdf\.sign\.request\] client=\d+ signer=\d+ attrs=\d+\n',s,120)
+  # Vellum stays responsive while Shibari waits for a decision. Cancel the
+  # already submitted request, then retry with the same signer run.
+  s=len(t());q.key('esc')
+  g['wait'](r'\[pdf\.sign\.cancelled\] stage=approval\n',s,120)
+  step(lambda:chord('ctrl','shift','b'),r'\[pdf\.sign\.choice\] field=Vellum signature 1 certificate_bytes=\d+ confirmed=0\n')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[pdf\.sign\.request\] client=\d+ signer=\d+ attrs=\d+\n',s,120)
   g['focus'](signer_sid);time.sleep(.5);q.key('n')
   g['wait'](r'\[shibari\.pdf\.refused\]\n',s,120)
   g['wait'](r'\[pdf\.sign\.failed\] stage=approval_or_cms\n',s,120)

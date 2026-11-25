@@ -11,10 +11,20 @@ struct Signer { run: Run, certificate_bytes: usize }
 #[derive(Clone, Copy)]
 struct Request { client: Run, signer: Run, len: usize, next: usize, finished: bool }
 #[derive(Clone, Copy)]
-struct Pending { client: Run, signer: Run, op: u64, arg: usize }
+struct Pending { client: Run, signer: Run, op: u64, arg: usize, since: u64, canceled: bool }
 static mut SIGNER: Option<Signer> = None;
 static mut REQUEST: Option<Request> = None;
 static mut PENDING: Option<Pending> = None;
+
+unsafe fn expire_pending(now: u64) {
+    if let Some(mut pending) = PENDING {
+        if now.saturating_sub(pending.since) >= 5_000 {
+            pending.canceled = true;
+            PENDING = Some(pending);
+            REQUEST = None;
+        }
+    }
+}
 
 fn live(run: Run) -> bool {
     crate::app_catalog::by_target(run.row).is_some_and(|r| r.app == crate::app_catalog::App::Program)
@@ -42,7 +52,7 @@ unsafe fn send(client: Run, signer: Run, op: u64, arg: usize, a: u64, b: u64, c:
     let Some(slot) = route(signer) else { return false };
     let (status, _) = crate::pdx_call(slot, op, a, b, c);
     if status != 0 { return false; }
-    PENDING = Some(Pending { client, signer, op, arg });
+    PENDING = Some(Pending { client, signer, op, arg, since: sex_pdx::get_ticks(), canceled: false });
     true
 }
 
@@ -54,6 +64,18 @@ unsafe fn reply(msg: &PdxMessage) -> bool {
     };
     if pending.signer != (Run { row: msg.caller_pd, task: msg.caller_task }) { return false; }
     PENDING = None;
+    if pending.canceled {
+        REQUEST = None;
+        // The old reply has now drained. Reset Shibari before allowing a new
+        // request; no late word can be mistaken for the reset's reply.
+        if pending.op != p::END && live(pending.signer) {
+            if !send(pending.client, pending.signer, p::END, 0, 0, 0, 0) {
+                // Do not risk reusing this run if its reset cannot be queued.
+                SIGNER = None;
+            } else if let Some(mut reset) = PENDING { reset.canceled = true; PENDING = Some(reset); }
+        }
+        return true;
+    }
     let value = msg.arg0;
     if value == 0 {
         match pending.op {
@@ -69,6 +91,7 @@ unsafe fn reply(msg: &PdxMessage) -> bool {
 }
 
 pub unsafe fn receive(msg: &PdxMessage) -> bool {
+    expire_pending(sex_pdx::get_ticks());
     if reply(msg) { return true; }
     let op = msg.type_id;
     if !(p::REGISTER..=p::END).contains(&op) { return false; }
@@ -97,6 +120,17 @@ pub unsafe fn receive(msg: &PdxMessage) -> bool {
         return true;
     }
     let Some((caller, signer)) = selected(msg) else { sex_pdx::pdx_reply(msg.caller_pd, p::REFUSED); return true };
+    if op == p::END {
+        if let Some(mut pending) = PENDING {
+            if pending.client == caller && pending.signer == signer.run {
+                pending.canceled = true;
+                PENDING = Some(pending);
+                REQUEST = None;
+                sex_pdx::pdx_reply(caller.row, 0);
+                return true;
+            }
+        }
+    }
     if op == p::BEGIN && REQUEST.is_some_and(|r| !live(r.client) || !live(r.signer)) { REQUEST = None; }
     let queued = match op {
         p::CERT if msg.arg1 < signer.certificate_bytes.div_ceil(8) as u64 =>

@@ -13,7 +13,8 @@ fn mine(m: &sex_pdx::PdxMessage) -> bool {
 fn discard_stale_shell_replies() {
     // Window::open's registration reply can be queued before Vellum starts
     // signing. Window::title and normal window actions do not produce replies.
-    // selected() is the first signing operation, so no signing reply is due yet.
+    // register() and selected() begin separate signing sessions, so no signing
+    // reply is due at either entry point.
     while mailbox::take(mine).is_some() {}
     while let Some(message) = sex_pdx::pdx_try_listen_raw(0) {
         if !mine(&message) { mailbox::put(message); }
@@ -60,25 +61,36 @@ pub fn selected() -> Result<Option<Signer>, u64> {
 pub fn certificate(signer: Signer, into: &mut [u8]) -> Result<(), u64> {
     if into.len() != signer.certificate_bytes || into.len() > p::MAX_CERT { return Err(p::REFUSED); }
     for (i, chunk) in into.chunks_mut(8).enumerate() {
-        p::unpack(call(p::CERT, signer.row as u64, i as u64, 0)?, chunk);
+        let word = match call(p::CERT, signer.row as u64, i as u64, 0) {
+            Ok(word) => word,
+            Err(error) => { cancel(signer); return Err(error); }
+        };
+        p::unpack(word, chunk);
     }
     Ok(())
 }
 
 pub fn public_point(signer: Signer, into: &mut [u8; POINT_BYTES]) -> Result<(), u64> {
     for (i, chunk) in into.chunks_mut(8).enumerate() {
-        p::unpack(call(p::POINT, signer.row as u64, i as u64, 0)?, chunk);
+        let word = match call(p::POINT, signer.row as u64, i as u64, 0) {
+            Ok(word) => word,
+            Err(error) => { cancel(signer); return Err(error); }
+        };
+        p::unpack(word, chunk);
     }
     Ok(())
 }
 
 pub fn request(signer: Signer, attrs: &[u8]) -> Result<(), u64> {
     if attrs.is_empty() || attrs.len() > p::MAX_ATTRS { return Err(p::REFUSED); }
-    if call(p::BEGIN, signer.row as u64, attrs.len() as u64, 0)? != 0 { return Err(p::REFUSED); }
-    for (i, chunk) in attrs.chunks(8).enumerate() {
-        if call(p::CHUNK, signer.row as u64, i as u64, p::pack(chunk))? != 0 { cancel(signer); return Err(p::REFUSED); }
+    if call(p::BEGIN, signer.row as u64, attrs.len() as u64, 0).unwrap_or(p::REFUSED) != 0 {
+        cancel(signer);
+        return Err(p::REFUSED);
     }
-    if call(p::FINISH, signer.row as u64, 0, 0)? != 0 { cancel(signer); return Err(p::REFUSED); }
+    for (i, chunk) in attrs.chunks(8).enumerate() {
+        if call(p::CHUNK, signer.row as u64, i as u64, p::pack(chunk)).unwrap_or(p::REFUSED) != 0 { cancel(signer); return Err(p::REFUSED); }
+    }
+    if call(p::FINISH, signer.row as u64, 0, 0).unwrap_or(p::REFUSED) != 0 { cancel(signer); return Err(p::REFUSED); }
     Ok(())
 }
 
