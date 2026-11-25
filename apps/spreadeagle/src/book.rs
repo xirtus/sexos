@@ -256,6 +256,15 @@ impl Book {
         self.run("data.validation", json!({ "range": range.a1(), "type": "list", "formula1": values.join(","),
             "errorStyle": "stop", "errorTitle": "Choose a listed value" })).map(|_| ())
     }
+    /// The live choices for an in-cell dropdown, including lists imported from XLSX.
+    /// A workbook may suppress its dropdown even while validation stays active.
+    pub fn validation_choices(&self, row: u32, col: u32) -> Option<Vec<String>> {
+        let d = self.session.doc().ok()?;
+        let at = CellRef::new(row, col);
+        let rule = d.wb.active()?.validations.iter().find(|rule| rule.ranges.iter().any(|r| r.contains(at)))?;
+        if rule.kind != gridcraft_engine::model::ValidationKind::List || !rule.in_cell_dropdown { return None; }
+        Some(gridcraft_engine::cmd::data::list_items(&d.wb, d.wb.active_sheet(), at, rule))
+    }
     pub fn clear(&mut self, row: u32, col: u32) -> Result<(), String> {
         let cell = CellRef::new(row, col).a1();
         self.run("selection.set", json!({ "range": cell }))?;
@@ -1384,6 +1393,25 @@ mod tests {
         assert_eq!(reopened.input(1, 1), "Meals");
         assert!(reopened.set(2, 1, "Food").is_err());
         reopened.set(2, 1, "Meals").unwrap();
+    }
+
+    #[test]
+    fn validation_dropdown_reads_literal_and_live_choices() {
+        let mut book = Book::blank(&temp("validation-dropdown.xlsx"));
+        assert_eq!(book.validation_choices(1, 1), None);
+        book.list_validation(Range::cell(1, 1), "Food,Fun").unwrap();
+        assert_eq!(book.validation_choices(1, 1), Some(vec!["Food".into(), "Fun".into()]));
+        book.set(1, 3, "Meals").unwrap();
+        book.set(2, 3, "Fun").unwrap();
+        book.list_validation(Range::cell(1, 2), "=D2:D3").unwrap();
+        assert_eq!(book.validation_choices(1, 2), Some(vec!["Meals".into(), "Fun".into()]));
+        book.set(1, 3, "Rent").unwrap();
+        assert_eq!(book.validation_choices(1, 2), Some(vec!["Rent".into(), "Fun".into()]));
+        let path = book.path.clone();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap().0;
+        assert_eq!(reopened.validation_choices(1, 1), Some(vec!["Food".into(), "Fun".into()]));
+        assert_eq!(reopened.validation_choices(1, 2), Some(vec!["Rent".into(), "Fun".into()]));
     }
 
     #[test]

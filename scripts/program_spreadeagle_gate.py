@@ -513,6 +513,13 @@ def main():
   g['wait'](r'\[spreadeagle\.goto\] place=B9 cell=B9\n',s,120)
   s=len(t());type_line('Other');q.key('ret')
   g['wait'](r'\[spreadeagle\.set\.rejected\] cell=B9\n',s,120)
+  s=len(t());g['chord']('ctrl','g');type_line('B9');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=B9 cell=B9\n',s,120)
+  g['chord']('alt','down',r'\[spreadeagle\.validation\.menu\] cell=B9 choices=2\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-validation-dropdown.ppm')})
+  assert (a.out/'spreadeagle-validation-dropdown.ppm').stat().st_size>10000
+  s=len(t());q.key('down');q.key('ret')
+  g['wait'](r'\[spreadeagle\.validation\.chosen\] cell=B9 value=Fun\n',s,120)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1]),'powercut_recovered':True})

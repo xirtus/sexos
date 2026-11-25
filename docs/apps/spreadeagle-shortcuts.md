@@ -58,7 +58,8 @@ shortcut reopens it during the current session.
 Ctrl+Alt+L adds a choice list to the selected range. Enter comma-separated
 choices such as `Food,Fun,Rent`, or enter a current-sheet row or column such as
 `=D2:D20` to use those cells as live choices (2–1,000 source cells). Blank
-source cells are skipped. Editing the source updates allowed values. Typing a
+source cells are skipped. Editing the source updates allowed values. A small
+arrow appears on a selected cell with a choice list; click it or press Alt+Down
+to open the native menu. Use Up/Down and Enter to choose, or Esc to close. Typing a
 value outside a stop-style list leaves the cell unchanged. The rule survives
-XLSX save and reopen. The native choice dropdown and paste validation remain
-open gaps.
+XLSX save and reopen. Paste validation remains an open gap.
