@@ -166,7 +166,7 @@ fn git_read(path: &[u8], max: usize) -> Option<Vec<u8>> {
 }
 
 #[derive(Clone)]
-struct GitChange { code: char, path: Vec<u8> }
+struct GitChange { code: char, path: Vec<u8>, id: [u8; 20] }
 
 /// Compare tracked paths with the checked Git index; no ignored/untracked claim.
 fn git_changes(root: &[u8]) -> Result<Vec<GitChange>, String> {
@@ -175,7 +175,7 @@ fn git_changes(root: &[u8]) -> Result<Vec<GitChange>, String> {
     let tracked = git::parse_index(&bytes).map_err(|e| format!("Unsupported or damaged Git index: {e:?}"))?;
     let mut out = Vec::new();
     for entry in tracked {
-        if entry.stage != 0 { out.push(GitChange { code: 'C', path: entry.path }); continue; }
+        if entry.stage != 0 { out.push(GitChange { code: 'C', path: entry.path, id: entry.id }); continue; }
         let path = project::join(root, &entry.path);
         let code = match files::direct::stat(&path) {
             Err(_) => 'D',
@@ -187,9 +187,31 @@ fn git_changes(root: &[u8]) -> Result<Vec<GitChange>, String> {
                 None => '?',
             },
         };
-        out.push(GitChange { code, path: entry.path });
+        out.push(GitChange { code, path: entry.path, id: entry.id });
     }
     Ok(out)
+}
+
+fn git_diff(root: &[u8], change: &GitChange) -> Result<Vec<String>, String> {
+    if !matches!(change.code, 'M' | 'D') { return Err(String::from("Diff is available for tracked modified or deleted text files.")); }
+    let hex = b"0123456789abcdef";
+    let mut object = b".git/objects/".to_vec();
+    for (i, byte) in change.id.iter().enumerate() {
+        if i == 1 { object.push(b'/'); }
+        object.push(hex[(byte >> 4) as usize]); object.push(hex[(byte & 15) as usize]);
+    }
+    let packed = String::from("Indexed blob is packed or unavailable; this diff view currently reads loose objects.");
+    let compressed = git_read(&project::join(root, &object), git::MAX_FILE as usize + 64).ok_or(packed)?;
+    let before = git::loose_blob(&compressed, &change.id).map_err(|_| String::from("Indexed blob is damaged or too large."))?;
+    let after = if change.code == 'D' { Vec::new() } else {
+        git_read(&project::join(root, &change.path), git::MAX_FILE as usize)
+            .ok_or_else(|| String::from("Changed file is unavailable or too large."))?
+    };
+    git::diff_text(&before, &after).map_err(|e| match e {
+        git::DiffError::Limit => String::from("Diff exceeds 64 KiB or 300 lines per side."),
+        git::DiffError::Binary => String::from("Binary or non-UTF-8 files need a separate viewer."),
+        git::DiffError::Blob => String::from("Indexed blob is damaged."),
+    })
 }
 
 fn read_draft(path: &[u8]) -> Option<Vec<u8>> {
@@ -283,6 +305,7 @@ enum Overlay {
     Completion { items: Vec<String>, sel: usize, start: usize, cursor: usize, version: u64, path: Vec<u8> },
     Help { scroll: usize },
     Git { changes: Vec<GitChange>, sel: usize, note: String },
+    GitDiff { path: Vec<u8>, lines: Vec<String>, scroll: usize, note: String },
     Palette { query: String, sel: usize },
     QuickOpen { query: String, sel: usize, files: Vec<Vec<u8>> },
     Find { query: String },
@@ -763,12 +786,31 @@ impl App {
             Overlay::Git { changes, sel, .. } => {
                 if !changes.is_empty() {
                     *sel = (*sel as isize + updown).clamp(0, changes.len() as isize - 1) as usize;
+                    if p.k == K::Named(Named::Right) {
+                        let change = &changes[*sel];
+                        let (lines, note) = match git_diff(&self.root, change) {
+                            Ok(lines) => (lines, String::new()), Err(note) => (Vec::new(), note),
+                        };
+                        sex_pdx::serial_record!("[quil.code.git.diff] path={} lines={} note={}", lossy(&change.path), lines.len(), note);
+                        self.overlay = Overlay::GitDiff { path: change.path.clone(), lines, scroll: 0, note };
+                    }
                     if enter && changes[*sel].code != 'D' {
                         let path = project::join(&self.root, &changes[*sel].path);
                         self.open(&path);
                         keep = false;
                     }
                 }
+            }
+            Overlay::GitDiff { lines, scroll, .. } => {
+                let visible = self.rows().saturating_sub(3).max(1);
+                let max = lines.len().saturating_sub(visible);
+                *scroll = match p.k {
+                    K::Named(Named::Up) => scroll.saturating_sub(1),
+                    K::Named(Named::Down) => scroll.saturating_add(1).min(max),
+                    K::Named(Named::PageUp) => scroll.saturating_sub(visible),
+                    K::Named(Named::PageDown) => scroll.saturating_add(visible).min(max),
+                    _ => *scroll,
+                };
             }
             Overlay::Palette { query, sel } => {
                 edit(query);
@@ -1082,7 +1124,7 @@ impl App {
             }
             Overlay::Help { scroll } => {
                 let mut all = keymap::shortcut_rows(self.keymap);
-                all.insert(0, String::from("Ctrl+Shift+V  tracked Git changes (read-only)"));
+                all.insert(0, String::from("Ctrl+Shift+V  tracked Git changes; Right shows diff"));
                 all.insert(0, String::from("Language diagnostics  Ctrl+Shift+J"));
                 all.insert(0, String::from("Language completion  Ctrl+Shift+Space"));
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
@@ -1095,7 +1137,13 @@ impl App {
                 for (i, change) in changes.iter().enumerate().skip(first).take(10) {
                     lines.push((format!("{}  {}", change.code, lossy(&change.path)), i == *sel));
                 }
-                ("Quil tracked changes  ", String::from("M modified  D deleted  C conflict  ? too large; Enter opens; Esc closes"))
+                ("Quil tracked changes  ", String::from("Right diff; Enter opens; M modified  D deleted  C conflict  ? too large"))
+            }
+            Overlay::GitDiff { path, lines: diff, scroll, note } => {
+                if !note.is_empty() { lines.push((note.clone(), false)); }
+                else if diff.is_empty() { lines.push((String::from("No text lines changed."), false)); }
+                for line in diff.iter().skip(*scroll).take(rows.saturating_sub(3)) { lines.push((line.clone(), false)); }
+                ("Quil diff  ", format!("{}  Up/Down scroll; Esc closes", lossy(path)))
             }
             Overlay::Palette { query, sel } => {
                 let names: Vec<&str> = Command::ALL.iter().map(|c| c.name()).collect();

@@ -2,7 +2,8 @@
 //! Read-only Git index facts for a project inside Quil's Files grant.
 //! Version 2/3 SHA-1 indexes are understood; unsupported formats are reported.
 use alloc::vec::Vec;
-use alloc::string::ToString;
+use alloc::{format, vec};
+use alloc::string::{String, ToString};
 use sha1::{Digest, Sha1};
 
 const HEADER: usize = 12;
@@ -10,6 +11,57 @@ const ENTRY: usize = 62;
 const CHECKSUM: usize = 20;
 pub const MAX_INDEX: usize = 8 << 20;
 pub const MAX_FILE: u64 = 8 << 20;
+pub const MAX_DIFF_BYTES: usize = 64 << 10;
+pub const MAX_DIFF_LINES: usize = 300;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffError { Blob, Limit, Binary }
+
+/// A loose object is untrusted file content. Bound decompression, verify Git's
+/// object ID and size, and accept only a blob before using it as a diff base.
+pub fn loose_blob(compressed: &[u8], id: &[u8; 20]) -> Result<Vec<u8>, DiffError> {
+    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(compressed, MAX_FILE as usize + 64)
+        .map_err(|_| DiffError::Blob)?;
+    if Sha1::digest(&raw).as_slice() != id { return Err(DiffError::Blob); }
+    let nul = raw.iter().position(|b| *b == 0).ok_or(DiffError::Blob)?;
+    let size = core::str::from_utf8(raw.get(5..nul).ok_or(DiffError::Blob)?)
+        .ok().and_then(|s| s.parse::<usize>().ok()).ok_or(DiffError::Blob)?;
+    if !raw.starts_with(b"blob ") || size > MAX_FILE as usize || raw.len() - nul - 1 != size { return Err(DiffError::Blob); }
+    Ok(raw[nul + 1..].to_vec())
+}
+
+/// A bounded line diff against the indexed blob. Equal lines provide context;
+/// insertions and deletions are prefixed with + and -. No shell or Git process.
+pub fn diff_text(before: &[u8], after: &[u8]) -> Result<Vec<String>, DiffError> {
+    if before.len() > MAX_DIFF_BYTES || after.len() > MAX_DIFF_BYTES { return Err(DiffError::Limit); }
+    if before.contains(&0) || after.contains(&0) { return Err(DiffError::Binary); }
+    let a = core::str::from_utf8(before).map_err(|_| DiffError::Binary)?;
+    let b = core::str::from_utf8(after).map_err(|_| DiffError::Binary)?;
+    let a: Vec<&str> = a.lines().collect();
+    let b: Vec<&str> = b.lines().collect();
+    if a.len() > MAX_DIFF_LINES || b.len() > MAX_DIFF_LINES { return Err(DiffError::Limit); }
+    let width = b.len() + 1;
+    let mut lcs = vec![0u16; (a.len() + 1) * width];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lcs[i * width + j] = if a[i] == b[j] { lcs[(i + 1) * width + j + 1] + 1 }
+                else { lcs[(i + 1) * width + j].max(lcs[i * width + j + 1]) };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::new();
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            out.push(format!("  {}", a[i])); i += 1; j += 1;
+        } else if i < a.len() && (j == b.len() || lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) {
+            out.push(format!("- {}", a[i])); i += 1;
+        } else {
+            out.push(format!("+ {}", b[j])); j += 1;
+        }
+    }
+    if before.ends_with(b"\n") != after.ends_with(b"\n") { out.push(String::from("\\ No newline state differs")); }
+    Ok(out)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tracked { pub path: Vec<u8>, pub id: [u8; 20], pub size: u32, pub stage: u8 }
@@ -87,5 +139,24 @@ mod tests {
         bad[7] = 4;
         assert_eq!(parse_index(&bad), Err(Error::Version));
         assert_eq!(parse_index(b"DIRC"), Err(Error::Header));
+    }
+
+    #[test]
+    fn verifies_loose_blob_and_shows_separate_hunks() {
+        let before = b"one\ntwo\nthree\nfour\n";
+        let after = b"one\nTWO\nthree\nFOUR\n";
+        let mut raw = b"blob 19\0".to_vec();
+        raw.extend_from_slice(before);
+        let id: [u8; 20] = Sha1::digest(&raw).into();
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        assert_eq!(loose_blob(&compressed, &id).unwrap(), before);
+        assert_eq!(loose_blob(&compressed, &[0; 20]), Err(DiffError::Blob));
+        assert_eq!(diff_text(before, after).unwrap(), ["  one", "- two", "+ TWO", "  three", "- four", "+ FOUR"]);
+    }
+
+    #[test]
+    fn limits_diff_size_and_rejects_binary() {
+        assert_eq!(diff_text(&vec![b'a'; MAX_DIFF_BYTES + 1], b""), Err(DiffError::Limit));
+        assert_eq!(diff_text(b"a\0b", b"a\nb"), Err(DiffError::Binary));
     }
 }
