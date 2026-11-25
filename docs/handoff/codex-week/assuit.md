@@ -20,8 +20,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   are covered by a host test; CI captures the guest prompt and result.
 - **Footnotes:** Ctrl+Shift+N now inserts a linked note at the body caret
   through a bounded prompt. The note remains editable on the page; Esc returns
-  to the body caret. DOCX/ODT round trips are covered. Endnotes and note
-  management controls remain.
+  to the body caret. Ctrl+Alt+E now inserts a linked editable endnote through
+  the same bounded flow. DOCX/ODT round trips are covered. Native note
+  placement, numbering and conversion controls remain.
 - **Hyperlinks:** Ctrl+K now opens a native URL prompt for selected text or a
   new display label. Web and mail links are bounded, undoable, and covered by
   DOCX/ODT round trips. Ctrl+Alt+K now removes a link from selected text while

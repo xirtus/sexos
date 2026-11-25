@@ -105,29 +105,42 @@ impl Book {
         Ok(())
     }
 
-    pub fn editing_inserted_footnote(&self) -> bool {
-        let StoryRef::Part(id) = self.session.sel.focus.story else { return false };
-        self.note_return.is_some()
-            && self.session.doc.parts.get(&id).is_some_and(|part| part.kind == PartKind::Footnote)
+    pub fn editing_inserted_note(&self) -> Option<&'static str> {
+        let StoryRef::Part(id) = self.session.sel.focus.story else { return None };
+        if self.note_return.is_none() { return None; }
+        match self.session.doc.parts.get(&id)?.kind {
+            PartKind::Footnote => Some("footnote"),
+            PartKind::Endnote => Some("endnote"),
+            _ => None,
+        }
     }
 
     /// Insert a linked note at a collapsed body caret, then leave its rich
     /// story active so the writer can continue editing it.
     pub fn insert_footnote(&mut self, text: &str) -> Result<(), String> {
+        self.insert_note(text, false)
+    }
+
+    pub fn insert_endnote(&mut self, text: &str) -> Result<(), String> {
+        self.insert_note(text, true)
+    }
+
+    fn insert_note(&mut self, text: &str, endnote: bool) -> Result<(), String> {
+        let kind = if endnote { "endnote" } else { "footnote" };
         let text = text.trim();
         if text.is_empty() || text.chars().count() > 500 || text.chars().any(char::is_control) {
-            return Err("Enter 1–500 characters for the footnote".into());
+            return Err(format!("Enter 1–500 characters for the {kind}"));
         }
         if !self.session.sel.is_collapsed() || self.session.sel.focus.story != StoryRef::Body {
-            return Err("Place the caret in body text before inserting a footnote".into());
+            return Err(format!("Place the caret in body text before inserting {} {kind}", if endnote { "an" } else { "a" }));
         }
         let back = self.session.sel.focus.clone();
-        self.run("references.footnote", json!({ "text": text }))?;
+        self.run(if endnote { "references.endnote" } else { "references.footnote" }, json!({ "text": text }))?;
         self.note_return = Some(back);
         Ok(())
     }
 
-    pub fn close_inserted_footnote(&mut self) {
+    pub fn close_inserted_note(&mut self) {
         if let Some(back) = self.note_return.take() {
             self.session.sel = Selection::caret(back);
             self.session.clamp_selection();
@@ -1388,9 +1401,9 @@ mod tests {
             assert!(book.insert_footnote("").is_err());
             assert!(book.insert_footnote(&"x".repeat(501)).is_err());
             book.insert_footnote("Source one").unwrap();
-            assert!(book.editing_inserted_footnote());
+            assert_eq!(book.editing_inserted_note(), Some("footnote"));
             book.type_text(" updated").unwrap();
-            book.close_inserted_footnote();
+            book.close_inserted_note();
             assert_eq!(book.session.sel.focus.story, StoryRef::Body);
             assert!(book.draw(0, 1.5).unwrap().pixels != before, "note must render on the page");
             let note = |b: &Book| {
@@ -1405,6 +1418,36 @@ mod tests {
             book.save().unwrap();
             let reopened = Book::open(&path).unwrap();
             assert!(note(&reopened).contains("Source one updated"), "{ext} lost footnote text or link");
+        }
+    }
+
+    #[test]
+    fn endnote_is_linked_editable_and_round_trips() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("endnote.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("A claim for the back matter").unwrap();
+            assert!(book.insert_endnote("").is_err());
+            assert!(book.insert_endnote(&"x".repeat(501)).is_err());
+            book.insert_endnote("Reference one").unwrap();
+            assert_eq!(book.editing_inserted_note(), Some("endnote"));
+            book.type_text(" updated").unwrap();
+            book.close_inserted_note();
+            assert_eq!(book.session.sel.focus.story, StoryRef::Body);
+            let note = |b: &Book| {
+                let id = b.session.doc.body.iter().filter_map(|block| block.as_para())
+                    .flat_map(|p| &p.objects)
+                    .find_map(|obj| match obj { InlineObject::NoteRef { id, .. } => Some(*id), _ => None })
+                    .expect("linked endnote reference");
+                assert_eq!(b.session.doc.parts.get(&id).unwrap().kind, PartKind::Endnote);
+                b.session.doc.plain_text(StoryRef::Part(id))
+            };
+            assert!(note(&book).contains("Reference one updated"));
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert!(note(&reopened).contains("Reference one updated"), "{ext} lost the endnote text or link");
+            let last = reopened.pages().saturating_sub(1);
+            assert!(reopened.draw(last, 1.5).is_some());
         }
     }
 
