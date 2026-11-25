@@ -19,7 +19,8 @@ impl Summary {
         let preview = m.text.as_deref().unwrap_or("").lines().find(|line| !line.trim().is_empty())
             .unwrap_or("").chars().take(120).collect();
         Self {
-            from: m.from(), subject: m.subject(),
+            from: if m.headers.get("X-Unsent") == Some("1") { String::from("Draft") } else { m.from() },
+            subject: m.subject(),
             date: m.headers.text("date").unwrap_or_default(), preview,
             attachments: m.attachments.len(), remote_content: m.has_remote_content(),
         }

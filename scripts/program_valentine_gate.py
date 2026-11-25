@@ -32,6 +32,7 @@ def main():
  g=boot(a.iso,disk,a.out,'valentine',a.resolution);t=g['text'];q=g['q']
  def keys(value):
   send_text(q,value)
+ def ctrl(key):q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':key}],'hold-time':80})
  def shell(line,pattern,timeout=120):
   g['focus'](153);time.sleep(.5);s=len(t());keys(line);q.key('ret');return g['wait'](pattern,s,timeout)
  def launch():
@@ -58,6 +59,14 @@ def main():
   s=len(t());q.key('esc');g['wait'](r'\[valentine.search\] query= matches=1',s,60)
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'r'}],'hold-time':80})
   g['wait'](r'\[valentine.loaded\] messages=1',s,60)
+  s=len(t());ctrl('n');keys('bob@example.org');q.key('ret');keys('plans');q.key('ret');keys('see you at seven.')
+  ctrl('s');g['wait'](r'\[valentine.draft.saved\] path=draft-[^ ]+\.eml bytes=\d+',s,60)
+  shot('valentine-draft')
+  close(target,task)
+  target,task,s=launch();g['wait'](r'\[valentine.loaded\] messages=2',s,60)
+  keys('plans');g['wait'](r'\[valentine.search\] query=plans matches=1',s,60)
+  s=len(t());q.key('ret');g['wait'](r'\[valentine.opened\] file=draft-[^ ]+\.eml bytes=\d+ subject=plans',s,60)
+  s=len(t());ctrl('e');time.sleep(.4);shot('valentine-draft-reopened');q.key('esc')
   close(target,task)
   assert '[valentine.fatal]' not in t() and 'KERNEL PANIC' not in t()
  finally:g['stop']();server.shutdown()

@@ -15,9 +15,10 @@ Remaining gaps:
 - Link accounts through Multipass and obtain authenticated TLS IMAP/SMTP flows
   without giving Valentine a password. Then connect the native inbox and composer
   to those flows, with IDLE notifications through Bell.
-- JMAP, offline cache and conflict handling, folders, flags, drafts, sent copies,
+- JMAP, offline cache and conflict handling, folders, flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
 - Search across accounts, conversation view, filters, signatures, keyboard
-  shortcut reference, undo and crash-safe drafts.
+  shortcut reference and undo. Local drafts now save through staged replacement
+  and recover from the `.eml` file, but account-backed send and sync remain.
 
 The local `.eml` viewer does not claim live mail sync or sending.
