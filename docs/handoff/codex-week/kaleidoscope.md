@@ -13,6 +13,10 @@ and Shields. The remaining gaps are:
   Ctrl+Shift+J now pauses the live request and file writes at the committed
   offset, then resumes that same connection. A server that closes during a
   long pause still requires a fresh retry; durable Range/ETag resume remains.
+  The hidden part is now synced before it gets a visible name, and Files is
+  synced again after rename. A failed sync is reported as a failed download;
+  it cannot enter completed history. If the second sync fails, the visible
+  file may remain but is explicitly marked unconfirmed for retry.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an
