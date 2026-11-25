@@ -631,6 +631,55 @@ fn rust_multiline_raw_string_carries_hash_delimiter_across_lines() {
 }
 
 #[test]
+fn syntax_state_survives_scroll_and_invalidates_after_edit() {
+    fn line_at(bytes: &[u8], line: usize) -> usize {
+        bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n').nth(line - 1).unwrap().0 + 1
+    }
+    let mut text = b"let s = br##\"begin\n".to_vec();
+    for _ in 0..40_000 { text.extend_from_slice(b"raw body\n"); }
+    text.extend_from_slice(b"end\"##; fn real() {}\n");
+    let mut tab = Tab::new(b"a.rs", Editor::from_bytes(&text));
+    tab.top = line_at(&text, 39_999);
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Pending);
+    let mut state = crate::workspace::SyntaxAt::Pending;
+    for _ in 0..12 {
+        state = tab.syntax_state_at_top();
+        if matches!(state, crate::workspace::SyntaxAt::Ready(_)) { break; }
+    }
+    assert_eq!(state, crate::workspace::SyntaxAt::Ready(highlight::State::RustRawString(2)));
+    tab.scroll(1);
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Ready(highlight::State::RustRawString(2)));
+    tab.ed.set_cursor(0);
+    tab.ed.type_text(b"// ");
+    tab.top = line_at(&tab.ed.text(), 40_000);
+    let mut after_edit = crate::workspace::SyntaxAt::Pending;
+    for _ in 0..12 {
+        after_edit = tab.syntax_state_at_top();
+        if !matches!(after_edit, crate::workspace::SyntaxAt::Pending) { break; }
+    }
+    assert_eq!(after_edit, crate::workspace::SyntaxAt::Ready(highlight::State::Normal));
+}
+
+#[test]
+fn syntax_scan_sees_raw_openers_past_drawn_columns() {
+    let mut text = vec![b' '; 5000];
+    text.extend_from_slice(b"br##\"begin\nbody\nend\"##\n");
+    let mut tab = Tab::new(b"a.rs", Editor::from_bytes(&text));
+    tab.top = text.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Ready(highlight::State::RustRawString(2)));
+}
+
+#[test]
+fn syntax_scan_reports_unavailable_for_oversized_line() {
+    let mut text = vec![b' '; crate::workspace::SYNTAX_LINE_MAX + 1];
+    text.extend_from_slice(b"\nfn real() {}\n");
+    let mut tab = Tab::new(b"a.rs", Editor::from_bytes(&text));
+    tab.top = crate::workspace::SYNTAX_LINE_MAX + 2;
+    assert_eq!(tab.syntax_state_at_top(), crate::workspace::SyntaxAt::Unavailable);
+    assert!(!tab.syntax_pending);
+}
+
+#[test]
 fn python_inline_f_string_prefixes_are_colored_with_the_string() {
     let text = b"label = f\"#value\"; path = rf'//name'; other = Fr\"ok\"";
     let mut out = Vec::new();

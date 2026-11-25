@@ -16,6 +16,7 @@ OCCURRENCES=b'foo foo foo foo\n'
 OCCURRENCES_DONE=b'bar bar bar bar\n'
 RAW=b'fn main() { let a = r#"// not a comment"#; let b = br##"/* literal */"##; }\n'
 RAW_MULTILINE=b'fn main() {\n let text = br##"// raw\n fn fake() { /* raw */\n ending"##; fn real() {}\n}\n'
+RAW_SCROLL=b'fn main() { let text = br##"begin\n'+b'raw line // still string\n'*110+b'end"##; fn real() {} }\n'
 PY_FSTRING=b'label = f"#{value}"; path = rf"//{name}"\n'
 PY_INTERP=b'name = "Quil"; label = f"Hello {name}!"\n'
 JS_TEMPLATE=b'const name = "Quil"; const greeting = `Hello ${name}!`;\n'
@@ -25,7 +26,7 @@ GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
 GIT_HEAD=b'ref: refs/heads/quil/demo\n'
 UNTRACKED=b'Quil work note\n'
 assert bytes.fromhex(GIT_ID)==INDEX[52:72]
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/occurrences.rs':OCCURRENCES,'/raw.rs':RAW,'/raw-multiline.rs':RAW_MULTILINE,'/fstring.py':PY_FSTRING,'/interpolation.py':PY_INTERP,'/template.js':JS_TEMPLATE,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/occurrences.rs':OCCURRENCES,'/raw.rs':RAW,'/raw-multiline.rs':RAW_MULTILINE,'/raw-scroll.rs':RAW_SCROLL,'/fstring.py':PY_FSTRING,'/interpolation.py':PY_INTERP,'/template.js':JS_TEMPLATE,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -210,6 +211,13 @@ def main():
   g['wait'](rf'\[quil.code.opened\] path=raw-multiline.rs bytes={len(RAW_MULTILINE)} lazy=0',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-rust-multiline-raw.ppm')})
   assert (a.out/'quil-rust-multiline-raw.ppm').stat().st_size>100000
+  # Go far enough down that the opener is outside the viewport; the visible
+  # comment-like text must still use the raw-string syntax state.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('raw-scroll');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=raw-scroll.rs bytes={len(RAW_SCROLL)} lazy=0',s,60)
+  send('ctrl','l');keys('90');q.key('ret')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-rust-raw-scrolled.ppm')})
+  assert (a.out/'quil-rust-raw-scrolled.ppm').stat().st_size>100000
   s=len(t());send('ctrl','p');time.sleep(.3);keys('fstring');q.key('ret')
   g['wait'](rf'\[quil.code.opened\] path=fstring.py bytes={len(PY_FSTRING)} lazy=0',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-python-fstring.ppm')})

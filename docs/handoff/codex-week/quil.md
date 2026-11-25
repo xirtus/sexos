@@ -7,6 +7,10 @@ Rust syntax coloring now treats complete one-line `r#"..."#` and
 `br##"..."##` raw strings as strings, including comment-like text inside.
 Multiline Rust raw strings now retain their hash delimiter and syntax color
 across lines, including comment-like text. Full parser-backed syntax remains a gap.
+The viewport now reconstructs the incoming syntax state from versioned per-tab
+checkpoints. Distant jumps scan in bounded steps while showing plain text and a
+"syntax indexing" label. Lines over 1 MiB show plain text with a "syntax
+unavailable" label; a parser-backed incremental index remains a gap.
 Python coloring now includes `f`, `fr`, and `rf` prefixes in complete one-line
 formatted strings and separates simple `{identifier}` references into syntax
 spans. Escaped braces, complex expressions and triple-quoted strings still

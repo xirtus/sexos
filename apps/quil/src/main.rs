@@ -34,7 +34,7 @@ use quil_core::highlight::{self, Kind};
 use quil_core::keymap::{self, Command, Keymap, Keys, Lookup, Named, Press, K};
 use quil_core::project::{self, Entry, Fs, Query, Tree};
 use quil_core::vim::{self, VKey, Vim};
-use quil_core::workspace::{Tab, Tabs};
+use quil_core::workspace::{SyntaxAt, Tab, Tabs, SYNTAX_LINE_MAX};
 use quil_core::fuzzy;
 use sex_app::{files, settings, Event, Window};
 use sex_pdx::app_key::{us_char, Key};
@@ -1326,7 +1326,7 @@ impl App {
         let text_cols = cols.saturating_sub(ex);
         let numbers = self.numbers;
         let vim_block = self.keymap == Keymap::Vim && self.vim.block_cursor();
-        {
+        let syntax_at = {
             let t = self.tab();
             t.follow(rows);
             // Horizontal scroll follows the primary cursor.
@@ -1336,7 +1336,8 @@ impl App {
             let ccol = display_cols(&line);
             if ccol < t.left { t.left = ccol.saturating_sub(8); }
             if ccol >= t.left + text_cols { t.left = ccol + 8 - text_cols; }
-        }
+            t.syntax_state_at_top()
+        };
         let i = self.tabs.active;
         let t = &self.tabs.list[i];
         let first_line = t.ed.buf.line_of(t.top);
@@ -1349,12 +1350,14 @@ impl App {
         let find = self.find.clone();
         let mut spans = Vec::new();
         let mut line = t.top;
-        let mut syntax_state = highlight::State::Normal;
+        let mut syntax_state = match syntax_at { SyntaxAt::Ready(state) => state, _ => highlight::State::Normal };
+        let mut syntax_exact = matches!(syntax_at, SyntaxAt::Ready(_));
         let mut cells: Vec<(usize, usize, char, u32, u32)> = Vec::new();
         let mut cursors: Vec<(usize, usize)> = Vec::new();
         for r in 0..rows {
             let y = r + 1;
-            let end = t.ed.buf.line_end(line);
+            let end_or_long = t.syntax_line_end(line);
+            let end = end_or_long.unwrap_or_else(|| (line + SYNTAX_LINE_MAX + 1).min(t.ed.buf.len()));
             let shown_end = end.min(line + 4096);
             let bytes = t.ed.buf.slice(line..shown_end);
             let is_cur = line == primary_line;
@@ -1364,7 +1367,15 @@ impl App {
                 let label = match first_line { Some(n) => format!("{:>5} ", n + r + 1), None => String::from("    ? ") };
                 self.p.text(tc, y, gutter, &label, if is_cur { palette.fg } else { palette.dim }, palette.bg);
             }
-            syntax_state = highlight::line_state(lang, &bytes, syntax_state, &mut spans);
+            // Lex the whole logical line so an opener beyond the 4096 drawn bytes
+            // still carries into the following line. Very long lines stay plain.
+            if syntax_exact && end_or_long.is_some() {
+                let lex_bytes = if shown_end == end { bytes.clone() } else { t.ed.buf.slice(line..end) };
+                syntax_state = highlight::line_state(lang, &lex_bytes, syntax_state, &mut spans);
+            } else {
+                syntax_exact = false;
+                spans.clear();
+            }
             // Find matches on this line, for highlighting.
             let hits: Vec<usize> = if find.len() >= 2 { project::matches(&bytes, &Query { needle: find.clone(), fold_case: true, whole_word: false }) } else { Vec::new() };
             let mut dc = 0usize;
@@ -1389,7 +1400,7 @@ impl App {
                 k += clen;
             }
             if heads.binary_search(&(line + bytes.len())).is_ok() && shown_end == end { cursors.push((dc, y)); }
-            if end >= t.ed.buf.len() { break; }
+            if end_or_long.is_none() || end >= t.ed.buf.len() { break; }
             line = end + 1;
         }
         for (x, y, c, fg, bg) in cells { self.p.ch(x, y, c, fg, bg); }
@@ -1411,8 +1422,9 @@ impl App {
         if self.keymap == Keymap::Vim && matches!(self.vim.mode, vim::Mode::Command | vim::Mode::Search) {
             left_s.push_str(&format!("{}{}", if self.vim.mode == vim::Mode::Command { ":" } else { "/" }, self.vim.cmdline));
         } else { left_s.push_str(&format!(" {}", self.status)); }
-        let right = format!("Ln {ln}, Col {col}  {}{}  {} bytes  {} ", if t.ed.sels.len() > 1 { format!("{} cursors  ", t.ed.sels.len()) } else { String::new() },
-            t.lang.name(), t.ed.buf.len(), if t.ed.buf.indexed() { "" } else { "indexing" });
+        let syntax_note = if !syntax_exact { if matches!(syntax_at, SyntaxAt::Unavailable) || matches!(syntax_at, SyntaxAt::Ready(_)) { "syntax unavailable" } else { "syntax indexing" } } else { "" };
+        let right = format!("Ln {ln}, Col {col}  {}{}  {} bytes  {} {} ", if t.ed.sels.len() > 1 { format!("{} cursors  ", t.ed.sels.len()) } else { String::new() },
+            t.lang.name(), t.ed.buf.len(), if t.ed.buf.indexed() { "" } else { "indexing" }, syntax_note);
         let n = self.p.text(0, sy, cols, &left_s, if mode.is_empty() { palette.fg } else { palette.accent }, palette.bar);
         let rx = cols.saturating_sub(right.chars().count());
         if rx > n { self.p.text(rx, sy, cols - rx, &right, palette.dim, palette.bar); }
@@ -1634,7 +1646,7 @@ extern "C" fn main() -> ! {
             None => {
                 // Idle: count more of a big file's lines, a few blocks at a time.
                 let t = app.tab();
-                if t.ed.buf.indexed() && !theme_changed { continue; }
+                if t.ed.buf.indexed() && !theme_changed && !t.syntax_pending { continue; }
                 t.ed.buf.index_step(8);
             }
         }
