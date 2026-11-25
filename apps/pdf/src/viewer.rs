@@ -80,7 +80,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Type in text fields; Space toggles checkbox; Escape ends",
-    "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or new markup",
+    "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
     "Ctrl+Shift+V inspects stored digital signature fields",
@@ -991,10 +991,10 @@ impl Viewer {
                 let Some(a) = self.annots.get(self.chosen).cloned() else { return true };
                 let page = self.page;
                 let Some(editor) = self.editor() else { return true };
-                match editor.delete_annotation(page, a.index) {
-                    Ok(()) => {
+                match editor.remove_annotation(page, a.index) {
+                    Ok(removed) => {
                         self.field_history.clear();
-                        self.annotation_history.clear();
+                        self.annotation_history.record_delete(page, removed);
                         self.refresh();
                         self.load_annots(false);
                         sex_std::record(&format!("[pdf.annotate] kind=delete page={} was={} annots={}", page + 1, a.subtype, self.annotation_count()));
@@ -1094,11 +1094,11 @@ impl Viewer {
             Ok(Some(page)) => {
                 self.refresh();
                 if self.panel == Panel::Annots { self.load_annots(false); }
-                self.status = Some(format!("{} new markup. Ctrl+S saves.", if redo { "Redid" } else { "Undid" }));
+                self.status = Some(format!("{} markup change. Ctrl+S saves.", if redo { "Redid" } else { "Undid" }));
                 sex_std::record(&format!("[pdf.annotate.history] action={} page={} annots={}",
                     if redo { "redo" } else { "undo" }, page + 1, self.annotation_count()));
             }
-            Ok(None) => self.status = Some(format!("No new markup to {}", if redo { "redo" } else { "undo" })),
+            Ok(None) => self.status = Some(format!("No markup change to {}", if redo { "redo" } else { "undo" })),
             Err(e) => self.status = Some(format!("Could not {} markup: {e}", if redo { "redo" } else { "undo" })),
         }
     }

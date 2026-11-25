@@ -102,6 +102,9 @@ def main():
   step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,Highlight\n')
   q.key('down');time.sleep(.2);q.key('down');time.sleep(.2)
   step(lambda:q.key('delete'),r'\[pdf\.annotate\] kind=delete page=1 was=Highlight annots=2\n')
+  step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=3\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-deletion-undone.ppm')})
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
   q.key('esc');time.sleep(.3)
   # The form: type the name, Tab to the checkbox, Space ticks it, Escape ends.
   step(lambda:chord('ctrl','e'),r'\[pdf\.form\] fields=2 first=name\n')

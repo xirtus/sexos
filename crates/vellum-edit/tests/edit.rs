@@ -167,6 +167,25 @@ fn delete_and_second_revision() {
 }
 
 #[test]
+fn restore_existing_annotation_keeps_original_object_and_appearance() {
+    let orig = simple(Style::Table);
+    let mut ed = Editor::open(orig).unwrap();
+    ed.add_annotation(0, &NewAnnot { kind: AnnotKind::Note { at: (100.0, 100.0), icon: NoteIcon::Key }, style: style() }).unwrap();
+    let saved = ed.save_incremental().unwrap();
+    let mut reopened = Editor::open(saved).unwrap();
+    let original = reopened.annotations(0).unwrap();
+    let removed = reopened.remove_annotation(0, 0).unwrap();
+    assert!(reopened.annotations(0).unwrap().is_empty());
+    reopened.restore_annotation(&removed).unwrap();
+    assert_eq!(reopened.annotations(0).unwrap(), original);
+    assert!(reopened.restore_annotation(&removed).is_err(), "duplicate restore must fail");
+    reopened.remove_restored_annotation(&removed).unwrap();
+    assert!(reopened.annotations(0).unwrap().is_empty());
+    reopened.restore_annotation(&removed).unwrap();
+    assert_eq!(Editor::open(reopened.save_incremental().unwrap()).unwrap().annotations(0).unwrap(), original);
+}
+
+#[test]
 fn no_edits_means_identical_bytes() {
     for s in [Style::Table, Style::XrefStream] {
         let orig = form(s, true);
