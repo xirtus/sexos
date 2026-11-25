@@ -172,6 +172,45 @@ fn browser_save_sdk_cancellation_wipes_proposal() {
     assert!(!client.active());
     assert!(client.poll(1).is_none());
 }
+
+#[test]
+fn vault_provider_exposes_only_complete_save_proposal() {
+    reset();
+    env(|e| e.broker.label(C, *b"kaleidoscope\0\0\0\0"));
+    current(P);
+    let mut provider = sdk::Provider::new(&Window { target: P.pd, task: P.task }, 99).unwrap();
+    provider.poll(0); pump(); provider.poll(0);
+    assert!(provider.registered());
+    current(C);
+    let mut client = sdk::SaveClient::request(
+        &Window { target: C.pd, task: C.task }, "https://example.org", "alice", "secret", 0,
+    ).unwrap();
+    let mut offered = false;
+    for tick in 1..100 {
+        env(|e| e.now = tick);
+        current(P); provider.poll(tick);
+        if let Some(o) = provider.save_offer() {
+            assert_eq!(o.origin, "https://example.org");
+            assert_eq!(o.username, "alice");
+            assert_eq!(o.password, "secret");
+            assert_eq!(o.consumer, C);
+            offered = true;
+            break;
+        }
+        pump();
+        current(C); assert!(client.poll(tick).is_none());
+        pump();
+    }
+    assert!(offered);
+    assert!(provider.busy());
+    env(|e| e.focus = P);
+    current(P);
+    provider.approve_save().unwrap();
+    assert!(!provider.busy());
+    pump();
+    current(C);
+    assert!(matches!(client.poll(100), Some(Ok(()))));
+}
 struct Env {
     broker: Broker,
     current: Subject,

@@ -506,12 +506,31 @@ pub struct Offer<'a> {
     pub name: &'a [u8; 16],
     pub origin: &'a str,
 }
+struct SaveRequest {
+    request: Request,
+    bytes: Zeroizing<Vec<u8>>,
+    lengths: (usize, usize),
+    data_at: usize,
+    header: bool,
+    complete: bool,
+}
+/// Fully received, bounded browser proposal. Borrowed secrets cannot outlive
+/// the provider; the caller must ask the person before committing them.
+pub struct SaveOffer<'a> {
+    pub token: u32,
+    pub consumer: w::Subject,
+    pub name: &'a [u8; 16],
+    pub origin: &'a str,
+    pub username: &'a str,
+    pub password: &'a str,
+}
 pub struct Provider {
     subject: w::Subject,
     epoch: u64,
     registered: bool,
     register_at: u64,
     request: Option<Request>,
+    save: Option<SaveRequest>,
     bytes: Zeroizing<Vec<u8>>,
     send_len: usize,
     send_at: usize,
@@ -536,6 +555,7 @@ impl Provider {
             registered: false,
             register_at: 0,
             request: None,
+            save: None,
             bytes: Zeroizing::new(alloc::vec![0;w::MAX_DATA]),
             send_len: 0,
             send_at: 0,
@@ -551,7 +571,7 @@ impl Provider {
         })
     }
     pub fn busy(&self) -> bool {
-        self.request.is_some()
+        self.request.is_some() || self.save.is_some()
     }
     pub fn registered(&self) -> bool {
         self.registered
@@ -575,9 +595,31 @@ impl Provider {
             origin,
         })
     }
+    pub fn save_offer(&self) -> Option<SaveOffer<'_>> {
+        let s = self.save.as_ref()?;
+        let r = &s.request;
+        if !s.complete || r.origin_at != r.origin_len || r.names != 3 { return None; }
+        let origin = core::str::from_utf8(&r.origin[..r.origin_len]).ok()?;
+        if !w::valid_origin(origin.as_bytes()) { return None; }
+        let username = core::str::from_utf8(&s.bytes[..s.lengths.0]).ok()?;
+        let password = core::str::from_utf8(&s.bytes[s.lengths.0..s.data_at]).ok()?;
+        if username.is_empty() || password.is_empty() || username.contains('\0') || password.contains('\0') { return None; }
+        Some(SaveOffer { token: r.token, consumer: r.consumer, name: &r.name, origin, username, password })
+    }
+    /// Call only after the person has consented and the encrypted vault commit
+    /// is durable. Receipt by Chastity is never permission to send this ACK.
+    pub fn approve_save(&mut self) -> Result<(), Error> {
+        let s = self.save_offer().ok_or(Error::Invalid)?;
+        if !send(&w::Packet::new(w::SAVE_ALLOW, s.token as u64, self.epoch, 0)) {
+            return Err(Error::Transport);
+        }
+        self.clear();
+        Ok(())
+    }
     fn clear(&mut self) {
         self.bytes.as_mut_slice().zeroize();
         self.request = None;
+        self.save = None;
         self.send_len = 0;
         self.send_at = 0;
         self.lengths = 0;
@@ -587,7 +629,7 @@ impl Provider {
         self.finishing = false;
     }
     pub fn deny(&mut self) {
-        if let Some(r) = &self.request {
+        if let Some(r) = self.request.as_ref().or_else(|| self.save.as_ref().map(|s| &s.request)) {
             send(&w::Packet::new(w::DENY, r.token as u64, self.epoch, 0));
         }
         self.clear();
@@ -632,7 +674,8 @@ impl Provider {
             self.close();
         }
         self.last = now;
-        if self.request.as_ref().is_some_and(|r| now >= r.deadline) {
+        if self.request.as_ref().is_some_and(|r| now >= r.deadline)
+            || self.save.as_ref().is_some_and(|s| now >= s.request.deadline) {
             self.deny();
         }
         for _ in 0..64 {
@@ -641,7 +684,7 @@ impl Provider {
             };
             let a = p.args[0];
             let b = p.args[1];
-            let c = if p.opcode == w::DATA || p.opcode == w::ORIGIN {
+            let c = if p.opcode == w::DATA || p.opcode == w::ORIGIN || p.opcode == w::SAVE_DATA {
                 0
             } else {
                 p.args[2]
@@ -655,16 +698,16 @@ impl Provider {
             }
             if p.opcode == w::REGISTERED && a == self.epoch && b == self.subject.word() && c == 0 {
                 self.registered = true;
-            } else if p.opcode == w::OFFER
+            } else if (p.opcode == w::OFFER || p.opcode == w::SAVE_OFFER)
                 && self.registered
                 && c == self.epoch
-                && self.request.is_none()
+                && !self.busy()
             {
                 let token = a as u32;
                 let len = (a >> 32) as usize;
                 if token != 0 && (1..=w::MAX_ORIGIN).contains(&len) {
                     if let Some(consumer) = w::Subject::decode(b) {
-                        self.request = Some(Request {
+                        let request = Request {
                             token,
                             consumer,
                             name: [0; 16],
@@ -673,11 +716,17 @@ impl Provider {
                             origin_len: len,
                             origin_at: 0,
                             deadline: now.saturating_add(w::CONSENT_TICKS),
-                        });
+                        };
+                        if p.opcode == w::SAVE_OFFER {
+                            self.save = Some(SaveRequest {
+                                request, bytes: Zeroizing::new(alloc::vec![0; w::MAX_DATA]),
+                                lengths: (0, 0), data_at: 0, header: false, complete: false,
+                            });
+                        } else { self.request = Some(request); }
                     }
                 }
             } else if p.opcode == w::CONSUMER && b == self.epoch {
-                if let Some(r) = &mut self.request {
+                if let Some(r) = self.request.as_mut().or_else(|| self.save.as_mut().map(|s| &mut s.request)) {
                     let part = (a >> 32) as usize;
                     if a as u32 == r.token && part < 2 {
                         r.name[part * 8..part * 8 + 8].copy_from_slice(&c.to_le_bytes());
@@ -686,7 +735,7 @@ impl Provider {
                 }
             } else if p.opcode == w::ORIGIN {
                 if let Some((token, epoch, offset, count)) = w::chunk_meta(&p) {
-                    if let Some(r) = &mut self.request {
+                    if let Some(r) = self.request.as_mut().or_else(|| self.save.as_mut().map(|s| &mut s.request)) {
                         if token == r.token
                             && epoch == self.epoch
                             && offset == r.origin_at
@@ -699,9 +748,37 @@ impl Provider {
                 }
             } else if p.opcode == w::CANCEL
                 && b == self.epoch
-                && self.request.as_ref().is_some_and(|r| r.token as u64 == a)
+                && (self.request.as_ref().is_some_and(|r| r.token as u64 == a)
+                    || self.save.as_ref().is_some_and(|s| s.request.token as u64 == a))
             {
                 self.clear();
+            } else if p.opcode == w::SAVE_HEADER && b == self.epoch {
+                if let (Some(s), Some(lengths)) = (&mut self.save, w::lengths(c)) {
+                    if s.request.token as u64 == a && s.request.origin_at == s.request.origin_len
+                        && !s.header && !s.complete {
+                        s.lengths = lengths;
+                        s.header = true;
+                        s.request.deadline = now.saturating_add(w::TRANSFER_TICKS);
+                    }
+                }
+            } else if p.opcode == w::SAVE_DATA {
+                if let Some((token, epoch, offset, count)) = w::chunk_meta(&p) {
+                    if let Some(s) = &mut self.save {
+                        if token == s.request.token && epoch == self.epoch && s.header && !s.complete
+                            && offset == s.data_at && offset + count <= s.lengths.0 + s.lengths.1 {
+                            w::chunk_copy(&p, &mut s.bytes);
+                            s.data_at += count;
+                        }
+                    }
+                }
+            } else if p.opcode == w::SAVE_COMPLETE && b == self.epoch && c == 0 {
+                if let Some(s) = &mut self.save {
+                    if s.request.token as u64 == a && s.header
+                        && s.data_at == s.lengths.0 + s.lengths.1 {
+                        s.complete = true;
+                        s.request.deadline = now.saturating_add(w::CONSENT_TICKS);
+                    }
+                }
             } else if p.opcode == w::ACK
                 && b == self.epoch
                 && self.waiting
