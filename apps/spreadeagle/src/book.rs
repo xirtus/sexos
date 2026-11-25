@@ -441,7 +441,7 @@ impl Book {
     /// Apply one or two AutoFilter comparisons to a column. GridCraft evaluates
     /// the criteria against cells, including numeric values and formula results.
     pub fn filter_by_condition(&mut self, at: Range, col: u32, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter contains/starts/ends/notcontains text or >, >=, <, <= number; join two with and/or";
+        const HELP: &str = "Enter =, <>, contains/starts/ends/notcontains text or >, >=, <, <= number; join two with and/or";
         fn criterion(input: &str) -> Result<(&'static str, &str), String> {
             let (name, value) = input.trim().split_once(' ').ok_or(HELP)?;
             let value = value.trim();
@@ -449,6 +449,7 @@ impl Book {
             let op = match name.to_ascii_lowercase().as_str() {
                 "contains" => "contains", "notcontains" => "notContains",
                 "starts" => "beginsWith", "ends" => "endsWith",
+                "=" => "=", "<>" | "!=" => "<>",
                 ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=",
                 _ => return Err(HELP.into()),
             };
@@ -464,7 +465,7 @@ impl Book {
             for (at, _) in input.match_indices(delimiter) {
                 let right = &input[at + delimiter.len()..];
                 if right.split_once(' ').is_some_and(|(op, _)| matches!(op.to_ascii_lowercase().as_str(),
-                    "contains" | "notcontains" | "starts" | "ends" | ">" | ">=" | "<" | "<=")) {
+                    "contains" | "notcontains" | "starts" | "ends" | "=" | "<>" | "!=" | ">" | ">=" | "<" | "<=")) {
                     joins.push((at, delimiter.len(), and));
                 }
             }
@@ -1139,6 +1140,29 @@ mod tests {
         book.save().unwrap();
         let reopened = Book::open(&path).unwrap().0;
         assert_eq!((reopened.row_height(1) > 0, reopened.row_height(2) > 0, reopened.row_height(3) > 0), (false, true, true));
+    }
+
+    #[test]
+    fn equality_inequality_and_wildcards_filter_and_reopen() {
+        let mut book = budget("filter-equality.xlsx");
+        let at = Range::cell(1, 0);
+        for bad in ["=", "<>", "!=", "=  "] {
+            assert!(book.filter_by_condition(at, 0, bad).is_err(), "{bad}");
+        }
+        book.filter_by_condition(at, 0, "= Food").unwrap();
+        assert_eq!([1, 2, 3].map(|r| book.row_height(r) > 0), [false, true, false]);
+        book.filter_by_condition(at, 0, "<> Food").unwrap();
+        assert_eq!([1, 2, 3].map(|r| book.row_height(r) > 0), [true, false, true]);
+        book.filter_by_condition(at, 0, "= F*").unwrap();
+        assert_eq!([1, 2, 3].map(|r| book.row_height(r) > 0), [false, true, true]);
+        book.filter_by_condition(at, 0, "= F* or = Rent").unwrap();
+        assert_eq!([1, 2, 3].map(|r| book.row_height(r) > 0), [true, true, true]);
+        book.filter_by_condition(at, 0, "!= F*").unwrap();
+        assert_eq!([1, 2, 3].map(|r| book.row_height(r) > 0), [true, false, false]);
+        let path = book.path.clone();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap().0;
+        assert_eq!([1, 2, 3].map(|r| reopened.row_height(r) > 0), [true, false, false]);
     }
 
     #[test]
