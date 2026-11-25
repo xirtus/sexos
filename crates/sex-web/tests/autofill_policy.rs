@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use sex_web::autofill_policy::{login, origin, Refusal};
+use sex_web::autofill_policy::{login, origin, save_login, Refusal};
 use sex_web::sex_html::parse::parse;
 
 const PAGE: &str = "https://example.org/login?next=%2F";
@@ -47,4 +47,24 @@ fn refuses_ambiguous_and_non_login_forms() {
     rejected("<form method=post><input name=u><input name=p type=password autocomplete=new-password></form>", PAGE, false, Refusal::NoLogin);
     rejected("<form method=post><input name=u><input name=p type=password disabled></form>", PAGE, false, Refusal::NoLogin);
     rejected("<form method=post><input name=u><input name=p type=password readonly></form>", PAGE, false, Refusal::NoLogin);
+}
+
+#[test]
+fn save_capture_requires_current_bounded_values() {
+    let html = "<form method=post action='/session'><input name=u value=markup><input type=password name=p value=markup></form>";
+    let mut dom = parse(html);
+    assert!(matches!(save_login(&dom, PAGE, false), Err(Refusal::Empty)));
+    let pair = login(&dom, PAGE, false).unwrap();
+    dom.values.insert(pair.username, "person".into());
+    dom.values.insert(pair.password, "secret".into());
+    let capture = save_login(&dom, PAGE, false).unwrap();
+    assert_eq!((capture.origin.as_str(), capture.username.as_str(), capture.password.as_str()),
+        ("https://example.org", "person", "secret"));
+    assert_eq!((capture.username_node, capture.password_node), (pair.username, pair.password));
+    assert!(matches!(save_login(&dom, "http://example.org/login", false), Err(Refusal::Insecure)));
+    assert!(matches!(save_login(&dom, PAGE, true), Err(Refusal::Frame)));
+    dom.values.insert(pair.password, "x".repeat(4097));
+    assert!(matches!(save_login(&dom, PAGE, false), Err(Refusal::Oversize)));
+    dom.values.insert(pair.password, "with\0nul".into());
+    assert!(matches!(save_login(&dom, PAGE, false), Err(Refusal::Empty)));
 }

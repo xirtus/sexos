@@ -52,6 +52,7 @@ impl Browser {
                     Refusal::Frame => "Passwords cannot fill an embedded page",
                     Refusal::UnsafeAction => "This form does not submit safely to this site",
                     Refusal::NoLogin | Refusal::Ambiguous => "No eligible login form is visible",
+                    Refusal::Empty | Refusal::Oversize => "This login has no bounded credentials to save",
                 });
                 sex_pdx::serial_record!("[web.autofill.refused] reason={:?}", reason);
                 self.draw();

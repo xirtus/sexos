@@ -14,6 +14,7 @@ sex-js = { path = "../sex-js" }
 sex-fetch = { path = "../sex-fetch" }
 sex-theme = { path = "../sex-theme" }
 libm = "0.2"
+zeroize = "1"
 
 [features]
 # Elapsed-time attribution of host operations and selector queries (examples/bench.rs).

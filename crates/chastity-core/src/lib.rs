@@ -12,6 +12,7 @@
 //! Builds for the host (`cargo test -p chastity-core`) and for SexOS programs
 //! (`x86_64-sex-std.json`, with `apps/chastity`).
 pub mod autofill;
+pub mod save_login;
 pub mod generator;
 pub mod entropy;
 pub mod keeper;
