@@ -700,6 +700,13 @@ impl Browser {
                 if from != bg { self.ext_deliver(&bg, &e); }
             }
             "exec" | "css" => {
+                // Explicit executeScript requests arrive after page load. They
+                // must obey the same exact-origin choice as content scripts.
+                if t == "exec" && !self.site_scripts.enabled(&self.url) {
+                    web_record!("[web.extension.script.blocked] id={} origin={}", id, super::origin_of(&self.url).unwrap_or_default());
+                    self.ext_answer(&from, n, Value::Null);
+                    return;
+                }
                 let mut code = String::new();
                 let mut css = String::from(m["css"].as_str().unwrap_or(""));
                 for f in m["files"].as_array().into_iter().flatten().filter_map(Value::as_str) {

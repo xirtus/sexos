@@ -15,7 +15,7 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | Select tab 1–8, last tab | Ctrl+1–8, Ctrl+9 |
 | Private tab, container tab 1–4 | Ctrl+Shift+P, Ctrl+Shift+1–4 |
 | Vertical tabs, split view, group, side panel | Ctrl+Shift+,, Ctrl+Shift+\\, Ctrl+Shift+G, Ctrl+Shift+B |
-| Site settings, Shields, clear site data | Ctrl+Shift+E, Ctrl+Shift+S, Ctrl+Shift+Backspace |
+| Site settings, Shields, JavaScript, clear site data | Ctrl+Shift+E, Ctrl+Shift+S, Ctrl+Shift+Y, Ctrl+Shift+Backspace |
 | Clear only site cookies / local storage (in site settings) | Ctrl+Alt+C / Ctrl+Alt+S |
 | Request Chastity fill for a visible HTTPS login | Ctrl+Shift+K |
 | Ask Chastity to review saving a visible HTTPS login | Ctrl+Shift+U |
@@ -23,9 +23,12 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 
 The reader view shortcut returns to the source page when used in reader view.
 Site settings shows the current container's cookie and local-storage counts for
-the site. Clearing site data refreshes those counts. On the site settings page,
-Ctrl+Alt+C clears only that site's cookies and Ctrl+Alt+S clears only its local
-storage in the current container; the full clear also removes saved code.
+the site. Ctrl+Shift+Y blocks or allows JavaScript for that exact origin and
+reloads the page. The choice survives restart. It covers page scripts, inline
+handlers, and content scripts on that origin. Clearing site data refreshes the
+stored-data counts. On the site settings page, Ctrl+Alt+C clears only that
+site's cookies and Ctrl+Alt+S clears only its local storage in the current
+container; the full clear also removes saved code.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
 Each completed row also has **Remove from history**, which leaves its saved file

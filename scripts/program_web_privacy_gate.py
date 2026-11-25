@@ -130,6 +130,23 @@ def main():
   s=len(t());chord('ctrl','shift','backspace')
   g['wait'](r'\[web.site.cleared\] url=http://10\.0\.2\.2:'+str(PORT)+r'/a/page2',s,60)
   g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=On box=Main cookies=0 storage=0 bytes=0',s,120)
+  # The exact-origin JavaScript control is enforced on navigation, including
+  # inline handlers. The settings page remains browser-owned and usable.
+  s=len(t());chord('ctrl','shift','y')
+  g['wait'](r'\[web.site.scripts\] enabled=0 origin=http://10\.0\.2\.2:'+str(PORT),s,60)
+  g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r'[^\n]* scripts=Off',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'site-scripts-off.ppm')})
+  assert (a.out/'site-scripts-off.ppm').stat().st_size>10000
+  s=len(t());chord('ctrl','shift','e')
+  g['wait'](r'\[web.site.script.blocked\] origin=http://10\.0\.2\.2:'+str(PORT),s,120)
+  g['wait'](r'\[web.loaded\] [^\n]*scripted=0',s,120)
+  assert '[web.console] level=0 site data ready' not in t()[s:], 'blocked page script ran'
+  s=len(t());chord('ctrl','shift','e')
+  g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r'[^\n]* scripts=Off',s,120)
+  s=len(t());chord('ctrl','shift','y')
+  g['wait'](r'\[web.site.scripts\] enabled=1 origin=http://10\.0\.2\.2:'+str(PORT),s,60)
+  s=len(t());chord('ctrl','shift','e')
+  g['wait'](r'\[web.console\] level=0 site data ready',s,120)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'third_party_requests':len(third),'frame_cookie':frame_cookie[0],'shields_down_cookie':px[-1][2]})
  finally:g['stop']()

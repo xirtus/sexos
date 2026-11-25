@@ -294,6 +294,8 @@ struct Browser {
     download_status: Option<String>,
     /// Ad and tracker blocking.
     shields: shields::Shields,
+    /// Person-chosen exact-origin JavaScript setting.
+    site_scripts: sex_web::site_scripts::Policy,
     /// Tabs down the left side instead of across the bar (Ctrl+Shift+,).
     vertical: bool,
     /// Tab groups; each tab slot names its own.
@@ -1094,11 +1096,11 @@ impl Browser {
         // Like other browsers, extensions stay out of private tabs.
         let (ext_css, early, late) = if self.jarbox == profile::Jarbox::Private { Default::default() } else { self.extensions.content(&mut self.window, &base, self.in_frame.is_some()) };
         sheets.extend(ext_css);
-        let mut scripts = early;
-        scripts.extend(self.scripts(&dom, &base));
-        scripts.extend(late);
+        let scripts_enabled = self.site_scripts.enabled(&base);
+        let mut scripts = if scripts_enabled { early } else { Vec::new() };
+        if scripts_enabled { scripts.extend(self.scripts(&dom, &base)); scripts.extend(late); }
         // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
-        let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
+        let handlers = scripts_enabled && dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
             sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
                 || attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
             _ => false,
@@ -1119,6 +1121,7 @@ impl Browser {
         self.doc = Doc::Plain(doc);
         self.canvases = sex_web::canvas::Canvases::new();
         let script_begun = sex_pdx::get_ticks();
+        if !scripts_enabled { web_record!("[web.site.script.blocked] origin={}", sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_default()); }
         if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
         self.media_scan();
@@ -1197,6 +1200,9 @@ impl Browser {
 
     #[inline(never)]
     fn run_scripts(&mut self, scripts: Vec<PageScript>) {
+        // A single admission point also covers later explicit injection into
+        // a plain page, not just the scripts gathered during navigation.
+        if !self.site_scripts.enabled(&self.url) { return; }
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
@@ -2220,7 +2226,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, password_save: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, chrome_palette, theme_generation, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_resumes: Vec::new(), download_failures: Vec::new(), download_events: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
+        shields: shields::Shields::empty(), site_scripts: Default::default(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
@@ -2233,6 +2239,7 @@ pub extern "C" fn _start() -> ! {
     (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());
     if b.jarbox != profile::Jarbox::Private { b.load_downloads(); }
     b.shields = shields::Shields::load(&mut b.window);
+    b.site_scripts = site_settings::load_scripts(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);

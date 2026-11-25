@@ -63,7 +63,10 @@ and Shields. The remaining gaps are:
   local storage items and bytes in the current container. Clearing site data
   updates those counts to zero. The person can now clear only cookies or only
   local storage from the native site settings page, scoped to the active box.
-  Permission prompts and a full settings catalog remain.
+  Ctrl+Shift+Y now allows or blocks JavaScript for the exact origin, including
+  inline handlers and content scripts, and saves the choice. Camera,
+  microphone, notifications, and other permission prompts still need browser
+  capability hooks and a full settings catalog.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
 - Private URLs and page content previously reached serial diagnostics even though
   private history, session, cookies and storage stayed out of Files. Kaleidoscope

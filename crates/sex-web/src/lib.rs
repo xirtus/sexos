@@ -28,6 +28,7 @@ pub mod download_promotion;
 pub mod download_resume;
 pub mod private_diagnostics;
 pub mod site_data;
+pub mod site_scripts;
 pub mod autofill_policy;
 pub mod session;
 pub use sex_image::Image;
