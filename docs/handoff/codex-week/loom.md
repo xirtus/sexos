@@ -35,7 +35,11 @@ Remaining gaps:
   reverses the group. Ctrl+C now copies up to 64 selected list items through
   one background job, with reserved collision-safe names, cleanup on failure,
   copied Loom metadata, and one-step undo. Cross-disk batch moves,
-  grid selection remains a daily-driver gap.
+  Ctrl-click toggles a grid tile in both single and split layouts; Ctrl+Space
+  and Ctrl+arrows provide a keyboard path. Selected tiles use the accent fill,
+  while a separate focus ring tracks keyboard focus. The same batch operations
+  and one-step undo apply in both views. Grid drag of a selected group and
+  cross-disk batch move remain open.
 - The thumbnail grid and disk usage map now follow Tatami's light, dark and high
   contrast tokens. Pictures retain a dark photo well because their RGB cache
   already contains that well; this avoids stale transparency halos across themes.

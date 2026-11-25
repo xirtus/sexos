@@ -10,6 +10,7 @@ open prompt determine which keys act. F11 closes the window.
 | Rename the selected item | F2 |
 | Select a range in the text folder list | Shift+Up/Down/Home/End |
 | Toggle a row in a text-list selection; move focus without clearing marks | Ctrl+Space; Ctrl+Up/Down/Home/End |
+| Toggle tiles in the graphical grid; move focus without clearing marks | Ctrl+click; Ctrl+Space; Ctrl+arrows |
 | Show size and checksum | Ctrl+I |
 | Copy, cut and paste | Ctrl+C, Ctrl+X, Ctrl+V |
 | Create a folder | Ctrl+N |
@@ -41,7 +42,9 @@ folder on the same disk, and one Ctrl+Z moves it back. Ctrl+C copies a selected
 text-list selection of up to 64 items into this or another folder; Ctrl+V starts
 one background job and Ctrl+Z removes the completed group. A taken name receives
 `(copy)` or `(copy 2)` before its extension. Copied ratings and tags follow
-the new items. Plain arrows clear marks; Ctrl+arrows preserve them. Grid batch selection remains open.
+the new items. Plain arrows clear marks; Ctrl+arrows preserve them. In the
+graphical grid, click focuses a tile and Ctrl+click toggles it. Batch drag of
+marked tiles remains open.
 Ctrl+Shift+R opens the batch rename preview.
 In split grid view, a click in either pane focuses that folder. Clicking a tile
 also selects it; Ctrl+Page Up/Down changes the active folder from the keyboard.

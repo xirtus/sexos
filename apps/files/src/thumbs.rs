@@ -271,7 +271,7 @@ impl Thumbs {
     fn rows(height: usize) -> usize { (height.saturating_sub(HEAD + FOOT) / CELL_H).max(1) }
 
     /// Draws the grid into the window's pixels; `top` is moved to keep the cursor seen.
-    pub fn draw(&mut self, window: &mut Window, head: &str, foot: &str, cwd: &[u8], entries: &[Entry], cursor: usize, top: &mut usize) {
+    pub fn draw(&mut self, window: &mut Window, head: &str, foot: &str, cwd: &[u8], entries: &[Entry], cursor: usize, selected_rows: &[usize], top: &mut usize) {
         let theme = sex_app::settings::theme();
         let rgb = |c: u32| c & 0xFF_FFFF;
         let (bg, tile, text, dim, picked, on_picked) =
@@ -293,7 +293,8 @@ impl Thumbs {
             let (x0, y0) = (8 + c * CELL_W, HEAD + r * CELL_H);
             let box_w = CELL_W - 8;
             let picture = matches!(self.made.get(&join(cwd, &e.name)), Some(Thumb::Picture { .. }));
-            let selected = i == cursor;
+            let selected = selected_rows.contains(&i);
+            let focused = i == cursor;
             let ground = if picture { PHOTO_WELL } else if selected { picked } else { tile };
             fill(px, width, x0, y0, box_w, CELL_H - 6, if selected && picture { picked } else { ground });
             if selected && picture { fill(px, width, x0 + 2, y0 + 2, box_w - 4, CELL_H - 10, PHOTO_WELL); }
@@ -321,6 +322,7 @@ impl Thumbs {
             if e.dir { name.push('/'); }
             self.text(px, width, x0 + 4, y0 + SIDE + 6, box_w - 8, &name,
                 if picture { PHOTO_TEXT } else if selected { on_picked } else { text });
+            if focused { focus_ring(px, width, x0, y0, box_w, CELL_H - 6, if selected { on_picked } else { picked }); }
         }
         let more = entries.len().saturating_sub(first + rows * cols);
         let foot = if more > 0 { alloc::format!("{} more below.  {}", more, foot) } else { String::from(foot) };
@@ -331,8 +333,8 @@ impl Thumbs {
     /// Two independent folder tabs in one pixel window. Each pane has its own
     /// scroll row and cursor; cached previews are keyed by the full path.
     pub fn draw_split(&mut self, window: &mut Window,
-        left: (&str, &[u8], &[Entry], usize, &mut usize),
-        right: (&str, &[u8], &[Entry], usize, &mut usize), foot: &str) {
+        left: (&str, &[u8], &[Entry], usize, &[usize], &mut usize),
+        right: (&str, &[u8], &[Entry], usize, &[usize], &mut usize), foot: &str) {
         let theme = sex_app::settings::theme();
         let (bg, tile, text, dim, picked, on_picked) =
             (theme.window & 0xFF_FFFF, theme.surface & 0xFF_FFFF, theme.text & 0xFF_FFFF,
@@ -351,9 +353,9 @@ impl Thumbs {
     }
 
     fn split_pane(&mut self, px: &mut [u32], stride: usize, height: usize,
-        pane_x: usize, pane_w: usize, pane: (&str, &[u8], &[Entry], usize, &mut usize),
+        pane_x: usize, pane_w: usize, pane: (&str, &[u8], &[Entry], usize, &[usize], &mut usize),
         colors: (u32, u32, u32, u32, u32)) {
-        let (head, cwd, entries, cursor, top) = pane;
+        let (head, cwd, entries, cursor, selected_rows, top) = pane;
         let (tile, text, dim, picked, on_picked) = colors;
         let cols = (pane_w.saturating_sub(16) / CELL_W).max(1);
         let rows = Self::rows(height);
@@ -366,7 +368,8 @@ impl Thumbs {
             let (c, r) = ((i - first) % cols, (i - first) / cols);
             let (x, y) = (pane_x + 8 + c * CELL_W, HEAD + r * CELL_H);
             if x + CELL_W > pane_x + pane_w { continue; }
-            let selected = i == cursor;
+            let selected = selected_rows.contains(&i);
+            let focused = i == cursor;
             let picture = matches!(self.made.get(&join(cwd, &e.name)), Some(Thumb::Picture { .. }));
             let ground = if picture { PHOTO_WELL } else if selected { picked } else { tile };
             fill(px, stride, x, y, CELL_W - 8, CELL_H - 6, if selected && picture { picked } else { ground });
@@ -390,6 +393,7 @@ impl Thumbs {
             if e.dir { name.push('/'); }
             self.text(px, stride, x + 4, y + SIDE + 6, CELL_W - 16, &name,
                 if picture { PHOTO_TEXT } else if selected { on_picked } else { text });
+            if focused { focus_ring(px, stride, x, y, CELL_W - 8, CELL_H - 6, if selected { on_picked } else { picked }); }
         }
         if entries.len() > first + rows * cols {
             self.text(px, stride, pane_x + 10, height.saturating_sub(FOOT + 18), pane_w.saturating_sub(20),
@@ -442,6 +446,13 @@ impl Thumbs {
             pen += adv;
         }
     }
+}
+
+fn focus_ring(px: &mut [u32], stride: usize, x: usize, y: usize, w: usize, h: usize, color: u32) {
+    fill(px, stride, x, y, w, 2, color);
+    fill(px, stride, x, y + h - 2, w, 2, color);
+    fill(px, stride, x, y, 2, h, color);
+    fill(px, stride, x + w - 2, y, 2, h, color);
 }
 
 const GLYPH_W: usize = 22;

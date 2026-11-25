@@ -357,16 +357,29 @@ impl App {
             && self.selection().is_some_and(|range| range.contains(&row))
     }
     fn toggle_focus(&mut self) {
-        if self.thumbs.on || self.entries.is_empty() { return; }
+        if self.entries.is_empty() { return; }
         self.selection_marks = loom_core::selection::toggle_row(self.selection_anchor, self.cursor,
             &self.selection_marks, self.entries.len());
         self.selection_anchor = None;
         sex_pdx::serial_record!("[files.app.selection.disjoint] count={} focus={}", self.selection_marks.len(), self.cursor);
     }
+    fn grid_click(&mut self, row: usize, control: bool) {
+        let old = self.cursor;
+        self.cursor = row;
+        if control {
+            if !self.selection_active() && old != row { self.selection_marks.push(old); }
+            self.toggle_focus();
+        } else {
+            self.selection_anchor = None;
+            self.selection_marks.clear();
+        }
+        sex_pdx::serial_record!("[files.app.grid.select] focus={} count={} control={}",
+            self.cursor, self.selected_rows().len(), control as u8);
+    }
     fn move_selection(&mut self, to: usize, extend: bool) {
         let old = self.cursor;
         self.cursor = to.min(self.entries.len().saturating_sub(1));
-        if !extend { self.selection_marks.clear(); }
+        if !extend || self.thumbs.on { self.selection_marks.clear(); }
         self.selection_anchor = if extend && !self.thumbs.on && !self.entries.is_empty() {
             Some(self.selection_anchor.unwrap_or(old))
         } else { None };
@@ -440,10 +453,13 @@ impl App {
             other_entries.retain(|e| e.name != TRASH && e.name != meta::FILE && e.name != session::FILE
                 && e.name != session::PREVIOUS && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
             other_entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
-            let left = format!("> [{}] {}", self.active_tab + 1, shown(&self.cwd));
+            let left = format!("> [{}] {}{}", self.active_tab + 1, shown(&self.cwd),
+                if self.selection_active() { format!(" · {} marked", self.selected_rows().len()) } else { String::new() });
             let right = format!("  [{}] {}", other + 1, shown(&other_path));
-            self.thumbs.draw_split(window, (&left, &self.cwd, &self.entries, self.cursor, &mut self.top),
-                (&right, &other_path, &other_entries, other_cursor, &mut other_top),
+            let selected = self.selected_rows();
+            let other_selected = [other_cursor];
+            self.thumbs.draw_split(window, (&left, &self.cwd, &self.entries, self.cursor, &selected, &mut self.top),
+                (&right, &other_path, &other_entries, other_cursor, &other_selected, &mut other_top),
                 "Ctrl+PageUp/PageDown changes pane  ·  Ctrl+G list  ·  Ctrl+Shift+\\ close split");
             self.tabs[other].top = other_top;
             self.showing_pixels = true;
@@ -453,13 +469,15 @@ impl App {
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
             let mut head = format!("Loom [{}/{}]  {}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
             if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
+            if self.selection_active() { head.push_str(&format!(" · {} marked", self.selected_rows().len())); }
             let mut foot = String::new();
             if let Some(job) = &self.job { foot.push_str(&job.progress()); foot.push_str("  "); }
             if !self.status.is_empty() { foot.push_str(&self.status); foot.push_str("  "); }
             if self.thumbs.busy() { foot.push_str("Making thumbnails...  "); }
-            foot.push_str("Arrows move  Enter open  Ctrl+G list");
+            foot.push_str("Ctrl+click marks  Ctrl+Space marks  Ctrl+G list");
             let mut top = self.top;
-            self.thumbs.draw(window, &head, &foot, &self.cwd, &self.entries, self.cursor, &mut top);
+            let selected = self.selected_rows();
+            self.thumbs.draw(window, &head, &foot, &self.cwd, &self.entries, self.cursor, &selected, &mut top);
             self.top = top;
             self.showing_pixels = true;
             return;
@@ -1200,10 +1218,17 @@ impl App {
         }
         self.status.clear();
         if key.control {
-            if !self.thumbs.on && !self.entries.is_empty() {
+            if !self.entries.is_empty() {
+                let cols = if self.thumbs.on {
+                    if self.split && self.tabs.len() > 1 && split_grid_fits(window) {
+                        ((window.size().0 / 2).saturating_sub(16) / thumbs::CELL_W).max(1)
+                    } else { Thumbs::columns(window.size().0) }
+                } else { 1 };
                 let target = match sex_app::nav(key) {
-                    Some(Nav::Up) => Some(self.cursor.saturating_sub(1)),
-                    Some(Nav::Down) => Some((self.cursor + 1).min(self.entries.len() - 1)),
+                    Some(Nav::Left) if self.thumbs.on => Some(self.cursor.saturating_sub(1)),
+                    Some(Nav::Right) if self.thumbs.on => Some((self.cursor + 1).min(self.entries.len() - 1)),
+                    Some(Nav::Up) => Some(self.cursor.saturating_sub(cols)),
+                    Some(Nav::Down) => Some((self.cursor + cols).min(self.entries.len() - 1)),
                     Some(Nav::Home) => Some(0),
                     Some(Nav::End) => Some(self.entries.len() - 1),
                     _ => None,
@@ -1274,8 +1299,6 @@ impl App {
                     Err(e) => self.status = format!("Home: {}.", shown(sex_pdx::home_lock::message(e))),
                 },
                 KEY_G => {
-                    self.selection_anchor = None;
-                    self.selection_marks.clear();
                     self.thumbs.on = !self.thumbs.on;
                     sex_pdx::serial_record!("[files.app.grid] on={} dir={}", self.thumbs.on as u8, shown(&self.cwd));
                     if self.thumbs.on { self.thumbs.folder(&self.cwd, &self.entries); }
@@ -1298,10 +1321,10 @@ impl App {
             } else { Thumbs::columns(window.size().0) };
             let last = self.entries.len() - 1;
             match sex_app::nav(key) {
-                Some(Nav::Left) => { self.cursor = self.cursor.saturating_sub(1); return; }
-                Some(Nav::Right) => { self.cursor = (self.cursor + 1).min(last); return; }
-                Some(Nav::Up) => { self.cursor = self.cursor.saturating_sub(cols); return; }
-                Some(Nav::Down) => { self.cursor = (self.cursor + cols).min(last); return; }
+                Some(Nav::Left) => { self.move_selection(self.cursor.saturating_sub(1), false); return; }
+                Some(Nav::Right) => { self.move_selection((self.cursor + 1).min(last), false); return; }
+                Some(Nav::Up) => { self.move_selection(self.cursor.saturating_sub(cols), false); return; }
+                Some(Nav::Down) => { self.move_selection((self.cursor + cols).min(last), false); return; }
                 _ => {}
             }
         }
@@ -1442,15 +1465,29 @@ pub extern "C" fn _start() -> ! {
                             && split_grid_fits(&mut window) {
                             let other = (app.active_tab + 1) % app.tabs.len();
                             let other_len = files::list(&mut window, &at(&app.tabs[other].cwd)).map_or(0, |v| v.len());
-                            let (pane, index) = loom_core::split::grid_hit(window.size().0, p.x as usize, p.y as usize,
+                            let (width, height) = window.size();
+                            let (pane, mut index) = loom_core::split::grid_hit(width, p.x.max(0) as usize, p.y.max(0) as usize,
                                 thumbs::CELL_W, thumbs::CELL_H, thumbs::HEAD, app.top, app.tabs[other].top,
                                 app.entries.len(), other_len);
+                            if p.y < thumbs::HEAD as i16 || p.y as usize >= height.saturating_sub(thumbs::FOOT) { index = None; }
                             if pane == 1 { app.show_tab(&mut window, other); }
-                            if let Some(index) = index { app.cursor = index.min(app.entries.len().saturating_sub(1)); }
+                            index = index.filter(|&row| row < app.entries.len());
+                            if let Some(index) = index { app.grid_click(index, p.mods & sex_pdx::app_pointer::CONTROL != 0); }
                             sex_pdx::serial_record!("[loom.split.focus] pane={} active={} dir={} item={}", pane + 1,
                                 app.active_tab + 1, shown(&app.cwd), index.map_or(0, |i| i + 1));
                             app.render(&mut window);
                             press = None;
+                        } else if app.thumbs.on && app.tab_ready() {
+                            let (width, height) = window.size();
+                            let index = loom_core::split::single_grid_hit(width, height, p.x.max(0) as usize,
+                                p.y.max(0) as usize, thumbs::CELL_W, thumbs::CELL_H, thumbs::HEAD,
+                                thumbs::FOOT, app.top, app.entries.len());
+                            if let Some(index) = index {
+                                let control = p.mods & sex_pdx::app_pointer::CONTROL != 0;
+                                app.grid_click(index, control);
+                                app.render(&mut window);
+                                press = (!control).then_some((p.x as i32, p.y as i32));
+                            } else { press = None; }
                         } else { press = Some((p.x as i32, p.y as i32)); }
                     }
                     K::Move if p.buttons & 1 != 0 => if let Some((x0, y0)) = press {
