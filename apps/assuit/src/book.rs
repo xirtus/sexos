@@ -147,6 +147,28 @@ impl Book {
         }
     }
 
+    /// Convert linked notes throughout the document, keeping their references
+    /// and rich text. A conversion is one undoable document edit.
+    pub fn convert_notes(&mut self, input: &str) -> Result<usize, String> {
+        let to = match input.trim().to_ascii_lowercase().as_str() {
+            "endnote" | "endnotes" => "endnote",
+            "footnote" | "footnotes" => "footnote",
+            "swap" => "swap",
+            _ => return Err("Enter endnote, footnote, or swap".into()),
+        };
+        if self.editing_inserted_note().is_some() {
+            return Err("Press Esc to return to the body before converting notes".into());
+        }
+        let source_exists = self.session.doc.parts.values().any(|part| match to {
+            "endnote" => part.kind == PartKind::Footnote,
+            "footnote" => part.kind == PartKind::Endnote,
+            _ => matches!(part.kind, PartKind::Footnote | PartKind::Endnote),
+        });
+        if !source_exists { return Err("No notes of that kind to convert".into()); }
+        let result = self.run("references.convertNotes", json!({ "to": to }))?;
+        Ok(result["converted"].as_u64().unwrap_or(0) as usize)
+    }
+
     /// Apply a web or mail link to selected text, or insert its URL (or an
     /// optional following label) at the caret. WordCraft keeps the link style.
     pub fn insert_hyperlink(&mut self, input: &str) -> Result<(), String> {
@@ -1448,6 +1470,47 @@ mod tests {
             assert!(note(&reopened).contains("Reference one updated"), "{ext} lost the endnote text or link");
             let last = reopened.pages().saturating_sub(1);
             assert!(reopened.draw(last, 1.5).is_some());
+        }
+    }
+
+    #[test]
+    fn note_conversion_keeps_links_text_and_undo_in_docx_and_odt() {
+        use wordcraft_engine::doc::InlineObject;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("converted-notes.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First claim").unwrap();
+            book.insert_footnote("First source").unwrap();
+            book.close_inserted_note();
+            book.type_text(" Second claim").unwrap();
+            book.insert_endnote("Second source").unwrap();
+            book.close_inserted_note();
+            let notes = |b: &Book| {
+                b.session.doc.body.iter().filter_map(|block| block.as_para())
+                    .flat_map(|p| &p.objects)
+                    .filter_map(|obj| match obj { InlineObject::NoteRef { id, .. } => Some(*id), _ => None })
+                    .map(|id| {
+                        let part = b.session.doc.parts.get(&id).expect("linked note part");
+                        (part.kind, b.session.doc.plain_text(StoryRef::Part(id)))
+                    }).collect::<Vec<_>>()
+            };
+            assert_eq!(notes(&book).len(), 2);
+            assert!(book.convert_notes("invalid").is_err());
+            assert_eq!(book.convert_notes("endnotes").unwrap(), 1);
+            assert!(notes(&book).iter().all(|(kind, _)| *kind == PartKind::Endnote));
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert_eq!(notes(&book).iter().filter(|(kind, _)| *kind == PartKind::Footnote).count(), 1,
+                "{ext} undo must restore the original kinds in one step");
+            assert_eq!(book.convert_notes("swap").unwrap(), 2);
+            let swapped = notes(&book);
+            assert!(swapped.iter().any(|(kind, text)| *kind == PartKind::Endnote && text.contains("First source")));
+            assert!(swapped.iter().any(|(kind, text)| *kind == PartKind::Footnote && text.contains("Second source")));
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert_eq!(notes(&reopened), swapped, "{ext} lost converted notes or their links");
+            assert_eq!(reopened.convert_notes("footnote").unwrap(), 1);
+            assert!(notes(&reopened).iter().all(|(kind, _)| *kind == PartKind::Footnote));
+            assert!(reopened.convert_notes("footnote").is_err(), "no-op must not alter the document");
         }
     }
 
