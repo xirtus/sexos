@@ -57,6 +57,8 @@ mod restricted_image {
     pub struct Writer;
     pub fn writer() -> Option<Writer> { Some(Writer) }
     impl Writer { pub fn seal_ordinary(&mut self, _: u64, _: u64) -> Option<u32> { Some(1) } }
+    pub fn release_unobserved_before_load() {}
+    pub fn shell_epoch() -> u64 { 1 }
 }
 #[macro_export]
 macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}

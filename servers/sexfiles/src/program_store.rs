@@ -24,8 +24,8 @@ static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; s
 pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
     // the store's program NAME, still with its arguments.
-    let shell_epoch = sex_pdx::crash_log::peer_state(6).ok()
-        .filter(|peer| peer.live()).map_or(0, |peer| peer.epoch);
+    crate::restricted_image::release_unobserved_before_load();
+    let shell_epoch = crate::restricted_image::shell_epoch();
     let files_epoch = sex_pdx::crash_log::self_epoch().unwrap_or(0);
     match try_load(name,true,requester,shell_epoch,files_epoch) {
         Ok((len, approved, generation)) => store::loaded_with_generation(len, generation, approved),

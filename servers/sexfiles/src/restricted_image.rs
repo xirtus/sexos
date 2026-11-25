@@ -157,22 +157,46 @@ impl Drop for Writer {
         if !self.sealed { STAGING.lock().writer_end(); }
     }
 }
+/// Shell's incarnation as Files sees it through route 6. Images built without the
+/// recorder hold no such route; Files then cannot observe Shell's restarts and uses
+/// `UNOBSERVED_SHELL`, which only Shell's own consume or next load releases.
+pub const UNOBSERVED_SHELL: u64 = u64::MAX;
+pub fn shell_epoch() -> u64 {
+    match sex_pdx::crash_log::peer_state(6) {
+        Ok(peer) if peer.live() => peer.epoch,
+        Ok(_) => 0,
+        Err(_) => UNOBSERVED_SHELL,
+    }
+}
 /// Only the exact current Shell run can release the image. A dead or restarted
 /// Shell can no longer be inside its synchronous kernel copy.
 pub fn recover_ordinary() {
     use sex_pdx::crash_log::{self, PeerLife};
     let Some((_, held_epoch, _)) = STAGING.lock().ordinary else { return; };
+    if held_epoch == UNOBSERVED_SHELL { return; }
     if let Ok(peer) = crash_log::peer_state(6) {
         if STAGING.lock().ordinary_recover(peer.epoch, peer.life == PeerLife::Dead) {
             sex_pdx::serial_record!("[files.image.recovered] shell_epoch={} current_epoch={}", held_epoch, peer.epoch);
         }
     }
 }
+/// Shell copies each loaded image synchronously and reports it consumed before it
+/// asks for another. A new load from Shell while an unobserved lease is still held
+/// therefore means that Shell run ended mid-copy: release it rather than refuse
+/// every later program.
+pub fn release_unobserved_before_load() {
+    let mut staging = STAGING.lock();
+    if let Some((generation, UNOBSERVED_SHELL, _)) = staging.ordinary {
+        staging.ordinary = None;
+        drop(staging);
+        sex_pdx::serial_record!("[files.image.recovered] generation={} shell_epoch=unobserved reason=next_load", generation);
+    }
+}
 pub fn ordinary_consumed(generation: u32, files_epoch: u64) -> bool {
     use sex_pdx::crash_log;
-    let Ok(peer) = crash_log::peer_state(6) else { return false; };
-    peer.live() && crash_log::self_epoch() == Ok(files_epoch)
-        && STAGING.lock().ordinary_consumed(generation, peer.epoch, files_epoch)
+    let epoch = shell_epoch();
+    epoch != 0 && crash_log::self_epoch() == Ok(files_epoch)
+        && STAGING.lock().ordinary_consumed(generation, epoch, files_epoch)
 }
 pub fn attest_and_lease(subject: Lease, image: &[u8]) -> Option<Lease> {
     STAGING
