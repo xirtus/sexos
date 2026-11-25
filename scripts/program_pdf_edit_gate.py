@@ -105,11 +105,12 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signature-inspection.ppm')})
   # Choose green, then find the word and keep this colored highlight through save.
   step(lambda:chord('ctrl','shift','h'),r'\[pdf\.highlight\.color\] name=green\n')
+  step(lambda:chord('ctrl','shift','o'),r'\[pdf\.highlight\.opacity\] value=75%\n')
   s=len(t());chord('ctrl','f');keys(FORM_WORD.lower());q.key('ret')
   g['wait'](rf'\[pdf\.find\] term={FORM_WORD.lower()} page=1 hits=1 index=1\n',s,600)
   hl=step(lambda:chord('ctrl','h'),r'\[pdf\.annotate\] kind=highlight page=1 rects=1 from=find annots=1\n')
-  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-highlight-green.ppm')})
-  assert (a.out/'pdf-highlight-green.ppm').stat().st_size>10000
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-highlight-green-75-percent.ppm')})
+  assert (a.out/'pdf-highlight-green-75-percent.ppm').stat().st_size>10000
   q.key('esc');time.sleep(.3)
   # A sticky note, typed.
   s=len(t());chord('ctrl','n');keys(NOTE);q.key('ret')
@@ -423,6 +424,8 @@ def main():
  data=out_pdf.read_bytes();assert data.startswith(FORM) and len(data)>len(FORM)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_highlight_color_survives_guest_save','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_COLOR_PDF':str(out_pdf)},check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_highlight_opacity_survives_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_OPACITY_PDF':str(out_pdf)},check=True)
  update=data[len(FORM):]
  for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/Subtype /FreeText',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
  assert NOTE.encode() in update and NAME.encode() in update

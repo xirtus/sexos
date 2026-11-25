@@ -68,11 +68,15 @@ const KEY_E: u8 = 0x12;
 const KEY_R: u8 = 0x13;
 const KEY_S: u8 = 0x1F;
 const KEY_H: u8 = 0x23;
+const KEY_O: u8 = 0x18;
 const HIGHLIGHT_COLORS: [(&str, [f32; 3]); 4] = [
     ("yellow", [1.0, 0.92, 0.0]),
     ("green", [0.45, 0.9, 0.45]),
     ("pink", [1.0, 0.55, 0.75]),
     ("blue", [0.45, 0.7, 1.0]),
+];
+const HIGHLIGHT_OPACITIES: [(&str, f32); 4] = [
+    ("100%", 1.0), ("75%", 0.75), ("50%", 0.5), ("25%", 0.25),
 ];
 const KEY_L: u8 = 0x26;
 const KEY_N: u8 = 0x31;
@@ -91,6 +95,7 @@ const SHORTCUTS: &[&str] = &[
     "Shift+arrows size the region; Enter highlights it",
     "Ctrl+H highlight a found word or selected region",
     "Ctrl+Shift+H choose the next highlight color",
+    "Ctrl+Shift+O choose the next highlight opacity",
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Text: arrows/Home/End move; Shift selects; Ctrl+A selects all",
@@ -345,6 +350,7 @@ struct Viewer {
     field_history: FieldHistory,
     annotation_history: AnnotationHistory,
     highlight_color: usize,
+    highlight_opacity: usize,
     /// The region Ctrl+R chose: shown points `[left, top, right, bottom]` on the page.
     region: Option<[f64; 4]>,
     region_drag: Option<(usize, (f64, f64))>,
@@ -1096,6 +1102,13 @@ impl Viewer {
             sex_std::record(&format!("[pdf.highlight.color] name={name}"));
             return true;
         }
+        if ctrl(KEY_O) && key.shift {
+            self.highlight_opacity = (self.highlight_opacity + 1) % HIGHLIGHT_OPACITIES.len();
+            let name = HIGHLIGHT_OPACITIES[self.highlight_opacity].0;
+            self.status = Some(format!("Highlight opacity: {name}. Ctrl+H marks text or a region."));
+            sex_std::record(&format!("[pdf.highlight.opacity] value={name}"));
+            return true;
+        }
         if ctrl(KEY_H) { self.highlight(); return true; }
         if ctrl(KEY_R) {
             self.region = match self.region { Some(_) => None, None => Some(self.first_region()) };
@@ -1406,7 +1419,8 @@ impl Viewer {
         let rects: Vec<[f64; 4]> = rects.iter().map(|r| marks::rect_to_user(&info, *r)).collect();
         let n = rects.len();
         let (color_name, color) = HIGHLIGHT_COLORS[self.highlight_color];
-        let annot = NewAnnot { kind: AnnotKind::Highlight { rects }, style: AnnotStyle { color, date: Some(now_date()), ..AnnotStyle::default() } };
+        let (opacity_name, opacity) = HIGHLIGHT_OPACITIES[self.highlight_opacity];
+        let annot = NewAnnot { kind: AnnotKind::Highlight { rects }, style: AnnotStyle { color, opacity, date: Some(now_date()), ..AnnotStyle::default() } };
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(id) => {
@@ -1415,7 +1429,7 @@ impl Viewer {
                 self.region = None;
                 self.region_drag = None;
                 self.refresh();
-                self.status = Some(format!("Highlighted in {color_name}. Ctrl+S saves."));
+                self.status = Some(format!("Highlighted in {color_name} at {opacity_name}. Ctrl+S saves."));
                 sex_std::record(&format!("[pdf.annotate] kind=highlight page={} rects={n} from={from} annots={}", page + 1, self.annotation_count()));
             }
             Err(e) => self.status = Some(format!("Could not highlight: {e}")),
@@ -2091,7 +2105,7 @@ pub fn main() {
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
-        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), highlight_color: 0, region: None, region_drag: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
+        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), highlight_color: 0, highlight_opacity: 0, region: None, region_drag: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
         status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };
