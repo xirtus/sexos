@@ -66,6 +66,29 @@ fn rust_raw_string_end(text: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// End of a complete one-line Python f-string, including `f`, `fr`, or `rf`.
+/// Triple-quoted and multiline strings need cross-line lexer state.
+fn python_f_string_end(text: &[u8], start: usize) -> Option<usize> {
+    let first = text.get(start)?.to_ascii_lowercase();
+    let mut at = start + 1;
+    match first {
+        b'f' => { if text.get(at).is_some_and(|b| b.to_ascii_lowercase() == b'r') { at += 1; } }
+        b'r' => { if text.get(at).is_some_and(|b| b.to_ascii_lowercase() == b'f') { at += 1; } else { return None; } }
+        _ => return None,
+    }
+    let quote = *text.get(at)?;
+    if !matches!(quote, b'\'' | b'"') || text.get(at + 1) == Some(&quote) && text.get(at + 2) == Some(&quote) {
+        return None;
+    }
+    at += 1;
+    while at < text.len() {
+        if text[at] == b'\\' { at = (at + 2).min(text.len()); continue; }
+        if text[at] == quote { return Some(at + 1); }
+        at += 1;
+    }
+    None
+}
+
 /// Colours one line. `in_comment` says whether it starts inside a block comment; the
 /// return value says whether the next line does.
 pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usize, Kind)>) -> bool {
@@ -89,6 +112,13 @@ pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usi
         let c = text[i];
         if lang == Lang::Rust {
             if let Some(end) = rust_raw_string_end(text, i) {
+                push(out, i, end, Kind::String);
+                i = end;
+                continue;
+            }
+        }
+        if lang == Lang::Python {
+            if let Some(end) = python_f_string_end(text, i) {
                 push(out, i, end, Kind::String);
                 i = end;
                 continue;

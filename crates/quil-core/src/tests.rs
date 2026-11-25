@@ -613,6 +613,20 @@ fn rust_inline_raw_strings_keep_comment_markers_inside_string() {
 }
 
 #[test]
+fn python_inline_f_string_prefixes_are_colored_with_the_string() {
+    let text = b"label = f\"#{value}\"; path = rf'//{name}'; other = Fr\"ok\"";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Python, text, false, &mut out));
+    for token in [b"f\"#{value}\"".as_slice(), b"rf'//{name}'".as_slice(), b"Fr\"ok\"".as_slice()] {
+        let start = text.windows(token.len()).position(|part| part == token).unwrap();
+        assert!(out.contains(&(start, start + token.len(), Kind::String)));
+    }
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::Comment));
+    highlight::line(Lang::Python, b"format = 1", false, &mut out);
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::String));
+}
+
+#[test]
 fn tabs_open_close_and_cycle() {
     let mut t = Tabs::default();
     t.add(Tab::new(b"a.rs", Editor::from_bytes(b"a")));
