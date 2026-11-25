@@ -14,3 +14,8 @@
   issue, and captures `assuit-german-dictionary.ppm`.
 - Local checks: focused Assuit host test, gate Python syntax, and diff check
   passed. Full build and QEMU guest proof are delegated to GitHub CI.
+- Guest path correction: Hermit's `std::fs::canonicalize` is unsupported; use
+  SexOS's grant-aware `sex_std::fs::canonicalize` when configuring the folder.
+  The focused host dictionary test passes. A local target check stopped in
+  `ring` because this machine lacks the target C `assert.h`; GitHub CI's
+  Assuit build and QEMU gate will exercise the Hermit branch.

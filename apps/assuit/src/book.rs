@@ -58,6 +58,12 @@ impl Book {
     /// can place a licensed `<locale>.aff` and `<locale>.dic` pair here in Loom.
     pub fn use_spell_dictionaries(&mut self, folder: &Path) -> Result<(), String> {
         std::fs::create_dir_all(folder).map_err(|e| format!("Could not create Assuit dictionaries folder: {e}"))?;
+        // Hermit's std backend refuses canonicalize before reaching SexOS's
+        // file calls; use the app's granted-path implementation in the guest.
+        #[cfg(target_os = "hermit")]
+        let absolute = sex_std::fs::canonicalize(folder)
+            .map_err(|e| format!("Could not open Assuit dictionaries folder: {e}"))?;
+        #[cfg(not(target_os = "hermit"))]
         let absolute = std::fs::canonicalize(folder)
             .map_err(|e| format!("Could not open Assuit dictionaries folder: {e}"))?;
         let path = absolute.to_str().ok_or("Dictionaries folder name is not UTF-8")?;
