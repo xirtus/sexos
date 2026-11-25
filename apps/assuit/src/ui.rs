@@ -428,7 +428,7 @@ impl Ui {
                 Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("multiple 1.5 0 8, exact 18 0 8, or minimum 18 0 8")),
                 Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
                 Ask::Footnote(note) => format!("Footnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
-                Ask::Link(link) => format!("Link: {link}_   {}", said("Enter a web or mail address; optional display text follows a space")),
+                Ask::Link(link) => format!("Link: {link}_   {}", said("Edit address here, Ctrl+A clears it; optional display text follows a space")),
                 Ask::Contents(action) => format!("Contents: {action}_   {}", said("insert 1–9 heading levels, update, or remove")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
@@ -568,10 +568,12 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
+        let link_prompt = matches!(ask, Ask::Link(_));
         let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Link(t) | Ask::Contents(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
+            code::A if key.control && link_prompt => { text.clear(); self.message.clear(); return; }
             code::ENTER => {}
             _ => {
                 if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { text.push(ch); self.message.clear(); }
@@ -973,7 +975,12 @@ impl Ui {
                     }
                     return;
                 }
-                (code::K, _) if !key.alt => { self.ask = Some(Ask::Link(String::new())); return; }
+                (code::K, _) if !key.alt => {
+                    let current = self.book.select_hyperlink_at_caret();
+                    if current.is_some() { sex_std::record("[assuit.link.edit]"); self.invalidate(); }
+                    self.ask = Some(Ask::Link(current.unwrap_or_default()));
+                    return;
+                }
                 (code::T, _) if key.alt && !key.shift => { self.ask = Some(Ask::Contents(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }

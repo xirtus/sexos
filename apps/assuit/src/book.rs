@@ -169,6 +169,30 @@ impl Book {
         Ok(())
     }
 
+    /// Select the complete, single-paragraph link under a collapsed caret and
+    /// return its address for Assuit's native edit prompt. Adjacent runs with
+    /// the same target can have different character formatting.
+    pub fn select_hyperlink_at_caret(&mut self) -> Option<String> {
+        if !self.session.sel.is_collapsed() { return None; }
+        let at = self.session.sel.focus.clone();
+        let para = self.session.doc.para_at(&at)?;
+        let runs = para.run_ranges().filter_map(|(range, props)|
+            props.link.as_ref().map(|link| (range, link.clone()))).collect::<Vec<_>>();
+        let i = runs.iter().position(|(range, _)| range.start < at.off && at.off <= range.end)
+            .or_else(|| runs.iter().position(|(range, _)| range.start <= at.off && at.off < range.end))?;
+        let url = runs[i].1.clone();
+        let mut first = i;
+        while first > 0 && runs[first - 1].1 == url && runs[first - 1].0.end == runs[first].0.start { first -= 1; }
+        let mut last = i;
+        while last + 1 < runs.len() && runs[last + 1].1 == url && runs[last].0.end == runs[last + 1].0.start { last += 1; }
+        self.session.sel = Selection {
+            anchor: Pos { off: runs[first].0.start, ..at.clone() },
+            focus: Pos { off: runs[last].0.end, ..at },
+        };
+        self.session.clamp_selection();
+        Some(url)
+    }
+
     fn has_table_of_contents(&self) -> bool {
         let is_toc = |instr: &str| instr.split_whitespace().next() == Some("TOC") && !instr.contains("\\c");
         self.session.doc.body.iter().filter_map(|block| block.as_para())
@@ -1441,6 +1465,36 @@ mod tests {
             assert!(reopened.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
                 .all(|r| r.props.link.is_none()), "{ext} restored a removed link");
         }
+    }
+
+    #[test]
+    fn caret_link_edit_selects_full_label_and_round_trips() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("edit-link.{ext}"));
+            let mut book = Book::blank(&path);
+            book.insert_hyperlink("https://old.example Linked name").unwrap();
+            book.session.sel = Selection::caret(Pos::body(0, 4));
+            assert_eq!(book.select_hyperlink_at_caret().as_deref(), Some("https://old.example"));
+            let (from, to) = book.session.sel.ordered();
+            assert_eq!((from.off, to.off), (0, "Linked name".len()));
+            book.insert_hyperlink("https://new.example Revised name").unwrap();
+            assert!(book.text().contains("Revised name"));
+            assert!(book.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .any(|r| r.props.link.as_deref() == Some("https://new.example")));
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert!(book.text().contains("Linked name"), "one undo restores the old label");
+            book.key(&Chord { name: "Y", ctrl: true, shift: false });
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert!(reopened.text().contains("Revised name"));
+            assert!(reopened.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .any(|r| r.props.link.as_deref() == Some("https://new.example")), "{ext} lost the edited target");
+        }
+        let mut plain = Book::blank("plain.docx");
+        plain.type_text("ordinary text").unwrap();
+        plain.session.sel = Selection::caret(Pos::body(0, 4));
+        assert!(plain.select_hyperlink_at_caret().is_none());
+        assert!(plain.session.sel.is_collapsed());
     }
 
     #[test]
