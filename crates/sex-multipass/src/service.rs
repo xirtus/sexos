@@ -20,6 +20,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use shibari::{Keeper, Knot, Owner};
+use sex_mail::{imap, smtp};
 
 /// The domain an app runs in. Filled in by the service from the PDX call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -50,6 +51,14 @@ pub struct Act<'a> {
     pub body: &'a [u8],
     /// Extra request headers, from [`ACT_HEADERS`] only.
     pub headers: &'a [(&'a str, &'a str)],
+}
+
+/// A bounded inbox page returned by Multipass without moving its TLS flow to
+/// Valentine. The message bodies stay on the account server until requested.
+pub struct MailInbox {
+    pub exists: u32,
+    pub uid_validity: u32,
+    pub uids: Vec<u32>,
 }
 
 /// Headers an app may set on an act-for request. Nothing that carries credentials or
@@ -224,6 +233,56 @@ impl Multipass {
         Ok(flow)
     }
 
+    /// Read the latest UIDs through a Multipass-owned, authenticated flow.
+    /// This avoids a cross-domain TLS flow transfer. The caller chooses only
+    /// an IMAP mailbox, never a server or a credential.
+    pub fn mail_inbox<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        mailbox: &str, limit: usize, dialer: &mut D) -> Result<MailInbox> {
+        if mailbox.is_empty() || mailbox.len() > 255 || mailbox.chars().any(char::is_control) || limit == 0 || limit > 50 {
+            return Err(ApiError::new("mail_request", "Choose a mailbox and a page size from 1 to 50."));
+        }
+        let flow = self.open_mail_flow(now, app, id, MailPurpose::Imap, dialer)?;
+        let mut client = imap::Client::resume_authenticated(flow);
+        let selected = client.select(mailbox).map_err(mail_protocol_error)?;
+        let uids = client.uid_search("ALL").map_err(mail_protocol_error)?;
+        let start = uids.len().saturating_sub(limit);
+        Ok(MailInbox { exists: selected.exists, uid_validity: selected.uid_validity, uids: uids[start..].to_vec() })
+    }
+
+    /// Fetch one exact UID from a selected mailbox through a grant-checked
+    /// Multipass flow. Numeric UIDs keep caller text out of IMAP commands.
+    pub fn mail_fetch<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        mailbox: &str, uid: u32, dialer: &mut D) -> Result<Option<Vec<u8>>> {
+        if mailbox.is_empty() || mailbox.len() > 255 || mailbox.chars().any(char::is_control) || uid == 0 {
+            return Err(ApiError::new("mail_request", "Choose a mailbox and a message UID."));
+        }
+        let flow = self.open_mail_flow(now, app, id, MailPurpose::Imap, dialer)?;
+        let mut client = imap::Client::resume_authenticated(flow);
+        client.select(mailbox).map_err(mail_protocol_error)?;
+        let fetched = client.uid_fetch(&format!("{uid}")).map_err(mail_protocol_error)?;
+        Ok(fetched.into_iter().find(|m| m.uid == uid).map(|m| m.body))
+    }
+
+    /// Submit a composed plain-text message from the configured account.
+    /// Multipass owns the SMTP flow and fixes the envelope sender to the
+    /// account user. Header fields are checked before composing any bytes.
+    pub fn mail_send<D: MailDialer>(&mut self, now: u64, app: App, id: u64,
+        to: &[&str], subject: &str, body: &str, date: &str, message_id: &str,
+        dialer: &mut D) -> Result<()> {
+        let safe_header = |s: &str, max: usize| s.len() <= max && !s.chars().any(char::is_control);
+        if to.is_empty() || to.len() > 50 || to.iter().any(|s| !safe_header(s, 254) || !s.contains('@') || s.chars().any(|c| matches!(c, '<' | '>' | ' ')))
+            || !safe_header(subject, 998) || !safe_header(date, 128) || !safe_header(message_id, 254)
+            || message_id.is_empty() || body.len() > 1024 * 1024 {
+            return Err(ApiError::new("mail_request", "The message contains an invalid address or header, or is too large."));
+        }
+        let from = self.mail.get(&id).ok_or_else(|| ApiError::new("not_signed_in", "That mail account is not signed in."))?.user.clone();
+        let flow = self.open_mail_flow(now, app, id, MailPurpose::Smtp, dialer)?;
+        let message = sex_mail::message::compose(&sex_mail::message::Draft {
+            from: &from, to, subject, body, date, message_id, in_reply_to: None, references: &[],
+        });
+        smtp::Client::resume_authenticated(flow).send(&from, to, &message).map_err(mail_protocol_error)
+    }
+
     /// Always refused: tokens never leave Multipass and Shibari.
     pub fn token(&self, _app: App, _id: u64) -> Result<Vec<u8>> {
         Err(ApiError::new("token_never_leaves", "Apps never receive account tokens. Ask Multipass to act for the account instead."))
@@ -279,6 +338,7 @@ impl Multipass {
 fn pad4(mut s: String) -> String { while (s.len() - 6) % 4 != 0 { s.push('='); } s }
 
 fn shibari_err() -> ApiError { ApiError::new("shibari", "Shibari could not keep the account's session.") }
+fn mail_protocol_error(_: sex_mail::Error) -> ApiError { ApiError::new("mail_protocol", "The mail server could not complete that request.") }
 
 #[cfg(test)]
 mod mail_broker_tests {
@@ -359,5 +419,45 @@ mod mail_broker_tests {
             "smtp.example.org", 465, &mut valid, &mut dialer).err().unwrap().code, "mail_server");
         assert!(valid.iter().all(|b| *b == 0));
         assert_eq!(broker.book.list("person").count(), 0);
+    }
+
+    #[test]
+    fn broker_owned_mail_operations_send_then_read_without_flow_handoff() {
+        let (mut broker, mut dialer) = setup();
+        let id = broker.add_mail_account(10, "person", "alice@example.org", "imap.example.org", 993,
+            "smtp.example.org", 465, &mut b"app-password".to_vec(), &mut dialer).unwrap();
+        let app = App(22);
+        let opened = dialer.opened.len();
+        assert_eq!(broker.mail_inbox(11, app, id, "INBOX", 20, &mut dialer).err().unwrap().code, "no_grant");
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org"], "Hello", "Body", "24 Nov 2026", "one@example.org", &mut dialer).err().unwrap().code, "no_grant");
+        assert_eq!(dialer.opened.len(), opened);
+        broker.grant("person", app, id, Scope::Read).unwrap();
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org"], "Hello", "Body", "24 Nov 2026", "one@example.org", &mut dialer).err().unwrap().code, "no_grant");
+        broker.grant("person", app, id, Scope::Write).unwrap();
+        broker.mail_send(12, app, id, &["alice@example.org"], "Hello", "Body", "24 Nov 2026", "one@example.org", &mut dialer).unwrap();
+        let page = broker.mail_inbox(13, app, id, "INBOX", 20, &mut dialer).unwrap();
+        assert_eq!(page.exists, 1);
+        assert_eq!(page.uids, [1]);
+        let raw = broker.mail_fetch(14, app, id, "INBOX", 1, &mut dialer).unwrap().unwrap();
+        assert!(core::str::from_utf8(&raw).unwrap().contains("From: alice@example.org"));
+        assert!(core::str::from_utf8(&raw).unwrap().contains("Subject: Hello"));
+        assert!(core::str::from_utf8(&raw).unwrap().contains("Body"));
+        broker.revoke(app, id);
+        assert_eq!(broker.mail_fetch(15, app, id, "INBOX", 1, &mut dialer).err().unwrap().code, "no_grant");
+    }
+
+    #[test]
+    fn malformed_mail_requests_do_not_open_network_flows() {
+        let (mut broker, mut dialer) = setup();
+        let id = broker.add_mail_account(10, "person", "alice@example.org", "imap.example.org", 993,
+            "smtp.example.org", 465, &mut b"app-password".to_vec(), &mut dialer).unwrap();
+        let app = App(22);
+        broker.grant("person", app, id, Scope::Write).unwrap();
+        let opened = dialer.opened.len();
+        assert_eq!(broker.mail_inbox(11, app, id, "INBOX\r\nDELETE", 20, &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(broker.mail_fetch(11, app, id, "INBOX", 0, &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org\r\nRCPT TO:<thief@example.org>"], "Hello", "Body", "date", "id", &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(broker.mail_send(11, app, id, &["alice@example.org"], "Hello\r\nBcc: thief@example.org", "Body", "date", "id", &mut dialer).err().unwrap().code, "mail_request");
+        assert_eq!(dialer.opened.len(), opened);
     }
 }

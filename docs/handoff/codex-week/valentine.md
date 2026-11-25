@@ -12,22 +12,17 @@ theme. A QEMU gate checks the real window and preserves screenshots.
 
 Remaining gaps:
 
-- Link accounts through Multipass and obtain authenticated TLS IMAP/SMTP flows
-  without giving Valentine a password. Then connect the native inbox and composer
-  to those flows, with IDLE notifications through Bell. The mail clients can now
-  resume a flow after Multipass authenticates it. The versioned
-  `OPEN_MAIL_FLOW` request now names IMAP or SMTP without carrying credentials,
-  forbids caller-chosen endpoints, and checks the response sequence and flow ID.
-  Multipass's host-tested SASL helper can use an app-password knot inside
-  Shibari over a verified TLS mail stream and yield only an authenticated stream;
-  transient SASL buffers are wiped after use. This is not yet wired to a guest
-  network flow. Multipass's core now validates user-supplied IMAP and SMTP
-  server settings, confirms both sign-ins through a trusted TLS dialer before
-  keeping a mail stamp, and applies an app's read/write grant before opening
-  only those saved endpoints. The account password lives in Shibari and the
-  setup input buffer is wiped.
-  The boot-routed Multipass service, boot-enforced account grants, TLS-capable SexNet app
-  flows, and a capability-safe network flow handoff do not exist yet.
+- Link accounts through Multipass, connect Valentine's native inbox and
+  composer, and deliver IMAP IDLE notifications through Bell. Multipass's core
+  validates configured IMAP and SMTP servers, checks both sign-ins, stores the
+  app password in Shibari, and enforces read/write grants. Its new broker-owned
+  operations page inbox UIDs, fetch an exact message, and submit plain-text
+  mail from the saved account over authenticated flows; Valentine need not
+  receive a network flow or credential. The earlier `OPEN_MAIL_FLOW` PDX
+  contract remains unimplemented and would need a flow ownership transfer.
+  The broker-owned path still needs a boot-routed Multipass service, a verified
+  TLS SexNet dialer, account setup and grant UI, and a Valentine client. Bell
+  has no mail event source yet.
 - JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
 - Search across accounts, conversation view, filters, and signatures.
