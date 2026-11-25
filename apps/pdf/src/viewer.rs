@@ -899,7 +899,7 @@ impl Viewer {
             Ok(b) => b,
             Err(e) => { self.status = Some(format!("Could not save: {e}")); sex_std::record(&format!("[pdf.save.failed] {e}")); return; }
         };
-        if let Err(e) = std::fs::write(&path, &bytes) {
+        if let Err(e) = thumb::write_whole(&path, &bytes) {
             self.status = Some(format!("Could not save: {e}"));
             sex_std::record(&format!("[pdf.save.failed] {e}"));
             return;

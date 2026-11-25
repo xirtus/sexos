@@ -117,24 +117,53 @@ pub fn encode(image: &Image) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Writes `bytes` to `path` whole, or leaves no file: a write that fails part way
-/// removes what it wrote.
+/// Stages complete bytes beside `path`, then replaces it through Files' rename.
+/// A failed write leaves any previous PDF or thumbnail untouched.
 pub fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
-    match std::fs::write(path, bytes) {
-        Ok(()) => match std::fs::metadata(path) {
-            Ok(m) if m.len() == bytes.len() as u64 => Ok(()),
-            Ok(_) => {
-                let _ = std::fs::remove_file(path);
-                Err(std::io::Error::other("short write"))
-            }
-            Err(e) => Err(e),
-        },
-        Err(e) => {
-            let _ = std::fs::remove_file(path);
-            Err(e)
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut staged = None;
+    for _ in 0..16 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        // An `@/file.pdf` grant may name only that file, not a sibling. Stage in
+        // Vellum's own folder and rename to the exact granted destination.
+        let name = if path.starts_with("@/") { format!("vellum-{n}.tmp") }
+            else { format!("{path}.vellum-{n}.tmp") };
+        match OpenOptions::new().write(true).create_new(true).open(&name) {
+            Ok(file) => { staged = Some((name, file)); break; }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
         }
     }
+    let (name, mut file) = staged.ok_or_else(|| Error::new(ErrorKind::AlreadyExists, "no free Vellum staging name"))?;
+    let write_result = (|| {
+        file.write_all(bytes)?;
+        file.flush()?;
+        sync_staged(&file)
+    })();
+    drop(file);
+    let result = write_result.and_then(|()| rename_staged(&name, path));
+    if result.is_err() { let _ = std::fs::remove_file(&name); }
+    result
 }
+
+#[cfg(target_os = "hermit")]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> {
+    use sex_std::fs::FileExt;
+    file.fsync()
+}
+
+#[cfg(not(target_os = "hermit"))]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> { file.sync_all() }
+
+#[cfg(target_os = "hermit")]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { sex_std::fs::rename(from, to) }
+
+#[cfg(not(target_os = "hermit"))]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 #[cfg(test)]
 mod tests {
@@ -208,5 +237,20 @@ mod tests {
         assert!(write_whole(missing.to_str().unwrap(), &bytes).is_err());
         assert!(!missing.exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replacement_preserves_stale_staging_and_previous_output_until_ready() {
+        let dir = std::env::temp_dir().join(format!("vellum-replace-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("preview.thumb");
+        let path = path.to_str().unwrap();
+        std::fs::write(path, b"prior thumbnail").unwrap();
+        let stale = format!("{path}.vellum-0.tmp");
+        std::fs::write(&stale, b"stale bytes").unwrap();
+        write_whole(path, b"complete new thumbnail").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"complete new thumbnail");
+        assert_eq!(std::fs::read(&stale).unwrap(), b"stale bytes");
+        std::fs::remove_file(stale).unwrap();
     }
 }
