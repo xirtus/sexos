@@ -9,7 +9,7 @@
 //! Ctrl+Shift+P a private tab, Ctrl+Shift+1..4 a tab in a container, Ctrl+Shift+,
 //! tabs down the side (vertical tabs) or back across the bar, Ctrl+Shift+\\ split view,
 //! Ctrl+Shift+G the tab into a new group or out of its group (a click on a group's
-//! label folds it), Ctrl+Shift+B the side panel.
+//! label folds it), Ctrl+Shift+B the side panel, Ctrl+Shift+E site settings.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -36,6 +36,12 @@ impl Browser {
             0x22 if key.shift => self.toggle_group(),
             // Ctrl+Shift+B: the side panel with the bookmarks, or closed.
             0x30 if key.shift => self.toggle_panel(),
+            // Ctrl+Shift+E: settings for the current web site; press again to return.
+            0x12 if key.shift => {
+                let url = self.url.clone();
+                if let Some(site) = super::site_settings::target(&url) { self.open(&site, true); }
+                else if sex_fetch::Url::parse(&url).is_ok() { self.open(&super::site_settings::address(&url), true); }
+            }
             0x11 => self.close_tab(),
             // Next and previous go round the strip's tabs (not the side panel's page).
             0x51 => { let n = (self.active + 1) % self.strip_len(); self.show_tab(n); }
@@ -73,15 +79,17 @@ impl Browser {
             0x24 => self.open("about:downloads", true),
             // Ctrl+Shift+S: Shields down for this site, or up again; the page reloads.
             0x1F if key.shift => {
-                let url = self.url.clone();
+                let url = super::site_settings::target(&self.url).unwrap_or_else(|| self.url.clone());
                 self.shields.toggle(&mut self.window, &url);
-                self.open(&url, false);
+                let shown = self.url.clone();
+                self.open(&shown, false);
             }
             0x0E if key.shift => {
-                let url = self.url.clone();
+                let url = super::site_settings::target(&self.url).unwrap_or_else(|| self.url.clone());
                 self.profile.clear_site(&mut self.jar.borrow_mut(), &mut self.storage.borrow_mut(), &url);
                 self.code_store.forget(&mut self.window, &mut self.code_cache.borrow_mut(), &url);
                 sex_pdx::serial_record!("[web.site.cleared] url={}", url);
+                if super::site_settings::target(&self.url).is_some() { let shown = self.url.clone(); self.open(&shown, false); }
             }
             _ => return false,
         }
