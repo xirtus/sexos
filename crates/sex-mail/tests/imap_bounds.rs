@@ -31,3 +31,18 @@ fn rejects_many_continuations_before_response_text_grows_unbounded() {
     let mut client = imap::Client::resume_authenticated(Wire::new(wire));
     assert!(matches!(client.read_response(), Err(Error::Protocol(_))));
 }
+
+#[test]
+fn rejects_untagged_stream_that_outgrows_one_command() {
+    // Each response is within its own bound; together they exceed the command's.
+    let body = vec![b'x'; 8 << 20];
+    let mut wire = Vec::new();
+    for i in 0..((imap::MAX_COMMAND_TOTAL / body.len()) + 2) {
+        wire.extend_from_slice(format!("* {} FETCH (BODY[] {{{}}}\r\n", i + 1, body.len()).as_bytes());
+        wire.extend_from_slice(&body);
+        wire.extend_from_slice(b")\r\n");
+    }
+    wire.extend_from_slice(b"r1 OK done\r\n");
+    let mut client = imap::Client::resume_authenticated(Wire::new(wire));
+    assert!(matches!(client.command("NOOP"), Err(Error::Protocol(_))));
+}

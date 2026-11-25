@@ -12,6 +12,9 @@ use zeroize::Zeroizing;
 /// without limit through continuations or multiple literals.
 const MAX_RESPONSE_TEXT: usize = 2 << 20;
 const MAX_RESPONSE_TOTAL: usize = 64 << 20;
+/// Untagged responses kept for one command. Each response is bounded above,
+/// but a server could otherwise stream them without end before its tagged reply.
+pub const MAX_COMMAND_TOTAL: usize = 128 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token { Atom(String), Str(Vec<u8>), List(Vec<Token>), Nil }
@@ -81,7 +84,10 @@ impl<C: Conn> Client<C> {
     pub fn into_conn(self) -> C { self.io.conn }
 
     /// Parse one response (line plus literals) into tokens.
-    pub fn read_response(&mut self) -> Result<Response> {
+    pub fn read_response(&mut self) -> Result<Response> { self.read_sized().map(|(r, _)| r) }
+
+    /// One response and the wire bytes it took (lines plus literals).
+    fn read_sized(&mut self) -> Result<(Response, usize)> {
         let mut data = Vec::new();
         let mut literals: Vec<Vec<u8>> = Vec::new();
         let mut total = 0usize;
@@ -108,7 +114,7 @@ impl<C: Conn> Client<C> {
         let (tag, rest) = match data.iter().position(|&b| b == b' ') { Some(i) => (&data[..i], &data[i + 1..]), None => (&data[..], &[][..]) };
         let mut p = Parser { s: rest, i: 0 };
         let tokens = p.list_until(None, &mut lits);
-        Ok(Response { tag: String::from_utf8_lossy(tag).into_owned(), tokens })
+        Ok((Response { tag: String::from_utf8_lossy(tag).into_owned(), tokens }, total))
     }
 
     fn next_tag(&mut self) -> String { self.tag += 1; format!("{}{}", self.tag_prefix, self.tag) }
@@ -123,13 +129,16 @@ impl<C: Conn> Client<C> {
 
     fn finish(&mut self, tag: &str) -> Result<Vec<Response>> {
         let mut untagged = Vec::new();
+        let mut kept = 0usize;
         loop {
-            let r = self.read_response()?;
+            let (r, size) = self.read_sized()?;
             if r.tag == tag {
                 return match r.word(0).as_deref() { Some("OK") => Ok(untagged), _ => Err(Error::Refused(r.rest())) };
             }
             if r.tag == "*" {
                 if r.word(0).as_deref() == Some("CAPABILITY") { self.capabilities = caps(&r); }
+                kept = kept.saturating_add(size);
+                if kept > MAX_COMMAND_TOTAL { return Err(Error::Protocol("IMAP command response too large".into())); }
                 untagged.push(r);
             }
         }
