@@ -39,6 +39,7 @@ from quil_autosave_gate import boot
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 NOTE='check this'
+NOTE_EDITED=NOTE+' updated'
 NAME='Ada Lovelace'
 BAR=30
 def thumb_ok(data,want_w,want_h):
@@ -146,6 +147,12 @@ def main():
   step(lambda:q.key('ret'),r'\[pdf\.annotate\.comment\] page=1 index=0 chars=12\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-highlight-comment.ppm')})
   assert (a.out/'pdf-highlight-comment.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=2\n')
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
+  q.key('down');q.key('ret');keys(' updated')
+  step(lambda:q.key('ret'),r'\[pdf\.annotate\.note_edit\] page=1 index=1 chars=18\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-note-edited.ppm')})
+  assert (a.out/'pdf-note-edited.ppm').stat().st_size>10000
   step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=2\n')
   step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
   q.key('esc');time.sleep(.3)
@@ -440,9 +447,11 @@ def main():
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_OPACITY_PDF':str(out_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_highlight_comment_survives_guest_save','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_COMMENT_PDF':str(out_pdf)},check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_note_edit_survives_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_NOTE_EDIT_PDF':str(out_pdf)},check=True)
  update=data[len(FORM):]
  for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/Subtype /FreeText',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
- assert NOTE.encode() in update and NAME.encode() in update
+ assert NOTE_EDITED.encode() in update and NAME.encode() in update
  recovered_pdf=a.out/'recover-saved.pdf';subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/recover.pdf',str(recovered_pdf)],check=True)
  recovered_data=recovered_pdf.read_bytes();assert recovered_data.startswith(FORM) and b'crash note' in recovered_data[len(FORM):]
  signed_pdf=a.out/'signature-field-signed.pdf'
@@ -468,7 +477,7 @@ def main():
   r=pypdf.PdfReader(io.BytesIO(data));annots=[x.get_object() for x in r.pages[0]['/Annots']]
   kinds=sorted(str(x['/Subtype']) for x in annots)
   assert kinds.count('/Highlight')==1 and kinds.count('/Text')==1 and kinds.count('/FreeText')==1 and kinds.count('/Widget')==2,kinds
-  assert any(str(x.get('/Contents',''))==NOTE for x in annots)
+  assert any(str(x.get('/Contents',''))==NOTE_EDITED for x in annots)
   fields=r.get_fields();assert str(fields['name'].get('/V'))==NAME and str(fields['agree'].get('/V'))=='/Yes',fields
   checked='pypdf'
  out_thumb=a.out/'form.thumb';subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/form.thumb',str(out_thumb)],check=True)

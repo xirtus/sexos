@@ -70,7 +70,7 @@ impl AnnotationHistory {
                 *page
             }
             AnnotationChange::Comment { page, index, before, after } => {
-                editor.set_highlight_comment(*page, *index, if redo { after } else { before })?;
+                editor.set_annotation_text(*page, *index, if redo { after } else { before })?;
                 *page
             }
         };
@@ -134,13 +134,30 @@ mod tests {
             style: AnnotStyle::default(),
         }).unwrap();
         let index = editor.annotations(0).unwrap().into_iter().find(|a| a.subtype == "Highlight").unwrap().index;
-        editor.set_highlight_comment(0, index, "Review green").unwrap();
+        editor.set_annotation_text(0, index, "Review green").unwrap();
         let mut history = AnnotationHistory::default();
         history.record_comment(0, index, String::new(), "Review green".into());
         assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
         assert_eq!(editor.annotations(0).unwrap()[index].contents, None);
         assert_eq!(history.step(&mut editor, true).unwrap(), Some(0));
         assert_eq!(editor.annotations(0).unwrap()[index].contents.as_deref(), Some("Review green"));
+    }
+
+    #[test]
+    fn undo_redo_sticky_note_text() {
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        editor.add_annotation(0, &NewAnnot {
+            kind: AnnotKind::Note { at: (60.0, 80.0), icon: NoteIcon::Comment },
+            style: AnnotStyle { contents: Some("before".into()), ..Default::default() },
+        }).unwrap();
+        let index = editor.annotations(0).unwrap().into_iter().find(|a| a.subtype == "Text").unwrap().index;
+        editor.set_annotation_text(0, index, "after").unwrap();
+        let mut history = AnnotationHistory::default();
+        history.record_comment(0, index, "before".into(), "after".into());
+        assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
+        assert_eq!(editor.annotations(0).unwrap()[index].contents.as_deref(), Some("before"));
+        assert_eq!(history.step(&mut editor, true).unwrap(), Some(0));
+        assert_eq!(editor.annotations(0).unwrap()[index].contents.as_deref(), Some("after"));
     }
 
     #[test]

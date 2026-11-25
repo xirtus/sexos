@@ -104,7 +104,7 @@ fn signed_pdf_refuses_annotation_add_and_remove_without_changes() {
     };
     let expected = Error::BadValue("cannot edit annotations in a signed PDF".into());
     assert_eq!(editor.add_annotation(0, &highlight).unwrap_err(), expected);
-    assert_eq!(editor.set_highlight_comment(0, 0, "No change").unwrap_err(), expected);
+    assert_eq!(editor.set_annotation_text(0, 0, "No change").unwrap_err(), expected);
     assert_eq!(editor.remove_annotation(0, 0).unwrap_err(), expected);
     assert!(!editor.is_modified());
 }
@@ -198,7 +198,7 @@ fn highlight_comment_edits_without_changing_appearance() {
     }).unwrap();
     let before_comment = editor.save_incremental().unwrap();
     let before = editor.annotations(0).unwrap().remove(0);
-    assert_eq!(editor.set_highlight_comment(0, before.index, "Review this paragraph").unwrap(), None);
+    assert_eq!(editor.set_annotation_text(0, before.index, "Review this paragraph").unwrap(), None);
     let after = editor.annotations(0).unwrap().remove(0);
     assert_eq!(after.contents.as_deref(), Some("Review this paragraph"));
     assert_eq!(after.quad_points, before.quad_points);
@@ -211,7 +211,7 @@ fn highlight_comment_edits_without_changing_appearance() {
     assert_eq!(l[0].get(b"Contents").unwrap().as_str().unwrap(), b"Review this paragraph");
     assert_eq!(render(&saved), render(&before_comment));
     let mut reopened = Editor::open(saved).unwrap();
-    assert_eq!(reopened.set_highlight_comment(0, before.index, "").unwrap().as_deref(), Some("Review this paragraph"));
+    assert_eq!(reopened.set_annotation_text(0, before.index, "").unwrap().as_deref(), Some("Review this paragraph"));
     assert_eq!(Editor::open(reopened.save_incremental().unwrap()).unwrap().annotations(0).unwrap()[0].contents, None);
 }
 
@@ -221,6 +221,35 @@ fn guest_highlight_comment_survives_guest_save() {
     let editor = Editor::open(std::fs::read(path).unwrap()).unwrap();
     let highlight = editor.annotations(0).unwrap().into_iter().find(|a| a.subtype == "Highlight").unwrap();
     assert_eq!(highlight.contents.as_deref(), Some("Review green"));
+}
+
+#[test]
+fn sticky_note_text_edits_without_moving_its_icon() {
+    let original = simple(Style::Table);
+    let mut editor = Editor::open(original.clone()).unwrap();
+    editor.add_annotation(0, &NewAnnot {
+        kind: AnnotKind::Note { at: (50.0, 100.0), icon: NoteIcon::Comment },
+        style: AnnotStyle { contents: Some("check this".into()), ..Default::default() },
+    }).unwrap();
+    let before_pdf = editor.save_incremental().unwrap();
+    let before = editor.annotations(0).unwrap().remove(0);
+    assert_eq!(editor.set_annotation_text(0, before.index, "check this updated").unwrap().as_deref(), Some("check this"));
+    let saved = editor.save_incremental().unwrap();
+    assert_incremental(&original, &saved);
+    let after = Editor::open(saved.clone()).unwrap().annotations(0).unwrap().remove(0);
+    assert_eq!(after.contents.as_deref(), Some("check this updated"));
+    assert_eq!(after.rect, before.rect);
+    assert!(after.has_appearance);
+    assert_eq!(render(&saved), render(&before_pdf));
+    assert_eq!(lopdf_annots(&saved)[0].get(b"Contents").unwrap().as_str().unwrap(), b"check this updated");
+}
+
+#[test]
+fn guest_note_edit_survives_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_NOTE_EDIT_PDF") else { return };
+    let editor = Editor::open(std::fs::read(path).unwrap()).unwrap();
+    let note = editor.annotations(0).unwrap().into_iter().find(|a| a.subtype == "Text").unwrap();
+    assert_eq!(note.contents.as_deref(), Some("check this updated"));
 }
 
 #[test]
