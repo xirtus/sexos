@@ -80,7 +80,8 @@ pub fn write(wb: &Workbook) -> Result<ChartParts, String> {
             }
             let category_axis = categories.map(|cat| format!("<chart:axis chart:dimension=\"x\" chart:name=\"primary-x\"><chart:categories table:cell-range-address=\"{}\"/></chart:axis>", escape(&cat)))
                 .unwrap_or_else(|| "<chart:axis chart:dimension=\"x\" chart:name=\"primary-x\"/>".into());
-            plot.insert_str(0, &format!("{category_axis}<chart:axis chart:dimension=\"y\" chart:name=\"primary-y\"><chart:grid chart:class=\"major\"/></chart:axis>"));
+            let grid = if chart.gridlines { "<chart:grid chart:class=\"major\"/>" } else { "" };
+            plot.insert_str(0, &format!("{category_axis}<chart:axis chart:dimension=\"y\" chart:name=\"primary-y\">{grid}</chart:axis>"));
             let title = chart.title.as_ref().map(|t| format!("<chart:title><text:p>{}</text:p></chart:title>", escape(t))).unwrap_or_default();
             let legend = match chart.legend { LegendPos::None => "", LegendPos::Bottom => "bottom", LegendPos::Top => "top", LegendPos::Left => "start", LegendPos::Right => "end" };
             let legend = if legend.is_empty() { String::new() } else { format!("<chart:legend chart:legend-position=\"{legend}\"/>") };
@@ -116,10 +117,21 @@ pub fn read<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, content: &str
     let mut charts = Vec::new();
     let mut warnings = Vec::new();
     for (sheet, x, y, width, height, href) in references {
-        let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
+        let object = href.trim_start_matches("./").trim_end_matches('/');
+        let path = format!("{object}/content.xml");
         let mut xml = String::new();
         if zip.by_name(&path).ok().and_then(|mut file| file.read_to_string(&mut xml).ok()).is_none() {
             warnings.push(format!("ODS chart object {href} could not be opened; save as XLSX after rebuilding it"));
+            continue;
+        }
+        // ODF stores plot settings in automatic styles, either in content.xml
+        // or in the embedded chart's styles.xml. A clustered chart cannot
+        // represent horizontal, stacked, percentage, or 3-D plot semantics.
+        let mut styles = String::new();
+        let _ = zip.by_name(&format!("{object}/styles.xml"))
+            .ok().and_then(|mut file| file.read_to_string(&mut styles).ok());
+        if unsupported_plot_semantics(&xml) || unsupported_plot_semantics(&styles) {
+            warnings.push(format!("ODS chart object {href} has plot settings Spreadeagle cannot preserve; keep the original ODS file"));
             continue;
         }
         let inch = |v: Option<String>| v.as_deref().and_then(length_px).map(|n| n * 0.75).unwrap_or(0.0);
@@ -142,7 +154,6 @@ pub fn read<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, content: &str
 fn parse_object(xml: &str, names: &[String], anchor: Anchor, id: u32) -> Option<Chart> {
     // ODF uses the same `chart:bar` class for columns and horizontal bars.
     // The latter has a vertical category axis and needs a separate mapping.
-    if xml.contains("chart:vertical=\"true\"") { return None; }
     let mut reader = quick_xml::Reader::from_str(xml);
     let (mut kind, mut title, mut in_title, mut legend, mut series, mut categories) = (None, None, false, LegendPos::None, Vec::new(), None);
     loop {
@@ -168,8 +179,25 @@ fn parse_object(xml: &str, names: &[String], anchor: Anchor, id: u32) -> Option<
     if series.is_empty() || anchor.width <= 0.0 || anchor.height <= 0.0 { return None; }
     for item in &mut series { item.categories = categories.clone(); }
     Some(Chart { id, kind: kind?, anchor, title, series, legend, data_labels: false, data_table: None,
-        gridlines: true, style: 1, hole_size: 75, first_slice_angle: 0, x_title: None, y_title: None,
+        gridlines: xml.contains("<chart:grid"), style: 1, hole_size: 75, first_slice_angle: 0, x_title: None, y_title: None,
         source: None, by_rows: false, pivot: None })
+}
+
+fn unsupported_plot_semantics(xml: &str) -> bool {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                if e.attributes().flatten().any(|a| {
+                    matches!(a.key.local_name().as_ref(), b"vertical" | b"stacked" | b"percentage" | b"three-dimensional")
+                        && a.value.as_ref() == b"true"
+                }) { return true; }
+            }
+            Ok(Event::Eof) => return false,
+            Err(_) => return true,
+            _ => {},
+        }
+    }
 }
 
 fn from_addr(address: &str, names: &[String]) -> Option<String> {
@@ -234,6 +262,68 @@ mod tests {
         }
         session.execute_headless("insert.chart", json!({"range":"A1:B3", "type":"pie", "at":"D2"})).unwrap();
         assert!(super::super::write(&session.doc().unwrap().wb).unwrap_err().contains("save as XLSX"));
+    }
+
+    #[test]
+    fn chart_without_gridlines_round_trips_without_adding_a_grid() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        for (cell, input) in [("A1", "Month"), ("B1", "Sales"), ("A2", "Jan"), ("B2", "12"),
+            ("A3", "Feb"), ("B3", "18")] {
+            session.execute_headless("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        session.execute_headless("insert.chart", json!({"range":"A1:B3", "type":"column", "at":"D2"})).unwrap();
+        let mut wb = (*session.doc().unwrap().wb).clone();
+        wb.sheet_mut(0).unwrap().charts[0].gridlines = false;
+        let bytes = super::super::write(&wb).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut content = String::new();
+        zip.by_name("content.xml").unwrap().read_to_string(&mut content).unwrap();
+        let mut object = String::new();
+        zip.by_name("Object 1/content.xml").unwrap().read_to_string(&mut object).unwrap();
+        assert!(!object.contains("<chart:grid"));
+        let (found, warnings) = read(&mut zip, &content, &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(found.len(), 1);
+        assert!(!found[0].chart.gridlines);
+    }
+
+    #[test]
+    fn unsupported_odf_plot_styles_refuse_chart_import() {
+        use std::io::Write;
+        let source = include_bytes!("../../assets/lo-charts.ods");
+        for flag in ["vertical", "stacked", "percentage", "three-dimensional"] {
+            for in_styles_file in [false, true] {
+                let mut input = zip::ZipArchive::new(std::io::Cursor::new(source.as_slice())).unwrap();
+                let output = std::io::Cursor::new(Vec::new());
+                let mut writer = zip::ZipWriter::new(output);
+                for index in 0..input.len() {
+                    let mut entry = input.by_index(index).unwrap();
+                    let name = entry.name().to_string();
+                    if entry.is_dir() {
+                        writer.add_directory(name, zip::write::SimpleFileOptions::default()).unwrap();
+                        continue;
+                    }
+                    let mut data = Vec::new();
+                    entry.read_to_end(&mut data).unwrap();
+                    if name == if in_styles_file { "Object 1/styles.xml" } else { "Object 1/content.xml" } {
+                        let xml = String::from_utf8(data).unwrap();
+                        let xml = if in_styles_file {
+                            xml.replace("</office:document-styles>", &format!("<office:automatic-styles><style:style style:name=\"unsupported\" style:family=\"chart\"><style:chart-properties chart:{flag}=\"true\"/></style:style></office:automatic-styles></office:document-styles>"))
+                        } else {
+                            xml.replacen("<style:chart-properties", &format!("<style:chart-properties chart:{flag}=\"true\""), 1)
+                        };
+                        data = xml.into_bytes();
+                    }
+                    writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                    writer.write_all(&data).unwrap();
+                }
+                let bytes = writer.finish().unwrap().into_inner();
+                let extras = super::super::extras(&bytes).unwrap();
+                assert_eq!(extras.charts.len(), 1, "{flag} in_styles_file={in_styles_file}");
+                assert!(extras.chart_warnings.iter().any(|w| w.contains("cannot preserve")), "{flag} {in_styles_file}: {:?}", extras.chart_warnings);
+            }
+        }
     }
 
     #[test]
