@@ -50,6 +50,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   m=spindle(f'fetch http://10.0.2.2:{PORT}/cal.ics cal.ics',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   target,task,sid,today,s=start(' @cal.ics')
+  g['wait'](r'\[date.notice.cursor.initialized\] owner=visible minute=\d+',s,60)
   g['wait'](r'\[calendar.imported\] events=6 added=6\n',s,60);g['wait'](r'\[calendar.saved\] events=6 ',s,60)
   g['wait'](r'\[date.save.committed\] file=events.txt bytes=\d+',s,60)
   # The whole desktop for the calendar (Super+M), so a month shows its titles.
