@@ -38,7 +38,7 @@ mod tests {
         let raw = d.encode().unwrap();
         assert_eq!(crate::inbox::Summary::from_raw(&raw).from, "Draft");
         let parsed = message::parse(&raw);
-        assert_eq!(LocalDraft::from_message(&parsed), Some(d));
+        assert_eq!(LocalDraft::from_message(&parsed), Some(d.clone()));
         assert!(LocalDraft::from_message(&message::parse(b"From: a@b\r\n\r\nHi")).is_none());
         assert!(LocalDraft { to: "amy@example.org\r\nBcc: spy@example.org".into(), ..d.clone() }.encode().is_none());
         assert!(LocalDraft { subject: "Hi\nX-Evil: yes".into(), ..d }.encode().is_none());
