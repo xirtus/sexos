@@ -13,6 +13,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Polish:** the app now follows Settings' light, dark and high-contrast
   appearance for its page desk, status bar and style picker. A keyboard shortcut
   reference is available in the app and `docs/apps/assuit-shortcuts.md`. Verified
-  recovery after an interrupted save remains.
+  recovery after an interrupted run is covered by a two-boot QEMU power-cut
+  gate for idle unsaved edits. This proves the recovery copy survives an abrupt
+  stop after Assuit reports it kept the edit; cutting power during a Files
+  rename is outside the gate.
 
 Each remaining feature should have a focused host test and a CI guest gate before it is claimed complete.
