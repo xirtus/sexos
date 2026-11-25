@@ -397,6 +397,17 @@ def main():
   time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-removed.ppm')})
   removed_page=(a.out/'assuit-hyperlink-removed.ppm').read_bytes()
   assert paper_pixels(removed_page)!=paper_pixels(linked_page),'Removing a link did not repaint selected text'
+  s=len(t());press('ctrl','k');type_line('https://old.example');q.key('ret')
+  g['wait'](r'\[assuit\.link\.insert\]',s,120)
+  press('right');press('left')
+  s=len(t());press('ctrl','k')
+  g['wait'](r'\[assuit\.link\.edit\]',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-link-caret-prompt.ppm')})
+  assert (a.out/'assuit-link-caret-prompt.ppm').stat().st_size>10000
+  press('ctrl','a');type_line('https://new.example revised');q.key('ret')
+  g['wait'](r'\[assuit\.link\.insert\]',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-link-caret-edited.ppm')})
+  assert paper_pixels((a.out/'assuit-link-caret-edited.ppm').read_bytes())!=paper_pixels(removed_page)
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   press('ctrl','home')
   s=len(t());press('ctrl','alt','t')

@@ -25,8 +25,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Hyperlinks:** Ctrl+K now opens a native URL prompt for selected text or a
   new display label. Web and mail links are bounded, undoable, and covered by
   DOCX/ODT round trips. Ctrl+Alt+K now removes a link from selected text while
-  keeping the words; undo and DOCX/ODT round trips are covered. Editing the
-  display text or URL of an existing link without reselection remains.
+  keeping the words; undo and DOCX/ODT round trips are covered. Ctrl+K at a
+  caret inside an existing single-paragraph link now selects its whole label
+  and prefills the address, so its target or display text can be changed without
+  manual reselection. Cross-paragraph link editing remains.
 - **Table of contents:** Ctrl+Alt+T now inserts a generated contents table
   from heading styles (levels 1–9), refreshes it after edits, or removes it.
   A DOCX/ODT host test covers insert, update, removal and save/reopen.
