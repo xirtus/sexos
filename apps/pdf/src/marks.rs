@@ -75,6 +75,17 @@ pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
     out
 }
 
+/// Return the editable widget under a shown-page point, after crop/rotation conversion.
+pub fn field_at_shown(fields: &[(FieldInfo, usize, [f64; 4])], page: usize, info: &PageInfo, point: (f64, f64)) -> Option<usize> {
+    fields.iter().enumerate().rev().find_map(|(index, (field, _, _))| {
+        field.widgets.iter().any(|(_, widget_page, rect)| {
+            if *widget_page != Some(page) { return false; }
+            let [left, top, right, bottom] = rect_to_shown(info, *rect);
+            point.0 >= left && point.0 <= right && point.1 >= top && point.1 <= bottom
+        }).then_some(index)
+    })
+}
+
 /// The selected option's export value, or no selection yet.
 pub fn choice_index(f: &FieldInfo) -> Option<usize> {
     let value = match &f.value {
@@ -342,6 +353,36 @@ mod tests {
         let after = fillable(&again.fields().unwrap());
         assert_eq!(after[0].0.value, FieldValue::Text("M".into()));
         assert_eq!(after[1].0.value, FieldValue::Choices(vec!["A".into(), "E".into(), "D".into()]));
+    }
+
+    #[test]
+    fn widget_hit_uses_shown_rotation_and_only_fillable_fields() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/choice.pdf");
+        let ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        let mut info = ed.page_info(0).unwrap();
+        for rotate in [0, 90, 180, 270] {
+            info.rotate = rotate;
+            for (index, (_, page, rect)) in fields.iter().enumerate() {
+                let shown = rect_to_shown(&info, *rect);
+                let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
+                assert_eq!(field_at_shown(&fields, *page, &info, center), Some(index));
+                assert_eq!(field_at_shown(&fields, *page + 1, &info, center), None);
+            }
+        }
+        assert_eq!(field_at_shown(&fields, 0, &info, (-10.0, -10.0)), None);
+        let mut locked = ed.fields().unwrap();
+        locked[0].read_only = true;
+        assert_eq!(fillable(&locked).len(), fields.len() - 1);
+        let mut repeated = fields.clone();
+        let mut another = repeated[0].0.widgets[0].clone();
+        another.1 = Some(1);
+        another.2 = [400.0, 655.0, 500.0, 681.0];
+        repeated[0].0.widgets.push(another);
+        info.rotate = 0;
+        let shown = rect_to_shown(&info, [400.0, 655.0, 500.0, 681.0]);
+        let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
+        assert_eq!(field_at_shown(&repeated, 1, &info, center), Some(0));
     }
 
     #[test]
