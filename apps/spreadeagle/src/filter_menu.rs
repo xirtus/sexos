@@ -10,6 +10,10 @@ pub struct FilterMenu {
     pub toggled: bool,
     pub active: bool,
     pub condition: bool,
+    pub query: String,
+    /// Visible result row -> original value index; checks always use original indices.
+    pub results: Vec<usize>,
+    pub searching: bool,
 }
 
 impl FilterMenu {
@@ -21,9 +25,26 @@ impl FilterMenu {
                 || values.iter().any(|selected| selected.eq_ignore_ascii_case(value)),
             _ => false,
         }).collect();
-        Self { col, values, selected: 0, checked, toggled: false, active, condition }
+        let results = (0..values.len()).collect();
+        Self { col, values, selected: 0, checked, toggled: false, active, condition, query: String::new(), results, searching: false }
     }
     pub fn untouched_active(&self) -> bool { self.active && !self.toggled && self.selected == 0 }
+    pub fn visible_len(&self) -> usize { self.results.len() + 1 }
+    pub fn value_index(&self, row: usize) -> Option<usize> { row.checked_sub(1).and_then(|n| self.results.get(n)).copied() }
+    pub fn selected_value_index(&self) -> Option<usize> { self.value_index(self.selected) }
+    pub fn push_query(&mut self, c: char) {
+        if self.query.chars().count() < 64 { self.query.push(c); self.refresh(); }
+    }
+    pub fn pop_query(&mut self) { self.query.pop(); self.refresh(); }
+    pub fn clear_query(&mut self) { self.query.clear(); self.refresh(); }
+    fn refresh(&mut self) {
+        let needle = self.query.to_lowercase();
+        self.results = self.values.iter().enumerate().filter_map(|(i, v)| {
+            let text = if v.is_empty() { "(blank)" } else { v };
+            text.to_lowercase().contains(&needle).then_some(i)
+        }).collect();
+        self.selected = usize::from(!self.results.is_empty() && !self.query.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -44,5 +65,24 @@ mod tests {
         let condition = FilterMenu::new(0, vec!["Food".into()], FilterState::Other);
         assert!(condition.condition && condition.untouched_active());
         assert_eq!(condition.checked, [false]);
+    }
+
+    #[test]
+    fn search_keeps_original_checks_and_selects_a_distant_match() {
+        let values = (0..1_000).map(|i| format!("Item {i:04}")).collect();
+        let mut menu = FilterMenu::new(0, values, FilterState::Values {
+            values: vec!["Item 0001".into(), "Item 0999".into()], blanks: false,
+        });
+        menu.searching = true;
+        for c in "0999".chars() { menu.push_query(c); }
+        assert_eq!(menu.visible_len(), 2);
+        assert_eq!(menu.selected_value_index(), Some(999));
+        assert!(menu.checked[1] && menu.checked[999]);
+        menu.checked[999] = false;
+        menu.pop_query();
+        assert_eq!(menu.query, "099");
+        assert!(menu.checked[1] && !menu.checked[999]);
+        menu.clear_query();
+        assert_eq!(menu.visible_len(), 1_001);
     }
 }

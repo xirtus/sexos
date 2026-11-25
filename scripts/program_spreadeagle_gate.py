@@ -222,6 +222,13 @@ def main():
   g['wait'](r'\[spreadeagle\.filter\.menu\.unchanged\] col=A\n',s,120)
   column('A',r'Item\|Food\|~\|~\|~\|~\|\|',s)
   ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=5\n')
+  s=len(t());q.key('slash');type_line('rent')
+  g['wait'](r'\[spreadeagle\.filter\.search\] col=A query=rent matches=1 selected=1\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-search.ppm')})
+  s=len(t());q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=Rent\n',s,120)
+  column('A',r'Item\|~\|~\|Rent\|~\|~\|\|',s)
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=5\n')
   s=len(t());q.key('spc');q.key('ret')
   g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=all\n',s,120)
   column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)
@@ -254,6 +261,7 @@ def main():
   s=len(t());q.key('spc');q.key('ret')
   g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=all\n',s,120)
   assert (a.out/'spreadeagle-filter-selected.ppm').stat().st_size>10000
+  assert (a.out/'spreadeagle-filter-search.ppm').stat().st_size>10000
   column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)
   ctrl_shift('l',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|Food\|Fun\|Rent\|Total\|Per year\|\|\n')
   q.key('up');time.sleep(.3);q.key('right');time.sleep(.5)

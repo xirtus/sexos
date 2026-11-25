@@ -609,20 +609,24 @@ impl Ui {
         self.pen.text(&mut canvas, sx, ty0 + (TABS_H - self.pen.line_height()) / 2, &status, palette.dim, Some((sx, w - sx)));
         if let Some(menu) = &self.filter_menu {
             let (mx, my) = self.filter_menu_rect(menu.col, w, h);
-            let count = (menu.values.len() + 1).min(FILTER_MENU_VISIBLE);
+            let count = menu.visible_len().min(FILTER_MENU_VISIBLE);
             let mh = 26 + count as i32 * FILTER_MENU_ROW;
             canvas.fill(mx + 3, my + 3, FILTER_MENU_W, mh, palette.grid);
             canvas.fill(mx, my, FILTER_MENU_W, mh, palette.bar_bg);
             canvas.frame(mx, my, FILTER_MENU_W, mh, palette.grid);
             let title = if menu.condition { "condition active" } else if menu.active { "values active" } else { "choose values" };
-            self.pen.text(&mut canvas, mx + 8, my + 5, &format!("{}: {title}", column_name(menu.col)), palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
+            let heading = if menu.searching || !menu.query.is_empty() {
+                format!("{} / {}_ ({})", column_name(menu.col), menu.query, menu.results.len())
+            } else { format!("{}: {title}  / search", column_name(menu.col)) };
+            self.pen.text(&mut canvas, mx + 8, my + 5, &heading, palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
             let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
             for slot in 0..count {
                 let index = first + slot;
-                let label = if index == 0 { "All rows" } else { &menu.values[index - 1] };
+                let value = menu.value_index(index);
+                let label = value.map_or("All rows", |i| menu.values[i].as_str());
                 let y = my + 25 + slot as i32 * FILTER_MENU_ROW;
                 if index == menu.selected { canvas.fill(mx + 3, y, FILTER_MENU_W - 6, FILTER_MENU_ROW, palette.head_on); }
-                let mark = if index == 0 { "    " } else if menu.checked[index - 1] { "[x] " } else { "[ ] " };
+                let mark = if value.is_none() { "    " } else if value.is_some_and(|i| menu.checked[i]) { "[x] " } else { "[ ] " };
                 let shown = format!("{mark}{}", if label.is_empty() { "(blank)" } else { label });
                 self.pen.text(&mut canvas, mx + 9, y + 3, &shown, if index == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, FILTER_MENU_W - 18)));
             }
@@ -924,10 +928,11 @@ impl Ui {
             sex_std::record(&format!("[spreadeagle.filter.menu.unchanged] col={}", column_name(menu.col)));
             return false;
         }
+        let chosen = menu.selected_value_index();
         let values: Vec<String> = if menu.toggled {
             menu.values.into_iter().zip(menu.checked).filter_map(|(value, checked)| checked.then_some(value)).collect()
         } else {
-            menu.selected.checked_sub(1).map(|i| menu.values[i].clone()).into_iter().collect()
+            chosen.map(|i| menu.values[i].clone()).into_iter().collect()
         };
         let label = match values.as_slice() { [] => "all".to_string(), [one] => one.clone(), _ => format!("{}-values", values.len()) };
         let done = self.book.filter_by_values(self.selection(), menu.col, &values);
@@ -937,25 +942,41 @@ impl Ui {
     }
 
     fn filter_menu_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
-        if key.code == code::ESC { self.filter_menu = None; return false; }
+        if key.code == code::ESC {
+            if let Some(menu) = self.filter_menu.as_mut().filter(|m| !m.query.is_empty()) {
+                menu.clear_query(); menu.searching = false; return false;
+            }
+            self.filter_menu = None; return false;
+        }
         if key.code == code::ENTER { return self.apply_filter_menu(); }
-        if key.code == code::C && !key.control {
+        if (key.code == code::SLASH && !key.control) || (key.code == code::F && key.control && !key.shift) {
+            if let Some(menu) = self.filter_menu.as_mut() { menu.searching = true; }
+            return false;
+        }
+        if key.code == code::C && !key.control && self.filter_menu.as_ref().is_some_and(|m| !m.searching) {
             let col = self.filter_menu.take().unwrap().col;
             self.ask = Some(Ask::FilterCondition { col, text: Vec::new() });
             sex_std::record(&format!("[spreadeagle.filter.condition-prompt] col={}", column_name(col)));
             return false;
         }
         if let Some(menu) = &mut self.filter_menu {
+            if key.code == code::BACKSPACE && menu.searching { menu.pop_query(); return false; }
             if key.code == code::SPACE && !key.control {
                 menu.toggled = true;
                 if menu.selected == 0 { menu.checked.fill(false); }
-                else { menu.checked[menu.selected - 1] = !menu.checked[menu.selected - 1]; }
+                else if let Some(i) = menu.selected_value_index() { menu.checked[i] = !menu.checked[i]; }
                 return false;
             }
             match sex_app::nav(key) {
                 Some(Nav::Up) => menu.selected = menu.selected.saturating_sub(1),
-                Some(Nav::Down) => menu.selected = (menu.selected + 1).min(menu.values.len()),
-                _ => {}
+                Some(Nav::Down) => menu.selected = (menu.selected + 1).min(menu.visible_len().saturating_sub(1)),
+                _ => if menu.searching {
+                    if let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
+                        menu.push_query(c);
+                        sex_std::record(&format!("[spreadeagle.filter.search] col={} query={} matches={} selected={}",
+                            column_name(menu.col), menu.query, menu.results.len(), menu.selected));
+                    }
+                },
             }
         }
         false
@@ -1350,7 +1371,7 @@ impl Ui {
                         let menu = self.filter_menu.as_mut().unwrap();
                         let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
                         let index = first + slot;
-                        if slot < FILTER_MENU_VISIBLE && index <= menu.values.len() {
+                        if slot < FILTER_MENU_VISIBLE && index < menu.visible_len() {
                             menu.selected = index;
                             if self.apply_filter_menu() { self.record_column(); }
                         }
