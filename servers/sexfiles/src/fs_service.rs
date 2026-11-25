@@ -1081,7 +1081,8 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
         return w::reply(r.seq, w::DENIED, 0);
     }
-    if r.kind == w::SYNC { crate::volumes::sync_all(fs); crate::home::sync(fs); }
+    let media_sync_error = if r.kind == w::SYNC { crate::volumes::sync_all(fs).err() } else { None };
+    if r.kind == w::SYNC { crate::home::sync(fs); }
     let owner = if r.kind == w::PREPARE && program.is_some() {
         let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
         Some(owner)
@@ -1099,6 +1100,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
             }
             if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
             if !read_only { crate::organize::after(fs, r.kind, path); }
+            if let Some(code) = media_sync_error { return w::reply(r.seq, code, 0); }
             w::reply(r.seq, w::OK, value)
         }
         Err(e) => {

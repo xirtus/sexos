@@ -463,10 +463,15 @@ pub fn facts(mut fs: Option<&mut Fs<'static, FsDisk>>, out: &mut String) {
     }
 }
 /// SYNC with no path reaches every volume too.
-pub fn sync_all(fs: &mut Fs<'static, FsDisk>) {
-    for m in mounts().iter_mut().filter(|m| !m.read_only()) {
-        if let Err(e) = with(Some(&mut *fs), m, |v, d| v.sync(d)) { sex_pdx::serial_record!("[files.media.sync.failed] name={} error={:?}", m.name, e); }
-    }
+pub fn sync_all(fs: &mut Fs<'static, FsDisk>) -> Result<(), u8> {
+    let mounted = mounts();
+    sv::sync_each(mounted.len(), |index| {
+        let m = &mut mounted[index];
+        if m.read_only() { return Ok(()); }
+        let result = with(Some(&mut *fs), m, |v, d| v.sync(d));
+        if let Err(e) = result { sex_pdx::serial_record!("[files.media.sync.failed] name={} error={:?}", m.name, e); }
+        result
+    }).map_err(status)
 }
 
 /// The disk holds no SexOS filesystem: mounts every volume on it, read only, under
