@@ -7,9 +7,12 @@
 
 #[path = "../servers/sexdisplay/src/chrome_candy.rs"]
 mod chrome_candy;
+#[path = "../servers/sexdisplay/src/silkbar_anim.rs"]
+mod silkbar_anim;
 
 use chrome_candy::*;
 use sex_pdx::desktop_style::chrome::Metrics;
+use silkbar_anim::{SilkBarAnim, animated_workspace_pill_pixel, slot_capsule_pixel};
 
 fn luma(c: u32) -> f32 {
     let r = ((c >> 16) & 0xFF) as f32;
@@ -126,4 +129,89 @@ fn workspace_pills_and_bell_icon_render_cleanly() {
         }
     }
     assert!(bell_px >= 40 && badge_px >= 6, "bell={bell_px} badge={badge_px}");
+}
+
+#[test]
+fn silkbar_anim_hover_press_workspace_and_dropdown_settle_to_zero_idle_cost() {
+    let mut anim = SilkBarAnim::new();
+    // Initial step establishes baseline with zero idle cost.
+    let s0 = anim.step(1000, true, None, 0, None, false);
+    assert!(!s0.animating && !s0.bar_dirty && !s0.menu_dirty);
+    assert_eq!(anim.snapshot().ws_expand[0], 255);
+    assert_eq!(anim.snapshot().ws_expand[1], 0);
+
+    // Hover slot 13 (Clock), switch workspace 0 -> 2, and open tray dropdown.
+    let s1 = anim.step(1016, true, Some(13), 2, Some(13), true);
+    assert!(s1.animating && s1.bar_dirty && s1.menu_dirty);
+    assert!(anim.snapshot().hover_alpha[13] > 0 && anim.snapshot().hover_alpha[13] < 255);
+    assert!(anim.menu_slide_offset(1) > 0, "dropdown begins sliding in");
+
+    // Tactile press pulse triggers and expires cleanly.
+    anim.trigger_press(13, 1016, true);
+    assert_eq!(anim.snapshot().press_slot, Some(13));
+
+    // Advance 25 frames at 16ms (400ms total): every animation settles cleanly.
+    let mut t = 1016u64;
+    for _ in 0..25 {
+        t += 16;
+        let _ = anim.step(t, true, Some(13), 2, Some(13), true);
+    }
+    let settled = anim.step(t + 16, true, Some(13), 2, Some(13), true);
+    assert!(!settled.animating && !settled.bar_dirty && !settled.menu_dirty, "zero idle cost once settled");
+    let snap = anim.snapshot();
+    assert_eq!(snap.hover_alpha[13], 255);
+    assert_eq!(snap.active_alpha[13], 255);
+    assert_eq!(snap.ws_expand[0], 0);
+    assert_eq!(snap.ws_expand[2], 255);
+    assert_eq!(snap.press_slot, None);
+    assert_eq!(anim.menu_slide_offset(1), 0);
+}
+
+#[test]
+fn silkbar_anim_respects_reduce_motion_with_instant_snap() {
+    let mut anim = SilkBarAnim::new();
+    let _ = anim.step(100, false, None, 0, None, false);
+    // With animations off, hover, workspace switch, and dropdown snap in one step with animating=false.
+    let s = anim.step(116, false, Some(0), 4, Some(11), true);
+    assert!(!s.animating, "Reduce Motion must never schedule extra animation frames");
+    assert!(s.bar_dirty && s.menu_dirty);
+    let snap = anim.snapshot();
+    assert_eq!(snap.hover_alpha[0], 255);
+    assert_eq!(snap.active_alpha[11], 255);
+    assert_eq!(snap.ws_expand[0], 0);
+    assert_eq!(snap.ws_expand[4], 255);
+    assert_eq!(anim.menu_slide_offset(1), 0);
+}
+
+#[test]
+fn silkbar_capsule_and_animated_workspace_pill_render_in_dark_and_light() {
+    for (mode, bg) in [(MODE_DARK, 0x0015_1520), (MODE_LIGHT, 0x00F5_F4F9)] {
+        let mut hover_px = 0usize;
+        let mut active_px = 0usize;
+        for y in 2..26 {
+            for x in 10..34 {
+                if slot_capsule_pixel(x, y, 10, 2, 24, 24, 1, mode, 0x00D6_336C, 255, 0, false, bg) != bg {
+                    hover_px += 1;
+                }
+                if slot_capsule_pixel(x, y, 10, 2, 24, 24, 1, mode, 0x00D6_336C, 0, 255, false, bg) != bg {
+                    active_px += 1;
+                }
+            }
+        }
+        assert!(hover_px >= 200 && active_px >= 200, "mode={mode} hover={hover_px} active={active_px}");
+    }
+    // Mid-transition workspace pill width lies strictly between inactive dot and active capsule.
+    let count = |expand: u8| {
+        let mut n = 0usize;
+        for y in 2..26 {
+            for x in 100..124 {
+                if animated_workspace_pill_pixel(x, y, 100, 2, 24, 24, 1, expand, 0, false, 0x00D6_336C, 0x006E_6875, 0x00FF_4444, 0x0015_1520).is_some() {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let (dot, mid, pill) = (count(0), count(128), count(255));
+    assert!(dot < mid && mid < pill, "dot={dot} mid={mid} pill={pill}");
 }

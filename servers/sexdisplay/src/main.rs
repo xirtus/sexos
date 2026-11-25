@@ -158,6 +158,8 @@ mod desktop_widgets;
 mod decor;
 mod desk_theme;
 mod chrome_candy;
+mod silkbar_anim;
+static mut SILKBAR_ANIM: silkbar_anim::SilkBarAnim = silkbar_anim::SilkBarAnim::new();
 mod glass;
 mod frost;
 mod pacing;
@@ -1235,25 +1237,44 @@ fn module_rect(bar: &SilkBar, slot: ModuleSlot) -> (usize, usize, usize, usize) 
     (lb.x, lb.y, lb.w, lb.h)
 }
 
+fn bar_slot_bg(x: usize, y: usize, slot_idx: usize, b: &silkbar_model::LayoutBox, scene: &scene::SceneSnapshot) -> u32 {
+    let body = bar_body(x, y, scene);
+    if slot_idx >= silkbar_anim::SLOT_COUNT || b.w == 0 { return body; }
+    let anim = unsafe { (*core::ptr::addr_of!(SILKBAR_ANIM)).snapshot() };
+    silkbar_anim::slot_capsule_pixel(
+        x, y, b.x, b.y, b.w, b.h,
+        scene.metrics.scale() as usize,
+        scene.tokens.mode_id,
+        scene.tokens.bar.active,
+        anim.hover_alpha[slot_idx],
+        anim.active_alpha[slot_idx],
+        anim.press_slot == Some(slot_idx as u8),
+        body,
+    )
+}
+
 fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
+    let anim = unsafe { (*core::ptr::addr_of!(SILKBAR_ANIM)).snapshot() };
     for i in 0..silkbar_model::WORKSPACE_COUNT {
-        let b=&bar.layout[1+i];
+        let slot_idx = 1 + i;
+        let b=&bar.layout[slot_idx];
         if b.w==0||!in_rect(x,y,b.x,b.y,b.w,b.h){continue;}
         let scale=scene.metrics.scale()as usize;
+        let bg = bar_slot_bg(x, y, slot_idx, b, scene);
         if i==0&&bar.layout[ModuleSlot::Workspace1 as usize].w==0 {
             let left=b.x+(b.w-10*scale)/2;let top=b.y+(b.h-10*scale)/2;
             if in_rect(x,y,left,top,10*scale,10*scale)
                 &&((x-left)/scale)%4<2&&((y-top)/scale)%4<2{return Some(scene.tokens.bar.active);}
-            return None;
+            return Some(bg);
         }
-        let col = if bar.workspaces[i].urgent { scene.tokens.bar.urgent }
-            else if bar.workspaces[i].active { scene.tokens.bar.active }
-            else { scene.tokens.bar.muted };
-        let bg = bar_body(x, y, scene);
-        return chrome_candy::workspace_pill_pixel(
+        let expand = if bar.workspaces[i].active { anim.ws_expand[i].max(1) } else { anim.ws_expand[i] };
+        let pill = silkbar_anim::animated_workspace_pill_pixel(
             x, y, b.x, b.y, b.w, b.h, scale,
-            bar.workspaces[i].active, bar.workspaces[i].urgent, col, bg,
+            expand, anim.hover_alpha[slot_idx], bar.workspaces[i].urgent,
+            scene.tokens.bar.active, scene.tokens.bar.muted, scene.tokens.bar.urgent,
+            bg,
         );
+        return Some(pill.unwrap_or(bg));
     }
     None
 }
@@ -1265,14 +1286,18 @@ static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx:
 fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
     // Tray icons in the three status chips: network, volume, battery.
     for (idx,slot) in [ModuleSlot::Chip0,ModuleSlot::Chip1,ModuleSlot::Chip2].iter().enumerate(){
-        let(cx,cy,cw,ch)=module_rect(bar,*slot);
+        let slot_idx = *slot as usize;
+        let b = &bar.layout[slot_idx];
+        let(cx,cy,cw,ch)=(b.x,b.y,b.w,b.h);
+        if cw == 0 || !in_rect(x, y, cx, cy, cw, ch) { continue; }
+        let bg = bar_slot_bg(x, y, slot_idx, b, scene);
+        if !bar.chips[idx].visible { return Some(bg); }
         let size=scene.metrics.px(16)as usize;
         let left=cx+cw.saturating_sub(size)/2;let top=cy+ch.saturating_sub(size)/2;
-        if !in_rect(x,y,left,top,size,size){continue;}
-        if !bar.chips[idx].visible{return None;}
-        // The SexOS icon set's tray icons, anti-aliased over the bar's glass.
-        return tray_icons::at(idx,x-left,y-top,size,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)})
-            .map(|(c,a)|coverage_blend(desk_theme::tray_ink(c,desk_theme::current()),bar_body(x,y,scene),a));
+        if !in_rect(x,y,left,top,size,size){ return Some(bg); }
+        // The SexOS icon set's tray icons, anti-aliased over the animated capsule.
+        return Some(tray_icons::at(idx,x-left,y-top,size,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)})
+            .map_or(bg, |(c,a)|coverage_blend(desk_theme::tray_ink(c,desk_theme::current()),bg,a)));
     }
     None
 }
@@ -1536,13 +1561,14 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
     if let Some(c) = workspace_color(x, y, bar, scene) { return c; }
     // Status chip backgrounds
     if let Some(c) = chip_color(x, y, bar, scene) { return c; }
-    // Bell indicator (crisp silhouette with notification badge dot)
-    let (bx, by, bw, bh) = module_rect(bar, ModuleSlot::Bell);
-    if in_rect(x, y, bx, by, bw, bh) {
+    // Bell indicator (crisp silhouette with notification badge dot over animated capsule)
+    let bell_slot = ModuleSlot::Bell as usize;
+    let bell_box = &bar.layout[bell_slot];
+    if bell_box.w > 0 && in_rect(x, y, bell_box.x, bell_box.y, bell_box.w, bell_box.h) {
         let s = &bar.bell_state;
-        let bg = bar_body(x, y, scene);
+        let bg = bar_slot_bg(x, y, bell_slot, bell_box, scene);
         if let Some(c) = chrome_candy::bell_icon_pixel(
-            x, y, bx, by, bw, bh, scene.metrics.scale() as usize,
+            x, y, bell_box.x, bell_box.y, bell_box.w, bell_box.h, scene.metrics.scale() as usize,
             s.flags & 1 != 0, s.total_visible, s.redacted_count,
             scene.tokens.bar.text, scene.tokens.bar.muted, bg,
         ) {
@@ -1550,12 +1576,19 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
         }
         return bg;
     }
-    // Launcher button: the SexOS lips (sex_pdx::brand) on the bar's own glass,
-    // where other systems put their own mark.
-    let (lx, ly, lw, lh) = module_rect(bar, ModuleSlot::Launcher);
-    if in_rect(x, y, lx, ly, lw, lh) {
-        let body = bar_body(x, y, scene);
-        return launcher_mark_at(x - lx, y - ly, lw, lh).map_or(body, |(color, cover)| sex_pdx::brand::blend(color, body, cover));
+    // Clock capsule background (clock text renders on top in top_strip_pixel).
+    let clock_slot = ModuleSlot::Clock as usize;
+    let clock_box = &bar.layout[clock_slot];
+    if clock_box.w > 0 && in_rect(x, y, clock_box.x, clock_box.y, clock_box.w, clock_box.h) {
+        return bar_slot_bg(x, y, clock_slot, clock_box, scene);
+    }
+    // Launcher button: the SexOS lips (sex_pdx::brand) over animated capsule.
+    let launch_slot = ModuleSlot::Launcher as usize;
+    let launch_box = &bar.layout[launch_slot];
+    if launch_box.w > 0 && in_rect(x, y, launch_box.x, launch_box.y, launch_box.w, launch_box.h) {
+        let body = bar_slot_bg(x, y, launch_slot, launch_box, scene);
+        return launcher_mark_at(x - launch_box.x, y - launch_box.y, launch_box.w, launch_box.h)
+            .map_or(body, |(color, cover)| sex_pdx::brand::blend(color, body, cover));
     }
     bar_body(x, y, scene)
 }
@@ -3038,7 +3071,6 @@ fn restore_cursor_under(fb: *mut u32, w: usize, h: usize, total_pixels: usize, m
         for row in 0..CURSOR_ARROW_H * cs {
             let py = oy + row;
             if py >= h { break; }
-            if py < metrics.bar()as usize { continue; } // never write into SilkBar zone (y<51)
             for col in 0..CURSOR_ARROW_W * cs {
                 let px = ox + col;
                 if px >= w { continue; }
@@ -3325,7 +3357,6 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
                 for row in 0..CURSOR_ARROW_H * cs {
                     let py = oy + row;
                     if py >= h { break; }
-                    if py < (scene.metrics.bar()as usize) { continue; }
                     for col in 0..CURSOR_ARROW_W * cs {
                         let px = ox + col;
                         if px >= w { continue; }
@@ -3341,15 +3372,24 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             for row in 0..CURSOR_ARROW_H * cs {
                 let py = oy + row;
                 if py >= h { break; }
-                if py < (scene.metrics.bar()as usize) { continue; } // never write into SilkBar zone (y<51)
-                let bits = CURSOR_ARROW_BITMAP[row / cs];
+                let lr = row / cs;
+                let bits = CURSOR_ARROW_BITMAP[lr];
                 for col in 0..CURSOR_ARROW_W * cs {
-                    if bits & (0x80u8 >> (col / cs)) == 0 { continue; }
+                    let lc = col / cs;
+                    if bits & (0x80u8 >> lc) == 0 { continue; }
                     let px = ox + col;
                     if px >= w { continue; }
                     let idx = py * w + px;
                     if idx < total_pixels {
-                        core::ptr::write_volatile(fb.add(idx), CURSOR_ARROW_COLOR);
+                        // Crisp white outline with dark obsidian interior so the
+                        // cursor reads clearly on both Light and Dark SilkBar.
+                        let interior = lr > 0 && lr + 1 < CURSOR_ARROW_H && lc > 0 && lc + 1 < CURSOR_ARROW_W
+                            && (CURSOR_ARROW_BITMAP[lr - 1] & (0x80u8 >> lc)) != 0
+                            && (CURSOR_ARROW_BITMAP[lr + 1] & (0x80u8 >> lc)) != 0
+                            && (bits & (0x80u8 >> (lc - 1))) != 0
+                            && (bits & (0x80u8 >> (lc + 1))) != 0;
+                        let ink = if interior { 0x0014_161E } else { CURSOR_ARROW_COLOR };
+                        core::ptr::write_volatile(fb.add(idx), ink);
                     }
                 }
             }
@@ -3544,9 +3584,11 @@ fn tray_fill(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, u
 fn tray_menu_rect(w: usize, bar: usize, scale: u32) -> Option<glass::Rect> {
     use sex_pdx::tray::{self, Menu};
     let s = scale as usize;
+    let slide = unsafe { (*core::ptr::addr_of!(SILKBAR_ANIM)).menu_slide_offset(s) };
+    let y_bar = bar.saturating_add(slide);
     match unsafe { TRAY_VIEW }.menu {
-        Menu::Quick => tray::Quick::new(w, bar, s).map(|q| q.panel),
-        Menu::Calendar => tray::Calendar::new(w, bar, s).map(|c| c.panel),
+        Menu::Quick => tray::Quick::new(w, y_bar, s).map(|q| q.panel),
+        Menu::Calendar => tray::Calendar::new(w, y_bar, s).map(|c| c.panel),
         Menu::None => None,
     }
 }
@@ -3558,6 +3600,8 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
     let scale = scene.metrics.scale();
     let s = scale as usize;
     let bar = scene.metrics.bar() as usize;
+    let slide = unsafe { (*core::ptr::addr_of!(SILKBAR_ANIM)).menu_slide_offset(s) };
+    let y_bar = bar.saturating_add(slide);
     let line = glyphs::UI_H * s;
     let d = desk_theme::current();
     let (bg, rim, track) = (d.menu, d.menu_rim, d.menu_picked);
@@ -3570,7 +3614,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
     let status = unsafe { TRAY_STATUS };
     match view.menu {
         Menu::Quick => {
-            let Some(q) = tray::Quick::new(w, bar, s) else { return };
+            let Some(q) = tray::Quick::new(w, y_bar, s) else { return };
             panel(q.panel);
             let mid = |r: (usize, usize, usize, usize)| r.1 + r.3.saturating_sub(line) / 2;
             let r0 = q.rows[0];
@@ -3601,7 +3645,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             for r in &q.rows[1..] { tray_fill(fb, w, h, total, (r.0, r.1, r.2, s), track); }
         }
         Menu::Calendar => {
-            let Some(c) = tray::Calendar::new(w, bar, s) else { return };
+            let Some(c) = tray::Calendar::new(w, y_bar, s) else { return };
             panel(c.panel);
             let today = if scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0 {
                 sex_time::SexTimestamp::from_unix(scene.bar.civil_clock.seconds() as i64, 0).and_then(sex_time::Gregorian::from_timestamp)
@@ -5085,7 +5129,18 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 {
                         if let Some(view) = sex_pdx::tray::View::decode(msg.arg2) {
                             let status = sex_pdx::tray::Status::decode(msg.arg0);
-                            unsafe { TRAY_STATUS = status; TRAY_LABEL = msg.arg1; TRAY_VIEW = view; }
+                            unsafe {
+                                TRAY_STATUS = status; TRAY_LABEL = msg.arg1; TRAY_VIEW = view;
+                                let press_slot = match view.menu {
+                                    sex_pdx::tray::Menu::Quick => Some(ModuleSlot::Chip1 as usize),
+                                    sex_pdx::tray::Menu::Calendar => Some(ModuleSlot::Clock as usize),
+                                    sex_pdx::tray::Menu::None => None,
+                                };
+                                if let Some(s) = press_slot {
+                                    let on = (*core::ptr::addr_of!(MOTION)).enabled();
+                                    (*core::ptr::addr_of_mut!(SILKBAR_ANIM)).trigger_press(s, sex_pdx::get_ticks(), on);
+                                }
+                            }
                             needs_top_strip_redraw = true;
                             needs_full_redraw = true;
                             sex_pdx::serial_record!("[display.tray] menu={} offset={} volume={} muted={} battery={} wifi={}", msg.arg2 & 0xFF, view.month_offset, status.volume, status.muted as u8, status.battery.map_or(-1, |b| b as i32), status.wifi);
@@ -6025,11 +6080,48 @@ pub extern "C" fn _start() -> ! {
         let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
         // A window still moving: draw the next frame of its animation.
         let motion_now = sex_pdx::get_ticks();
+        // SilkBar macOS-style interactive animations: hover capsules, active/press
+        // highlights, workspace pill transitions, and tray dropdown reveal.
+        // Zero idle cost when settled; snaps immediately when animations are off.
+        let sb_step = unsafe {
+            let bh = bar_height();
+            let hover_slot = SURFACES.iter()
+                .find(|s| s.active && s.surface_id == CURSOR_SURFACE_ID)
+                .and_then(|c| {
+                    if c.x < 0 || c.y < 0 || (c.y as usize) >= bh { return None; }
+                    let (cx, cy) = (c.x as usize, c.y as usize);
+                    (0..silkbar_model::LAYOUT_COUNT).find(|&i| {
+                        let b = &bar.layout[i];
+                        b.w > 0 && in_rect(cx, cy, b.x, b.y, b.w, b.h)
+                    })
+                });
+            let active_ws = (0..silkbar_model::WORKSPACE_COUNT)
+                .find(|&i| bar.workspaces[i].active)
+                .unwrap_or(0);
+            let launcher_open = SURFACES.iter().any(|s| s.active && s.surface_id == LAUNCHER_PANEL_SURFACE_ID);
+            let tray_menu = (*core::ptr::addr_of!(TRAY_VIEW)).menu;
+            let open_menu_slot = match tray_menu {
+                sex_pdx::tray::Menu::Quick => Some(ModuleSlot::Chip1 as usize),
+                sex_pdx::tray::Menu::Calendar => Some(ModuleSlot::Clock as usize),
+                sex_pdx::tray::Menu::None => if launcher_open { Some(ModuleSlot::Launcher as usize) } else { None },
+            };
+            let anim_on = (*core::ptr::addr_of!(MOTION)).enabled();
+            (*core::ptr::addr_of_mut!(SILKBAR_ANIM)).step(
+                motion_now,
+                anim_on,
+                hover_slot,
+                active_ws,
+                open_menu_slot,
+                tray_menu != sex_pdx::tray::Menu::None,
+            )
+        };
+        if sb_step.bar_dirty { needs_top_strip_redraw = true; }
+        if sb_step.menu_dirty { needs_full_redraw = true; }
         // On the damage path: each frame redraws only where moving windows
         // pass, and the frame after the last tween ends lands them exactly.
         let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
         let pacer = unsafe { &mut *core::ptr::addr_of_mut!(PACER) };
-        let animating = motion.active(motion_now);
+        let animating = motion.active(motion_now) || sb_step.animating;
         // 60 Hz: between paced frames the moving windows are not redrawn.
         let paced = !animating || pacer.due(motion_now);
         let motion_damage = motion.span().filter(|_| paced).map(|(l, t, r, b)| {
