@@ -22,7 +22,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   through a bounded prompt. The note remains editable on the page; Esc returns
   to the body caret. Ctrl+Alt+E now inserts a linked editable endnote through
   the same bounded flow. DOCX/ODT round trips are covered. Native note
-  placement, numbering and conversion controls remain.
+  placement and numbering controls remain. Ctrl+Alt+Shift+N now converts
+  footnotes to endnotes, endnotes to footnotes, or swaps both kinds across the
+  document. It keeps linked note text, supports one-step undo, and has DOCX/ODT
+  round-trip coverage plus a guest screenshot gate.
 - **Hyperlinks:** Ctrl+K now opens a native URL prompt for selected text or a
   new display label. Web and mail links are bounded, undoable, and covered by
   DOCX/ODT round trips. Ctrl+Alt+K now removes a link from selected text while

@@ -109,6 +109,8 @@ enum Ask {
     Footnote(String),
     /// Ctrl+Alt+E: text for a linked endnote at the body caret.
     Endnote(String),
+    /// Ctrl+Alt+Shift+N: convert linked notes throughout the document.
+    NoteConvert(String),
     /// Ctrl+K: address and optional display text for a hyperlink.
     Link(String),
     /// Ctrl+Alt+T: insert, update or remove a heading-based contents table.
@@ -151,6 +153,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
     ("Ctrl+Alt+E", "Insert an endnote; Esc returns to body"),
+    ("Ctrl+Alt+Shift+N", "Convert notes to endnotes, footnotes, or swap"),
     ("Ctrl+K", "Link selected text or insert a labeled link"),
     ("Ctrl+Alt+K", "Remove a link from selected text"),
     ("Ctrl+Alt+T", "Insert, refresh or remove a table of contents"),
@@ -432,6 +435,7 @@ impl Ui {
                 Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
                 Ask::Footnote(note) => format!("Footnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
                 Ask::Endnote(note) => format!("Endnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
+                Ask::NoteConvert(to) => format!("Convert notes: {to}_   {}", said("endnote, footnote, or swap; applies to the whole document")),
                 Ask::Link(link) => format!("Link: {link}_   {}", said("Edit address here, Ctrl+A clears it; optional display text follows a space")),
                 Ask::Contents(action) => format!("Contents: {action}_   {}", said("insert 1–9 heading levels, update, or remove")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
@@ -573,7 +577,7 @@ impl Ui {
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
         let link_prompt = matches!(ask, Ask::Link(_));
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Endnote(t) | Ask::Link(t) | Ask::Contents(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Endnote(t) | Ask::NoteConvert(t) | Ask::Link(t) | Ask::Contents(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -796,6 +800,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::NoteConvert(_)) {
+            match self.book.convert_notes(&typed) {
+                Ok(count) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.note.convert] to={typed} count={count}"));
+                    self.message = format!("Converted {count} note{}", if count == 1 { "" } else { "s" });
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if matches!(ask, Ask::Link(_)) {
             match self.book.insert_hyperlink(&typed) {
                 Ok(()) => {
@@ -976,6 +992,7 @@ impl Ui {
                 (code::L, _) if key.shift => { self.ask = Some(Ask::Paper(String::new())); return; }
                 (code::L, _) if key.alt => { self.ask = Some(Ask::List(String::new())); return; }
                 (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
+                (code::N, _) if key.alt && key.shift => { self.ask = Some(Ask::NoteConvert(String::new())); return; }
                 (code::N, _) if key.alt => { self.ask = Some(Ask::PageNumbers(String::new())); return; }
                 (code::N, _) if key.shift => { self.ask = Some(Ask::Footnote(String::new())); return; }
                 (code::E, _) if key.alt && !key.shift => { self.ask = Some(Ask::Endnote(String::new())); return; }

@@ -392,6 +392,14 @@ def main():
   assert (a.out/'assuit-endnote-edit.ppm').stat().st_size>10000
   s=len(t());q.key('esc');g['wait'](r'\[assuit\.endnote\.close\]',s,120)
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  s=len(t());press('ctrl','alt','shift','n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-note-convert-prompt.ppm')})
+  assert (a.out/'assuit-note-convert-prompt.ppm').stat().st_size>10000
+  type_line('endnote');q.key('ret')
+  g['wait'](r'\[assuit\.note\.convert\] to=endnote count=1',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-notes-converted.ppm')})
+  assert (a.out/'assuit-notes-converted.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   press('ctrl','end')
   s=len(t());press('ctrl','k')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-hyperlink-prompt.ppm')})
