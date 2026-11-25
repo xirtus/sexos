@@ -92,6 +92,13 @@ def main():
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'end'}],'hold-time':80});time.sleep(.5)
   for _ in range(50):q.key('ret');time.sleep(.08)
   g['wait'](r'\[assuit\.page\] page=2 pages=2 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,300)
+  # The print chooser can emit only even pages while leaving the editing document active.
+  s=len(t());press('ctrl','shift','p');type_line('even')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-print-even-pages.ppm')})
+  assert (a.out/'assuit-print-even-pages.ppm').stat().st_size>10000
+  q.key('ret')
+  chosen=g['wait'](r'\[assuit\.pdf-range\] pages=even name=welcome\.even\.pdf bytes=(\d+)\n',s,300)
+  assert int(chosen[1])>500,chosen[0]
   g['chord']('ctrl','v',r'\[assuit\.command\] edit\.paste\n')
   # Preview uses WordCraft's rendered paper but does not move the editing caret.
   s=len(t());press('ctrl','alt','p')
