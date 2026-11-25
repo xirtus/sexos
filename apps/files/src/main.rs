@@ -111,6 +111,8 @@ struct App {
     /// Name to select once the job finishes.
     job_select: Option<Vec<u8>>,
     last_drawn: u64,
+    theme_generation: u64,
+    last_theme_check: u64,
     last_pct: u64,
     confirm: Option<Confirm>,
     /// In a trash folder: where each entry came from, by row.
@@ -999,7 +1001,7 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
@@ -1017,10 +1019,21 @@ pub extern "C" fn _start() -> ! {
     let registered = sex_app::search::register("loom", &[sex_app::search::KIND_FILE, sex_app::search::KIND_CONTENT]);
     sex_pdx::serial_record!("[files.app.voyeur.register] sent={}", registered as u8);
     app.render(&mut window);
+    sex_pdx::serial_record!("[files.app.theme] mode={:?}", sex_app::settings::theme().mode);
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);
     // Where the left button went down, until a drag starts or it comes up.
     let mut press: Option<(i32, i32)> = None;
     loop {
+        let now = sex_pdx::get_ticks();
+        if now.saturating_sub(app.last_theme_check) >= 500 {
+            app.last_theme_check = now;
+            let generation = sex_app::settings::generation().unwrap_or(app.theme_generation);
+            if generation != app.theme_generation {
+                app.theme_generation = generation;
+                app.render(&mut window);
+                sex_pdx::serial_record!("[files.app.theme] mode={:?}", sex_app::settings::theme().mode);
+            }
+        }
         if let Some((cookie, program)) = app.opening.clone() {
             match sex_app::launch::poll(cookie) {
                 Some(sex_app::launch::Event::Refused { code, .. }) => {
