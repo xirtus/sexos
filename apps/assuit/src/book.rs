@@ -466,6 +466,26 @@ impl Book {
         Ok(())
     }
 
+    /// Set left, right and relative first-line indents for the current or
+    /// selected paragraphs. A negative first-line value makes a hanging indent.
+    pub fn set_paragraph_indents(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter left, right and first-line indents in inches, e.g. 0.5 0 -0.25 for hanging";
+        let words: Vec<_> = input.split_whitespace().collect();
+        if words.len() != 3 { return Err(HELP.into()); }
+        let mut inch = [0.0_f32; 3];
+        for (at, word) in words.iter().enumerate() {
+            inch[at] = word.parse().map_err(|_| HELP.to_string())?;
+            if !inch[at].is_finite() { return Err(HELP.into()); }
+        }
+        if !(0.0..=3.0).contains(&inch[0]) || !(0.0..=3.0).contains(&inch[1])
+            || inch[0] + inch[1] > 4.0 || !(-3.0..=3.0).contains(&inch[2])
+            || inch[0] + inch[2] < 0.0 { return Err(HELP.into()); }
+        self.run("para.indents", json!({
+            "left": inch[0] * 72.0, "right": inch[1] * 72.0, "firstLine": inch[2] * 72.0,
+        }))?;
+        Ok(())
+    }
+
     /// Inserts a picture from a file the program can read in its granted folder.
     pub fn insert_picture(&mut self, path: &str) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("Could not read {path}: {e}"))?;
@@ -1452,6 +1472,32 @@ mod tests {
             book.save().unwrap();
             let minimum = Book::open(&path).unwrap();
             assert_eq!(spacing(&minimum), spacing(&book), "{ext} lost minimum height");
+        }
+    }
+
+    #[test]
+    fn paragraph_indents_round_trip_and_undo() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("paragraph-indents.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text(&"An indented paragraph wraps over several lines on the page. ".repeat(20)).unwrap();
+            let before = book.draw(0, 1.0).unwrap().pixels;
+            for bad in ["0.5 0", "4 0 0", "0 0 -0.25", "0.5 0 -1", "0.5 NaN 0", "3 3 0"] {
+                assert!(book.set_paragraph_indents(bad).is_err(), "{bad}");
+            }
+            let indents = |b: &Book| {
+                let p = b.session.doc.body.iter().find_map(|block| block.as_para()).unwrap();
+                (p.props.indent_left, p.props.indent_right, p.props.indent_first)
+            };
+            book.set_paragraph_indents("0.5 0.25 -0.25").unwrap();
+            assert_eq!(indents(&book), (Some(36.0), Some(18.0), Some(-18.0)));
+            assert!(book.draw(0, 1.0).unwrap().pixels != before, "indent must change page layout");
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert_ne!(indents(&book), (Some(36.0), Some(18.0), Some(-18.0)), "one undo must restore prior indents");
+            book.set_paragraph_indents("0.5 0.25 -0.25").unwrap();
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert_eq!(indents(&reopened), indents(&book), "{ext} lost paragraph indents");
         }
     }
 

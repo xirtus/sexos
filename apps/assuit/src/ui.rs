@@ -103,6 +103,8 @@ enum Ask {
     PageNumbers(String),
     /// Ctrl+Alt+S: line multiple, space before and after in points.
     Spacing(String),
+    /// Ctrl+Alt+I: left, right and first-line indents in inches.
+    Indents(String),
     /// Ctrl+Shift+K: document proofing language.
     Language(String),
 }
@@ -138,6 +140,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+N", "Add page numbers to header or footer"),
     ("Ctrl+Alt+H / F", "Edit shown header / footer; Esc returns to body"),
     ("Ctrl+Alt+S", "Paragraph line multiple or exact/minimum height"),
+    ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
@@ -413,6 +416,7 @@ impl Ui {
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
                 Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("place, remove, start N, continue, format TYPE, first/even on/off")),
                 Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("multiple 1.5 0 8, exact 18 0 8, or minimum 18 0 8")),
+                Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
@@ -549,7 +553,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -735,6 +739,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Indents(_)) {
+            match self.book.set_paragraph_indents(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.paragraph-indents] {typed}"));
+                    self.message = format!("Paragraph indents set to {typed}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if matches!(ask, Ask::Language(_)) {
             match self.book.proofing_language(&typed) {
                 Ok(tag) => {
@@ -885,6 +901,7 @@ impl Ui {
                 (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
                 (code::N, _) if key.alt => { self.ask = Some(Ask::PageNumbers(String::new())); return; }
                 (code::S, _) if key.alt => { self.ask = Some(Ask::Spacing(String::new())); return; }
+                (code::I, _) if key.alt && !key.shift => { self.ask = Some(Ask::Indents(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }

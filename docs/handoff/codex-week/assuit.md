@@ -14,6 +14,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   document edits. This slice adds a bounded paragraph-spacing prompt and checks
   DOCX/ODT save and reopen. The prompt now also accepts `exact` and `minimum`
   line heights in points, with DOCX/ODT round trips and a guest screenshot gate.
+- **Paragraph indents:** WordCraft stores left, right and relative first-line
+  indents. Ctrl+Alt+I now opens a bounded inch prompt, including negative
+  first-line values for hanging indents. One-step undo and DOCX/ODT persistence
+  are covered by a host test; CI captures the guest prompt and result.
 - **Page numbering:** WordCraft can insert dynamic page fields in a header or
   footer, but Assuit has no native control for it. This slice exposes bounded
   top/bottom and left/center/right choices, checks the visible page and
