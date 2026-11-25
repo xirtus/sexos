@@ -4,6 +4,7 @@
 //! Frozen rows and columns stay put while the rest scrolls; filtered-out rows are
 //! skipped; charts float over the cells at their anchors.
 use crate::book::{Book, Function, Range, column_name};
+use crate::filter_menu::FilterMenu;
 use sex_office::{Canvas, Pen};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::{Kind, Pointer};
@@ -117,7 +118,6 @@ enum Ask {
     FilterCondition { col: u32, text: Vec<char> },
 }
 
-struct FilterMenu { col: u32, values: Vec<String>, selected: usize, checked: Vec<bool>, toggled: bool }
 
 struct FunctionPicker { entries: Vec<Function>, query: String, selected: usize }
 
@@ -614,7 +614,8 @@ impl Ui {
             canvas.fill(mx + 3, my + 3, FILTER_MENU_W, mh, palette.grid);
             canvas.fill(mx, my, FILTER_MENU_W, mh, palette.bar_bg);
             canvas.frame(mx, my, FILTER_MENU_W, mh, palette.grid);
-            self.pen.text(&mut canvas, mx + 8, my + 5, &format!("{}: choose values", column_name(menu.col)), palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
+            let title = if menu.condition { "condition active" } else if menu.active { "values active" } else { "choose values" };
+            self.pen.text(&mut canvas, mx + 8, my + 5, &format!("{}: {title}", column_name(menu.col)), palette.ink, Some((mx + 8, FILTER_MENU_W - 16)));
             let first = menu.selected.saturating_sub(FILTER_MENU_VISIBLE - 1);
             for slot in 0..count {
                 let index = first + slot;
@@ -911,12 +912,18 @@ impl Ui {
         if !(left..=right).contains(&col) { return; }
         let values = self.book.filter_choices(col);
         sex_std::record(&format!("[spreadeagle.filter.menu] col={} values={}", column_name(col), values.len()));
-        let checked = vec![false; values.len()];
-        self.filter_menu = Some(FilterMenu { col, values, selected: 0, checked, toggled: false });
+        let menu = FilterMenu::new(col, values, self.book.filter_state(col));
+        sex_std::record(&format!("[spreadeagle.filter.menu.state] col={} active={} selected={}", column_name(col),
+            if menu.condition { "condition" } else if menu.active { "values" } else { "none" }, menu.checked.iter().filter(|&&on| on).count()));
+        self.filter_menu = Some(menu);
     }
 
     fn apply_filter_menu(&mut self) -> bool {
         let Some(menu) = self.filter_menu.take() else { return false };
+        if menu.untouched_active() {
+            sex_std::record(&format!("[spreadeagle.filter.menu.unchanged] col={}", column_name(menu.col)));
+            return false;
+        }
         let values: Vec<String> = if menu.toggled {
             menu.values.into_iter().zip(menu.checked).filter_map(|(value, checked)| checked.then_some(value)).collect()
         } else {

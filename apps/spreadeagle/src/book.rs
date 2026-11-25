@@ -4,6 +4,7 @@
 //! files. Nothing here draws or touches SexOS, so the host tests drive it directly.
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::model::FilterCriterion;
 use serde_json::{Value as Json, json};
 use std::io::Write;
 
@@ -15,6 +16,10 @@ pub struct Shown {
     pub right: bool,
     pub error: bool,
 }
+
+/// The active AutoFilter criterion for one column, for the native value menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FilterState { None, Values { values: Vec<String>, blanks: bool }, Other }
 
 /// Cells from (`r0`, `c0`) to (`r1`, `c1`), counted from 0, corners in any order.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -365,6 +370,17 @@ impl Book {
         let d = self.session.doc().ok()?;
         let r = d.wb.active()?.autofilter.as_ref()?.range;
         Some(Range { r0: r.start.row, c0: r.start.col, r1: r.end.row, c1: r.end.col })
+    }
+
+    pub fn filter_state(&self, col: u32) -> FilterState {
+        let Ok(d) = self.session.doc() else { return FilterState::None };
+        let Some(af) = d.wb.active().and_then(|s| s.autofilter.as_ref()) else { return FilterState::None };
+        if !(af.range.start.col..=af.range.end.col).contains(&col) { return FilterState::None; }
+        let Some((_, criterion)) = af.criteria.iter().find(|(off, _)| *off == col - af.range.start.col) else { return FilterState::None };
+        match criterion {
+            FilterCriterion::Values { values, blanks } => FilterState::Values { values: values.clone(), blanks: *blanks },
+            _ => FilterState::Other,
+        }
     }
 
     /// Distinct displayed values under an AutoFilter header, including rows currently hidden
@@ -987,6 +1003,27 @@ mod tests {
         book.toggle_filter(Range::cell(2, 0)).unwrap();
         assert!(book.filter_range().is_none());
         assert!((0..4).all(|r| book.row_height(r) > 0));
+    }
+
+    #[test]
+    fn filter_state_reports_selected_values_and_condition_after_reopen() {
+        let mut book = budget("filter-state.xlsx");
+        let at = Range::cell(2, 0);
+        assert_eq!(book.filter_state(0), FilterState::None);
+        book.filter_by_values(at, 0, &["Food".into(), "Fun".into()]).unwrap();
+        assert_eq!(book.filter_state(0), FilterState::Values { values: vec!["Food".into(), "Fun".into()], blanks: false });
+        assert_eq!(book.filter_state(1), FilterState::None);
+        let path = book.path.clone();
+        book.save().unwrap();
+        let (mut reopened, _) = Book::open(&path).unwrap();
+        assert_eq!(reopened.filter_state(0), book.filter_state(0));
+        reopened.filter_by_condition(at, 0, "contains oo").unwrap();
+        assert_eq!(reopened.filter_state(0), FilterState::Other);
+        reopened.filter_by_values(at, 0, &[]).unwrap();
+        assert_eq!(reopened.filter_state(0), FilterState::None);
+        reopened.filter_by_values(at, 1, &["200".into()]).unwrap();
+        assert_eq!(reopened.filter_state(1), FilterState::Values { values: vec!["200".into()], blanks: false });
+        assert_eq!(reopened.filter_state(0), FilterState::None);
     }
 
     #[test]
