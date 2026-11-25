@@ -222,6 +222,18 @@ impl Book {
         Ok(())
     }
 
+    /// Resize the selected picture by its width in inches while preserving its
+    /// original proportions. WordCraft stores the size in document points.
+    pub fn picture_width(&mut self, inches: &str) -> Result<(), String> {
+        let inches = inches.trim().parse::<f32>().map_err(|_| "Enter a picture width from 0.1 to 20 inches".to_string())?;
+        if !inches.is_finite() || !(0.1..=20.0).contains(&inches) {
+            return Err("Enter a picture width from 0.1 to 20 inches".into());
+        }
+        self.run("picture.size", json!({ "width": inches * 72.0, "lockAspect": true }))
+            .map_err(|_| "Select a picture first".to_string())?;
+        Ok(())
+    }
+
     /// Selects the next proofing issue and returns its word and suggestions.
     pub fn next_spelling_issue(&mut self) -> Result<Option<(String, Vec<String>)>, String> {
         let issue = self.run("review.spelling", json!({}))?;
@@ -895,6 +907,31 @@ mod tests {
             assert_eq!(alt(&book).as_deref(), Some("SexOS lips badge"));
             book.save().unwrap();
             assert_eq!(alt(&Book::open(&path).unwrap()).as_deref(), Some("SexOS lips badge"), "{ext} lost alternative text");
+        }
+    }
+
+    #[test]
+    fn picture_width_preserves_aspect_and_round_trips() {
+        let picture = temp("size-mark.png");
+        std::fs::write(&picture, include_bytes!("../../../assets/brand/sexos-lips-badge-64.png")).unwrap();
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("picture-size.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.picture_width("2").is_err());
+            book.insert_picture(&picture).unwrap();
+            assert!(book.picture_width("22").is_err());
+            let size = |book: &Book| book.session.doc.body.iter().filter_map(|b| b.as_para())
+                .flat_map(|p| p.object_offsets().into_iter().filter_map(|off| p.object_at(off)))
+                .find_map(|o| match o { wordcraft_engine::doc::para::InlineObject::Image { w, h, .. } => Some((*w, *h)), _ => None }).unwrap();
+            let before = size(&book);
+            book.picture_width("2").unwrap();
+            let after = size(&book);
+            assert!((after.0 - 144.0).abs() < 0.1);
+            assert!((after.1 / after.0 - before.1 / before.0).abs() < 0.01);
+            book.save().unwrap();
+            let saved = size(&Book::open(&path).unwrap());
+            assert!((saved.0 - 144.0).abs() < 0.1, "{ext} lost picture width: {saved:?}");
+            assert!((saved.1 / saved.0 - before.1 / before.0).abs() < 0.01, "{ext} lost picture proportions");
         }
     }
 
