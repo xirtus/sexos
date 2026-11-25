@@ -42,7 +42,7 @@ def main():
  def shell(line,pattern,timeout=120):
   g['focus'](153);time.sleep(.5);s=len(t());keys(line);q.key('ret');return g['wait'](pattern,s,timeout)
  def launch():
-  s=len(t());shell('run valentine',r'\[shell.program.launch\]')
+  s=len(t());shell('run +net valentine',r'\[shell.program.launch\]')
   ready=g['wait'](r'\[valentine.ready\] target=(\d+) task=(\d+)',s,90)
   display=g['wait'](rf'\[shell.program.launch\] target={ready[1]} task={ready[2]} surface=(\d+)',s,60)
   g['focus'](int(display[1]));time.sleep(.7)
@@ -132,9 +132,10 @@ def main():
   keys('plans');g['wait'](r'\[valentine.search\] query=plans matches=1',s,60)
   s=len(t());q.key('ret');g['wait'](r'\[valentine.opened\] file=draft-[^ ]+\.eml bytes=\d+ subject=plans',s,60)
   s=len(t());ctrl('e');time.sleep(.4);shot('valentine-draft-reopened');q.key('esc')
-  s=len(t());ctrl('m');g['wait'](r'\[valentine.account.unavailable\] reason=multipass-service-not-booted',s,60)
-  # The wire contract is present, but no boot-routed Multipass/TLS flow service
-  # exists yet. The guest must continue to show the honest unavailable state.
+  s=len(t());ctrl('m')
+  g['wait'](rf'\[net.mail.route\] caller={target} task={task} kind=20 status=9 account=0',s,60)
+  g['wait'](r'\[valentine.account.status\] broker=1 status=9',s,60)
+  # The broker route is live, but no account or verified mail dialer is installed.
   shot('valentine-account-status')
   s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name=Travel messages=1',s,60)
   g['wait'](r'\[valentine.opened\] file=Travel/trip.eml bytes=\d+ subject=Dinner on Friday',s,60)
