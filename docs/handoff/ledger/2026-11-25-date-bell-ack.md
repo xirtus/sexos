@@ -12,6 +12,8 @@
 - Focused host protocol tests: 2/2 passed (ticket, accepted/muted/retry cursor
   policy, changed chunk).
   Full build and QEMU gate run only in GitHub CI; screenshot pending.
-- Remaining: lost receipts can cause replay, and Bell queue acceptance does
-  not prove the Shell displayed the notice. Live CalDAV account secrets still
-  await Multipass; this change does not claim account integration.
+- Remaining: lost receipts can cause replay. Bell's accepted event is held in
+  a volatile queue: a Bell restart or queue eviction before Shell presentation
+  can lose it after Date has advanced its durable cursor. This receipt is not
+  durable delivery or proof that the person saw the notice. Live CalDAV account
+  secrets still await Multipass; this change does not claim account integration.
