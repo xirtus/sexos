@@ -71,10 +71,16 @@ fn clean(text: &str) -> String {
 fn visible_words(dom: &Dom, n: NodeId) -> usize {
     fn collect(dom: &Dom, n: NodeId, text: &mut String) {
         if unwanted(dom, n) { return; }
+        // A table cell is a separate run of text. Keep inline fragments
+        // together, but do not join the last word of one cell to the first
+        // word of the next (including cells in a nested table).
+        let cell = matches!(dom.tag(n), Some("th" | "td" | "caption"));
+        if cell { text.push(' '); }
         match &dom.nodes[n].kind {
             Kind::Text(value) => text.push_str(value),
             _ => for &child in &dom.nodes[n].children { collect(dom, child, text); },
         }
+        if cell { text.push(' '); }
     }
     let mut text = String::new();
     collect(dom, n, &mut text);
@@ -172,7 +178,7 @@ fn emit(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) {
 }
 
 /// Keep data tables in reading order. Only the table structure and bounded
-/// column spans survive; page styling, event handlers and other attributes do
+/// column and row spans survive; page styling, event handlers and other attributes do
 /// not cross into reader view.
 fn table(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) {
     let mut rows = String::new();
@@ -209,10 +215,11 @@ fn table_rows(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut us
                     // Empty cells still occupy a column. Dropping one shifts
                     // every following value under the wrong heading.
                     *words += visible_words(dom, cell);
-                    let span = dom.attr(cell, "colspan").and_then(|v| v.trim().parse::<usize>().ok())
+                    let span = |name| dom.attr(cell, name).and_then(|v| v.trim().parse::<usize>().ok())
                         .filter(|v| (2..=64).contains(v));
-                    cells.push_str(&alloc::format!("<{tag}{}>{content}</{tag}>",
-                        span.map_or(String::new(), |v| alloc::format!(" colspan=\"{v}\""))));
+                    let colspan = span("colspan").map_or(String::new(), |v| alloc::format!(" colspan=\"{v}\""));
+                    let rowspan = span("rowspan").map_or(String::new(), |v| alloc::format!(" rowspan=\"{v}\""));
+                    cells.push_str(&alloc::format!("<{tag}{colspan}{rowspan}>{content}</{tag}>"));
                 }
                 if !cells.is_empty() { out.push_str("<tr>"); out.push_str(&cells); out.push_str("</tr>"); }
             }
@@ -253,6 +260,12 @@ fn inline(dom: &Dom, n: NodeId, base: &str, out: &mut String) {
                         out.push_str(&alloc::format!("</{t}>"));
                     }
                     "br" => out.push_str("<br>"),
+                    "table" => {
+                        // A table inside a data cell is still a table. The outer
+                        // cell already accounts for its visible words.
+                        let mut nested_words = 0;
+                        table(dom, c, base, out, &mut nested_words);
+                    }
                     "img" => {}
                     _ => inline(dom, c, base, out),
                 }

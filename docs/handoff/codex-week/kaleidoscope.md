@@ -81,10 +81,10 @@ Reader view now extracts the article from the currently shown DOM. It keeps
 script-added text and avoids a second request for a page that may have changed
 or required a sign-in. Direct `about:reader?url=` addresses still fetch once.
 Article data tables now retain captions, rows, header/data cells including empty
-cells, links, and bounded column spans in reader view. Hidden rows, page styles,
-and event handlers stay
-out. The reader QEMU fixture shows the table in its screenshot; complex nested
-tables and row spans remain gaps.
+cells, links, bounded column and row spans, and nested data tables in reader view.
+Hidden rows, page styles, and event handlers stay out. The reader QEMU fixture
+shows a row span and nested table in its screenshot. Tables with more complex
+layout and paged printing still need work.
 
 The browser's own controls now follow SexOS light, dark and high-contrast
 appearance and accent changes. Site content keeps its own CSS colors.
