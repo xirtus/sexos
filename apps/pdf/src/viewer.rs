@@ -85,7 +85,8 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+H highlight a found word or selected region",
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
-    "Type text; Space toggles; Up/Down choice, Enter selects",
+    "Text: Left/Right, Home/End, Backspace/Delete edit at caret",
+    "Space toggles; Up/Down choice, Enter selects",
     "Click a choice value for its pointer menu; wheel scrolls options",
     "Click a PDF field to focus it; checkbox clicks toggle",
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
@@ -109,7 +110,38 @@ enum Panel { None, Thumbs, Outline, Annots }
 /// Form filling: the fields the keyboard reaches, which one, and its text so far.
 struct Form {
     fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String,
-    choice: Option<usize>, popup: bool, popup_top: usize,
+    caret: usize, choice: Option<usize>, popup: bool, popup_top: usize,
+}
+
+fn text_byte(text: &str, caret: usize) -> usize {
+    text.char_indices().nth(caret).map_or(text.len(), |(at, _)| at)
+}
+
+fn text_with_caret(text: &str, caret: usize) -> String {
+    let at = text_byte(text, caret);
+    format!("{}|{}", &text[..at], &text[at..])
+}
+
+fn text_backspace(text: &mut String, caret: &mut usize) {
+    if *caret == 0 { return; }
+    let end = text_byte(text, *caret);
+    *caret -= 1;
+    let start = text_byte(text, *caret);
+    text.replace_range(start..end, "");
+}
+
+fn text_delete(text: &mut String, caret: usize) {
+    let at = text_byte(text, caret);
+    if at < text.len() {
+        let end = text_byte(text, caret + 1);
+        text.replace_range(at..end, "");
+    }
+}
+
+fn text_insert(text: &mut String, caret: &mut usize, c: char) {
+    if text.chars().count() >= 200 { return; }
+    text.insert(text_byte(text, *caret), c);
+    *caret += 1;
 }
 
 /// The bounded menu fits in the client area even for a PDF with many choices.
@@ -520,12 +552,12 @@ impl Viewer {
                             .unwrap_or_else(|| "Up/Down choose, Enter saves".into()),
                     FieldKind::ComboBox { editable: true } => form.choice.and_then(|i| f.options.get(i))
                         .map(|(_, shown)| format!("{shown}  (type or Up/Down choose)"))
-                        .unwrap_or_else(|| format!("{}_  (type or Up/Down choose)", form.text)),
+                        .unwrap_or_else(|| format!("{}  (type or Up/Down choose)", text_with_caret(&form.text, form.caret))),
                     FieldKind::ListBox { multi_select: true } => form.choice.and_then(|i| f.options.get(i))
                         .map(|(_, shown)| format!("{} {shown}  (Space toggles, Up/Down moves)",
                             if marks::choice_indices(f).contains(&i) { "[x]" } else { "[ ]" }))
                         .unwrap_or_else(|| "Up/Down moves, Space toggles".into()),
-                    _ => format!("{}_", form.text),
+                    _ => text_with_caret(&form.text, form.caret),
                 };
                 (format!("{}:", f.name), value, format!("field {} of {}, Tab next, Escape ends", form.at + 1, form.fields.len()))
             })
@@ -822,7 +854,7 @@ impl Viewer {
         if self.form.is_some() { self.commit_field(); }
         else {
             sex_std::record(&format!("[pdf.form] fields={} first={}", fields.len(), fields[0].0.name));
-            self.form = Some(Form { fields, at: 0, text: String::new(), choice: None, popup: false, popup_top: 0 });
+            self.form = Some(Form { fields, at: 0, text: String::new(), caret: 0, choice: None, popup: false, popup_top: 0 });
         }
         self.focus_at(index, Some(clicked_page));
         let Some((field, _, _)) = self.form.as_ref().and_then(|f| f.fields.get(index)).cloned() else { return true };
@@ -866,6 +898,7 @@ impl Viewer {
                     form.choice = Some(index);
                     if let FieldKind::ComboBox { editable: true } = &field.kind {
                         form.text = field.options[index].0.clone();
+                        form.caret = form.text.chars().count();
                     }
                     form.popup = matches!(&field.kind, FieldKind::ListBox { multi_select: true });
                 }
@@ -1378,7 +1411,7 @@ impl Viewer {
             return;
         }
         sex_std::record(&format!("[pdf.form] fields={} first={}", fields.len(), fields[0].0.name));
-        self.form = Some(Form { fields, at: 0, text: String::new(), choice: None, popup: false, popup_top: 0 });
+        self.form = Some(Form { fields, at: 0, text: String::new(), caret: 0, choice: None, popup: false, popup_top: 0 });
         self.focus(0);
     }
 
@@ -1395,6 +1428,7 @@ impl Viewer {
         form.popup_top = 0;
         let Some((f, page, rect)) = form.fields.get(at).cloned() else { return };
         form.text = match &f.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
+        form.caret = form.text.chars().count();
         form.choice = if matches!(f.kind, FieldKind::ListBox { multi_select: true }) {
             marks::choice_indices(&f).first().copied().or(Some(0))
         } else { marks::choice_index(&f) };
@@ -1468,6 +1502,7 @@ impl Viewer {
                     form.fields = fields;
                     if let Some((field, _, _)) = form.fields.get(form.at) {
                         form.text = match &field.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
+                        form.caret = form.text.chars().count();
                         form.choice = if matches!(field.kind, FieldKind::ListBox { multi_select: true }) {
                             marks::choice_indices(field).first().copied().or(Some(0))
                         } else { marks::choice_index(field) };
@@ -1520,6 +1555,7 @@ impl Viewer {
                     if let Some((f, _, _)) = form.fields.get(form.at) {
                         if let Some((export, shown)) = form.choice.and_then(|i| f.options.get(i)) {
                             if matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) { form.text = export.clone(); }
+                            form.caret = form.text.chars().count();
                             sex_std::record(&format!("[pdf.choice] name={} selected={} count={} display={}", f.name, form.choice.unwrap_or(0) + 1, count, shown));
                         }
                     }
@@ -1540,16 +1576,32 @@ impl Viewer {
             self.focus(next);
             return true;
         }
+        let text_field = !checkbox && (choices.is_none() || matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })));
+        if text_field && !key.control {
+            let length = form.text.chars().count();
+            let moved = match sex_app::nav(key) {
+                Some(Nav::Left) => { form.caret = form.caret.saturating_sub(1); true }
+                Some(Nav::Right) => { form.caret = (form.caret + 1).min(length); true }
+                Some(Nav::Home) => { form.caret = 0; true }
+                Some(Nav::End) => { form.caret = length; true }
+                Some(Nav::Delete) => { text_delete(&mut form.text, form.caret); form.choice = None; true }
+                _ => false,
+            };
+            if moved {
+                sex_std::record(&format!("[pdf.form.caret] at={} chars={}", form.caret, form.text.chars().count()));
+                return true;
+            }
+        }
         match key.code {
             ESCAPE => { self.end_form(); return true; }
-            BACKSPACE if !checkbox && (choices.is_none() || matches!(choice_kind, Some(FieldKind::ComboBox { editable: true }))) => {
-                form.text.pop(); form.choice = None; return true;
+            BACKSPACE if text_field => {
+                text_backspace(&mut form.text, &mut form.caret); form.choice = None; return true;
             }
             BACKSPACE if choices.is_some() => return true,
             _ => {}
         }
         if matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) && key.control && key.code == sex_std::sex_pdx::app_key::A {
-            form.text.clear(); form.choice = None; return true;
+            form.text.clear(); form.caret = 0; form.choice = None; return true;
         }
         let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) else { return false };
         if checkbox {
@@ -1569,9 +1621,9 @@ impl Viewer {
             return true;
         } else if choices.is_some() && !matches!(choice_kind, Some(FieldKind::ComboBox { editable: true })) {
             return true;
-        } else if form.text.chars().count() < 200 {
+        } else if text_field {
             form.choice = None;
-            form.text.push(c);
+            text_insert(&mut form.text, &mut form.caret, c);
         }
         true
     }
@@ -1692,6 +1744,27 @@ fn open(name: &str) -> Result<(Vec<u8>, Pdf), String> {
 #[cfg(test)]
 mod render_cache_tests {
     use super::*;
+
+    #[test]
+    fn form_caret_edits_unicode_at_character_boundaries() {
+        let mut text = String::from("naïve");
+        let mut caret = 2;
+        assert_eq!(text_with_caret(&text, caret), "na|ïve");
+        text_delete(&mut text, caret);
+        assert_eq!(text, "nave");
+        text_insert(&mut text, &mut caret, 'é');
+        assert_eq!(text, "naéve");
+        assert_eq!(caret, 3);
+        text_backspace(&mut text, &mut caret);
+        assert_eq!(text, "nave");
+        assert_eq!(caret, 2);
+        text_backspace(&mut text, &mut caret);
+        assert_eq!(text, "nve");
+        assert_eq!(caret, 1);
+        let mut full = "x".repeat(200);
+        text_insert(&mut full, &mut caret, 'z');
+        assert_eq!(full.chars().count(), 200);
+    }
 
     #[test]
     fn shared_cache_keeps_thumbnail_pixels_identical() {
