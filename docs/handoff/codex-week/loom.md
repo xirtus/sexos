@@ -67,4 +67,7 @@ Remaining gaps:
 - The in-app controls have a standalone reference in `docs/apps/loom-shortcuts.md`.
   Folder navigation now saves the active tab's new path after startup recovery.
   The GitHub CI gate cuts VM power after a completed two-tab session save,
-  reattaches the same USB disk and captures the restored tabs. Redo remains open.
+  reattaches the same USB disk and captures the restored tabs. Ctrl+Y now redoes
+  one undone batch rename, with checked source/destination moves on SexFS and a
+  QEMU screenshot of the redone folder. Other file operations still need redo;
+  removable volumes cannot offer atomic collision checks without stable IDs.
