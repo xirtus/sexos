@@ -837,6 +837,19 @@ mod tests {
     }
 
     #[test]
+    fn exposes_more_than_two_hundred_distinct_formula_functions() {
+        let mut book = Book::blank(&temp("functions.xlsx"));
+        let catalog = book.run("formulas.functions", json!({})).unwrap();
+        let entries = catalog.as_array().unwrap();
+        let names: std::collections::BTreeSet<_> = entries.iter()
+            .filter_map(|entry| entry["name"].as_str()).collect();
+        assert!(names.len() >= 200, "only {} distinct functions", names.len());
+        for required in ["SUM", "IF", "XLOOKUP", "FILTER", "LET"] {
+            assert!(names.contains(required), "missing {required}");
+        }
+    }
+
+    #[test]
     fn go_to_and_insert_delete_lines() {
         let mut book = budget("lines.xlsx");
         assert_eq!(book.go_to("c3").unwrap(), Range { r0: 2, c0: 2, r1: 2, c1: 2 });
