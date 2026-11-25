@@ -194,7 +194,8 @@ fn setup(main: &mut Fs<'static, FsDisk>, mib: u64, password: &[u8]) -> Result<u3
     let dev = HomeDev { id, blocks, xts: Xts::new(&master) };
     let formatted = lend(main, || Fs::format(dev, memory(blocks)).and_then(|mut fs| { fs.commit()?; Ok(fs) }));
     match formatted {
-        Ok(fs) => {
+        Ok(mut fs) => {
+            lend(main, || crate::staged_export::recover(&mut fs, crate::staged_export::Volume::Home));
             *home() = Some(fs);
             sex_pdx::serial_record!("[files.home.setup] mib={} kdf_ms={} cost_kib={}", mib, sex_pdx::get_ticks().saturating_sub(start), Cost::SMALL.memory_kib);
             Ok(0)
@@ -220,8 +221,9 @@ fn unlock(main: &mut Fs<'static, FsDisk>, password: &[u8]) -> Result<u32, u8> {
     let blocks = (st.size / BLOCK as u64).saturating_sub(1);
     let dev = HomeDev { id: st.id, blocks, xts: Xts::new(&master) };
     match lend(main, || Fs::mount(dev, memory(blocks))) {
-        Ok(fs) => {
+        Ok(mut fs) => {
             let s = fs.statfs();
+            lend(main, || crate::staged_export::recover(&mut fs, crate::staged_export::Volume::Home));
             *home() = Some(fs);
             sex_pdx::serial_record!("[files.home.unlocked] ms={} total={} free={} generation={}", sex_pdx::get_ticks().saturating_sub(start), s.total, s.free, s.generation);
             Ok(0)
@@ -260,6 +262,7 @@ fn lock(main: &mut Fs<'static, FsDisk>) -> Result<u32, u8> {
     let r = lend(main, || fs.commit());
     if let Err(e) = r { *home() = Some(fs); sex_pdx::serial_record!("[files.home.lock.failed] error={:?}", e); return Err(crate::fs_service::status(e)); }
     drop(fs);
+    crate::staged_export::invalidate(crate::staged_export::Volume::Home);
     crate::fs_service::revoke_under(h::HOME);
     sex_pdx::serial_record!("[files.home.locked]");
     Ok(0)
@@ -271,6 +274,22 @@ fn crypt_status(e: sex_crypt::Error) -> u8 {
 /// A request on `/home` or under it; `inner` is the path inside the volume.
 pub fn run(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
     deep(|| run_here(main, r, path, data))
+}
+/// A staged request uses the same encrypted SexFS and deep stack as ordinary home
+/// I/O. The Files ticket is bound to the resolved destination, not a client path.
+pub fn staged(main: &mut Fs<'static, FsDisk>, row: usize, target: u32, task: u32,
+    r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
+    deep(|| {
+        let Some(fs) = home().as_mut() else { return Err(h::LOCKED); };
+        let inner = &path[h::HOME.len()..];
+        let destination = if inner.is_empty() { b"/".as_slice() } else { inner };
+        let result = lend(main, || crate::staged_export::request(fs,
+            crate::staged_export::Volume::Home, row, target, task, r, destination, data));
+        if let Err(status) = result {
+            if !matches!(status, w::IO | w::CORRUPT) { let _ = lend(main, || fs.rollback()); }
+        }
+        result
+    })
 }
 fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
     let strip = |p: &[u8]| -> alloc::vec::Vec<u8> { let i = &p[h::HOME.len().min(p.len())..]; if i.is_empty() { b"/".to_vec() } else { i.to_vec() } };

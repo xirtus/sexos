@@ -87,7 +87,8 @@ pub const REMOVE_IF_ID: u8 = 54;
 /// in data[0..32], returning a ticket in data[0..8]. CHUNK carries the ticket
 /// in data[0..8] and bytes thereafter, with the sequential byte offset in `offset`.
 /// PUBLISH and ABORT carry the ticket in `offset` and no data. No stage path is
-/// granted to the client. Home and removable volumes answer UNSUPPORTED.
+/// granted to the client. Primary SexFS and unlocked encrypted home support it;
+/// removable volumes answer UNSUPPORTED.
 pub const STAGE_BEGIN: u8 = 55;
 pub const STAGE_CHUNK: u8 = 56;
 pub const STAGE_PUBLISH: u8 = 57;

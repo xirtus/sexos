@@ -280,7 +280,7 @@ fn bring_up() -> State {
         State::Absent
     } else { bring_up_on(sectors) };
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
-    if let State::Ready(fs) = &mut state { crate::staged_export::recover(fs); }
+    if let State::Ready(fs) = &mut state { crate::staged_export::recover(fs, crate::staged_export::Volume::Primary); }
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
     if matches!(state, State::Ready(_)) { crate::organize::mounted(); } else { crate::organize::unmounted(); }
     state
@@ -1042,13 +1042,18 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     { return w::reply(r.seq, w::DENIED, 0); }
     if staged {
         let Some(k) = program else { return w::reply(r.seq, w::DENIED, 0); };
-        if crate::home::owns(path) || crate::volumes::owns(path) { return w::reply(r.seq, w::UNSUPPORTED, 0); }
+        if crate::volumes::owns(path) { return w::reply(r.seq, w::UNSUPPORTED, 0); }
         if writes_pending() {
             commit_writes(fs);
             if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
         }
         let binding = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
-        return match crate::staged_export::request(fs, k, caller, binding.task, r, path, data) {
+        if crate::home::owns(path) {
+            let result = crate::home::staged(fs, k, caller, binding.task, r, path, data);
+            if result.is_ok() { forget_stats(None); }
+            return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(status) => w::reply(r.seq, status, 0) };
+        }
+        return match crate::staged_export::request(fs, crate::staged_export::Volume::Primary, k, caller, binding.task, r, path, data) {
             Ok(n) => {
                 forget_stats(None);
                 if r.kind == w::STAGE_PUBLISH { crate::organize::after(fs, w::CREATE, path); }
