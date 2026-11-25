@@ -50,6 +50,7 @@ def main():
  def opened(col_a=COL_A):
   s=len(t());run('run spreadeagle')
   o=g['wait'](r'\[spreadeagle\.open\] target=(\d+) task=(\d+) name=welcome\.xlsx sheets=Budget,Notes\n',s,900)
+  g['wait'](r'\[spreadeagle\.theme\] mode=Light accent=d6336c',s,60)
   column('A',col_a,s,600)
   g['focus'](SURFACE[int(o[1])]);time.sleep(.8)
   return o
@@ -67,6 +68,8 @@ def main():
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|1200\|300\|150\|1650\|19800\|\|',s)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-opened.ppm')})
+  shot=(a.out/'spreadeagle-opened.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(b'\xff\xff\xff')>10000,'Light theme cell background missing'
   s=len(t());q.key('down');type_line('40');q.key('ret')
   g['wait'](r'\[spreadeagle\.set\] cell=B2 input=40\n',s,120)
   column('B',r'Cost\|40\|300\|150\|490\|5880\|\|',s)

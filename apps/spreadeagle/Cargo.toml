@@ -22,3 +22,4 @@ quick-xml = "0.41"
 [target.'cfg(target_os = "hermit")'.dependencies]
 sex-std = { path = "../../crates/sex-std" }
 sex-office = { path = "../../crates/sex-office" }
+sex-theme = { path = "../../crates/sex-theme" }

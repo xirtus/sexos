@@ -8,20 +8,27 @@ use sex_office::{Canvas, Pen};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::{Kind, Pointer};
 use std::cell::RefCell;
+use sex_theme::Tokens;
 
-const BG: u32 = 0x00ffffff;
-const GRID: u32 = 0x00dadce0;
-const HEAD_BG: u32 = 0x00f1f3f4;
-const HEAD_ON: u32 = 0x00d3e3fd;
-const INK: u32 = 0x00202124;
-const DIM: u32 = 0x005f6368;
-const ERROR: u32 = 0x00c5221f;
-const CURSOR: u32 = 0x001a73e8;
-const BAR_BG: u32 = 0x00f8f9fa;
-const TAB_ON: u32 = 0x00ffffff;
-const ACCENT: u32 = 0x000b8043;
-const FROZEN: u32 = 0x00bdc1c6;
-const CHART_EDGE: u32 = 0x00c4c7c5;
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: u32, grid: u32, head_bg: u32, head_on: u32, ink: u32,
+    dim: u32, error: u32, cursor: u32, bar_bg: u32, tab_on: u32,
+    accent: u32, frozen: u32, chart_edge: u32,
+}
+
+impl Palette {
+    fn from_tokens(t: Tokens) -> Self {
+        let rgb = |c: u32| c & 0x00FF_FFFF;
+        Self {
+            bg: rgb(t.field), grid: rgb(t.border), head_bg: rgb(t.surface),
+            head_on: rgb(sex_theme::mix(t.surface, t.accent, 0.25)),
+            ink: rgb(t.text), dim: rgb(t.text_dim), error: rgb(t.danger),
+            cursor: rgb(t.focus), bar_bg: rgb(t.surface), tab_on: rgb(t.field),
+            accent: rgb(t.accent), frozen: rgb(t.text_dim), chart_edge: rgb(t.border),
+        }
+    }
+}
 
 const BAR_H: i32 = 30;
 const HEAD_H: i32 = 22;
@@ -43,6 +50,8 @@ struct Edit {
 }
 
 pub struct Ui {
+    palette: Palette,
+    theme_generation: u64,
     book: Book,
     name: String,
     row: u32,
@@ -152,7 +161,12 @@ impl gridcraft_chart::Measure for Measure<'_> {
 
 impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
+        let theme = sex_app::settings::theme();
+        let palette = Palette::from_tokens(theme);
+        let theme_generation = sex_app::settings::generation().unwrap_or(0);
+        sex_std::record(&format!("[spreadeagle.theme] mode={:?} accent={:06x}", theme.mode, palette.accent));
         Ui {
+            palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
             ask: None, recovered: false, unkept: None,
@@ -259,6 +273,7 @@ impl Ui {
     }
 
     pub fn draw(&mut self, window: &mut sex_app::Window) {
+        let palette = self.palette;
         let (width, height) = window.size();
         let (w, h) = (width as i32, height as i32);
         let grid_w = w - ROW_HEAD_W;
@@ -269,23 +284,23 @@ impl Ui {
         let mut px = std::mem::take(&mut self.rows);
         px.clear();
         let mut canvas = Canvas::new(window.pixels(), width, height);
-        canvas.fill(0, 0, w, h, BG);
+        canvas.fill(0, 0, w, h, palette.bg);
 
         // Formula bar: the cell's name (or the selection's), then what it holds or what is being typed.
-        canvas.fill(0, 0, w, BAR_H, BAR_BG);
-        canvas.fill(0, BAR_H - 1, w, 1, GRID);
+        canvas.fill(0, 0, w, BAR_H, palette.bar_bg);
+        canvas.fill(0, BAR_H - 1, w, 1, palette.grid);
         let name = if self.anchor.is_some() { self.selection().a1() } else { self.cell_name() };
-        self.pen.text(&mut canvas, PAD + 2, (BAR_H - self.pen.line_height()) / 2, &name, INK, Some((0, 90)));
-        canvas.fill(96, 4, 1, BAR_H - 8, GRID);
+        self.pen.text(&mut canvas, PAD + 2, (BAR_H - self.pen.line_height()) / 2, &name, palette.ink, Some((0, 90)));
+        canvas.fill(96, 4, 1, BAR_H - 8, palette.grid);
         let (content, caret) = match &self.edit {
             Some(e) => (e.text.iter().collect::<String>(), Some(e.text[..e.caret].iter().collect::<String>())),
             None => (self.book.input(self.row, self.col), None),
         };
         let ty = (BAR_H - self.pen.line_height()) / 2;
-        self.pen.text(&mut canvas, 104, ty, &content, INK, Some((104, w - 108)));
+        self.pen.text(&mut canvas, 104, ty, &content, palette.ink, Some((104, w - 108)));
         if let Some(before) = caret {
             let x = 104 + self.pen.measure(&before);
-            canvas.fill(x, 6, 2, BAR_H - 12, CURSOR);
+            canvas.fill(x, 6, 2, BAR_H - 12, palette.cursor);
         }
 
         // Which rows and columns show: the frozen ones, then from the scroll position on.
@@ -311,38 +326,38 @@ impl Ui {
 
         // Headings, the selection's tint and the grid lines.
         let sel = self.selection();
-        canvas.fill(0, top_y, w, HEAD_H, HEAD_BG);
-        canvas.fill(0, top_y, ROW_HEAD_W, h - top_y - TABS_H, HEAD_BG);
+        canvas.fill(0, top_y, w, HEAD_H, palette.head_bg);
+        canvas.fill(0, top_y, ROW_HEAD_W, h - top_y - TABS_H, palette.head_bg);
         let (st, sl, sb, sr) = sel.bounds();
         for &(c, x, cw) in &cols {
-            if (sl..=sr).contains(&c) { canvas.fill(x, top_y, cw, HEAD_H, HEAD_ON); }
+            if (sl..=sr).contains(&c) { canvas.fill(x, top_y, cw, HEAD_H, palette.head_on); }
             let label = column_name(c);
             let lw = self.pen.measure(&label);
-            self.pen.text(&mut canvas, x + (cw - lw) / 2, top_y + (HEAD_H - self.pen.line_height()) / 2, &label, DIM, Some((x, cw)));
+            self.pen.text(&mut canvas, x + (cw - lw) / 2, top_y + (HEAD_H - self.pen.line_height()) / 2, &label, palette.dim, Some((x, cw)));
         }
         for &(r, y, rh) in &rows {
-            if (st..=sb).contains(&r) { canvas.fill(0, y, ROW_HEAD_W, rh, HEAD_ON); }
+            if (st..=sb).contains(&r) { canvas.fill(0, y, ROW_HEAD_W, rh, palette.head_on); }
             let label = format!("{}", r + 1);
             let lw = self.pen.measure(&label);
-            self.pen.text(&mut canvas, ROW_HEAD_W - PAD - lw, y + (rh - self.pen.line_height()) / 2, &label, DIM, Some((0, ROW_HEAD_W)));
+            self.pen.text(&mut canvas, ROW_HEAD_W - PAD - lw, y + (rh - self.pen.line_height()) / 2, &label, palette.dim, Some((0, ROW_HEAD_W)));
         }
         if !sel.single() {
             for &(r, y, rh) in &rows {
                 for &(c, x, cw) in &cols {
-                    if sel.contains(r, c) && (r, c) != (self.row, self.col) { canvas.tint(x, y, cw, rh, CURSOR, 30); }
+                    if sel.contains(r, c) && (r, c) != (self.row, self.col) { canvas.tint(x, y, cw, rh, palette.cursor, 30); }
                 }
             }
         }
         for &(c, x, cw) in &cols {
-            let color = if fc > 0 && c + 1 == fc { FROZEN } else { GRID };
-            canvas.fill(x + cw - 1, top_y, if color == FROZEN { 2 } else { 1 }, grid_bottom - top_y, color);
+            let color = if fc > 0 && c + 1 == fc { palette.frozen } else { palette.grid };
+            canvas.fill(x + cw - 1, top_y, if color == palette.frozen { 2 } else { 1 }, grid_bottom - top_y, color);
         }
         for &(r, y, rh) in &rows {
-            let color = if fr > 0 && r + 1 == fr { FROZEN } else { GRID };
-            canvas.fill(0, y + rh - 1, w, if color == FROZEN { 2 } else { 1 }, color);
+            let color = if fr > 0 && r + 1 == fr { palette.frozen } else { palette.grid };
+            canvas.fill(0, y + rh - 1, w, if color == palette.frozen { 2 } else { 1 }, color);
         }
-        canvas.fill(ROW_HEAD_W - 1, top_y, 1, h - top_y - TABS_H, GRID);
-        canvas.fill(0, top_y + HEAD_H - 1, w, 1, GRID);
+        canvas.fill(ROW_HEAD_W - 1, top_y, 1, h - top_y - TABS_H, palette.grid);
+        canvas.fill(0, top_y + HEAD_H - 1, w, 1, palette.grid);
 
         // Cells. Text runs into empty neighbours on its right, as in every spreadsheet.
         for &(r, y, rh) in &rows {
@@ -358,7 +373,7 @@ impl Ui {
                     }
                 }
                 let tx = if shown.right { x + cw - PAD - tw } else { x + PAD };
-                let color = if shown.error { ERROR } else { INK };
+                let color = if shown.error { palette.error } else { palette.ink };
                 let ty = y + (rh - self.pen.line_height()) / 2;
                 let clip = Some((x + 1, room - 2));
                 let (bold, _, underline) = self.book.font(r, c);
@@ -378,9 +393,9 @@ impl Ui {
             if let Some(&(_, y, rh)) = rows.iter().find(|r| r.0 == ft) {
                 for &(_, x, cw) in cols.iter().filter(|c| (fl..=fr2).contains(&c.0)) {
                     let (bx, by, s) = (x + cw - 17, y + (rh - 14) / 2, 14);
-                    canvas.fill(bx, by, s, s, BG);
-                    canvas.frame(bx, by, s, s, FROZEN);
-                    for i in 0..4 { canvas.fill(bx + 3 + i, by + 5 + i, 8 - 2 * i, 1, DIM); }
+                    canvas.fill(bx, by, s, s, palette.bg);
+                    canvas.frame(bx, by, s, s, palette.frozen);
+                    for i in 0..4 { canvas.fill(bx + 3 + i, by + 5 + i, 8 - 2 * i, 1, palette.dim); }
                 }
             }
         }
@@ -392,20 +407,20 @@ impl Ui {
             let (x1, y1) = (self.col_x(r) + self.book.col_width(r) as i32, self.row_y(b) + self.book.row_height(b) as i32);
             if x1 > ROW_HEAD_W && y1 > top_y + HEAD_H {
                 let (x0, y0) = (x0.max(ROW_HEAD_W - 1), y0.max(top_y + HEAD_H - 1));
-                for i in 0..2 { canvas.frame(x0 - 1 + i, y0 - 1 + i, x1 - x0 + 2 - 2 * i, y1 - y0 + 2 - 2 * i, ACCENT); }
+                for i in 0..2 { canvas.frame(x0 - 1 + i, y0 - 1 + i, x1 - x0 + 2 - 2 * i, y1 - y0 + 2 - 2 * i, palette.accent); }
             }
         }
 
         // The edge being dragged.
         if let Some((c, _, _, w)) = self.resizing {
-            if let Some(&(_, cx, _)) = cols.iter().find(|k| k.0 == c) { canvas.fill(cx + w - 1, top_y, 2, h - top_y - TABS_H, CURSOR); }
+            if let Some(&(_, cx, _)) = cols.iter().find(|k| k.0 == c) { canvas.fill(cx + w - 1, top_y, 2, h - top_y - TABS_H, palette.cursor); }
         }
 
         // The cursor cell.
         if let (Some(&(_, cx, cw)), Some(&(_, cy, ch))) = (cols.iter().find(|c| c.0 == self.col), rows.iter().find(|r| r.0 == self.row)) {
-            canvas.frame(cx - 1, cy - 1, cw + 1, ch + 1, CURSOR);
-            canvas.frame(cx, cy, cw - 1, ch - 1, CURSOR);
-            canvas.fill(cx + cw - 4, cy + ch - 4, 5, 5, CURSOR);
+            canvas.frame(cx - 1, cy - 1, cw + 1, ch + 1, palette.cursor);
+            canvas.frame(cx, cy, cw - 1, ch - 1, palette.cursor);
+            canvas.fill(cx + cw - 4, cy + ch - 4, 5, 5, palette.cursor);
         }
 
         // Charts, over the cells at their anchors.
@@ -425,22 +440,22 @@ impl Ui {
                 let right = (cx + cw as i32).min(w);
                 self.with_pen(label.size, |pen| pen.text(&mut canvas, lx, ly, &label.text, label.color, Some((cx.max(clip.0), right - cx.max(clip.0)))));
             }
-            canvas.frame(cx, cy, placed.width, placed.height, CHART_EDGE);
+            canvas.frame(cx, cy, placed.width, placed.height, palette.chart_edge);
         }
 
         // Sheet tabs and the status line.
         let ty0 = h - TABS_H;
-        canvas.fill(0, ty0, w, TABS_H, HEAD_BG);
-        canvas.fill(0, ty0, w, 1, GRID);
+        canvas.fill(0, ty0, w, TABS_H, palette.head_bg);
+        canvas.fill(0, ty0, w, 1, palette.grid);
         let mut tx = 8;
         let active = self.book.active_sheet();
         for (i, sheet) in self.book.sheets().iter().enumerate() {
             let tw = self.pen.measure(sheet) + 24;
             if i == active {
-                canvas.fill(tx, ty0, tw, TABS_H - 3, TAB_ON);
-                canvas.fill(tx, ty0 + TABS_H - 5, tw, 2, ACCENT);
+                canvas.fill(tx, ty0, tw, TABS_H - 3, palette.tab_on);
+                canvas.fill(tx, ty0 + TABS_H - 5, tw, 2, palette.accent);
             }
-            self.pen.text(&mut canvas, tx + 12, ty0 + (TABS_H - self.pen.line_height()) / 2, sheet, if i == active { ACCENT } else { DIM }, None);
+            self.pen.text(&mut canvas, tx + 12, ty0 + (TABS_H - self.pen.line_height()) / 2, sheet, if i == active { palette.accent } else { palette.dim }, None);
             tx += tw + 2;
         }
         let status = if let Some(ask) = &self.ask {
@@ -473,7 +488,7 @@ impl Ui {
         };
         let sw = self.pen.measure(&status);
         let sx = (w - sw - 10).max(tx + 16);
-        self.pen.text(&mut canvas, sx, ty0 + (TABS_H - self.pen.line_height()) / 2, &status, DIM, Some((sx, w - sx)));
+        self.pen.text(&mut canvas, sx, ty0 + (TABS_H - self.pen.line_height()) / 2, &status, palette.dim, Some((sx, w - sx)));
 
         self.rows = rows;
         self.cols = cols;
@@ -945,11 +960,25 @@ impl Ui {
 
     pub fn run(mut self, window: &mut sex_app::Window) {
         self.draw(window);
+        let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
         let frozen = self.book.frozen().map_or("none".into(), |(r, c)| format!("{r},{c}"));
         sex_std::record(&format!("[spreadeagle.view] charts={} frozen={frozen}", self.book.charts().len()));
         sex_std::record(&format!("[spreadeagle.columns] A={} B={}", self.book.col_width(0), self.book.col_width(1)));
         self.record_column();
         loop {
+            let now = sex_std::sex_pdx::get_ticks();
+            if now >= theme_next {
+                theme_next = now.saturating_add(1000);
+                if let Ok(generation) = sex_app::settings::generation() {
+                    if generation != self.theme_generation {
+                        self.theme_generation = generation;
+                        let theme = sex_app::settings::theme();
+                        self.palette = Palette::from_tokens(theme);
+                        sex_std::record(&format!("[spreadeagle.theme] mode={:?} accent={:06x}", theme.mode, self.palette.accent));
+                        self.draw(window);
+                    }
+                }
+            }
             let Some(event) = window.next_within(1000) else {
                 // A quiet moment after a change: keep the unsaved work safe.
                 if self.unkept.is_some_and(|t| sex_std::sex_pdx::get_ticks().saturating_sub(t) >= KEEP_AFTER_MS) { self.keep(); }
