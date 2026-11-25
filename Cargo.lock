@@ -4657,6 +4657,7 @@ version = "0.1.0"
 dependencies = [
  "linked_list_allocator",
  "sex-graphics",
+ "sex-http",
  "sex-net-config",
  "sex-pdx",
  "sex-time",
