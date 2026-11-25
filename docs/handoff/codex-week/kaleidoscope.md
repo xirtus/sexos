@@ -30,7 +30,9 @@ and Shields. The remaining gaps are:
   checks its previous durable copy before abandoning a synced hidden part.
   The downloads panel now offers Ctrl+Alt+J to clear saved history and current
   failures after a durable state write. Downloaded files and resumable transfers
-  remain available; nonempty orphan hidden-part cleanup is still open.
+  remain available. Individual completed rows can now be removed from history
+  without deleting the saved file; the removal survives restart. Nonempty orphan
+  hidden-part cleanup is still open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an

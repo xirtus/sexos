@@ -190,6 +190,29 @@ impl Browser {
         }
     }
 
+    /// Forget one panel row after the replacement and its recovery copy are retired.
+    /// The downloaded file remains in Files. The index is from the current panel only.
+    pub(super) fn forget_download(&mut self, index: usize) {
+        if self.url != "about:downloads" || index >= self.downloads.len() { return; }
+        let mut kept = self.downloads.clone();
+        let forgotten = kept.remove(index);
+        let text = download_history::encode(&kept);
+        let replaced = state_file::replace(&mut self.window, "Kaleidoscope/downloads.tsv", text.as_bytes());
+        // A deliberate removal must not reappear if the live record is damaged.
+        let previous = b"Kaleidoscope/downloads.tsv.previous";
+        let retired = replaced && (files::size(&mut self.window, previous).is_err()
+            || files::remove(&mut self.window, previous).is_ok() && files::sync(&mut self.window).is_ok());
+        if retired {
+            self.downloads = kept;
+            web_record!("[web.download.history.forgot] path={} kept=1", forgotten.path);
+            self.open("about:downloads", false);
+        } else {
+            web_record!("[web.download.history.forgot] path={} kept=0", forgotten.path);
+            self.download_status = Some(String::from("Could not remove that history item; try again."));
+            self.draw();
+        }
+    }
+
     /// Loads `url` for showing as a page: like `fetch`, but an answer that is a download
     /// streams to Files instead (then `Ok(None)`).
     pub(super) fn fetch_or_download(&mut self, url: &str) -> Result<Option<(String, core::ops::Range<usize>)>, &'static [u8]> {
@@ -476,14 +499,15 @@ impl Browser {
         html.push_str("<ul>");
         let mut here = Vec::with_capacity(self.downloads.len());
         for d in self.downloads.iter() { here.push(files::size(&mut self.window, d.path.as_bytes()).is_ok()); }
-        for (d, there) in self.downloads.iter().zip(here).rev() {
+        for (index, (d, there)) in self.downloads.iter().zip(here).enumerate().rev() {
             let name = esc(d.path.trim_start_matches("Downloads/"));
+            let forget = alloc::format!(" <a href=\"about:downloads?forget={}\">Remove from history</a>", index);
             // Files' Organizer may have placed it in the person's folders (Documents,
             // Pictures...), outside this program's own: say so rather than link nowhere.
             if there {
-                html.push_str(&alloc::format!("<li><a href=\"@{}\">{}</a> — {} KB <span style='color:#5f6368'>from {}</span></li>", esc(&d.path), name, d.bytes >> 10, esc(&d.url)));
+                html.push_str(&alloc::format!("<li><a href=\"@{}\">{}</a> — {} KB <span style='color:#5f6368'>from {}</span>{}</li>", esc(&d.path), name, d.bytes >> 10, esc(&d.url), forget));
             } else {
-                html.push_str(&alloc::format!("<li>{} — {} KB <span style='color:#5f6368'>from {}; moved out of Downloads (Files' organize log says where)</span></li>", name, d.bytes >> 10, esc(&d.url)));
+                html.push_str(&alloc::format!("<li>{} — {} KB <span style='color:#5f6368'>from {}; moved out of Downloads (Files' organize log says where)</span>{}</li>", name, d.bytes >> 10, esc(&d.url), forget));
             }
         }
         html.push_str("</ul>");
