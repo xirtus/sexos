@@ -201,6 +201,7 @@ enum Focus { Editor, Tree }
 
 enum Overlay {
     None,
+    Help { scroll: usize },
     Palette { query: String, sel: usize },
     QuickOpen { query: String, sel: usize, files: Vec<Vec<u8>> },
     Find { query: String },
@@ -457,6 +458,11 @@ impl App {
 
     fn key(&mut self, key: Key, window: &mut Window) {
         let Some(p) = press(key) else { return };
+        if p == Press::ctrl_shift('/') {
+            self.overlay = if matches!(self.overlay, Overlay::Help { .. }) { Overlay::None } else { Overlay::Help { scroll: 0 } };
+            sex_pdx::serial_record!("[quil.code.shortcuts] open={}", matches!(self.overlay, Overlay::Help { .. }) as u8);
+            return;
+        }
         if !matches!(self.overlay, Overlay::None) { self.overlay_key(p, window); return; }
         if self.focus == Focus::Tree && !p.ctrl {
             match p.k {
@@ -538,6 +544,17 @@ impl App {
         core::mem::swap(&mut take, &mut self.overlay);
         let mut keep = true;
         match &mut take {
+            Overlay::Help { scroll } => {
+                let visible = self.rows().saturating_sub(2).max(1);
+                let max = keymap::shortcut_rows(self.keymap).len().saturating_sub(visible);
+                *scroll = match p.k {
+                    K::Named(Named::Up) => scroll.saturating_sub(1),
+                    K::Named(Named::Down) => scroll.saturating_add(1).min(max),
+                    K::Named(Named::PageUp) => scroll.saturating_sub(visible),
+                    K::Named(Named::PageDown) => scroll.saturating_add(visible).min(max),
+                    _ => *scroll,
+                };
+            }
             Overlay::Palette { query, sel } => {
                 edit(query);
                 let names: Vec<&str> = Command::ALL.iter().map(|c| c.name()).collect();
@@ -844,6 +861,11 @@ impl App {
         let mut lines: Vec<(String, bool)> = Vec::new();
         let (title, input): (&str, String) = match &self.overlay {
             Overlay::None => return,
+            Overlay::Help { scroll } => {
+                let all = keymap::shortcut_rows(self.keymap);
+                for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
+                ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
+            }
             Overlay::Palette { query, sel } => {
                 let names: Vec<&str> = Command::ALL.iter().map(|c| c.name()).collect();
                 for (k, (i, _)) in fuzzy::rank(query, &names, 12).iter().enumerate() {
