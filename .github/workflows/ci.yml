@@ -1384,6 +1384,8 @@ jobs:
       run: python3 scripts/program_date_caldav_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/date"
     - name: Crush imports vCards, edits, searches and syncs both ways with a CardDAV server
       run: python3 scripts/program_crush_carddav_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/crush"
+    - name: Valentine lists, reads and searches local mail safely
+      run: python3 scripts/program_valentine_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/valentine"
     - name: Batik and Burlesque creative apps
       run: |
         python3 scripts/batik_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/batik"

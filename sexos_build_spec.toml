@@ -93,6 +93,7 @@ crates = [
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
   "apps/crush/Cargo.toml",
+  "apps/valentine/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/whisper-voice/Cargo.toml",
   "apps/steamy/Cargo.toml",
@@ -1068,6 +1069,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/crush/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/crush"
 dest_artifact = "iso_root/programs/crush"
+
+[[stage]]
+id = "build_valentine"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/valentine/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/valentine"
+dest_artifact = "iso_root/programs/valentine"
 
 # Filigree: font manager, specimen comparator, and Spindle typography bridge on Weft.
 [[stage]]
