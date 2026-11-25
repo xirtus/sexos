@@ -179,6 +179,10 @@ pub struct Link {
     /// they came (after the pad), its length, RX status and A-MSDU subframe.
     pub malformed: Option<Malformed>,
     pub malformed_count: u64,
+    /// Frames to us the firmware flagged duplicate, and the RX status and reorder
+    /// word of the last frame to us (diagnostics).
+    pub dup_flagged: u64,
+    pub last_unicast: Option<(u32, u32)>,
     pub down: Option<Down>,
     rekey: Option<Rekey>,
     /// Key messages answered after the handshake, keys installed since, and the
@@ -296,7 +300,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, dup_flagged: 0, last_unicast: None, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0,
             ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
@@ -388,6 +392,7 @@ impl Link {
         let mut delba = None;
         let mut moved = false;
         let (mut malformed, mut malformed_count) = (None, 0u64);
+        let (mut dup_flagged, mut last_status) = (0u64, None);
         let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
         let result = b.receive(r, dma, |p: &Packet<'_>| {
             if cmdq.on_packet(p) {
@@ -443,8 +448,17 @@ impl Link {
                     if let Some(a) = addrs { eth[..12].copy_from_slice(&a); }
                     let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, index);
                     let qos_unicast = f[0] & 0x80 != 0 && f[4] & 1 == 0;
+                    if f[4] & 1 == 0 { last_status = Some((rx.status, rx.reorder)); }
                     let verdict = match (session.as_mut(), qos_unicast) {
-                        (Some(s), true) => s.frame(rx.reorder, tid as u8, rx.status & STATUS_DUPLICATE != 0, false),
+                        (Some(s), true) => {
+                            // A duplicate is a retry of a frame already taken. The bit
+                            // alone is not trusted: on newer firmware bits 16..31 of this
+                            // word are the A1 hash and filter status, and a set bit 22
+                            // there dropped good frames for no reason.
+                            let flagged = rx.status & STATUS_DUPLICATE != 0;
+                            if flagged { dup_flagged += 1; }
+                            s.frame(rx.reorder, tid as u8, flagged && f[1] & 0x08 != 0, false)
+                        }
                         _ => ba::Verdict::Outside,
                     };
                     match verdict {
@@ -476,6 +490,8 @@ impl Link {
             }
             }
         });
+        self.dup_flagged += dup_flagged;
+        if last_status.is_some() { self.last_unicast = last_status; }
         if malformed.is_some() { self.malformed = malformed; }
         self.malformed_count += malformed_count;
         let (received, dropped, last_drop) = (intake.received, intake.dropped, intake.last_drop);
