@@ -66,7 +66,13 @@ Remaining gaps:
   receipt can replay an event. Shell panel enqueue is not durable pixel display;
   Bell and Shell histories are volatile, so the handoff is at least once, not
   durable display or exactly-once delivery.
-  Stable semantic IDs and cross-restart dedupe remain open. The guest gate checks
+  UID-backed reminders now have a stable, length-framed semantic key from the
+  source calendar, iCalendar UID, occurrence day and due UTC minute. A host
+  test checks that event reordering leaves the key intact and that different
+  occurrences and reminder times stay distinct. This is a source-side key
+  only: Bell and Shell do not yet receive or persist it. Legacy events without
+  UIDs, Clock alarms and timers still need persistent source identities before
+  cross-restart dedupe can be sound. The guest gate checks
   a healthy Shell-handled receipt and screenshot; it
   does not inject a queue-full or muted Bell state. Host receipt tests check
   muted versus transient refusal cursor policy.
