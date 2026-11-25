@@ -138,6 +138,12 @@ fn cert_parts(cert: &[u8]) -> Result<(&[u8], &[u8], &[u8]), CmsError> {
     Ok((issuer.full, serial.full, &point.value[1..]))
 }
 
+/// The P-256 public point in a bounded X.509 certificate. Shibari compares
+/// this with its private key's public point before it offers the certificate.
+pub fn certificate_public_point(cert: &[u8]) -> Result<&[u8], CmsError> {
+    cert_parts(cert).map(|(_, _, point)| point)
+}
+
 fn der(tag: u8, value: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     let len = value.len();

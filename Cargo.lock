@@ -8250,6 +8250,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shibari-sign"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+ "sha2 0.10.9",
+ "shibari",
+ "vellum-edit",
+ "zeroize",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

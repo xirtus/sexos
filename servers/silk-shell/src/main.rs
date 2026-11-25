@@ -24,6 +24,7 @@ mod restricted_routes;
 #[cfg(sexos_input_payload_proof)]
 mod wait_observer;
 mod app_input;
+mod pdf_sign;
 mod wm;
 mod launcher_search;
 mod voyeur;
@@ -27197,6 +27198,7 @@ pub extern "C" fn _start() -> ! {
             if restricted_pool::blocks(&msg){continue;}
             if DESKTOP_RECORDING.receive(&msg,sex_pdx::get_ticks(),PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0) {continue;}
             if shell_launch_message(&msg) { continue; }
+            if pdf_sign::receive(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
             if shell_keys_message(&msg) { continue; }

@@ -63,6 +63,7 @@ members = [
     "apps/leather-samples",
     "apps/chastity",
     "apps/chastity-probe",
+    "apps/shibari-sign",
     "apps/tassel",
     "crates/sex-organize",
     "crates/sex-html",

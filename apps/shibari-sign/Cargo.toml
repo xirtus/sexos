@@ -1,0 +1,16 @@
+[package]
+name = "shibari-sign"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "shibari-sign"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+shibari = { path = "../../crates/shibari" }
+vellum-edit = { path = "../../crates/vellum-edit" }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+sha2 = { version = "0.10", default-features = false }
