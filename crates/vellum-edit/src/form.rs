@@ -124,13 +124,44 @@ impl Editor {
     /// Malformed permissions fail closed.
     pub fn signed_edit_restricted(&self) -> Result<bool, Error> {
         let (_, catalog) = self.catalog()?;
-        let has_doc_mdp = match catalog.get(b"Perms") {
+        let has_permission_signature = match catalog.get(b"Perms") {
             Some(perms) => self.dict_of(perms)
                 .ok_or(Error::Malformed("bad catalog /Perms"))?
-                .get(b"DocMDP").is_some(),
+                .0.iter().any(|(key, _)| matches!(key.as_slice(), b"DocMDP" | b"UR" | b"UR3")),
             None => false,
         };
-        Ok(has_doc_mdp || self.signatures()?.iter().any(|signature| signature.signed))
+        if has_permission_signature { return Ok(true); }
+        // `field_nodes` is intentionally tolerant for display, and skips broken
+        // or overly deep branches. A mutation guard must inspect the *whole*
+        // field tree or refuse to decide: a hidden signed child is still signed.
+        let Some(form_obj) = catalog.get(b"AcroForm") else { return Ok(false); };
+        let form = self.dict_of(form_obj).ok_or(Error::Malformed("bad AcroForm"))?;
+        let fields = self.lookup(&form, b"Fields")
+            .and_then(|o| o.as_array().cloned()).ok_or(Error::Malformed("bad AcroForm fields"))?;
+        let mut pending = Vec::new();
+        for field in fields {
+            pending.push((field.as_ref().ok_or(Error::Malformed("bad AcroForm field reference"))?, 0usize, false));
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some((id, depth, inherited_sig)) = pending.pop() {
+            if depth > 32 || seen.len() >= 4096 {
+                return Err(Error::Unsupported("AcroForm field tree exceeds inspection limit"));
+            }
+            if !seen.insert(id.0) { return Err(Error::Malformed("cyclic or duplicate AcroForm field")); }
+            let field = self.get_dict(id).ok_or(Error::Malformed("bad AcroForm field"))?;
+            let is_sig = field.get(b"FT")
+                .map(|ft| self.resolve(ft).as_name() == Some(b"Sig"))
+                .unwrap_or(inherited_sig);
+            if is_sig && field.get(b"V").is_some_and(|v| *v != Object::Null) { return Ok(true); }
+            if let Some(kids) = field.get(b"Kids") {
+                let kids = self.resolve(kids).as_array().cloned()
+                    .ok_or(Error::Malformed("bad AcroForm Kids"))?;
+                for kid in kids {
+                    pending.push((kid.as_ref().ok_or(Error::Malformed("bad AcroForm kid reference"))?, depth + 1, is_sig));
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Add a visible, empty signature widget on a page. This creates no signature
@@ -345,14 +376,14 @@ impl Editor {
 
     /// Sets a field's value and regenerates its widgets' appearances.
     pub fn set_field(&mut self, name: &str, value: FieldValue) -> Result<(), Error> {
-        if self.signed_edit_restricted()? {
-            return Err(Error::BadValue("cannot fill fields in a signed PDF".into()));
-        }
         let nodes = self.field_nodes();
         let node = nodes.iter().find(|n| n.name == name).ok_or_else(|| Error::NoSuchField(name.into()))?;
         let info = self.field_info(node);
         if info.read_only || info.kind == FieldKind::Signature {
             return Err(Error::ReadOnly(name.into()));
+        }
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot fill fields in a signed PDF".into()));
         }
         let mut field = self.get_dict(node.id).ok_or(Error::Malformed("field vanished"))?;
         let helv = self.form_font();
