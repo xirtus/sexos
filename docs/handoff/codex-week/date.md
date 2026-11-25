@@ -76,8 +76,10 @@ Remaining gaps:
   persist or suppress it. A digest collision is possible, and no durable
   receiver receipt exists, so replay remains at least once. Legacy events
   without UIDs, Clock alarms and timers still need persistent source identities
-  before cross-restart dedupe can be sound. The guest gate checks
-  a healthy Shell-handled receipt and screenshot; it
+  before cross-restart dedupe can be sound. The guest gate imports a near-future
+  UID-backed reminder, checks its Shell semantic key and matching handled event,
+  and captures its visible notice. It also checks
+  a healthy Shell-handled timer receipt and screenshot; it
   does not inject a queue-full or muted Bell state. Host receipt tests check
   muted versus transient refusal cursor policy.
   Date now keeps a bounded durable last-checked minute. When its window closes,

@@ -8,7 +8,9 @@
   acknowledge the completed text. The key is observable in Shell's serial log.
 - Host protocol tests cover digest stability, malformed BEGIN sender words,
   stale Bell event/task and mismatched Date task/ticket. The Date QEMU gate
-  still tests the healthy notice path and captures its screenshot on GitHub CI.
+  imports a near-future UID-backed reminder, requires Shell's semantic key
+  marker and matching handled event, then captures the visible reminder.
+  Full build, QEMU and screenshot run on GitHub CI.
 - Shell does not persist the digest or suppress a repeated notice. Bell and
   Shell histories remain volatile; the delivery contract stays at least once.
   Legacy UID-less events, Clock alarms and timers still need source identities.
