@@ -372,9 +372,17 @@ impl App {
         self.make_archive(window, OutputFormat::TarZst, b".tar.zst", "tar.zst");
     }
 
+    pub(crate) fn make_tar(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::Tar, b".tar", "tar");
+    }
+
+    pub(crate) fn make_tar_gz(&mut self, window: &mut Window) {
+        self.make_archive(window, OutputFormat::TarGz, b".tar.gz", "tar.gz");
+    }
+
     fn make_archive(&mut self, window: &mut Window, format: OutputFormat, extension: &[u8], kind: &str) {
         let Some(path) = self.selected() else { self.status = format!("Select a file or folder to pack as {kind}."); return };
-        let dir_item = self.entries.get(self.cursor).is_some_and(|e| e.dir);
+        let dir_item = direct::stat(&at(&path)).is_ok_and(|s| s.dir);
         let name = base(&path).to_vec();
         let mut archive_name = if dir_item { name.clone() } else {
             match name.iter().rposition(|b| *b == b'.') { Some(i) if i > 0 => name[..i].to_vec(), _ => name.clone() }

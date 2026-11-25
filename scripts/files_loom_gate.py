@@ -381,6 +381,23 @@ def main():
   assert int(m[1])>=4,m[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-zst.ppm')})
   step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.zst')
+  # The format picker uses the same streaming writer and staged promotion.
+  q.key('home');time.sleep(.2)
+  step(lambda:cs('f'),r'\[files.app.archive.format\] selected=/media/LOOM/docs')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-pack-format.ppm')})
+  assert (a.out/'loom-pack-format.ppm').stat().st_size>10000
+  m=step(lambda:q.key('2'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar format=Tar entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar')
+  q.key('home');time.sleep(.2)
+  step(lambda:cs('f'),r'\[files.app.archive.format\] selected=/media/LOOM/docs')
+  m=step(lambda:q.key('3'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.gz files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.gz format=TarGz entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.gz')
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
   # 7. Disk and CD images, on a second stick.
   q.cmd('blockdev-add',{'driver':'raw','node-name':'imgsdrive','file':{'driver':'file','filename':str(imgs)}})
@@ -481,6 +498,9 @@ def main():
  plain=subprocess.run(['zstd','-dc'],input=compressed,capture_output=True,check=True).stdout
  with tarfile.open(fileobj=io.BytesIO(plain),mode='r:') as packed:
   for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,name
+ for suffix,mode in (('tar','r:'),('tar.gz','r:gz')):
+  with tarfile.open(fileobj=io.BytesIO(mread(stick,'docs.'+suffix)),mode=mode) as packed:
+   for name,data in CONTENT.items():assert packed.extractfile(name).read()==data,(suffix,name)
  for name,data in CONTENT.items():assert mread(stick,'docs (extracted)/'+name)==data,name
  assert mlist(stick,'ren')==['pic_01.txt','pic_02.txt','pic_03.txt'],mlist(stick,'ren')
  assert mread(stick,'ren/pic_01.txt')==REN['one.txt']

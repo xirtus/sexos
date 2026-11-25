@@ -19,8 +19,9 @@ Remaining gaps:
   available SexOS Home, Downloads, Documents and Disks folders, in single or
   split views. A persistent favorites editor and graphical sidebar remain.
 - Broader preview types and archive creation formats. ZIP and tar.zst can now
-  be created from a selected file or folder; plain tar and tar.gz creation still
-  need file-manager controls.
+  be created from a selected file or folder. Ctrl+Shift+F opens a format picker
+  for ZIP, plain tar, tar.gz and tar.zst, all using the same staged streaming
+  writer and one-step undo. More preview types remain open.
 - Folder tabs now restore from a versioned session file under the granted
   root, with a recoverable previous copy. An encrypted-home unlock and missing
   removable-volume restore policy still need a full session audit.
