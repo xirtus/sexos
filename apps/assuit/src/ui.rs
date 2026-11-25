@@ -53,6 +53,8 @@ enum Ask {
     SaveAs(String),
     /// Ctrl+G: a page number.
     GoTo(String),
+    /// Ctrl+T: dimensions such as 2x3.
+    Table(String),
 }
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
@@ -88,6 +90,7 @@ mod code {
     pub const E: u8 = 0x12;
     pub const G: u8 = 0x22;
     pub const P: u8 = 0x19;
+    pub const T: u8 = 0x14;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -225,6 +228,7 @@ impl Ui {
             match ask {
                 Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
+                Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
             }
         } else if let Some(p) = &self.find {
             match &p.with {
@@ -239,7 +243,7 @@ impl Ui {
                 }
             }
         } else if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
+            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
                 self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
         } else {
             self.message.clone()
@@ -309,7 +313,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -328,6 +332,27 @@ impl Ui {
             self.scroll_to = Some(page);
             sex_std::record(&format!("[assuit.goto] page={}", page + 1));
             self.message = format!("Page {} of {}", page + 1, self.book.pages());
+            return;
+        }
+        if matches!(ask, Ask::Table(_)) {
+            let Some((rows, cols)) = typed.split_once(|c| matches!(c, 'x' | 'X' | '×')) else {
+                self.message = "Enter rows x columns, for example 2x3".into();
+                return;
+            };
+            let dimensions = (rows.trim().parse::<usize>(), cols.trim().parse::<usize>());
+            let (Ok(rows), Ok(cols)) = dimensions else {
+                self.message = "Enter rows x columns, for example 2x3".into();
+                return;
+            };
+            match self.book.insert_table(rows, cols) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.table] rows={rows} cols={cols}"));
+                    self.message = format!("Inserted {rows} × {cols} table");
+                }
+                Err(e) => self.message = e,
+            }
             return;
         }
         match self.book.save_as(&typed) {
@@ -368,6 +393,7 @@ impl Ui {
                 (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }
                 (code::G, _) if !key.shift => { self.ask = Some(Ask::GoTo(String::new())); return; }
                 (code::P, _) if !key.shift => return self.export_pdf(),
+                (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::S, _) if key.shift => {
                     let styles = self.book.styles();
                     let current = self.book.paragraph_style();
