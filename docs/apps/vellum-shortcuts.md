@@ -17,9 +17,12 @@ Vellum's light, dark, and high-contrast colors.
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; Space checks a box |
 | Undo / redo committed form-field edits or added/deleted markup | Ctrl+Z / Ctrl+Shift+Z, before saving |
 | Place a typed visual signature | Ctrl+Shift+G |
+| Place an empty digital signature field at the chosen region | Ctrl+Shift+D |
 | Inspect digital signature fields and supported content integrity | Ctrl+Shift+V |
 | Save edits | Ctrl+S |
 
 Typed visual signatures are markup. Signature inspection verifies exact covered
 bytes for the supported P-256/SHA-256 detached CMS shape. It does not verify
 signer identity, certificate trust, or other CMS algorithms.
+An empty digital signature field can be saved and later signed once the Shibari
+certificate service is available. Placing the field does not sign the PDF.

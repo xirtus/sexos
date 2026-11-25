@@ -55,6 +55,45 @@ fn assert_incremental(orig: &[u8], saved: &[u8]) {
     assert!(s.trim_end().ends_with("%%EOF"));
 }
 
+#[test]
+fn new_signature_field_round_trips_and_can_receive_detached_cms() {
+    let original = simple(Style::Table);
+    let mut editor = Editor::open(original.clone()).unwrap();
+    editor.add_signature_field(0, "Vellum signature 1", [20.0, 20.0, 160.0, 50.0]).unwrap();
+    let field = editor.fields().unwrap().into_iter().find(|f| f.name == "Vellum signature 1").unwrap();
+    assert_eq!(field.kind, FieldKind::Signature);
+    assert_eq!(field.widgets.len(), 1);
+    assert_eq!(field.widgets[0].1, Some(0));
+    assert_eq!(field.widgets[0].2, [20.0, 20.0, 160.0, 50.0]);
+    assert!(!editor.signatures().unwrap()[0].signed);
+    let saved = editor.save_incremental().unwrap();
+    assert_incremental(&original, &saved);
+    assert!(region_diff(&render(&original), &render(&saved), [19.0, 19.0, 162.0, 52.0]) > 0,
+        "the empty signature field must be visible");
+    let independent = lopdf::Document::load_mem(&saved).unwrap();
+    let catalog = independent.catalog().unwrap();
+    let form = catalog.get(b"AcroForm").unwrap().as_dict().unwrap();
+    assert_eq!(form.get(b"SigFlags").unwrap().as_i64().unwrap(), 3);
+    let reopened = Editor::open(saved).unwrap();
+    let signed = reopened.embed_detached_signature_with("Vellum signature 1", 1024, |a, b| {
+        assert!(!a.is_empty() && !b.is_empty());
+        Ok(vec![1, 2, 3])
+    }).unwrap();
+    assert!(Editor::open(signed).unwrap().signatures().unwrap()[0].signed);
+}
+
+#[test]
+fn new_signature_field_rejects_bad_placement_and_signed_document() {
+    let mut editor = Editor::open(form(Style::Table, false)).unwrap();
+    assert!(editor.add_signature_field(0, "person.name", [20.0, 20.0, 80.0, 50.0]).is_err());
+    assert!(editor.add_signature_field(0, "bad.name", [20.0, 20.0, 80.0, 50.0]).is_err());
+    assert!(editor.add_signature_field(0, "New", [20.0, 20.0, 220.0, 50.0]).is_err());
+    assert!(!editor.is_modified());
+    let mut signed = Editor::open(form(Style::Table, true)).unwrap();
+    assert!(signed.add_signature_field(0, "New", [20.0, 20.0, 80.0, 50.0]).is_err());
+    assert!(!signed.is_modified());
+}
+
 fn lopdf_annots(saved: &[u8]) -> Vec<lopdf::Dictionary> {
     let doc = lopdf::Document::load_mem(saved).expect("lopdf loads the update");
     let pages = doc.get_pages();
