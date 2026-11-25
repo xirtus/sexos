@@ -110,6 +110,27 @@ fn signed_pdf_refuses_annotation_add_and_remove_without_changes() {
 }
 
 #[test]
+fn catalog_docmdp_without_signature_field_refuses_annotations() {
+    let pdf = fixtures::build(&[
+        (1, "<< /Type /Catalog /Pages 2 0 R /Perms << /DocMDP 6 0 R >> >>".into()),
+        (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+        (6, "<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 1 2 3] /Contents <0000> >>".into()),
+    ], Style::Table, 1);
+    let mut editor = Editor::open(pdf).unwrap();
+    assert!(editor.signatures().unwrap().is_empty());
+    let highlight = NewAnnot {
+        kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
+        style: AnnotStyle::default(),
+    };
+    let expected = Error::BadValue("cannot edit annotations in a signed PDF".into());
+    assert_eq!(editor.add_annotation(0, &highlight).unwrap_err(), expected);
+    assert_eq!(editor.set_annotation_text(0, 0, "No change").unwrap_err(), expected);
+    assert_eq!(editor.remove_annotation(0, 0).unwrap_err(), expected);
+    assert!(!editor.is_modified());
+}
+
+#[test]
 fn guest_signed_pdf_refuses_annotation_edits_when_supplied() {
     let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_SIGNED_PDF") else { return };
     let mut editor = Editor::open(std::fs::read(path).unwrap()).unwrap();

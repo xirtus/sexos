@@ -69,7 +69,7 @@ def document():
 FORM_WORD = 'PARAKEET'
 
 
-def form_document():
+def form_document(*, catalog_docmdp=False):
     """One US Letter page with a line of text holding FORM_WORD, an AcroForm text field
     `name` and a checkbox `agree` (with on and off appearances), for Vellum's edit gate."""
     text = (f'BT /F1 16 Tf 72 700 Td (Vellum form: the word {FORM_WORD} gets highlighted.) Tj ET\n'
@@ -80,7 +80,7 @@ def form_document():
     def stream(dict_, data):
         return f'<< {dict_} /Length {len(data)} >>\nstream\n{data}\nendstream'
     objects = {
-        1: '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>',
+        1: f'<< /Type /Catalog /Pages 2 0 R {"/Perms << /DocMDP 10 0 R >> " if catalog_docmdp else ""}/AcroForm << /Fields [6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>',
         2: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
         3: '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R 7 0 R] >>',
         4: stream('', text),
@@ -90,6 +90,9 @@ def form_document():
         8: stream('/Type /XObject /Subtype /Form /BBox [0 0 18 18]', on),
         9: stream('/Type /XObject /Subtype /Form /BBox [0 0 18 18]', off),
     }
+    if catalog_docmdp:
+        # Catalog certification signature without a discoverable AcroForm /Sig field.
+        objects[10] = '<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 1 2 3] /Contents <0000> >>'
     out = bytearray(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n')
     offsets = {}
     for num in sorted(objects):
