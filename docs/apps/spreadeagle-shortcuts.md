@@ -34,8 +34,12 @@ of a row header to change its height. Ctrl+Z undoes either size change.
 With AutoFilter on, click a column header's filter button or press Ctrl+Shift+O
 on that column. Use Up and Down to highlight a value, Space to mark several,
 Enter to apply, and Esc to close the menu. Existing selected values show checked;
-Enter on the untouched **All rows** row leaves an active filter in place. Move
-to a value and press Enter to replace it, or press Space on **All rows**, then
+press / or Ctrl+F in the menu to search its values (case-insensitive). Search
+narrows the list without losing checked choices; Enter applies the highlighted
+match, and Backspace edits the query. Esc clears a query before closing the menu.
+Space still toggles a highlighted result while searching. Enter on the untouched
+**All rows** row leaves an active filter in place. Move to a value and press
+Enter to replace it, or press Space on **All rows**, then
 Enter, to clear that column's filter.
 Press C in the value menu to enter a condition for that column. A condition can
 return no rows; All rows restores them.
