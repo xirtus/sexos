@@ -13,6 +13,7 @@ extern crate alloc;
 pub mod clock;
 pub mod conflicts;
 pub mod history;
+pub mod notice_cursor;
 pub mod ics;
 pub mod tz;
 

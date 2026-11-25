@@ -155,6 +155,23 @@ def main():
   g['wait'](rf'\[calendar.event\] date={today} when=10:20-11:20 title=power cut\n',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-after-powercut.ppm')})
   close(target,task)
+  # A clock alarm becomes due while Date has no window. The durable cursor
+  # makes the next run check that closed interval and ring through Bell.
+  target,task,sid,_,s=start('')
+  g['wait'](r'\[date.notice.cursor.loaded\] minute=\d+ now=\d+ catchup=[01]',s,60)
+  q.key('c');time.sleep(.3)
+  now=datetime.datetime.now(datetime.timezone.utc)
+  due=now.replace(second=0,microsecond=0)+datetime.timedelta(minutes=1 if now.second<45 else 2)
+  label='after close'
+  s=len(t());q.key('n');time.sleep(.3);keys(due.strftime('%H:%M')+' '+label);q.key('ret')
+  g['wait'](rf'\[date.alarm.added\] time={due:%H:%M} label={label}',s,60)
+  close(target,task)
+  time.sleep(max(0,(due-datetime.datetime.now(datetime.timezone.utc)).total_seconds())+3)
+  target,task,sid,_,s=start('')
+  g['wait'](r'\[date.notice.cursor.loaded\] minute=\d+ now=\d+ catchup=1',s,60)
+  g['wait'](r'\[date.alarm.fired\] kind=alarm title=after close notified=1',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-overdue-alarm.ppm')})
+  close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'today':str(today),'months_moved':months,'powercut_event':True})
  finally:g['stop']()
