@@ -10,8 +10,8 @@ use super::{profile::Jarbox, tabs::Tab, Browser};
 use sex_web::session::{Kept, Session};
 use alloc::vec::Vec;
 use sex_app::files;
+use super::state_file;
 
-const SESSION: &[u8] = b"Kaleidoscope/session.tsv";
 /// Most a session file may be.
 const MAX: usize = 64 << 10;
 
@@ -35,7 +35,7 @@ impl Browser {
         let text = self.session().text();
         if text == self.session_saved { return; }
         let _ = files::mkdir(&mut self.window, b"Kaleidoscope");
-        if files::write(&mut self.window, SESSION, text.as_bytes()).is_ok() {
+        if state_file::replace(&mut self.window, "Kaleidoscope/session.tsv", text.as_bytes()) {
             sex_pdx::serial_record!("[web.session.saved] tabs={} bytes={}", text.lines().filter(|l| l.starts_with("tab\t")).count(), text.len());
             self.session_saved = text;
         }
@@ -43,12 +43,8 @@ impl Browser {
 
     /// Opens the kept tabs again. False when there were none.
     pub(super) fn restore_session(&mut self) -> bool {
-        let Ok(size) = files::size(&mut self.window, SESSION) else { return false };
-        if size == 0 || size as usize > MAX { return false; }
-        let mut buf = alloc::vec![0u8; size as usize];
-        let Ok(n) = files::read(&mut self.window, SESSION, &mut buf) else { return false };
-        let Ok(text) = core::str::from_utf8(&buf[..n]) else { return false };
-        let s = Session::parse(text);
+        let Some(text) = state_file::read(&mut self.window, "Kaleidoscope/session.tsv", MAX as u64) else { return false };
+        let s = Session::parse(&text);
         if s.tabs.is_empty() { return false; }
         // Each tab waits blank with its address and title; the first is the shown slot.
         self.tabs.clear();

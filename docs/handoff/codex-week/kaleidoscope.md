@@ -16,6 +16,9 @@ and Shields. The remaining gaps are:
   first view and controls; permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
 - Inline PDF, print to PDF, service workers, and web app installation.
+- Profile and session writes previously replaced live files in place. This slice
+  stages and syncs each save, retains a previous copy, and recovers it after an
+  interrupted promotion. Other browser state files still need the same treatment.
 
 Keep browser state and controls within its own capabilities. Do not add a POSIX
 filesystem or network path.
