@@ -18,7 +18,7 @@ open prompt determine which keys act. F11 closes the window.
 | Empty trash; eject a removable disk | Ctrl+E in the corresponding view |
 | Go home; show removable disks | Ctrl+H; Ctrl+D |
 | Search file names and contents | Ctrl+F |
-| Toggle thumbnail grid; show disk usage | Ctrl+G; Ctrl+U |
+| Toggle thumbnail grid in one or both split panes; show disk usage | Ctrl+G; Ctrl+U |
 | Open a new folder tab; close the current one | Ctrl+Shift+T; Ctrl+Shift+W |
 | Switch tabs; show or hide split view | Ctrl+Page Up/Down; Ctrl+Shift+\ |
 | Browse an archive; extract it | Enter; Ctrl+Shift+X |
@@ -41,3 +41,5 @@ one background job and Ctrl+Z removes the completed group. A taken name receives
 `(copy)` or `(copy 2)` before its extension. Copied ratings and tags follow
 the new items. Grid and noncontiguous batch selection remain open.
 Ctrl+Shift+R opens the batch rename preview.
+In split grid view, a click in either pane focuses that folder. Clicking a tile
+also selects it; Ctrl+Page Up/Down changes the active folder from the keyboard.

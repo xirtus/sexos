@@ -29,6 +29,7 @@ files, and the metadata file; the second stick holds the files copied out of the
 byte for byte (SHA-256) as they are in them."""
 import argparse,hashlib,io,os,random,re,shutil,subprocess,tarfile,time,zipfile
 from pathlib import Path
+from program_gate_geometry import current_tile
 ROOT=Path(__file__).resolve().parents[1]
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','[':'bracket_left',']':'bracket_right',',':'comma'}
 SHIFTED={':':'semicolon','_':'minus','(':'9',')':'0','+':'equal','@':'2'}
@@ -151,10 +152,11 @@ def main():
  ctrl=lambda k:chord(k,'ctrl')
  cs=lambda k:chord(k,'ctrl','shift')
  E=re.escape
+ surfaces=[]
  def open_files(where='/media/LOOM',command=None):
   s=len(t());line(command or 'loom '+where);m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[files.app.list\] dir={E(where)} count=\d+',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
-  g['focus'](int(m[3]));time.sleep(.5);return s
+  surfaces.append(int(m[3]));g['focus'](int(m[3]));time.sleep(.5);return s
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
@@ -180,6 +182,21 @@ def main():
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
   step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-split.ppm')})
+  # The same two tabs also draw as independent graphical tile grids. A click
+  # in the right pane focuses it; keyboard switching then returns to the left.
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=1 dir=/media/LOOM/docs')
+  g['wait'](r'\[loom.split.grid\] active=2 pair=1 left=/media/LOOM/docs right=/media/LOOM/ren',0,60)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'folder-split-grid.ppm')})
+  assert (a.out/'folder-split-grid.ppm').stat().st_size>10000
+  tile=current_tile(t(),surfaces[-1]);rw,rh=map(int,a.resolution.split('x'))
+  x=tile[0]+8+(tile[2]-16)*3//4;y=tile[1]+34+15
+  q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},
+                                    {'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
+  s=len(t())
+  for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.15)
+  g['wait'](r'\[loom.split.focus\] pane=2 active=1 dir=/media/LOOM/ren item=0',s,60)
+  step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=0 dir=/media/LOOM/docs')
   step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM/ren\b')
   step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM count=3\b')
   step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')

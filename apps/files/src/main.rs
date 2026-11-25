@@ -46,6 +46,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 const ROWS: usize = 18;
+fn split_grid_fits(window: &mut Window) -> bool {
+    let (width, height) = window.size();
+    loom_core::split::grid_fits(width, height, thumbs::CELL_W, thumbs::CELL_H, thumbs::HEAD, thumbs::FOOT)
+}
 const TRASH: &[u8] = b".Trash";
 const INFO: &[u8] = b".Trash/.info";
 
@@ -355,6 +359,32 @@ impl App {
 
     fn render(&mut self, window: &mut Window) {
         if self.loom_render(window) { return; }
+        let split_grid = self.split && self.tabs.len() > 1 && self.thumbs.on && self.tab_ready()
+            && self.input.is_none();
+        if split_grid && !split_grid_fits(window) {
+            if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; }
+            self.render_split(window);
+            return;
+        }
+        if split_grid {
+            let other = (self.active_tab + 1) % self.tabs.len();
+            let other_path = self.tabs[other].cwd.clone();
+            let other_cursor = self.tabs[other].cursor;
+            let mut other_top = self.tabs[other].top;
+            let mut other_entries = files::list(window, &at(&other_path)).unwrap_or_default();
+            other_entries.retain(|e| e.name != TRASH && e.name != meta::FILE && e.name != session::FILE
+                && e.name != session::PREVIOUS && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
+            other_entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
+            let left = format!("> [{}] {}", self.active_tab + 1, shown(&self.cwd));
+            let right = format!("  [{}] {}", other + 1, shown(&other_path));
+            self.thumbs.draw_split(window, (&left, &self.cwd, &self.entries, self.cursor, &mut self.top),
+                (&right, &other_path, &other_entries, other_cursor, &mut other_top),
+                "Ctrl+PageUp/PageDown changes pane  ·  Ctrl+G list  ·  Ctrl+Shift+\\ close split");
+            self.tabs[other].top = other_top;
+            self.showing_pixels = true;
+            sex_pdx::serial_record!("[loom.split.grid] active={} pair={} left={} right={}", self.active_tab + 1, other + 1, shown(&self.cwd), shown(&other_path));
+            return;
+        }
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
             let mut head = format!("Loom [{}/{}]  {}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
             if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
@@ -1105,8 +1135,8 @@ impl App {
         if key.control {
             match key.code {
                 0x2B if key.shift => {
-                    if !self.tab_ready() || self.thumbs.on {
-                        self.status = "Finish this view and switch to the list before splitting.".into();
+                    if !self.tab_ready() {
+                        self.status = "Finish this view before splitting.".into();
                     } else if self.tabs.len() < 2 {
                         self.status = "Open a second tab before splitting.".into();
                     } else {
@@ -1175,8 +1205,10 @@ impl App {
             return;
         }
         // In the grid, arrows move across and down by whole rows.
-        if self.thumbs.on && !self.entries.is_empty() {
-            let cols = Thumbs::columns(window.size().0);
+        if self.thumbs.on && !self.entries.is_empty() && (!self.split || split_grid_fits(window)) {
+            let cols = if self.split && self.tabs.len() > 1 {
+                ((window.size().0 / 2).saturating_sub(16) / thumbs::CELL_W).max(1)
+            } else { Thumbs::columns(window.size().0) };
             let last = self.entries.len() - 1;
             match sex_app::nav(key) {
                 Some(Nav::Left) => { self.cursor = self.cursor.saturating_sub(1); return; }
@@ -1318,7 +1350,22 @@ pub extern "C" fn _start() -> ! {
             Some(Event::Pointer(p)) => {
                 use sex_pdx::app_pointer::Kind as K;
                 match p.kind {
-                    K::Down { button: 0 } => press = Some((p.x as i32, p.y as i32)),
+                    K::Down { button: 0 } => {
+                        if app.split && app.thumbs.on && app.tabs.len() > 1 && app.tab_ready()
+                            && split_grid_fits(&mut window) {
+                            let other = (app.active_tab + 1) % app.tabs.len();
+                            let other_len = files::list(&mut window, &at(&app.tabs[other].cwd)).map_or(0, |v| v.len());
+                            let (pane, index) = loom_core::split::grid_hit(window.size().0, p.x as usize, p.y as usize,
+                                thumbs::CELL_W, thumbs::CELL_H, thumbs::HEAD, app.top, app.tabs[other].top,
+                                app.entries.len(), other_len);
+                            if pane == 1 { app.show_tab(&mut window, other); }
+                            if let Some(index) = index { app.cursor = index.min(app.entries.len().saturating_sub(1)); }
+                            sex_pdx::serial_record!("[loom.split.focus] pane={} active={} dir={} item={}", pane + 1,
+                                app.active_tab + 1, shown(&app.cwd), index.map_or(0, |i| i + 1));
+                            app.render(&mut window);
+                            press = None;
+                        } else { press = Some((p.x as i32, p.y as i32)); }
+                    }
                     K::Move if p.buttons & 1 != 0 => if let Some((x0, y0)) = press {
                         if (p.x as i32 - x0).abs() + (p.y as i32 - y0).abs() > 8 {
                             press = None;
