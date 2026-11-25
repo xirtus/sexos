@@ -104,6 +104,8 @@ enum Ask {
     Chart,
     /// Ctrl+Shift+Q: edit the chart anchored at the selected cell.
     ChartEdit { id: u32, text: Vec<char> },
+    /// Ctrl+Shift+J: sort the selected table by several columns in priority order.
+    MultiSort { range: crate::book::Range, text: Vec<char> },
     /// Ctrl+Shift+K or C in the value menu: a comparison for this column.
     FilterCondition { col: u32, text: Vec<char> },
 }
@@ -124,11 +126,12 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
     ("Ctrl+Shift+A / D", "Sort ascending / descending"),
+    ("Ctrl+Shift+J", "Sort selected table by several columns"),
     ("Ctrl+Shift+L / E / O", "Filter / by cell / choose values; Space marks"),
     ("Ctrl+Shift+K", "Filter current column by condition"),
     ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
-    ("Ctrl+Shift+Q", "Edit selected chart type or title"),
+    ("Ctrl+Shift+Q", "Edit selected chart layout"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -174,6 +177,7 @@ mod code {
     pub const U: u8 = 0x16;
     pub const O: u8 = 0x18;
     pub const K: u8 = 0x25;
+    pub const J: u8 = 0x24;
     pub const Q: u8 = 0x10;
     pub const F2: u8 = 0x3C;
     pub const SLASH: u8 = 0x35;
@@ -505,6 +509,7 @@ impl Ui {
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
                 Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type/title, legend position, x/y title, labels or gridlines")),
+                Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("contains/starts/ends/notcontains text or >, >=, <, <= number; Enter applies")),
             }
         } else if let Some(p) = &self.find {
@@ -674,6 +679,23 @@ impl Ui {
                     }
                     Err(e) => { self.message = e; false }
                 }
+            }
+            Ask::MultiSort { range, text } => {
+                let range = *range;
+                match key.code {
+                    code::BACKSPACE => { text.pop(); self.message.clear(); return false; }
+                    code::ENTER => {}
+                    _ => {
+                        if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { text.push(ch); self.message.clear(); }
+                        return false;
+                    }
+                }
+                let typed = text.iter().collect::<String>();
+                let done = self.book.sort_multi(range, &typed);
+                if done.is_ok() { self.ask = None; }
+                let changed = self.command("data.sort", done, format!("Sorted {} by {typed}", range.a1()));
+                if changed { sex_std::record(&format!("[spreadeagle.sort.multi] range={} keys={typed}", range.a1())); }
+                changed
             }
             Ask::FilterCondition { col, text } => {
                 let col = *col;
@@ -889,6 +911,11 @@ impl Ui {
                     } else { self.message = "Select a chart or go to its anchor cell first".into(); None }
                 }
                 code::K if key.shift => { sex_std::record(&format!("[spreadeagle.filter.condition-prompt] col={}", column_name(self.col))); Some(Ask::FilterCondition { col: self.col, text: Vec::new() }) },
+                code::J if key.shift => {
+                    let range = self.selection();
+                    sex_std::record(&format!("[spreadeagle.sort.multi-prompt] range={}", range.a1()));
+                    Some(Ask::MultiSort { range, text: Vec::new() })
+                }
                 code::EQUALS if key.shift => Some(Ask::Lines { insert: true }),
                 code::MINUS => Some(Ask::Lines { insert: false }),
                 code::P => { self.export_pdf(); return false; }
