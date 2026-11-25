@@ -42,6 +42,9 @@ pub const DEFAULT_PORT: u16 = 7177;
 /// Between receives while nothing arrives.
 const POLL_MS: u64 = 40;
 const OUT_MAX: usize = 16 * 1024;
+/// Bytes handed to the network per send: a 16 KiB send filled the flow's whole
+/// send buffer at once and stalled the x17's first tether over Wi-Fi.
+const SEND_MAX: usize = 4096;
 const IN_MAX: usize = 2048;
 const QUEUE: usize = 16;
 pub const CMD_MAX: usize = 256;
@@ -530,7 +533,8 @@ impl Tether {
                 // Receives and sends take turns, so commands get through during the log dump.
                 self.recv_turn = !self.recv_turn;
                 if self.out_len > 0 && !self.recv_turn {
-                    let n = self.out_len.min(w::REGION_BYTES);
+                    // At most SEND_MAX a call, the size the Wi-Fi sweep proved on the x17.
+                    let n = self.out_len.min(SEND_MAX);
                     region[..n].copy_from_slice(&self.out[..n]);
                     self.net_call(w::SEND, n as u64, Call::Send);
                 } else if self.empty_receives >= STATE_EVERY {

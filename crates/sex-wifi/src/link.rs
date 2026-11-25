@@ -473,6 +473,8 @@ impl Link {
             }
             // Data from our AP only, and not our own broadcasts relayed back.
             if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
+            // Null and QoS Null (subtype bit 2): no body, nothing to take or count.
+            if f[0] & 0x40 != 0 { return; }
             // An A-MSDU the hardware did not split: each subframe on its own, as
             // the frame's header and CCMP header before the subframe's LLC payload.
             let parts = amsdu_parts(f, rx.status);
