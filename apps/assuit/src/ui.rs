@@ -109,6 +109,8 @@ enum Ask {
     Footnote(String),
     /// Ctrl+K: address and optional display text for a hyperlink.
     Link(String),
+    /// Ctrl+Alt+T: insert, update or remove a heading-based contents table.
+    Contents(String),
     /// Ctrl+Shift+K: document proofing language.
     Language(String),
 }
@@ -147,6 +149,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
     ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
     ("Ctrl+K", "Link selected text or insert a labeled link"),
+    ("Ctrl+Alt+T", "Insert, refresh or remove a table of contents"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
@@ -425,6 +428,7 @@ impl Ui {
                 Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
                 Ask::Footnote(note) => format!("Footnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
                 Ask::Link(link) => format!("Link: {link}_   {}", said("Enter a web or mail address; optional display text follows a space")),
+                Ask::Contents(action) => format!("Contents: {action}_   {}", said("insert 1–9 heading levels, update, or remove")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
@@ -563,7 +567,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Link(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Link(t) | Ask::Contents(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -785,6 +789,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Contents(_)) {
+            match self.book.table_of_contents(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.contents] {typed}"));
+                    self.message = format!("Table of contents: {typed}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if matches!(ask, Ask::Language(_)) {
             match self.book.proofing_language(&typed) {
                 Ok(tag) => {
@@ -946,6 +962,7 @@ impl Ui {
                 (code::I, _) if key.alt && !key.shift => { self.ask = Some(Ask::Indents(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
                 (code::K, _) if !key.alt => { self.ask = Some(Ask::Link(String::new())); return; }
+                (code::T, _) if key.alt && !key.shift => { self.ask = Some(Ask::Contents(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }
                 (code::I, _) if key.shift => { self.ask = Some(Ask::Picture(String::new())); return; }

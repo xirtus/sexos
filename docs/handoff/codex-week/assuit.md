@@ -25,6 +25,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Hyperlinks:** Ctrl+K now opens a native URL prompt for selected text or a
   new display label. Web and mail links are bounded, undoable, and covered by
   DOCX/ODT round trips. Editing and removing existing links remain.
+- **Table of contents:** Ctrl+Alt+T now inserts a generated contents table
+  from heading styles (levels 1–9), refreshes it after edits, or removes it.
+  A DOCX/ODT host test covers insert, update, removal and save/reopen.
 - **Page numbering:** WordCraft can insert dynamic page fields in a header or
   footer, but Assuit has no native control for it. This slice exposes bounded
   top/bottom and left/center/right choices, checks the visible page and
