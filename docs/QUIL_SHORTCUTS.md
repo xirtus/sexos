@@ -53,4 +53,8 @@ compares tracked files with the index. The panel marks modified, deleted,
 conflicted, or too-large-to-check files. Right opens a read-only line diff for a
 modified or deleted UTF-8 file whose indexed blob is loose; Up/Down scroll it.
 The diff is bounded to 64 KiB and 300 lines per side. Enter opens an existing file.
-Packed blobs, untracked/ignored files, staging, commits and branches need later work.
+In the tracked-changes panel, S stages one modified tracked UTF-8 file up to 64 KiB.
+U undoes only Quil's most recent stage, and refuses if another Git actor has changed
+the index. Quil writes a checked loose blob and replaces a v2/v3 index through
+Files' staged rename. Indexes with extensions, conflicts, deleted files,
+untracked/ignored files, broader unstage controls, commits and branches need later work.

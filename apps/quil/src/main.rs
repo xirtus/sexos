@@ -214,6 +214,68 @@ fn git_diff(root: &[u8], change: &GitChange) -> Result<Vec<String>, String> {
     })
 }
 
+fn git_write_new(path: &[u8], bytes: &[u8]) -> Result<(), String> {
+    files::direct::create(path).map_err(|_| String::from("Cannot create Git staging file."))?;
+    let mut at = 0;
+    while at < bytes.len() {
+        let end = (at + sex_pdx::fs::IO_MAX).min(bytes.len());
+        match files::direct::write_at(path, at as u64, &bytes[at..end]) {
+            Ok(n) if n == end - at => at = end,
+            _ => { let _ = files::direct::remove(path); return Err(String::from("Git staging write was incomplete.")); }
+        }
+    }
+    if files::direct::sync().is_err() { let _ = files::direct::remove(path); return Err(String::from("Git staging sync failed.")); }
+    Ok(())
+}
+
+fn git_replace_index(root: &[u8], expected: &[u8], updated: &[u8]) -> Result<(), String> {
+    let index = project::join(root, b".git/index");
+    let lock = project::join(root, b".git/index.lock");
+    if files::direct::stat(&lock).is_ok() { return Err(String::from("Git index is locked by another operation.")); }
+    git_write_new(&lock, updated)?;
+    if git_read(&index, git::MAX_INDEX).as_deref() != Some(expected) {
+        let _ = files::direct::remove(&lock);
+        return Err(String::from("Git index changed; reopen tracked changes."));
+    }
+    if files::direct::rename(&lock, &index).is_err() {
+        let _ = files::direct::remove(&lock);
+        return Err(String::from("Could not replace Git index."));
+    }
+    files::direct::sync().map_err(|_| String::from("Git index sync failed."))
+}
+
+fn git_stage(root: &[u8], change: &GitChange) -> Result<(Vec<u8>, Vec<u8>), String> {
+    if change.code != 'M' { return Err(String::from("Stage supports modified tracked text files only.")); }
+    let index = project::join(root, b".git/index");
+    let before = git_read(&index, git::MAX_INDEX).ok_or_else(|| String::from("Git index is unavailable."))?;
+    let current = git_read(&project::join(root, &change.path), git::MAX_DIFF_BYTES)
+        .ok_or_else(|| String::from("Changed text file exceeds 64 KiB or is unavailable."))?;
+    let (after, id, packed) = git::stage_tracked(&before, &change.path, &current)
+        .map_err(|e| format!("Cannot stage this Git index entry: {e:?}"))?;
+    if git::parse_index(&before).ok().and_then(|entries| entries.into_iter().find(|e| e.path == change.path)).map(|e| e.id) != Some(change.id) {
+        return Err(String::from("Git panel is stale; reopen tracked changes."));
+    }
+    let hex = b"0123456789abcdef";
+    let mut dir = b".git/objects/".to_vec();
+    for byte in id[..1].iter() { dir.push(hex[(byte >> 4) as usize]); dir.push(hex[(byte & 15) as usize]); }
+    let dir = project::join(root, &dir);
+    if files::direct::stat(&dir).is_err() { files::direct::mkdir(&dir).map_err(|_| String::from("Cannot make Git object folder."))?; }
+    let mut object = dir.clone(); object.push(b'/');
+    for byte in &id[1..] { object.push(hex[(byte >> 4) as usize]); object.push(hex[(byte & 15) as usize]); }
+    if files::direct::stat(&object).is_ok() {
+        let existing = git_read(&object, git::MAX_DIFF_BYTES + 64).ok_or_else(|| String::from("Existing Git object cannot be read."))?;
+        git::loose_blob(&existing, &id).map_err(|_| String::from("Existing Git object is damaged."))?;
+    } else {
+        let mut temp = object.clone(); temp.extend_from_slice(b".quil-stage");
+        if files::direct::stat(&temp).is_ok() { return Err(String::from("Git object staging file already exists.")); }
+        git_write_new(&temp, &packed)?;
+        if files::direct::rename(&temp, &object).is_err() { let _ = files::direct::remove(&temp); return Err(String::from("Cannot commit Git object.")); }
+        files::direct::sync().map_err(|_| String::from("Git object sync failed."))?;
+    }
+    git_replace_index(root, &before, &after)?;
+    Ok((before, after))
+}
+
 fn read_draft(path: &[u8]) -> Option<Vec<u8>> {
     if path.is_empty() { return None; }
     let name = draft_name(path);
@@ -337,6 +399,8 @@ struct App {
     theme_next: u64,
     draft_next: u64,
     drafted: BTreeMap<Vec<u8>, u64>,
+    /// Last index edit only; undo refuses if another Git actor touched it.
+    git_stage_undo: Option<(Vec<u8>, Vec<u8>)>,
     p: Painter,
 }
 
@@ -532,6 +596,7 @@ impl App {
 
     fn set_root(&mut self, root: &[u8]) {
         self.root = root.to_vec();
+        self.git_stage_undo = None;
         self.tree = Tree::new(root);
         self.tree.refresh(&mut AppFs);
         self.show_tree = true;
@@ -783,7 +848,35 @@ impl App {
                     _ => *scroll,
                 };
             }
-            Overlay::Git { changes, sel, .. } => {
+            Overlay::Git { changes, sel, note } => {
+                if matches!(typed, Some('u' | 'U')) {
+                    let result = self.git_stage_undo.as_ref().ok_or_else(|| String::from("No Quil stage to undo."))
+                        .and_then(|(before, after)| git_replace_index(&self.root, after, before));
+                    match result {
+                        Ok(()) => {
+                            self.git_stage_undo = None;
+                            let refreshed = git_changes(&self.root).unwrap_or_default();
+                            sex_pdx::serial_record!("[quil.code.git.unstaged] tracked_changes={}", refreshed.len());
+                            self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: String::from("Undid last Quil stage.") };
+                            keep = false;
+                        }
+                        Err(reason) => *note = reason,
+                    }
+                } else if matches!(typed, Some('s' | 'S')) && !changes.is_empty() {
+                    let change = changes[*sel].clone();
+                    match git_stage(&self.root, &change) {
+                        Ok(history) => {
+                            self.git_stage_undo = Some(history);
+                            let refreshed = git_changes(&self.root).unwrap_or_default();
+                            sex_pdx::serial_record!("[quil.code.git.staged] path={} tracked_changes={}", lossy(&change.path), refreshed.len());
+                            self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: format!("Staged {}. U undoes this stage.", lossy(&change.path)) };
+                            keep = false;
+                        }
+                        Err(reason) => *note = reason,
+                    }
+                }
+                if !keep { /* New panel already installed. */ }
+                else {
                 if !changes.is_empty() {
                     *sel = (*sel as isize + updown).clamp(0, changes.len() as isize - 1) as usize;
                     if p.k == K::Named(Named::Right) {
@@ -799,6 +892,7 @@ impl App {
                         self.open(&path);
                         keep = false;
                     }
+                }
                 }
             }
             Overlay::GitDiff { lines, scroll, .. } => {
@@ -1137,7 +1231,7 @@ impl App {
                 for (i, change) in changes.iter().enumerate().skip(first).take(10) {
                     lines.push((format!("{}  {}", change.code, lossy(&change.path)), i == *sel));
                 }
-                ("Quil tracked changes  ", String::from("Right diff; Enter opens; M modified  D deleted  C conflict  ? too large"))
+                ("Quil tracked changes  ", String::from("S stage modified text; U undo last stage; Right diff; Enter opens"))
             }
             Overlay::GitDiff { path, lines: diff, scroll, note } => {
                 if !note.is_empty() { lines.push((note.clone(), false)); }
@@ -1242,7 +1336,7 @@ extern "C" fn main() -> ! {
         keys: Keys::default(), vim: Vim::new(), overlay: Overlay::None, clipboard: (Vec::new(), false), status: String::from("Ctrl+Shift+P: all commands"),
         numbers: true, find: Vec::new(), mark: false, quit_armed: false, drag: false,
         palette, theme_generation, theme_next: sex_pdx::get_ticks().saturating_add(1000),
-        draft_next: sex_pdx::get_ticks().saturating_add(2000), drafted: BTreeMap::new(), p,
+        draft_next: sex_pdx::get_ticks().saturating_add(2000), drafted: BTreeMap::new(), git_stage_undo: None, p,
     };
     // `quil @/path` opens a file or a folder; words like `vim` or `emacs` pick the keys.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
