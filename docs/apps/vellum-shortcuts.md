@@ -10,7 +10,7 @@ Vellum's light, dark, and high-contrast colors.
 | Scroll | Up; Down |
 | Zoom | +, -, 0 / W fit width, F fit page, 1 actual size |
 | Thumbnails or outline | T; O, then Up / Down / Enter |
-| Search | Ctrl+F, then Enter / Ctrl+G next, Shift previous, Escape closes |
+| Search | Ctrl+F, then Enter / Ctrl+G next, Shift previous; Ctrl+Shift+M toggles Match Case while Find is open; Escape closes |
 | Choose a highlight region | Ctrl+R, then drag across the page; arrows move and Shift+arrows resize; Enter highlights |
 | Highlight, add note, list annotations | Ctrl+H; Ctrl+N; Ctrl+L |
 | Choose highlight color | Ctrl+Shift+H cycles yellow, green, pink, blue; the choice applies to found text and selected regions |
@@ -31,6 +31,7 @@ Vellum's light, dark, and high-contrast colors.
 | Save edits | Ctrl+S |
 
 In Find, a single space can match words separated by a line break in the PDF.
+The bar shows whether Match Case is on. Toggling it reruns the current query.
 
 Editable combo boxes retain their existing Ctrl+A clear command. For a focused
 combo or list field, click its value in the form bar to open

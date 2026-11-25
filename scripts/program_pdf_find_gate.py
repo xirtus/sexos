@@ -76,6 +76,16 @@ def main():
   hit=g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
   g['wait'](rf'\[pdf\.page\] page={UNIQUE_PAGE} pages={PAGES} width=\d+ height=\d+ ink=(\d+) ms=\d+\n',s,900)
   time.sleep(1.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find.ppm')})
+  # Match Case keeps the same query but excludes the uppercase-only word.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'m'}],'hold-time':80})
+  g['wait'](r'\[pdf\.find\.case\] match=1\n',s,60)
+  g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} hits=0\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-match-case.ppm')})
+  case_shot=(a.out/'pdf-find-match-case.ppm').read_bytes()
+  assert case_shot.startswith(b'P6\n') and case_shot!=(a.out/'pdf-find.ppm').read_bytes()
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'m'}],'hold-time':80})
+  g['wait'](r'\[pdf\.find\.case\] match=0\n',s,60)
+  g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
   # The first page was retired when search jumped to page 7. Revisit it at
   # the same zoom; pixels must come from the bounded cache.
   s=len(t());q.key('home')
