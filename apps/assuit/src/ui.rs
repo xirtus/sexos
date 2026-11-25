@@ -99,6 +99,8 @@ enum Ask {
     Paper(String),
     /// Ctrl+Shift+M: a margin preset or four inch values.
     Margins(String),
+    /// Ctrl+Alt+S: line multiple, space before and after in points.
+    Spacing(String),
     /// Ctrl+Shift+K: document proofing language.
     Language(String),
 }
@@ -131,6 +133,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+P", "Preview pages before printing"),
     ("Ctrl+Shift+L", "Paper size and orientation"),
     ("Ctrl+Shift+M", "Page margins"),
+    ("Ctrl+Alt+S", "Paragraph line and before/after spacing"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
@@ -402,6 +405,7 @@ impl Ui {
                 Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
+                Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("line multiple, before pt, after pt; for example 1.5 0 8")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
@@ -534,7 +538,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::Spacing(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -696,6 +700,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Spacing(_)) {
+            match self.book.set_paragraph_spacing(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.paragraph-spacing] {typed}"));
+                    self.message = format!("Paragraph spacing set to {typed}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if matches!(ask, Ask::Language(_)) {
             match self.book.proofing_language(&typed) {
                 Ok(tag) => {
@@ -807,6 +823,7 @@ impl Ui {
                 (code::L, _) if key.shift => { self.ask = Some(Ask::Paper(String::new())); return; }
                 (code::L, _) if key.alt => { self.ask = Some(Ask::List(String::new())); return; }
                 (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
+                (code::S, _) if key.alt => { self.ask = Some(Ask::Spacing(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }
