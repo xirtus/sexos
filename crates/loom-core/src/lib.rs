@@ -26,6 +26,7 @@ pub mod dupes;
 pub mod glob;
 pub mod hash;
 pub mod journal;
+pub mod preview;
 pub mod rename;
 pub mod tags;
 mod text;
