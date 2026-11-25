@@ -147,6 +147,34 @@ impl Book {
         }
     }
 
+    /// Reopen a linked footnote or endnote from its body reference. This also
+    /// works after saving and reopening a document, when insert state is gone.
+    pub fn edit_note_at_caret(&mut self) -> Result<&'static str, String> {
+        if self.note_return.is_some() || !self.session.sel.is_collapsed()
+            || self.session.sel.focus.story != StoryRef::Body {
+            return Err("Place the body caret on a note reference".into());
+        }
+        let back = self.session.sel.focus.clone();
+        let para = self.session.doc.para_at(&back)
+            .ok_or("Place the body caret on a note reference")?;
+        let id = para.objects_with_offsets().find_map(|(off, object)| {
+            if off == back.off || off + '\u{FFFC}'.len_utf8() == back.off {
+                if let InlineObject::NoteRef { id, .. } = object { return Some(*id); }
+            }
+            None
+        }).ok_or("Place the body caret on a note reference")?;
+        let kind = match self.session.doc.parts.get(&id).map(|part| &part.kind) {
+            Some(PartKind::Footnote) => "footnote",
+            Some(PartKind::Endnote) => "endnote",
+            _ => return Err("The note reference has no editable note".into()),
+        };
+        self.session.sel = Selection::caret(Pos::new(StoryRef::Part(id),
+            wordcraft_engine::doc::Path::top(0), 0));
+        self.session.clamp_selection();
+        self.note_return = Some(back);
+        Ok(kind)
+    }
+
     /// Convert linked notes throughout the document, keeping their references
     /// and rich text. A conversion is one undoable document edit.
     pub fn convert_notes(&mut self, input: &str) -> Result<usize, String> {
@@ -1470,6 +1498,37 @@ mod tests {
             assert!(note(&reopened).contains("Reference one updated"), "{ext} lost the endnote text or link");
             let last = reopened.pages().saturating_sub(1);
             assert!(reopened.draw(last, 1.5).is_some());
+        }
+    }
+
+    #[test]
+    fn saved_note_reference_reopens_for_editing() {
+        for (ext, endnote) in [("docx", false), ("odt", true)] {
+            let path = temp(&format!("reopen-note.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Claim").unwrap();
+            if endnote { book.insert_endnote("First").unwrap(); }
+            else { book.insert_footnote("First").unwrap(); }
+            book.close_inserted_note();
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert!(reopened.edit_note_at_caret().is_err());
+            let off = reopened.session.doc.body[0].as_para().unwrap()
+                .objects_with_offsets().find_map(|(off, obj)|
+                    matches!(obj, InlineObject::NoteRef { .. }).then_some(off)).unwrap();
+            reopened.session.sel = Selection::caret(Pos::body(0, off));
+            let kind = reopened.edit_note_at_caret().unwrap();
+            assert_eq!(kind, if endnote { "endnote" } else { "footnote" });
+            assert_eq!(reopened.editing_inserted_note(), Some(kind));
+            reopened.type_text("Updated ").unwrap();
+            reopened.close_inserted_note();
+            assert_eq!(reopened.session.sel.focus.story, StoryRef::Body);
+            reopened.save().unwrap();
+            let saved = Book::open(&path).unwrap();
+            let id = saved.session.doc.body[0].as_para().unwrap().objects.iter()
+                .find_map(|obj| match obj { InlineObject::NoteRef { id, .. } => Some(*id), _ => None }).unwrap();
+            let text = saved.session.doc.plain_text(StoryRef::Part(id));
+            assert!(text.contains("Updated") && text.contains("First"), "saved note: {text}");
         }
     }
 
