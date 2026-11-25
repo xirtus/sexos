@@ -504,7 +504,7 @@ impl Ui {
                 Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
-                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type line/bar/column/pie, title text, or clear title")),
+                Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("type/title, legend position, x/y title, labels or gridlines")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("contains/starts/ends/notcontains text or >, >=, <, <= number; Enter applies")),
             }
         } else if let Some(p) = &self.find {
