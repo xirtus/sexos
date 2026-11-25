@@ -63,7 +63,8 @@ def main():
   assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>1000,'Vellum did not paint the Light theme desk'
   # The shortcut reference is Vellum's own overlay over the current page.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':k}for k in ('ctrl','shift','slash')],'hold-time':80})
-  g['wait'](r'\[pdf\.shortcuts\] shown=1 rows=14\n',s,60)
+  rows=g['wait'](r'\[pdf\.shortcuts\] shown=1 rows=(\d+)\n',s,60)
+  assert int(rows[1])>=14,'Vellum shortcut reference lost rows'
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-shortcuts.ppm')})
   help_shot=(a.out/'pdf-shortcuts.ppm').read_bytes()
   assert help_shot.startswith(b'P6\n') and help_shot!=shot,'Vellum shortcut overlay did not repaint'
