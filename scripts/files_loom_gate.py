@@ -219,6 +219,17 @@ def main():
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   q.key('down');time.sleep(.3);q.key('down');time.sleep(.3)
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
+  # Cut one.txt and paste it within the same FAT32 volume, then undo/redo/undo.
+  ctrl('x');time.sleep(.3)
+  step(lambda:ctrl('h'),r'\[files.app.list\] dir=/media/LOOM count=5\b')
+  step(lambda:ctrl('v'),r'\[files.app.pasted\] from=/media/LOOM/ren/one.txt to=/media/LOOM/one.txt cut=1')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:ctrl('y'),r'\[files.app.redone\] left=0')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'same-volume-redone.ppm')})
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  q.key('home');time.sleep(.2)
+  q.key('down');time.sleep(.2);q.key('down');time.sleep(.2)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
   for n in (1,2):
    step(lambda:cs('r'),r'\[files.app.rename.start\] dir=/media/LOOM/ren items=3')
    for _ in range(3):q.key('backspace');time.sleep(.05)
