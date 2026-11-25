@@ -10,6 +10,7 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Form text caret:** text fields and editable combo boxes now show a caret in Vellum's form bar. Left/Right and Home/End move it; Backspace/Delete and typing edit at that position, including Unicode character boundaries.
 - **Form text selection:** Shift+Left/Right and Shift+Home/End extend a text selection. Ctrl+A selects an entire text field; typing or deletion replaces the selected span. Vellum highlights the range in its form bar. Drag selection within the bar remains open.
 - **Form text pointer caret:** a click on the focused text field's value in the form bar places the caret at the nearest character boundary and clears a keyboard selection. The guest gate inserts text at that position. Drag selection and editable-combo text pointer placement remain open.
+- **Annotation region drag:** after Ctrl+R enters region mode, dragging on the rendered page defines a bounded rectangle in shown page coordinates. Enter turns it into a PDF highlight through the existing edit/save path. The QEMU gate captures the dragged outline before the highlight and checks the saved annotation count. Direct drag initiation without choosing the region tool and richer markup appearance controls remain open.
 - **Search across layout breaks:** Find currently treats extracted line breaks as
   literal characters, so a phrase typed with a space misses words split across
   two visible lines. This slice makes whitespace runs match one query space and

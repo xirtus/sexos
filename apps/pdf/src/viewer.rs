@@ -81,7 +81,8 @@ const SHORTCUTS: &[&str] = &[
     "T thumbnails; O outline (Up / Down / Enter choose)",
     "Search: Ctrl+F find; Enter / Ctrl+G next; spaces cross lines",
     "Escape closes search",
-    "Markup: Ctrl+R select region; arrows move; Shift+arrows size",
+    "Markup: Ctrl+R region; drag on page or use arrow keys",
+    "Shift+arrows size the region; Enter highlights it",
     "Ctrl+H highlight a found word or selected region",
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
@@ -145,6 +146,16 @@ fn text_display(text: &str, caret: usize, anchor: Option<usize>) -> String {
 
 fn text_caret_at_x(x: usize, value_x: usize, chars: usize) -> usize {
     ((x.saturating_sub(value_x).saturating_add(CW / 2)) / CW).min(chars)
+}
+
+fn dragged_region(start: (f64, f64), end: (f64, f64), bounds: (f64, f64)) -> [f64; 4] {
+    let (w, h) = (bounds.0.max(0.0), bounds.1.max(0.0));
+    let (min_w, min_h) = (w.min(6.0), h.min(6.0));
+    let x0 = start.0.min(end.0).clamp(0.0, w - min_w);
+    let y0 = start.1.min(end.1).clamp(0.0, h - min_h);
+    let x1 = start.0.max(end.0).clamp(x0 + min_w, w);
+    let y1 = start.1.max(end.1).clamp(y0 + min_h, h);
+    [x0, y0, x1, y1]
 }
 
 fn text_backspace(text: &mut String, caret: &mut usize) {
@@ -328,6 +339,7 @@ struct Viewer {
     annotation_history: AnnotationHistory,
     /// The region Ctrl+R chose: shown points `[left, top, right, bottom]` on the page.
     region: Option<[f64; 4]>,
+    region_drag: Option<(usize, (f64, f64))>,
     /// A sticky note being typed.
     note: Option<String>,
     /// A typed visual signature; it is markup, not a cryptographic signature.
@@ -452,7 +464,10 @@ impl Viewer {
 
     fn go(&mut self, page: usize) {
         let page = page.min(self.pages().saturating_sub(1));
-        if page != self.page { self.page = page; self.scroll = 0; self.hscroll = 0; }
+        if page != self.page {
+            self.page = page; self.scroll = 0; self.hscroll = 0;
+            self.region = None; self.region_drag = None;
+        }
     }
 
     fn set_zoom(&mut self, zoom: Zoom, width: f32) {
@@ -840,6 +855,7 @@ impl Viewer {
         let popup_was_open = self.form.as_ref().is_some_and(|f| f.popup);
         if self.choice_pointer(p.kind, (x, y), size, l.bar) { return true; }
         if self.text_pointer(p.kind, (x, y), l.bar) { return true; }
+        if self.region_pointer(p.kind, p.buttons, (x, y), &l) { return true; }
         if self.widget_pointer(p.kind, (x, y), &l, size) { return true; }
         if popup_was_open && self.form.as_ref().is_some_and(|f| !f.popup) { return true; }
         match p.kind {
@@ -873,6 +889,45 @@ impl Viewer {
             }
             _ => false,
         }
+    }
+
+    fn region_pointer(&mut self, kind: Kind, buttons: u8, point: (usize, usize), l: &Layout) -> bool {
+        if self.shortcuts || self.region.is_none() { self.region_drag = None; return false; }
+        let shown = self.shown.as_ref().and_then(|r| shown_at_click(point, l, r, self.scroll, self.hscroll));
+        match kind {
+            Kind::Down { button: 0 } => {
+                let Some(start) = shown else { return false };
+                self.region_drag = Some((self.page, start));
+                self.update_drag_region(start, start);
+                true
+            }
+            Kind::Move if self.region_drag.is_some() => {
+                if buttons & 1 == 0 { self.region_drag = None; return true; }
+                if self.region_drag.is_some_and(|(page, _)| page != self.page) { self.region_drag = None; return true; }
+                if let Some(end) = shown {
+                    let (_, start) = self.region_drag.unwrap();
+                    self.update_drag_region(start, end);
+                }
+                true
+            }
+            Kind::Up { button: 0 } if self.region_drag.is_some() => {
+                let (page, start) = self.region_drag.take().unwrap();
+                if page != self.page { return true; }
+                if let Some(end) = shown { self.update_drag_region(start, end); }
+                if let Some(r) = self.region {
+                    sex_std::record(&format!("[pdf.region.drag] page={} x={:.0} y={:.0} w={:.0} h={:.0}",
+                        page + 1, r[0], r[1], r[2] - r[0], r[3] - r[1]));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn update_drag_region(&mut self, start: (f64, f64), end: (f64, f64)) {
+        let Some(page) = self.pdf.pages().get(self.page) else { return };
+        let (w, h) = page.render_dimensions();
+        self.region = Some(dragged_region(start, end, (w as f64, h as f64)));
     }
 
     fn text_pointer(&mut self, kind: Kind, (x, y): (usize, usize), bar: usize) -> bool {
@@ -1002,6 +1057,7 @@ impl Viewer {
         if ctrl(KEY_H) { self.highlight(); return true; }
         if ctrl(KEY_R) {
             self.region = match self.region { Some(_) => None, None => Some(self.first_region()) };
+            self.region_drag = None;
             sex_std::record(&format!("[pdf.region] shown={}", self.region.is_some() as u8));
             return true;
         }
@@ -1077,6 +1133,7 @@ impl Viewer {
                 self.field_history.clear();
                 self.annotation_history.clear();
                 self.region = None;
+                self.region_drag = None;
                 self.refresh();
                 self.status = Some(format!("{name} added. Ctrl+S saves this empty field."));
                 sex_std::record(&format!("[pdf.sign.field] page={} name={name} empty=1", page + 1));
@@ -1273,7 +1330,7 @@ impl Viewer {
             _ => {
                 match key.code {
                     ENTER => self.highlight(),
-                    ESCAPE => { self.region = None; sex_std::record("[pdf.region] shown=0"); }
+                    ESCAPE => { self.region = None; self.region_drag = None; sex_std::record("[pdf.region] shown=0"); }
                     _ => return false,
                 }
                 return true;
@@ -1313,6 +1370,7 @@ impl Viewer {
                 self.field_history.clear();
                 self.annotation_history.record_add(page, annot, id);
                 self.region = None;
+                self.region_drag = None;
                 self.refresh();
                 self.status = Some("Highlighted. Ctrl+S saves.".into());
                 sex_std::record(&format!("[pdf.annotate] kind=highlight page={} rects={n} from={from} annots={}", page + 1, self.annotation_count()));
@@ -1371,6 +1429,7 @@ impl Viewer {
                 self.field_history.clear();
                 self.annotation_history.record_add(page, annot, id);
                 self.region = None;
+                self.region_drag = None;
                 self.refresh();
                 self.status = Some("Visual signature placed. Ctrl+S saves; no digital signature".into());
                 sex_std::record(&format!("[pdf.sign.visual] page={} chars={} annots={}", page + 1, name.chars().count(), self.annotation_count()));
@@ -1403,6 +1462,7 @@ impl Viewer {
                 self.field_history.clear();
                 self.annotation_history.record_add(page, annot, id);
                 self.region = None;
+                self.region_drag = None;
                 self.refresh();
                 self.status = Some("Note added. Ctrl+S saves.".into());
                 sex_std::record(&format!("[pdf.annotate] kind=note page={} chars={chars} annots={}", page + 1, self.annotation_count()));
@@ -1873,6 +1933,16 @@ mod render_cache_tests {
     }
 
     #[test]
+    fn dragged_region_normalizes_reverse_drag_and_stays_on_page() {
+        assert_eq!(dragged_region((160.0, 140.0), (40.0, 70.0), (200.0, 180.0)),
+            [40.0, 70.0, 160.0, 140.0]);
+        assert_eq!(dragged_region((199.0, 179.0), (199.0, 179.0), (200.0, 180.0)),
+            [194.0, 174.0, 200.0, 180.0]);
+        assert_eq!(dragged_region((1.0, 1.0), (1.0, 1.0), (4.0, 3.0)),
+            [0.0, 0.0, 4.0, 3.0]);
+    }
+
+    #[test]
     fn shared_cache_keeps_thumbnail_pixels_identical() {
         let pdf = Pdf::new(include_bytes!("../../../tests/fixtures/pdf/find10.pdf").to_vec()).unwrap();
         let cache = RenderCache::new();
@@ -1963,7 +2033,7 @@ pub fn main() {
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
-        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, annots: Vec::new(),
+        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, region_drag: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, annots: Vec::new(),
         status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };

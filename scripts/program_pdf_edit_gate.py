@@ -75,6 +75,13 @@ def main():
  def click(x,y):
   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.25)
   for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
+ def drag(x0,y0,x1,y1):
+  def move(x,y):
+   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
+  move(x0,y0)
+  q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]});time.sleep(.2)
+  move((x0+x1)//2,(y0+y1)//2);move(x1,y1)
+  q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});time.sleep(.2)
  saved_path=None
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
@@ -111,6 +118,17 @@ def main():
   step(lambda:chord('ctrl','r'),r'\[pdf\.region\] shown=1\n')
   for k in ('right','right'):step(lambda:q.key(k),r'\[pdf\.region\] shown=1 x=')
   step(lambda:chord('shift','down'),r'\[pdf\.region\] shown=1 x=\d+ y=\d+ w=\d+ h=60\n')
+  tile=latest_frame(t(),sid)
+  bx,by,client_w,_=content_rect(t(),tile)
+  ui=chrome_metrics(t())['scale']
+  page_w=int(re.search(r'\[pdf\.page\] page=1 pages=1 width=(\d+)',t())[1])
+  client_w//=ui
+  left=(client_w-page_w)//2 if page_w+24<=client_w else 12
+  s=len(t());drag(bx+round((left+100)*ui),by+round((BAR+12+80)*ui),
+                   bx+round((left+260)*ui),by+round((BAR+12+150)*ui))
+  g['wait'](r'\[pdf\.region\.drag\] page=1 x=\d+ y=\d+ w=\d+ h=\d+\n',s)
+  q.cmd('screendump',{'filename':str(a.out/'pdf-region-drag.ppm')})
+  assert (a.out/'pdf-region-drag.ppm').stat().st_size>10000
   step(lambda:q.key('ret'),r'\[pdf\.annotate\] kind=highlight page=1 rects=1 from=region annots=3\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-marked.ppm')})
   # The list: three, in the page's order; the last (the region) deleted.
