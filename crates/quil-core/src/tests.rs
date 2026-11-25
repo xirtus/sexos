@@ -599,6 +599,20 @@ fn highlighting_marks_keywords_strings_and_block_comments() {
 }
 
 #[test]
+fn rust_inline_raw_strings_keep_comment_markers_inside_string() {
+    let text = b"let a = r#\"// note\"#; let b = br##\"/* note */\"##;";
+    let mut out = Vec::new();
+    assert!(!highlight::line(Lang::Rust, text, false, &mut out));
+    for token in [b"r#\"// note\"#".as_slice(), b"br##\"/* note */\"##".as_slice()] {
+        let start = text.windows(token.len()).position(|part| part == token).unwrap();
+        assert!(out.contains(&(start, start + token.len(), Kind::String)));
+    }
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::Comment));
+    highlight::line(Lang::Rust, b"let read = 1;", false, &mut out);
+    assert!(!out.iter().any(|(_, _, kind)| *kind == Kind::String));
+}
+
+#[test]
 fn tabs_open_close_and_cycle() {
     let mut t = Tabs::default();
     t.add(Tab::new(b"a.rs", Editor::from_bytes(b"a")));
