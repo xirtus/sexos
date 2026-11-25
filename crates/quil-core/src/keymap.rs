@@ -196,3 +196,52 @@ pub fn describe(p: Press) -> alloc::string::String {
     }
     s
 }
+
+/// The compact, scrollable reference shown inside Quil. Keep bindings sourced from
+/// the active keymap rather than maintaining a second list of key spellings.
+pub fn shortcut_rows(map: Keymap) -> alloc::vec::Vec<alloc::string::String> {
+    use alloc::{format, string::String, vec::Vec};
+    let mut rows = Vec::new();
+    rows.push(String::from("Ctrl+Shift+/  Help   Up/Down scroll   Esc close"));
+    for command in [
+        Command::Save, Command::SaveAs, Command::Open, Command::OpenFolder,
+        Command::NewTab, Command::CloseTab, Command::NextTab, Command::PrevTab,
+        Command::Undo, Command::Redo, Command::Find, Command::Replace,
+        Command::QuickOpen, Command::ProjectSearch, Command::Palette,
+        Command::ToggleTree, Command::AddCursorBelow, Command::AddNextOccurrence,
+        Command::SelectAllOccurrences, Command::ToggleComment,
+    ] {
+        let key = if map == Keymap::Emacs {
+            EMACS_CX.iter().find(|(_, c)| *c == command).map(|(p, _)| format!("Ctrl+X {}", describe(*p)))
+                .or_else(|| EMACS_META.iter().find(|(_, c)| *c == command).map(|(c, _)| format!("Esc {}", c.to_ascii_uppercase())))
+                .or_else(|| EMACS.iter().find(|(_, c)| *c == command).map(|(p, _)| describe(*p)))
+                .or_else(|| VSCODE.iter().find(|(p, c)| p.ctrl && p.shift && *c == command).map(|(p, _)| describe(*p)))
+        } else {
+            VSCODE.iter().find(|(_, c)| *c == command).map(|(p, _)| describe(*p))
+        };
+        if let Some(key) = key { rows.push(format!("{key:<20} {}", command.name())); }
+    }
+    if map == Keymap::Vim {
+        rows.push(String::from("Esc  Normal mode   i  Insert   :w  Save"));
+        rows.push(String::from("dd  Delete line   /  Search   u  Undo"));
+    }
+    rows
+}
+
+#[cfg(test)]
+mod shortcut_help_tests {
+    use super::*;
+    #[test]
+    fn help_uses_active_bindings_and_includes_close_hint() {
+        let vs = shortcut_rows(Keymap::VsCode).join("\n");
+        assert!(vs.contains("Ctrl+S"));
+        assert!(vs.contains("File: Save"));
+        assert!(vs.contains("Ctrl+Shift+/  Help"));
+        let emacs = shortcut_rows(Keymap::Emacs).join("\n");
+        assert!(emacs.contains("Ctrl+X Ctrl+S"));
+        assert!(emacs.contains("Esc X"));
+        assert!(!emacs.contains("Ctrl+P                Go: Go to File"));
+        let vim = shortcut_rows(Keymap::Vim).join("\n");
+        assert!(vim.contains(":w  Save"));
+    }
+}

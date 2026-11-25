@@ -14,3 +14,5 @@ Remaining gaps:
   same volume. Cross-volume saves need an explicit safe copy strategy.
 - Draft recovery needs a complete app-level audit. Quil now follows the system's
   light, dark and high-contrast colors, including accent changes while open.
+- The keyboard reference is available in Quil with Ctrl+Shift+/, including the
+  active keymap and scrolling; the complete user guide is `docs/QUIL_SHORTCUTS.md`.

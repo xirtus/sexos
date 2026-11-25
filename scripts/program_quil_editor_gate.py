@@ -66,6 +66,11 @@ def main():
   shot=(a.out/'quil-light.ppm').read_bytes()
   assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>10000,'Quil did not paint the light theme background'
   g['focus'](sid);time.sleep(.5)
+  # Help is a real Quil overlay, reachable with the same chord in every keymap.
+  s=len(t());send('ctrl','shift','slash');g['wait'](r'\[quil.code.shortcuts\] open=1',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-shortcuts.ppm')});time.sleep(.5)
+  assert (a.out/'quil-shortcuts.ppm').stat().st_size>100000,'Quil help screenshot is empty'
+  s=len(t());send('ctrl','shift','slash');g['wait'](r'\[quil.code.shortcuts\] open=0',s,30)
   # Go to File finds demo.rs among the folder's files.
   s=len(t());ctrl('p');g['wait'](r'\[quil.code.quickopen\] files=(\d+)',s,60);keys('demo');q.key('ret')
   g['wait'](rf'\[quil.code.opened\] path=demo.rs bytes={len(DEMO)} lazy=0',s,60);time.sleep(.5)
