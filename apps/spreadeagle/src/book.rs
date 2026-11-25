@@ -720,7 +720,7 @@ mod tests {
         assert_eq!((heights[1], heights[3]), (0, 0), "{heights:?}");
         let choice = book.filter_choices(0)[0].clone();
         book.filter_by(Range::cell(2, 0), 0, Some(&choice)).unwrap();
-        assert_eq!((book.row_height(1) > 0, book.row_height(2)), (true, 0));
+        assert_eq!((book.row_height(1), book.row_height(2) > 0), (0, true));
         book.filter_by(Range::cell(2, 0), 0, None).unwrap();
         assert!((0..4).all(|r| book.row_height(r) > 0));
         book.toggle_filter(Range::cell(2, 0)).unwrap();
