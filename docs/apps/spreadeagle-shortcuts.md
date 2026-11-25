@@ -23,6 +23,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `remove 2` to drop the second series while keeping at least one, `data A1:B4` to change its source range, `switch` to exchange rows and columns as series, `type doughnut`, `title text`, `clear title`, `hole 10`–`hole 90` on doughnuts, `angle 0`–`angle 359` on pie or doughnut, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
 | Ctrl+Shift+I | Search the function catalog by name, category or description; Up/Down chooses, Enter inserts `=NAME()` with the caret between the parentheses, Esc closes |
 | Ctrl+Shift+U | Toggle wrapped text in the selected cells; automatic row heights grow to show the lines |
+| Ctrl+Alt+C, Ctrl+Alt+R | Fit selected columns or rows to displayed contents; row fitting requires AutoFilter off |
 | Ctrl+Shift+W | Review warnings from importing the current workbook |
 | Ctrl+PageUp, Ctrl+PageDown | Previous or next sheet |
 
@@ -30,6 +31,9 @@ The status line also shows common operations. While entering a formula, Enter
 commits it and F2 edits the current cell without replacing its contents.
 Drag the right edge of a column header to change its width, or the bottom edge
 of a row header to change its height. Ctrl+Z undoes either size change.
+Ctrl+Alt+C or Ctrl+Alt+R recalculates the selected columns' widths or rows'
+heights after a manual resize. Row fitting asks you to turn off AutoFilter
+first, because the engine's fit operation would reveal filtered rows.
 
 With AutoFilter on, click a column header's filter button or press Ctrl+Shift+O
 on that column. Use Up and Down to highlight a value, Space to mark several,

@@ -307,6 +307,19 @@ impl Book {
         let number = row.saturating_add(1);
         self.run("home.rowHeight", json!({ "rows": format!("{number}:{number}"), "height": height.min(546) })).map(|_| ())
     }
+    /// Re-measure selected columns from their displayed cell text.
+    pub fn autofit_cols(&mut self, first: u32, last: u32) -> Result<(), String> {
+        if last < first || last - first >= 256 { return Err("Select at most 256 columns to fit.".into()); }
+        self.run("home.autofitColumnWidth", json!({ "cols": format!("{}:{}", column_name(first), column_name(last)) })).map(|_| ())
+    }
+    /// Clear custom row heights and fit their current content in one undo step.
+    pub fn autofit_rows(&mut self, first: u32, last: u32) -> Result<(), String> {
+        if last < first || last - first >= 10_000 { return Err("Select at most 10,000 rows to fit.".into()); }
+        // GridCraft's AutoFit command reveals hidden rows. Do not silently
+        // undo an active AutoFilter while measuring a row.
+        if self.filter_range().is_some() { return Err("Turn off AutoFilter before fitting rows.".into()); }
+        self.run("home.autofitRowHeight", json!({ "rows": format!("{}:{}", first + 1, last + 1) })).map(|_| ())
+    }
     /// Gives `range` a number format: "General", "Number", "Currency", "Short Date",
     /// "Time", "Percentage", "Scientific" (GridCraft's names), or a format code.
     pub fn number_format(&mut self, range: Range, format: &str) -> Result<(), String> {
@@ -1258,6 +1271,34 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(visible(&Book::open(&path).unwrap().0), visible(&book));
+    }
+
+    #[test]
+    fn selected_columns_and_custom_rows_autofit_undo_and_reopen() {
+        let mut book = Book::blank(&temp("autofit.xlsx"));
+        book.set(0, 0, "A longer heading").unwrap();
+        book.set_col_width(0, 400).unwrap();
+        book.set_row_height(0, 100).unwrap();
+        assert_eq!((book.col_width(0), book.row_height(0)), (400, 100));
+        assert!(book.autofit_cols(2, 1).is_err());
+        book.autofit_cols(0, 0).unwrap();
+        let fitted_col = book.col_width(0);
+        assert!(fitted_col > 64 && fitted_col < 400, "fitted width {fitted_col}");
+        book.autofit_rows(0, 0).unwrap();
+        let fitted_row = book.row_height(0);
+        assert!(fitted_row < 100, "fitted height {fitted_row}");
+        book.undo().unwrap();
+        assert_eq!(book.row_height(0), 100);
+        book.redo().unwrap();
+        assert_eq!(book.row_height(0), fitted_row);
+        book.toggle_filter(Range::cell(0, 0)).unwrap();
+        assert!(book.autofit_rows(0, 0).is_err(), "fitting must not reveal filtered rows");
+        assert_eq!(book.row_height(0), fitted_row);
+        book.toggle_filter(Range::cell(0, 0)).unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap().0;
+        assert_eq!((reopened.col_width(0), reopened.row_height(0)), (fitted_col, fitted_row));
     }
 
     #[test]

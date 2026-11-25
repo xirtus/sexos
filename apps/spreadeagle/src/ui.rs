@@ -170,6 +170,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+Q", "Edit selected chart layout"),
     ("Ctrl+Shift+I", "Search and insert a worksheet function"),
     ("Ctrl+Shift+U", "Wrap or unwrap selected cells"),
+    ("Ctrl+Alt+C / R", "Fit selected columns / rows to their contents"),
     ("Ctrl+Shift+W", "Review import warnings"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
@@ -1103,6 +1104,18 @@ impl Ui {
             return self.discard_recovered();
         }
         if key.control && self.edit.is_none() {
+            if key.alt && !key.shift && matches!(key.code, code::C | code::R) {
+                let (r0, c0, r1, c1) = self.selection().bounds();
+                let row = key.code == code::R;
+                let done = if row { self.book.autofit_rows(r0, r1) } else { self.book.autofit_cols(c0, c1) };
+                if done.is_ok() {
+                    sex_std::record(&format!("[spreadeagle.autofit] axis={} range={} first={} size={}",
+                        if row { "row" } else { "column" }, self.selection().a1(), if row { r0 + 1 } else { c0 + 1 },
+                        if row { self.book.row_height(r0) } else { self.book.col_width(c0) }));
+                }
+                return self.command(if row { "home.autofitRowHeight" } else { "home.autofitColumnWidth" }, done,
+                    format!("Fit {} to content", if row { "rows" } else { "columns" }));
+            }
             let ask = match key.code {
                 code::I if key.shift => {
                     match self.book.functions() {
