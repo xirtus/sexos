@@ -196,6 +196,14 @@ impl Browser {
         if self.url != "about:downloads" || index >= self.downloads.len() { return; }
         let mut kept = self.downloads.clone();
         let forgotten = kept.remove(index);
+        // Private rows live only in this process. A private window has not
+        // loaded the normal profile, so saving `kept` here would erase it.
+        if forgotten.private {
+            self.downloads = kept;
+            web_record!("[web.download.history.forgot] path={} kept=1 private=1", forgotten.path);
+            self.open("about:downloads", false);
+            return;
+        }
         let text = download_history::encode(&kept);
         let replaced = state_file::replace(&mut self.window, "Kaleidoscope/downloads.tsv", text.as_bytes());
         // A deliberate removal must not reappear if the live record is damaged.
