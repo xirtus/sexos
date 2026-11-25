@@ -143,6 +143,9 @@ pub fn request_v14(out: &mut [u8; REQUEST_V14_BYTES], channels: &[Channel], o: &
 /// A frame the firmware passed up, with what the receiver measured.
 pub struct Received<'a> {
     pub frame: &'a [u8], pub rssi: i16, pub channel: u8, pub status: u32,
+    /// The frame as it came, pad included, when the firmware padded it: a frame it
+    /// did not decrypt may carry the pad after the header rather than the IV.
+    pub raw: Option<&'a [u8]>,
     /// For one subframe of an A-MSDU the hardware split up: its index (the
     /// subframes share the 802.11 header, sequence and packet number).
     pub subframe: Option<u8>,
@@ -193,7 +196,8 @@ pub fn parse_mpdu<'a>(p: &'a Packet<'_>, family: Family, scratch: &'a mut [u8; 4
     let subframe = (d[3] & MPDU_AMSDU != 0).then_some(d[4] & AMSDU_SUBFRAME_MASK);
     let reorder = u32::from_le_bytes(d[16..20].try_into().unwrap());
     let last_subframe = d[4] & 0x80 != 0;
-    Some(Received { frame, rssi, channel, status, subframe, last_subframe, reorder })
+    let raw = (d[3] & MPDU_PAD != 0).then_some(body);
+    Some(Received { frame, rssi, channel, status, raw, subframe, last_subframe, reorder })
 }
 
 /// One network heard, keeping the strongest signal.

@@ -1934,6 +1934,48 @@ fn protected_from_ap(me: &[u8], bssid: &[u8], sa: &[u8], pn: u64, payload: &[u8]
     f
 }
 
+#[test]
+fn x17_takes_frames_with_mic_ok_and_decrypts_what_the_firmware_left() {
+    let (r, sim, bss, _, _, i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    let mut sim = sim;
+    let mut i = i;
+    assert_eq!(r.step, rsna::Step::Connected);
+    let me = i.mac;
+    let tk = sim.ap.wpa.as_ref().unwrap().ptk.clone().unwrap().tk;
+    let mut link = r.into_link();
+    let fam = b.boot.chip.family;
+    let gw = [0x02, 0x99, 0, 0, 0, 1];
+    // MIC OK without bit 11 (decryption done): taken, as Linux and iwx do.
+    let mut p = protected_from_ap(&me, &bss.bssid, &gw, 7, &ip(0x61));
+    p[24] = 6; // TID 6, where macOS puts TCP ACKs
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &p, 3 | 2 << 8 | 1 << 6, true));
+    // Not decrypted at all (no key found: security none): decrypted here.
+    let mut plain = vec![0u8; 26];
+    plain[0..2].copy_from_slice(&(w::FC_QOS_DATA | w::FC_FROM_DS).to_le_bytes());
+    plain[4..10].copy_from_slice(&me); plain[10..16].copy_from_slice(&bss.bssid); plain[16..22].copy_from_slice(&gw);
+    plain[24] = 6;
+    plain.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x00]);
+    plain.extend_from_slice(&ip(0x62));
+    let mut air = vec![0u8; plain.len() + 16];
+    ccmp::encrypt_frame(&tk, &plain, 26, 8, 0, &mut air).unwrap();
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &air, 3, true));
+    // The same with a broken MIC: refused, and counted.
+    let mut bad = air.clone();
+    let end = bad.len() - 1;
+    bad[end] ^= 1;
+    bad[26] = 9; // a new packet number, so only the MIC can refuse it
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &bad, 3, true));
+    let mut got = vec![];
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec()));
+    assert_eq!(got.len(), 2);
+    assert_eq!(&got[0][14..], &ip(0x61)[..]);
+    assert_eq!(&got[1][14..], &ip(0x62)[..]);
+    assert_eq!((link.rx_stats.sw_ok, link.rx_stats.sw_fail), (1, 1));
+    assert_eq!(link.rx_stats.tid_in[6], 2);
+    assert_eq!(link.rx_stats.tid_not_decrypted[6], 1);
+    assert_eq!(link.rx_stats.last_other.map(|d| d.kind), Some(link::Drop::NotDecrypted));
+}
+
 /// A 28-byte IPv4 packet filled with `fill` past its header's version and length.
 fn ip(fill: u8) -> Vec<u8> {
     let mut p = vec![fill; 28];

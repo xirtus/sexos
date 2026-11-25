@@ -748,6 +748,14 @@ impl Wifi {
         if l.ba_bypass || !l.replay_check { sex_pdx::serial_record!("[wifi.link.now5] tests: ba={} replay={} ba_gave_up={}", if l.ba_bypass { "off" } else { "on" }, if l.replay_check { "on" } else { "off" }, l.ba_gave_up); }
         sex_pdx::serial_record!("[wifi.link.now2] rx={} dropped={} last_drop={:?} overflow={} queued_in={} v4_out={} v4_in={} arp={}/{} missed_beacons={} ba={} flushes={}",
             l.received, l.dropped, l.last_drop, q.overflow, q.count, q.tx_v4, q.rx_v4, q.tx_arp, q.rx_arp, l.missed_beacons, l.ba.is_some() as u8, l.ba_flushes);
+        let x = &l.rx_stats;
+        sex_pdx::serial_record!("[wifi.link.now6] tid_in={:?} not_decrypted={:?} replays={:?} sw_ok={} sw_fail={}", x.tid_in, x.tid_not_decrypted, x.replays, x.sw_ok, x.sw_fail);
+        if let Some(d) = x.last_other {
+            let mut hex = [0u8; 2 * sex_wifi::link::MALFORMED_HEAD];
+            let k = (d.len as usize).min(sex_wifi::link::MALFORMED_HEAD);
+            for (j, b) in d.head[..k].iter().enumerate() { hex[2 * j] = b"0123456789abcdef"[(b >> 4) as usize]; hex[2 * j + 1] = b"0123456789abcdef"[(b & 15) as usize]; }
+            sex_pdx::serial_record!("[wifi.link.now7] last_other={:?} tid={} len={} status={:#x} bytes={}", d.kind, d.tid, d.len, d.status, core::str::from_utf8(&hex[..2 * k]).unwrap_or("?"));
+        }
         let (status, reorder) = l.last_unicast.unwrap_or((0, 0));
         match l.ba.as_ref() {
             Some(b) => sex_pdx::serial_record!("[wifi.link.now4] ba tid={} window={} head={} stored={} passed={} released={} dropped={} in_a_row={} dup_flagged={} last_status={:#x} reorder={:#x}",

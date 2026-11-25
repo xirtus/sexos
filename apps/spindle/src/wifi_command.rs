@@ -286,6 +286,8 @@ impl Wifi {
                     crate::hw_command::newest(b"[wifi.link.now2]", sb);
                     crate::hw_command::newest(b"[wifi.link.now4]", sb);
                     crate::hw_command::newest(b"[wifi.link.now5]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now6]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now7]", sb);
                     crate::hw_command::newest(b"[wifi.link.now3]", sb);
                 }
                 // Connecting, or a try failed: why the last one failed says more than
