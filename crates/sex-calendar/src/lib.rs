@@ -484,6 +484,19 @@ impl Event {
         else if linked { edited.state = SyncState::New; }
         Ok(edited)
     }
+    /// Set a same-day time range or make one personal event all day.
+    pub fn timed_personal(&self, time: Option<(u16, u16)>, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        if self.span != 1 { return Err("Choose how to time a multi-day event first."); }
+        if time.is_some_and(|(start, end)| start >= end || end >= 24 * 60) {
+            return Err("End time must be after start on the same day.");
+        }
+        let mut edited = self.clone();
+        edited.time = time;
+        if !edited.href.is_empty() { edited.state = SyncState::Modified; }
+        else if linked { edited.state = SyncState::New; }
+        Ok(edited)
+    }
     /// Calls `f` with each occurrence's first day that lies in `from..=to`, in order.
     /// RFC 5545: DTSTART is the first occurrence, COUNT counts before EXDATE removes
     /// any, RDATE adds days, and a day that does not exist is skipped, not moved.
