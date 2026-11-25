@@ -17,6 +17,13 @@
 //! the person's to type. `tether off` or closing Spindle ends it; `tether`
 //! alone says whether it is up. The host side is `scripts/tether_host.py`.
 //!
+//! `tether sweep HOST [ROUNDS]` runs Wi-Fi transfer trials instead (see [`SHAPES`]): each
+//! trial sets the Wi-Fi test switches (`wifi ba`, `wifi replay`), connects, moves data in
+//! one traffic shape and ends as pass, stall, timeout or a network failure; then `wifi`
+//! logs the link counters and the next trial starts. Every result and the counters after
+//! it are written to `SWEEP_FILE` on the Ventoy stick after each trial, so one unattended
+//! run shows which switch and which shape breaks the link.
+//!
 //! The flow is the network service's flow `FLOW` of this Spindle, so it never collides
 //! with `fetch` (flow 0); the shared region still carries one call at a time, so `fetch`,
 //! `update` and `pkg` wait for `tether off`.
@@ -52,7 +59,84 @@ enum Phase { Idle, Up,
     V4Wait, ResolveAsk, ResolveWait, Connect, Opening, Live, Close,
     /// `tether listen`: make the listener, say the address, wait for the Mac, and drop a
     /// finished connection to wait for the next one.
-    Listen, Addresses, Accept, Drop, CloseListener }
+    Listen, Addresses, Accept, Drop, CloseListener,
+    /// `tether sweep`: between trials (counters, file, switches for the next one).
+    Gap }
+
+/// One kind of traffic a sweep trial makes.
+pub struct Shape {
+    pub name: &'static str,
+    /// Bytes per send (one network call).
+    pub chunk: usize,
+    /// Pause after each send.
+    pub pace_ms: u64,
+    /// Bytes to send to the Mac.
+    pub up: u64,
+    /// Bytes the Mac sends back (`tether_host.py` answers `down=N` in the header).
+    pub down: u64,
+    /// Quiet time after connecting, before the data (the Mac's ARP entry ages meanwhile).
+    pub idle_ms: u64,
+}
+
+pub const SHAPES: [Shape; 8] = [
+    Shape { name: "bulk", chunk: 4096, pace_ms: 0, up: 512 * 1024, down: 0, idle_ms: 0 },
+    Shape { name: "mid", chunk: 1024, pace_ms: 0, up: 256 * 1024, down: 0, idle_ms: 0 },
+    Shape { name: "small", chunk: 128, pace_ms: 0, up: 64 * 1024, down: 0, idle_ms: 0 },
+    Shape { name: "paced", chunk: 4096, pace_ms: 100, up: 256 * 1024, down: 0, idle_ms: 0 },
+    Shape { name: "trickle", chunk: 256, pace_ms: 500, up: 16 * 1024, down: 0, idle_ms: 0 },
+    Shape { name: "idle45", chunk: 4096, pace_ms: 0, up: 64 * 1024, down: 0, idle_ms: 45_000 },
+    Shape { name: "down", chunk: 128, pace_ms: 0, up: 0, down: 512 * 1024, idle_ms: 0 },
+    Shape { name: "long", chunk: 4096, pace_ms: 0, up: 2 * 1024 * 1024, down: 0, idle_ms: 0 },
+];
+/// Switch combinations per shape: (block-ack reorder on, replay check on).
+pub const KNOBS: [(bool, bool); 4] = [(true, true), (false, true), (true, false), (false, false)];
+pub const TRIALS_PER_ROUND: u32 = (SHAPES.len() * KNOBS.len()) as u32;
+const SWEEP_FILE: &[u8] = b"/media/Ventoy/wifi-sweep.txt";
+/// No byte moved either way for this long: the trial stalled.
+const STALL_MS: u64 = 20_000;
+const TRIAL_MAX_MS: u64 = 240_000;
+const SWEEP_ROUNDS: u32 = 4;
+const SWEEP_MAX_ROUNDS: u32 = 50;
+const RESULTS_MAX: usize = 200 * 1024;
+static mut RESULTS: [u8; RESULTS_MAX] = [0; RESULTS_MAX];
+static mut RESULTS_LEN: usize = 0;
+
+/// Trial `k`'s shape and switch setting, as indexes: all four switch settings of a shape
+/// run together. `only`: every trial uses that shape.
+pub fn trial_plan(k: u32, only: Option<usize>) -> (usize, usize) {
+    let knob = k as usize % KNOBS.len();
+    match only {
+        Some(shape) => (shape, knob),
+        None => ((k % TRIALS_PER_ROUND) as usize / KNOBS.len(), knob),
+    }
+}
+
+fn on(b: bool) -> &'static str { if b { "on" } else { "off" } }
+
+#[derive(Clone, Copy)]
+struct Sweep {
+    active: bool,
+    total: u32,
+    /// The trial running (or the one just ended, in the gap).
+    trial: u32,
+    next_trial: u32,
+    gap_step: u8,
+    /// `sb.total_lines` when the trial ended: the `wifi` lines after it are kept.
+    mark: u32,
+    started: u64,
+    live_at: u64,
+    progress_at: u64,
+    header_sent: bool,
+    /// Filler bytes queued for sending.
+    filler: u64,
+    bytes_in: u64,
+    last_pass: bool,
+    /// `tether sweep HOST ROUNDS SHAPE`: one shape only.
+    only: Option<usize>,
+    passes: [u16; TRIALS_PER_ROUND as usize],
+    runs: [u16; TRIALS_PER_ROUND as usize],
+}
+const SWEEP_IDLE: Sweep = Sweep { active: false, total: 0, trial: 0, next_trial: 0, gap_step: 0, mark: 0, started: 0, live_at: 0, progress_at: 0, header_sent: false, filler: 0, bytes_in: 0, last_pass: true, only: None, passes: [0; TRIALS_PER_ROUND as usize], runs: [0; TRIALS_PER_ROUND as usize] };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Call { Plain, Send, Receive, State, Close }
@@ -91,6 +175,7 @@ pub struct Tether {
     commands: u64,
     /// `tether listen`: SexOS waits and the Mac connects (no typing needed to aim it).
     listening: bool,
+    sweep: Sweep,
 }
 
 pub static mut TETHER: Tether = Tether {
@@ -99,6 +184,7 @@ pub static mut TETHER: Tether = Tether {
     out: [0; OUT_MAX], out_len: 0, log_at: 0, log_total: 0, lines_sent: 0,
     inbound: [0; IN_MAX], in_len: 0, queue: [[0; CMD_MAX]; QUEUE], queue_len: [0; QUEUE],
     queue_head: 0, queue_count: 0, empty_receives: 0, recv_turn: false, bytes_out: 0, commands: 0, listening: false,
+    sweep: SWEEP_IDLE,
 };
 
 fn net() -> Option<&'static mut [u8]> {
@@ -209,6 +295,12 @@ macro_rules! say { ($sb:expr, $($arg:tt)*) => {{
 }}}
 
 impl Tether {
+    /// The running trial's shape, switches (ba, replay) and summary slot.
+    fn plan(&self) -> (&'static Shape, (bool, bool), usize) {
+        let (shape, knob) = trial_plan(self.sweep.trial, self.sweep.only);
+        (&SHAPES[shape], KNOBS[knob], shape * KNOBS.len() + knob)
+    }
+
     /// Connecting or connected.
     pub fn active(&self) -> bool { self.phase != Phase::Idle }
     /// Has a network call out (the shared region is in use).
@@ -223,6 +315,7 @@ impl Tether {
                 sb.push(b"tether: connecting.");
             } else {
                 sb.push(b"Usage: tether HOST[:PORT] (default port 7177), tether off");
+                sb.push(b"Wi-Fi test run: tether sweep HOST [ROUNDS] (results in /media/Ventoy/wifi-sweep.txt)");
                 sb.push(b"On the other computer: python3 scripts/tether_host.py");
             }
             return;
@@ -230,6 +323,12 @@ impl Tether {
         if args == b"off" || args == b"stop" {
             if !self.active() { sb.push(b"tether: not running."); return; }
             sb.push(b"tether: closing.");
+            if self.sweep.active {
+                self.sweep.active = false;
+                self.note(b"sweep stopped by tether off");
+                self.save(sb);
+                if self.phase == Phase::Gap { self.phase = Phase::Idle; return; }
+            }
             self.end();
             return;
         }
@@ -247,7 +346,44 @@ impl Tether {
             say!(sb, "tether: waiting for the network, then listening on port {}", port);
             return;
         }
-        let Some((host, port)) = parse_target(args) else { sb.push(b"Usage: tether HOST[:PORT] | tether listen [PORT]"); return };
+        if args == b"sweep" || args.starts_with(b"sweep ") {
+            let mut words = args[5..].split(|b| *b == b' ').filter(|w| !w.is_empty());
+            let target = words.next().and_then(parse_target);
+            let rounds = match words.next() {
+                None => Some(SWEEP_ROUNDS),
+                Some(w) => core::str::from_utf8(w).ok().and_then(|t| t.parse::<u32>().ok()).filter(|n| (1..=SWEEP_MAX_ROUNDS).contains(n)),
+            };
+            let only = match words.next() {
+                None => Some(None),
+                Some(w) => SHAPES.iter().position(|s| s.name.as_bytes() == w).map(Some),
+            };
+            let (Some((host, port)), Some(rounds), Some(only)) = (target, rounds, only) else {
+                sb.push(b"Usage: tether sweep HOST[:PORT] [ROUNDS 1-50] [SHAPE]");
+                sb.push(b"Shapes: bulk mid small paced trickle idle45 down long");
+                return;
+            };
+            self.listening = false;
+            self.host[..host.len()].copy_from_slice(host);
+            self.host_len = host.len();
+            self.port = port;
+            self.reset(sb);
+            self.sweep = SWEEP_IDLE;
+            self.sweep.active = true;
+            self.sweep.only = only;
+            self.sweep.total = rounds * if only.is_some() { KNOBS.len() as u32 } else { TRIALS_PER_ROUND };
+            self.sweep.gap_step = 2;
+            unsafe { *core::ptr::addr_of_mut!(RESULTS_LEN) = 0; }
+            let mut t = Text { buf: [0; 160], len: 0 };
+            let _ = core::fmt::Write::write_fmt(&mut t, format_args!("SexOS Wi-Fi sweep to {}:{}, {} trials ({} rounds)", core::str::from_utf8(host).unwrap_or("?"), port, self.sweep.total, rounds));
+            let (b, n) = (t.buf, t.len);
+            self.note(&b[..n]);
+            self.note(b"result: pass = all data moved; stall = nothing moved for 20 s; others = the network's answer");
+            say!(sb, "tether sweep: {} trials to {}:{}; tether off stops it. Results go to /media/Ventoy/wifi-sweep.txt", self.sweep.total, core::str::from_utf8(host).unwrap_or("?"), port);
+            self.phase = Phase::Gap;
+            self.next_at = 0;
+            return;
+        }
+        let Some((host, port)) = parse_target(args) else { sb.push(b"Usage: tether HOST[:PORT] | tether listen [PORT] | tether sweep HOST [ROUNDS]"); return };
         self.listening = false;
         self.host[..host.len()].copy_from_slice(host);
         self.host_len = host.len();
@@ -282,6 +418,7 @@ impl Tether {
     }
 
     fn fail(&mut self, sb: &mut Scrollback, why: &str) {
+        if self.sweep.active { self.finish(sb, why); return; }
         say!(sb, "tether: {}", why);
         sex_pdx::serial_record!("[spindle.tether.end] reason={} bytes={} commands={}", why, self.bytes_out, self.commands);
         // Listening: a session that ends drops its connection and waits for the next.
@@ -303,6 +440,7 @@ impl Tether {
 
     /// Fills `out` with the next text to send: the boot log head, then new scrollback lines.
     fn fill(&mut self, sb: &Scrollback) {
+        if self.sweep.active { self.fill_sweep(); return; }
         if self.log_at != usize::MAX {
             if self.log_at == 0 && self.out_len == 0 {
                 self.put(b"SEXOS-TETHER 1\n--- boot log head ---\n");
@@ -359,7 +497,9 @@ impl Tether {
             self.sent = false;
             self.next_at = 0;
         }
+        if self.phase == Phase::Live && self.sweep.active && self.sweep_check(sb, now) { return true; }
         if now < self.next_at { return false; }
+        if self.phase == Phase::Gap { self.gap(sb, now); return true; }
         if self.phase == Phase::V4Wait && now > self.deadline {
             self.fail(sb, "no IPv4 address: the router never answered DHCP (`hw dhcp` shows the lease when it comes)");
             return true;
@@ -397,11 +537,11 @@ impl Tether {
                     self.empty_receives = 0;
                     self.net_call(w::STATE, 0, Call::State);
                 } else {
-                    let room = (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES);
+                    let room = if self.sweep.active { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
                     self.net_call(w::RECEIVE, room as u64, Call::Receive);
                 }
             }
-            Phase::Idle => {}
+            Phase::Idle | Phase::Gap => {}
         }
         true
     }
@@ -418,6 +558,7 @@ impl Tether {
             if self.call != Call::Close { return true; }
             // Listening: the listener closes too.
             if self.listening { self.phase = Phase::CloseListener; self.next_at = 0; return true; }
+            if self.sweep.active { self.phase = Phase::Gap; self.sweep.gap_step = 0; self.next_at = 0; return true; }
             self.phase = Phase::Idle;
             sex_pdx::serial_record!("[spindle.tether.closed] bytes={} commands={}", self.bytes_out, self.commands);
             sb.push(b"tether: closed.");
@@ -479,7 +620,14 @@ impl Tether {
                 w::STATE_OPEN => {
                     self.phase = Phase::Live;
                     let host = core::str::from_utf8(&self.host[..self.host_len]).unwrap_or("?");
+                    if self.sweep.active {
+                        let (s, (ba, replay), _) = self.plan();
+                        say!(sb, "sweep {}/{}: {} ba={} replay={} connected", self.sweep.trial + 1, self.sweep.total, s.name, on(ba), on(replay));
+                        self.sweep.live_at = now;
+                        self.sweep.progress_at = now + s.idle_ms;
+                    } else {
                     say!(sb, "tether: up to {}:{}. Commands from there show as remote> lines; tether off ends it.", host, self.port);
+                    }
                     sex_pdx::serial_record!("[spindle.tether.up] port={}", self.port);
                 }
                 w::STATE_OPENING => self.next_at = now + POLL_MS,
@@ -517,12 +665,22 @@ impl Tether {
                     self.out_len -= n;
                     self.bytes_out += n as u64;
                     if n == 0 { self.next_at = now + POLL_MS; }
+                    else if self.sweep.active {
+                        self.sweep.progress_at = self.sweep.progress_at.max(now);
+                        let pace = self.plan().0.pace_ms;
+                        if pace > 0 && self.out_len == 0 { self.next_at = now + pace; }
+                    }
                 }
                 Call::Receive => {
-                    let n = (value as usize).min(IN_MAX - self.in_len);
+                    let n = if self.sweep.active { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
                     if n == 0 {
                         self.empty_receives += 1;
                         if self.out_len == 0 { self.next_at = now + POLL_MS; }
+                    } else if self.sweep.active {
+                        // Sweep: what the Mac sends is test data, not commands.
+                        self.empty_receives = 0;
+                        self.sweep.bytes_in += n as u64;
+                        self.sweep.progress_at = self.sweep.progress_at.max(now);
                     } else {
                         self.empty_receives = 0;
                         self.inbound[self.in_len..self.in_len + n].copy_from_slice(&region[..n]);
@@ -559,6 +717,176 @@ impl Tether {
         }
         // A line longer than the buffer: drop what came so far.
         if self.in_len == IN_MAX { self.in_len = 0; sb.push(b"tether: a command line was too long."); }
+    }
+
+    /// Queues a command for Spindle to run as if typed (sweep: `wifi`, its switches).
+    fn queue_own(&mut self, cmd: &[u8]) {
+        if self.queue_count == QUEUE { return; }
+        let slot = (self.queue_head + self.queue_count) % QUEUE;
+        let n = cmd.len().min(CMD_MAX);
+        self.queue[slot][..n].copy_from_slice(&cmd[..n]);
+        self.queue_len[slot] = n;
+        self.queue_count += 1;
+    }
+
+    /// Adds a line to the sweep's results file.
+    fn note(&mut self, line: &[u8]) {
+        let (buf, len) = unsafe { (&mut *core::ptr::addr_of_mut!(RESULTS), &mut *core::ptr::addr_of_mut!(RESULTS_LEN)) };
+        if *len + line.len() + 1 > RESULTS_MAX { return; }
+        buf[*len..*len + line.len()].copy_from_slice(line);
+        buf[*len + line.len()] = b'\n';
+        *len += line.len() + 1;
+    }
+
+    /// Writes the results so far to the stick (replacing the file).
+    fn save(&mut self, sb: &mut Scrollback) {
+        let len = unsafe { *core::ptr::addr_of!(RESULTS_LEN) };
+        let written = unsafe { crate::fs_commands::FS.start_write_with(SWEEP_FILE, RESULTS_MAX, |room| {
+            let n = len.min(room.len());
+            let all = &*core::ptr::addr_of!(RESULTS); room[..n].copy_from_slice(&all[..n]);
+            n
+        }, sb) };
+        sex_pdx::serial_record!("[spindle.sweep.save] bytes={} started={}", len, written as u8);
+    }
+
+    /// Sweep data for the Mac: a header naming the trial, then filler lines.
+    fn fill_sweep(&mut self) {
+        let now = sex_pdx::get_ticks();
+        let (s, (ba, replay), _) = self.plan();
+        if !self.sweep.header_sent {
+            self.sweep.header_sent = true;
+            let mut t = Text { buf: [0; 160], len: 0 };
+            let _ = core::fmt::Write::write_fmt(&mut t, format_args!("SEXOS-SWEEP 1 trial={} shape={} ba={} replay={} up={} down={}\n", self.sweep.trial + 1, s.name, on(ba), on(replay), s.up, s.down));
+            let (b, n) = (t.buf, t.len);
+            self.put(&b[..n]);
+            return;
+        }
+        if now < self.sweep.live_at + s.idle_ms || self.sweep.filler >= s.up { return; }
+        let want = (s.chunk as u64).min(s.up - self.sweep.filler) as usize;
+        let start = self.out_len;
+        // 64-byte lines: "t TRIAL OFFSET ....\n", cut to `want`.
+        while self.out_len - start < want && self.out_len < OUT_MAX {
+            let mut t = Text { buf: [0; 160], len: 0 };
+            let _ = core::fmt::Write::write_fmt(&mut t, format_args!("t{:04} {:09} ", self.sweep.trial + 1, self.sweep.filler + (self.out_len - start) as u64));
+            while t.len < 63 { t.buf[t.len] = b'.'; t.len += 1; }
+            t.buf[63] = b'\n';
+            let n = 64.min(want - (self.out_len - start)).min(OUT_MAX - self.out_len);
+            let b = t.buf;
+            self.put(&b[..n]);
+        }
+        self.sweep.filler += (self.out_len - start) as u64;
+    }
+
+    /// A live sweep trial: done, stalled or too long? True when it ended now.
+    fn sweep_check(&mut self, sb: &mut Scrollback, now: u64) -> bool {
+        let s = self.plan().0;
+        if self.sweep.header_sent && self.sweep.filler >= s.up && self.out_len == 0 && self.sweep.bytes_in >= s.down && !self.sent {
+            self.finish(sb, "pass");
+            return true;
+        }
+        if now > self.sweep.progress_at + STALL_MS { self.finish(sb, "stall"); return true; }
+        if now > self.sweep.started + TRIAL_MAX_MS { self.finish(sb, "timeout"); return true; }
+        false
+    }
+
+    /// Ends the running trial with `result` and closes its flow (the gap follows).
+    fn finish(&mut self, sb: &mut Scrollback, result: &str) {
+        let now = sex_pdx::get_ticks();
+        let k = self.sweep.trial;
+        let (s, (ba, replay), slot) = self.plan();
+        let pass = result == "pass";
+        self.sweep.runs[slot] += 1;
+        if pass { self.sweep.passes[slot] += 1; }
+        self.sweep.last_pass = pass;
+        let live_ms = if self.sweep.live_at > 0 { now.saturating_sub(self.sweep.live_at) } else { 0 };
+        let mut t = Text { buf: [0; 160], len: 0 };
+        let _ = core::fmt::Write::write_fmt(&mut t, format_args!("trial {} {} ba={} replay={} -> {} up={} down={} ms={} live_ms={}", k + 1, s.name, on(ba), on(replay), result, self.bytes_out, self.sweep.bytes_in, now.saturating_sub(self.sweep.started), live_ms));
+        let (b, n) = (t.buf, t.len);
+        self.note(&b[..n]);
+        sb.push(&b[..n.min(110)]);
+        sex_pdx::serial_record!("[spindle.sweep.trial] {}", core::str::from_utf8(&b[..n]).unwrap_or("?"));
+        self.end();
+    }
+
+    /// Between trials, one step per call: counters, file, switches, next connect.
+    fn gap(&mut self, sb: &mut Scrollback, now: u64) {
+        match self.sweep.gap_step {
+            0 => {
+                self.sweep.mark = sb.total_lines;
+                self.queue_own(b"wifi");
+                self.sweep.gap_step = 1;
+                self.next_at = now + 4_000;
+            }
+            1 => {
+                // The link counters `wifi` just showed go under the trial's result.
+                let kept = sb.retained() as u32;
+                let oldest = sb.total_lines.saturating_sub(kept);
+                let mut i = self.sweep.mark.max(oldest);
+                while i < sb.total_lines {
+                    let line = sb.get_retained((i - oldest) as usize);
+                    let mut copy = [0u8; 112];
+                    let n = line.len().min(110);
+                    copy[0] = b' '; copy[1] = b' ';
+                    copy[2..2 + n].copy_from_slice(&line[..n]);
+                    if !line.starts_with(b"remote>") && !line.starts_with(b"sweep ") { self.note(&copy[..n + 2]); }
+                    i += 1;
+                }
+                self.save(sb);
+                self.sweep.gap_step = 2;
+                self.next_at = now + 1_000;
+            }
+            2 => {
+                if self.sweep.next_trial >= self.sweep.total {
+                    self.summary();
+                    self.save(sb);
+                    self.sweep.active = false;
+                    self.phase = Phase::Idle;
+                    say!(sb, "tether sweep: done, {} trials. Results: /media/Ventoy/wifi-sweep.txt", self.sweep.total);
+                    return;
+                }
+                self.sweep.trial = self.sweep.next_trial;
+                self.sweep.next_trial += 1;
+                let ba = self.plan().1 .0;
+                self.queue_own(if ba { b"wifi ba on" } else { b"wifi ba off" });
+                self.sweep.gap_step = 3;
+                self.next_at = now + 1_500;
+            }
+            3 => {
+                let replay = self.plan().1 .1;
+                self.queue_own(if replay { b"wifi replay on" } else { b"wifi replay off" });
+                self.sweep.gap_step = 4;
+                // After a failure, give the link a while to come back before the next try.
+                self.next_at = now + if self.sweep.last_pass { 1_500 } else { 15_000 };
+            }
+            _ => {
+                self.reset(sb);
+                self.sweep.started = now;
+                self.sweep.live_at = 0;
+                self.sweep.progress_at = now;
+                self.sweep.header_sent = false;
+                self.sweep.filler = 0;
+                self.sweep.bytes_in = 0;
+                self.phase = Phase::Up;
+                self.next_at = 0;
+            }
+        }
+    }
+
+    /// Passes per shape and switch setting, at the end of the results.
+    fn summary(&mut self) {
+        self.note(b"");
+        self.note(b"--- summary: passes/runs (ba,replay) ---");
+        for (si, s) in SHAPES.iter().enumerate() {
+            if self.sweep.only.is_some_and(|o| o != si) { continue; }
+            let mut t = Text { buf: [0; 160], len: 0 };
+            let _ = core::fmt::Write::write_fmt(&mut t, format_args!("{:8}", s.name));
+            for (ki, (ba, replay)) in KNOBS.iter().enumerate() {
+                let slot = si * KNOBS.len() + ki;
+                let _ = core::fmt::Write::write_fmt(&mut t, format_args!("  ba={} replay={}: {}/{}", on(*ba), on(*replay), self.sweep.passes[slot], self.sweep.runs[slot]));
+            }
+            let (b, n) = (t.buf, t.len);
+            self.note(&b[..n]);
+        }
     }
 
     /// The next command that arrived, to run as if typed.
