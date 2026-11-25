@@ -181,6 +181,11 @@ impl App {
     fn key(&mut self, window: &mut Window, k: sex_pdx::app_key::Key) {
         if self.compose_key(window, k) { return; }
         match (k.control, k.code) {
+            (true, 0x32) => { // Ctrl+M: account linking needs the boot-routed Multipass service.
+                self.status = "Mail accounts are unavailable in this build; local mail and drafts remain available.".into();
+                sex_pdx::serial_record!("[valentine.account.unavailable] reason=multipass-service-not-booted");
+                return;
+            }
             (true, 0x31) => { self.new_draft(window); return; } // Ctrl+N
             (true, 0x12) => { self.edit_draft(); return; } // Ctrl+E
             (true, 0x13) => { self.reload(window); return; } // Ctrl+R
@@ -216,7 +221,7 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
     c.fill(0, 0, w, 42, p.panel);
     c.fill(0, 41, w, 1, p.border);
     c.text(title, 16, 6, "Valentine", p.accent, list_w - 24);
-    c.text(tiny, list_w + 16, 12, "Mail in this program's folder", p.dim, w - list_w - 24);
+    c.text(tiny, list_w + 16, 12, "Local mail | No account linked", p.dim, w - list_w - 24);
     c.fill(0, 42, list_w, h - 70, p.panel);
     c.fill(list_w - 1, 42, 1, h - 42, p.border);
     c.text(tiny, 12, 50, &format!("Find: {}_   {} messages", app.query, app.shown.len()), p.dim, list_w - 20);
@@ -272,7 +277,7 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
     }
     c.fill(0, h - 28, w, 28, p.panel);
     c.fill(0, h - 28, w, 1, p.border);
-    let status = if app.status.is_empty() { "Ctrl+N new draft  Ctrl+E edit draft  Up/Down choose  Enter open  Ctrl+R reload" } else { &app.status };
+    let status = if app.status.is_empty() { "Ctrl+N new draft  Ctrl+E edit draft  Ctrl+M account status  Enter open  Ctrl+R reload" } else { &app.status };
     c.text(tiny, 12, h - 22, status, p.dim, w - 24);
     window.show_pixels(w as usize, h as usize);
 }

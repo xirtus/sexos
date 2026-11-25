@@ -14,7 +14,9 @@ Remaining gaps:
 
 - Link accounts through Multipass and obtain authenticated TLS IMAP/SMTP flows
   without giving Valentine a password. Then connect the native inbox and composer
-  to those flows, with IDLE notifications through Bell.
+  to those flows, with IDLE notifications through Bell. The mail clients can now
+  resume a flow after Multipass authenticates it, but the boot-routed Multipass
+  service and a capability-safe flow handoff do not exist yet.
 - JMAP, offline cache and conflict handling, folders, flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
 - Search across accounts, conversation view, filters, signatures, keyboard

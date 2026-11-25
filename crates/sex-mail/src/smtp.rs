@@ -21,6 +21,12 @@ impl<C: Conn> Client<C> {
         Ok(c)
     }
 
+    /// Resume an authenticated submission stream handed over by Multipass.
+    /// Greeting, EHLO and SASL already happened on this same TLS flow.
+    pub fn resume_authenticated(conn: C) -> Self {
+        Self { io: Lines::new(conn), extensions: Vec::new() }
+    }
+
     pub fn into_conn(self) -> C { self.io.conn }
 
     pub fn reply(&mut self) -> Result<Reply> {

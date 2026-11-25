@@ -67,6 +67,8 @@ def main():
   keys('plans');g['wait'](r'\[valentine.search\] query=plans matches=1',s,60)
   s=len(t());q.key('ret');g['wait'](r'\[valentine.opened\] file=draft-[^ ]+\.eml bytes=\d+ subject=plans',s,60)
   s=len(t());ctrl('e');time.sleep(.4);shot('valentine-draft-reopened');q.key('esc')
+  s=len(t());ctrl('m');g['wait'](r'\[valentine.account.unavailable\] reason=multipass-service-not-booted',s,60)
+  shot('valentine-account-status')
   close(target,task)
   assert '[valentine.fatal]' not in t() and 'KERNEL PANIC' not in t()
  finally:g['stop']();server.shutdown()
