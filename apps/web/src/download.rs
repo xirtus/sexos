@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use sex_app::files;
 use sex_web::download_history::{self, Record};
+use sex_web::download_pause::Transfer;
 
 const DIR: &str = "Downloads";
 /// Largest download.
@@ -50,24 +51,27 @@ pub use sex_web::download_history::Record as Done;
 /// A failed transfer retained only for this browser window, with an explicit retry.
 pub struct Failure { pub name: String, pub url: String, pub why: String }
 
+enum Control { Continue, TogglePause, Cancel }
+
 impl Browser {
-    /// Escape stops an active transfer. Close is delivered to the normal loop
-    /// after cleanup; other input is held in order (at most one small queue).
-    fn download_cancel_requested(&mut self) -> bool {
-        let Some(event) = self.window.poll() else { return false };
+    /// Escape stops a transfer; Ctrl+Shift+J pauses or resumes the live flow.
+    /// Close reaches the normal loop after cleanup; other input is held in order.
+    fn download_control(&mut self) -> Control {
+        let Some(event) = self.window.poll() else { return Control::Continue };
         match event {
-            sex_app::Event::Key(key) if key.code == 0x01 && !key.control => true,
+            sex_app::Event::Key(key) if key.code == 0x01 && !key.control => Control::Cancel,
+            sex_app::Event::Key(key) if key.code == 0x24 && key.control && key.shift => Control::TogglePause,
             sex_app::Event::Close => {
                 self.download_events.clear();
                 self.download_events.push(sex_app::Event::Close);
-                true
+                Control::Cancel
             }
-            sex_app::Event::Pointer(p) if matches!(p.kind, sex_pdx::app_pointer::Kind::Move) => false,
+            sex_app::Event::Pointer(p) if matches!(p.kind, sex_pdx::app_pointer::Kind::Move) => Control::Continue,
             other @ (sex_app::Event::Key(_) | sex_app::Event::Pointer(_)) if self.download_events.len() < 32 => {
                 self.download_events.push(other);
-                false
+                Control::Continue
             }
-            _ => false,
+            _ => Control::Continue,
         }
     }
 
@@ -150,36 +154,52 @@ impl Browser {
         let mut cancelled = false;
         let result = (|| -> Result<(u64, u64), &'static [u8]> {
         let began = sex_pdx::get_ticks();
-        let mut wrote: u64 = 0;
+        let mut transfer = Transfer::new(DOWNLOAD_MAX as u64);
         let mut total: Option<u64> = None;
         let mut chunk: Vec<u8> = Vec::new();
         let mut shown_at = 0u64;
         let mut streamed = false;
         loop {
-            if self.download_cancel_requested() {
-                ex.cancel(&mut self.window);
-                cancelled = true;
-                return Err(b"Download cancelled.");
+            match self.download_control() {
+                Control::Cancel => {
+                    ex.cancel(&mut self.window);
+                    cancelled = true;
+                    return Err(b"Download cancelled.");
+                }
+                Control::TogglePause => {
+                    let paused = transfer.toggle();
+                    if !paused { ex.resume_after_pause(); }
+                    self.download_status = Some(if paused {
+                        alloc::format!("Paused at {} KB  {}  ·  Ctrl+Shift+J resumes  ·  Esc cancels", transfer.written() >> 10, name)
+                    } else {
+                        alloc::format!("Resuming {} at {} KB", name, transfer.written() >> 10)
+                    });
+                    self.draw();
+                    sex_pdx::serial_record!("[web.download.pause] paused={} bytes={}", paused as u8, transfer.written());
+                }
+                Control::Continue => {}
             }
+            if transfer.paused() { let _ = sex_pdx::sys_wait_self_ticks(16); continue; }
             let done = match ex.poll(&mut self.window) { Ok(d) => d, Err(e) => return Err(net::message(e)) };
             if let Some(t) = ex.stream(&mut chunk) {
                 streamed = true;
                 total = t;
                 if !chunk.is_empty() {
-                    if files::write_at(&mut self.window, part.as_bytes(), wrote, &chunk).map_or(true, |n| n < chunk.len()) {
+                    let Some(offset) = transfer.write_offset(chunk.len()) else { ex.cancel(&mut self.window); return Err(b"Download exceeds its size limit."); };
+                    if files::write_at(&mut self.window, part.as_bytes(), offset, &chunk).map_or(true, |n| n < chunk.len()) {
                         ex.cancel(&mut self.window);
                         return Err(b"Files is full: the download stopped.");
                     }
-                    wrote += chunk.len() as u64;
+                    transfer.committed(chunk.len());
                     chunk.clear();
                 }
             }
             let now = sex_pdx::get_ticks();
             if now >= shown_at + 250 {
                 shown_at = now;
-                self.download_status = Some(match total { Some(t) if t > 0 => alloc::format!("Downloading {}%  {}  ·  Esc cancels", wrote * 100 / t, name), _ => alloc::format!("Downloading {} KB  {}  ·  Esc cancels", wrote >> 10, name) });
+                self.download_status = Some(match total { Some(t) if t > 0 => alloc::format!("Downloading {}%  {}  ·  Ctrl+Shift+J pauses  ·  Esc cancels", transfer.written() * 100 / t, name), _ => alloc::format!("Downloading {} KB  {}  ·  Ctrl+Shift+J pauses  ·  Esc cancels", transfer.written() >> 10, name) });
                 self.draw();
-                sex_pdx::serial_record!("[web.download.progress] bytes={} total={}", wrote, total.map_or(-1, |t| t as i64));
+                sex_pdx::serial_record!("[web.download.progress] bytes={} total={}", transfer.written(), total.map_or(-1, |t| t as i64));
             }
             if done { break; }
             if ex.idle() > 64 { super::pause() } else if ex.idle() > 0 { sex_pdx::sys_yield() }
@@ -187,17 +207,18 @@ impl Browser {
         if !streamed {
             // Compressed or chunked: the body comes whole.
             let r = ex.finish().map_err(net::message)?;
+            if transfer.write_offset(r.body.len()).is_none() { return Err(b"Download exceeds its size limit."); }
             if files::write(&mut self.window, part.as_bytes(), &r.body).is_err() { return Err(b"Files is full: the download stopped."); }
-            wrote = r.body.len() as u64;
+            transfer.committed(r.body.len());
         }
-        if total.is_some_and(|expected| wrote != expected) {
+        if total.is_some_and(|expected| transfer.written() != expected) {
             return Err(b"Download ended before all bytes arrived.");
         }
-        let check = self.check_file(&part, wrote);
+        let check = self.check_file(&part, transfer.written());
         if files::rename(&mut self.window, part.as_bytes(), path.as_bytes()).is_err() { return Err(b"Can't save in Downloads."); }
         let _ = files::sync(&mut self.window);
-        sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, wrote, sex_pdx::get_ticks() - began, check);
-        Ok((wrote, check))
+        sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, transfer.written(), sex_pdx::get_ticks() - began, check);
+        Ok((transfer.written(), check))
         })();
         self.download_status = None;
         match result {
