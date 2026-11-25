@@ -8,6 +8,7 @@ open prompt determine which keys act. F11 closes the window.
 | Open a file or enter a folder | Enter |
 | Go to the parent folder | Backspace |
 | Rename the selected item | F2 |
+| Select a range in the text folder list | Shift+Up/Down/Home/End |
 | Show size and checksum | Ctrl+I |
 | Copy, cut and paste | Ctrl+C, Ctrl+X, Ctrl+V |
 | Create a folder | Ctrl+N |
@@ -32,3 +33,6 @@ Enter confirms a prompt and Escape cancels it. When a background job is active,
 Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
 supported file operations in the current Loom run; redo is not yet available.
+Delete moves a selected range to trash as one action, and one Ctrl+Z restores
+the range. Copy and cut currently accept one item; Ctrl+Shift+R opens the batch
+rename preview.

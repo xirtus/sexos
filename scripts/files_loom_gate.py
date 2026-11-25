@@ -227,6 +227,14 @@ def main():
    step(lambda:q.key('ret'),r'\[files.app.renamed\] dir=/media/LOOM/ren mask=pic_\[C:2\] files=3 moves=3')
    g['wait'](r'\[files.app.renamed.file\] from=one.txt to=pic_01.txt',0,5)
    if n==1:step(lambda:ctrl('z'),r'\[files.app.undone\]');g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # Shift+Down selects the first two rows; Delete and one undo cover both.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=0 last=1')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'loom-multi-selection.ppm')})
+  step(lambda:q.key('delete'),r'\[files.app.trashed.batch\] count=2')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=1\b',0,10)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
   # 5. Rate and tag the first file.
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:ctrl('3'),r'\[files.app.meta.rated\] path=ren/pic_01.txt stars=3')
