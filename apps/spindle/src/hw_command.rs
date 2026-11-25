@@ -74,9 +74,9 @@ pub fn keeps(pick: Pick, line: &[u8]) -> bool {
 
 /// Shows the newest line holding `text`, if the log still has one.
 pub fn newest(text: &[u8], sb: &mut crate::Scrollback) {
-    let mut last = [0u8; LINE];
+    let mut last = [0u8; 256];
     let mut n = 0usize;
-    let _ = walk(|line| { n = line.len().min(LINE); last[..n].copy_from_slice(&line[..n]); }, Pick::Matching(text));
+    let _ = walk(|line| { n = line.len().min(last.len()); last[..n].copy_from_slice(&line[..n]); }, Pick::Matching(text));
     // Scrollback keeps 110 bytes a line: wrap at spaces so no counter is cut off.
     let mut rest = &last[..n];
     while !rest.is_empty() {

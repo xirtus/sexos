@@ -2003,6 +2003,32 @@ fn x17_carries_ethernet_over_wpa2() {
     let fills: Vec<u8> = got.iter().map(|e| e[15]).collect();
     assert_eq!(fills, vec![0x50, 0x51, 0x52]);
     assert_eq!(link.dropped, 3 + 4);
+    // An A-MSDU the hardware did not split (the x17's lost TCP ACKs): its body is
+    // subframes (DA, SA, length, LLC payload, padded to 4), each passed up with
+    // its own addresses. Address 3 is the BSSID.
+    let mut f = protected_from_ap(&me, &bss.bssid, &bss.bssid, 30, &[]);
+    f.truncate(34);
+    f[22..24].copy_from_slice(&(9u16 << 4).to_le_bytes());
+    f[24] |= 0x80; // QoS: A-MSDU present
+    let gw2 = [0x02, 0x99, 0, 0, 0, 2];
+    for (k, (sa, fill)) in [(gw, 0x60u8), (gw2, 0x61)].into_iter().enumerate() {
+        let mut msdu = vec![0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x00];
+        msdu.extend_from_slice(&ip(fill));
+        f.extend_from_slice(&me);
+        f.extend_from_slice(&sa);
+        f.extend_from_slice(&(msdu.len() as u16).to_be_bytes());
+        f.extend_from_slice(&msdu);
+        if k == 0 { while (f.len() - 34) % 4 != 0 { f.push(0); } }
+    }
+    f.extend_from_slice(&[0xee; 8]); // MIC
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    let mut got: Vec<Vec<u8>> = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
+    assert_eq!(got.len(), 2, "both subframes");
+    assert_eq!((&got[0][0..6], &got[0][6..12], got[0][15]), (&me[..], &gw[..], 0x60));
+    assert_eq!((&got[1][6..12], got[1][15]), (&gw2[..], 0x61));
+    assert_eq!(&got[1][14..], &ip(0x61)[..]);
+    assert_eq!(link.dropped, 3 + 4);
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
     assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));

@@ -747,6 +747,18 @@ impl Wifi {
             l.up() as u8, l.ready() as u8, l.sent, l.tx_ok, l.tx_failed, t.queued, t.cur, t.hw, t.tail_hw(), ssn, last, t.ssn_skew, q.tx_full);
         sex_pdx::serial_record!("[wifi.link.now2] rx={} dropped={} last_drop={:?} overflow={} queued_in={} v4_out={} v4_in={} arp={}/{} missed_beacons={} ba={} flushes={}",
             l.received, l.dropped, l.last_drop, q.overflow, q.count, q.tx_v4, q.rx_v4, q.tx_arp, q.rx_arp, l.missed_beacons, l.ba.is_some() as u8, l.ba_flushes);
+        if let Some(m) = l.malformed {
+            // Header, CCMP header and the start of the body, to see which check refused it.
+            let mut hex = [0u8; 2 * wlink::MALFORMED_HEAD];
+            let k = (m.len as usize).min(wlink::MALFORMED_HEAD);
+            for (i, b) in m.head[..k].iter().enumerate() {
+                const D: &[u8; 16] = b"0123456789abcdef";
+                hex[2 * i] = D[(b >> 4) as usize];
+                hex[2 * i + 1] = D[(b & 15) as usize];
+            }
+            sex_pdx::serial_record!("[wifi.link.now3] malformed={} len={} status={:#x} subframe={:?} bytes={}",
+                l.malformed_count, m.len, m.status, m.subframe, core::str::from_utf8(&hex[..2 * k]).unwrap_or("?"));
+        }
     }
     /// Sends one Ethernet frame over the air.
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {

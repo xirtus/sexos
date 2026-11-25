@@ -146,6 +146,10 @@ impl Intake<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Malformed { pub head: [u8; MALFORMED_HEAD], pub len: u16, pub status: u32, pub subframe: Option<u8> }
+pub const MALFORMED_HEAD: usize = 48;
+
 /// Why a frame from the air was not passed up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Drop { NotDecrypted, Replay, Malformed }
@@ -171,6 +175,10 @@ pub struct Link {
     pub received: u64,
     pub dropped: u64,
     pub last_drop: Option<Drop>,
+    /// The last frame dropped as malformed (diagnostics): its first bytes as
+    /// they came (after the pad), its length, RX status and A-MSDU subframe.
+    pub malformed: Option<Malformed>,
+    pub malformed_count: u64,
     pub down: Option<Down>,
     rekey: Option<Rekey>,
     /// Key messages answered after the handshake, keys installed since, and the
@@ -223,6 +231,52 @@ pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) ->
     Ok((declared(&out[..n]).ok_or(Drop::Malformed)?, tid, pn))
 }
 
+/// Where the subframes of an unsplit A-MSDU sit in its frame.
+#[derive(Clone, Copy)]
+struct AmsduParts { head: usize, count: usize, at: [(u16, u16); MAX_SUBFRAMES] }
+const MAX_SUBFRAMES: usize = 16;
+impl AmsduParts {
+    /// Subframe `i` as a frame of its own (header with the A-MSDU bit cleared,
+    /// CCMP header, LLC payload) in `out`; its length and DA/SA.
+    fn frame(&self, f: &[u8], i: usize, out: &mut [u8; 4096]) -> (usize, [u8; 12]) {
+        let (at, len) = (self.at[i].0 as usize, self.at[i].1 as usize);
+        out[..self.head].copy_from_slice(&f[..self.head]);
+        let qos = 24 + if f[1] & 3 == 3 { 6 } else { 0 };
+        out[qos] &= !0x80;
+        out[self.head..self.head + len].copy_from_slice(&f[at + 14..at + 14 + len]);
+        let mut addrs = [0u8; 12];
+        addrs.copy_from_slice(&f[at..at + 12]);
+        (self.head + len, addrs)
+    }
+}
+
+/// An A-MSDU (QoS A-MSDU bit set) whose body is subframes (DA, SA, length, LLC
+/// payload, padded to 4 bytes) rather than one LLC/SNAP payload. On the x17 the
+/// AP's TCP ACKs to us stopped arriving mid-stream, all dropped as malformed.
+fn amsdu_parts(f: &[u8], status: u32) -> Option<AmsduParts> {
+    let hdr = w::data_header_len(f)?;
+    let fc = u16::from_le_bytes([f[0], f[1]]);
+    if fc & 0x0080 == 0 { return None; }
+    let qos = 24 + if fc & 0x0300 == 0x0300 { 6 } else { 0 };
+    if f[qos] & 0x80 == 0 { return None; }
+    let protected = fc & w::FC_PROTECTED != 0 && status & STATUS_SEC_MASK == STATUS_SEC_CCM;
+    let head = hdr + if protected { CCMP_HEADER } else { 0 };
+    let body = f.get(head..)?;
+    // Already one MSDU (the hardware split it and left the bit set).
+    if body.len() >= 6 && body[..6] == [0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00] { return None; }
+    let mut parts = AmsduParts { head, count: 0, at: [(0, 0); MAX_SUBFRAMES] };
+    let mut at = head;
+    while at + 14 <= f.len() && parts.count < MAX_SUBFRAMES {
+        let len = u16::from_be_bytes([f[at + 12], f[at + 13]]) as usize;
+        if len < 8 || at + 14 + len > f.len() { break; }
+        parts.at[parts.count] = (at as u16, len as u16);
+        parts.count += 1;
+        // Each subframe but the last is padded to 4 bytes, counted from the first.
+        at = head + ((at + 14 + len - head + 3) & !3);
+    }
+    (parts.count > 0).then_some(parts)
+}
+
 /// The length of an Ethernet frame by what its packet says it holds: IPv4 total
 /// length, IPv6 payload length plus its header, ARP's 28 bytes. Anything after
 /// (a MIC, padding) is not the packet's. Other types keep their length.
@@ -242,7 +296,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0,
             ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
@@ -333,6 +387,7 @@ impl Link {
         let mut addba = None;
         let mut delba = None;
         let mut moved = false;
+        let (mut malformed, mut malformed_count) = (None, 0u64);
         let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
         let result = b.receive(r, dma, |p: &Packet<'_>| {
             if cmdq.on_packet(p) {
@@ -372,9 +427,21 @@ impl Link {
             }
             // Data from our AP only, and not our own broadcasts relayed back.
             if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
+            // An A-MSDU the hardware did not split: each subframe on its own, as
+            // the frame's header and CCMP header before the subframe's LLC payload.
+            let parts = amsdu_parts(f, rx.status);
+            let count = parts.map_or(1, |p| p.count);
+            for part in 0..count {
+            let mut sub = [0u8; 4096];
+            let (f, index, addrs) = match parts {
+                Some(p) => { let (n, a) = p.frame(f, part, &mut sub); (&sub[..n], part as u8, Some(a)) }
+                None => (f, rx.subframe.unwrap_or(0), None),
+            };
             match decap(f, rx.status, protected, &mut eth) {
                 Ok((n, tid, number)) => {
-                    let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, rx.subframe.unwrap_or(0));
+                    // The subframe's own addresses (in an A-MSDU, address 3 is the BSSID).
+                    if let Some(a) = addrs { eth[..12].copy_from_slice(&a); }
+                    let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, index);
                     let qos_unicast = f[0] & 0x80 != 0 && f[4] & 1 == 0;
                     let verdict = match (session.as_mut(), qos_unicast) {
                         (Some(s), true) => s.frame(rx.reorder, tid as u8, rx.status & STATUS_DUPLICATE != 0, false),
@@ -395,9 +462,22 @@ impl Link {
                 }
                 // A frame with no payload (null data) is not an error.
                 Err(Drop::Malformed) if w::data_header_len(f) == Some(f.len()) => {}
-                Err(d) => { intake.dropped += 1; intake.last_drop = Some(d); }
+                Err(d) => {
+                    intake.dropped += 1;
+                    intake.last_drop = Some(d);
+                    if d == Drop::Malformed {
+                        let mut head = [0u8; MALFORMED_HEAD];
+                        let k = f.len().min(MALFORMED_HEAD);
+                        head[..k].copy_from_slice(&f[..k]);
+                        malformed = Some(Malformed { head, len: f.len() as u16, status: rx.status, subframe: rx.subframe });
+                        malformed_count += 1;
+                    }
+                }
+            }
             }
         });
+        if malformed.is_some() { self.malformed = malformed; }
+        self.malformed_count += malformed_count;
         let (received, dropped, last_drop) = (intake.received, intake.dropped, intake.last_drop);
         self.pn = pn;
         self.received += received;
