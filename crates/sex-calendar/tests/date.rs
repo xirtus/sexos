@@ -6,6 +6,39 @@ use sex_calendar::clock::{self, Alarm, Clock};
 use sex_calendar::{ics, tz, Calendar, Date, Event, PartStat, Rule, SyncState};
 
 fn d(y: i32, m: u8, day: u8) -> Date { Date::new(y, m, day).unwrap() }
+
+#[test]
+fn moving_personal_event_preserves_identity_and_refuses_series_or_invites() {
+    let from = d(2026, 11, 25);
+    let to = d(2026, 12, 2);
+    let mut local = Event::all_day(from, "Dentist");
+    local.uid = "personal-1".into();
+    local.time = Some((540, 600));
+    local.alarms = vec![30];
+    let moved = local.moved_personal_to(to, false).unwrap();
+    assert_eq!((moved.start, moved.uid.as_str(), moved.time, moved.alarms.as_slice()),
+        (to, "personal-1", Some((540, 600)), &[30][..]));
+    assert_eq!(moved.state, SyncState::Clean);
+    assert_eq!(local.start, from, "the source stays available for undo");
+    assert_eq!(local.moved_personal_to(to, true).unwrap().state, SyncState::New);
+    local.href = "/cal/personal-1.ics".into();
+    local.etag = "v1".into();
+    let linked = local.moved_personal_to(to, true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-1.ics", "v1", SyncState::Modified));
+    local.rule = Rule::parse("FREQ=WEEKLY;COUNT=3");
+    assert!(local.moved_personal_to(to, true).is_err());
+    local.rule = None;
+    local.invitation = true;
+    assert!(local.moved_personal_to(to, false).is_err());
+    local.invitation = false;
+    local.conflict_source_calendar = Some(0);
+    local.conflict_source_href = "/cal/source.ics".into();
+    assert!(local.moved_personal_to(to, false).is_err());
+    local.conflict_source_calendar = None;
+    local.conflict_source_href.clear();
+    local.uid = "legacy-conflict".into();
+    assert!(local.moved_personal_to(to, false).is_err());
+}
 fn unix_min(text: &str) -> i64 {
     // YYYY-MM-DDTHH:MM in UTC.
     let day = Date::parse(&text[..10]).unwrap();
