@@ -43,6 +43,7 @@ fn call(op: u64, a: u64, b: u64, c: u64) -> Result<u64, u64> {
 /// Shibari announces a checked public certificate; Shell binds its current run.
 pub fn register(certificate_bytes: usize) -> Result<(), u64> {
     if certificate_bytes == 0 || certificate_bytes > p::MAX_CERT { return Err(p::REFUSED); }
+    discard_stale_shell_replies();
     if call(p::REGISTER, certificate_bytes as u64, 0, 0)? == 0 { Ok(()) } else { Err(p::REFUSED) }
 }
 
