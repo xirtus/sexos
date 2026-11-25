@@ -17,3 +17,6 @@ and Shields. The remaining gaps are:
 
 Keep browser state and controls within its own capabilities. Do not add a POSIX
 filesystem or network path.
+
+The existing browser controls now have an offline in-app shortcut page and a
+matching keyboard reference in `docs/apps/kaleidoscope-shortcuts.md`.

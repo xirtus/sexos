@@ -50,6 +50,7 @@ const WELCOME: &str = include_str!("welcome.html");
 /// JavaScript on Canvas 2D, so they exercise the same engine as any web page.
 const BUILT_IN: &[(&str, &str)] = &[
     ("about:welcome", WELCOME),
+    ("about:shortcuts", include_str!("shortcuts.html")),
     ("about:blank", "<title></title>"),
     ("about:games", include_str!("games/index.html")),
     ("about:solitaire", include_str!("games/solitaire.html")),
