@@ -16,3 +16,5 @@ Remaining gaps:
 - The in-app `?` reference and `docs/DATE_SHORTCUTS.md` now cover Date's
   calendar, clock, invitation, sync and export keys. Wider accessibility
   review, including localized key names, remains.
+- Date now draws its native surfaces from SexOS light, dark and high-contrast
+  appearance tokens, and refreshes when Settings changes theme or accent.

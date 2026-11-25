@@ -55,6 +55,10 @@ def main():
   s2=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'m'}],'hold-time':80})
   g['wait'](r'\[shell.wm.action\] action=ToggleMonocle done=1',s2,30);g['wait'](rf'\[shell.program.resize\] pd={target} task={task} w=\d+ h=\d+ status=0',s2,30);time.sleep(2)
   g['focus'](sid);time.sleep(.5)
+  g['wait'](r'\[date.theme\] mode=Light accent=d6336c',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-light.ppm')});time.sleep(.5)
+  light=(a.out/'date-light.ppm').read_bytes()
+  assert light.startswith(b'P6\n') and light.count(bytes((0xF6,0xF5,0xF7)))>10000,'Date did not paint the light theme background'
   # In-app reference covers the calendar, clock, invitation and sync keys.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'slash'}],'hold-time':80})
   g['wait'](r'\[date.help\] open=1 offset=0',s,30)
