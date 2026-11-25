@@ -113,6 +113,24 @@ impl Book {
         self.run("insert.table", json!({ "rows": rows, "cols": cols })).map(|_| ())
     }
 
+    /// Edit the table containing the caret through WordCraft's undoable commands.
+    /// Keep the accepted phrases explicit so a typo cannot delete a different part.
+    pub fn edit_table(&mut self, action: &str) -> Result<&'static str, String> {
+        let (command, description) = match action.trim().to_ascii_lowercase().as_str() {
+            "select row" => ("table.selectRow", "Selected row"),
+            "select column" => ("table.selectColumn", "Selected column"),
+            "row above" => ("table.insertRowAbove", "Inserted row above"),
+            "row below" => ("table.insertRowBelow", "Inserted row below"),
+            "column left" => ("table.insertColumnLeft", "Inserted column left"),
+            "column right" => ("table.insertColumnRight", "Inserted column right"),
+            "delete row" => ("table.deleteRow", "Deleted row"),
+            "delete column" => ("table.deleteColumn", "Deleted column"),
+            _ => return Err("Choose select row/column, row above/below, column left/right, or delete row/column".into()),
+        };
+        self.run(command, json!({})).map_err(|_| "Place the caret in a table cell first".to_string())?;
+        Ok(description)
+    }
+
     /// Set the current section's paper and orientation. WordCraft stores this in the
     /// document, so DOCX and ODT preserve it after Save As and reopen.
     pub fn set_paper(&mut self, input: &str) -> Result<(), String> {
@@ -724,6 +742,36 @@ mod tests {
             let again = Book::open(&path).unwrap();
             assert!(again.text().contains("First cell"), "{ext}: {}", again.text());
             assert!(again.text().contains("Second cell"), "{ext}: {}", again.text());
+        }
+    }
+
+    #[test]
+    fn edited_table_round_trips_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("table-edit.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.edit_table("row below").is_err());
+            assert!(book.edit_table("remove all").is_err());
+            book.insert_table(2, 2).unwrap();
+            book.type_text("Anchor").unwrap();
+            book.edit_table("row below").unwrap();
+            book.edit_table("column right").unwrap();
+            let dimensions = |book: &Book| {
+                let table = book.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+                (table.rows.len(), table.cols())
+            };
+            assert_eq!(dimensions(&book), (3, 3));
+            book.save().unwrap();
+            let mut again = Book::open(&path).unwrap();
+            assert_eq!(dimensions(&again), (3, 3), "{ext} lost inserted cells");
+            assert!(again.text().contains("Anchor"));
+            let at = again.session.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+            again.run("caret.set", json!({"pos": {"story": "body", "path": [at, 1, 1, 0], "off": 0}})).unwrap();
+            again.edit_table("delete row").unwrap();
+            again.edit_table("delete column").unwrap();
+            assert_eq!(dimensions(&again), (2, 2));
+            again.save().unwrap();
+            assert_eq!(dimensions(&Book::open(&path).unwrap()), (2, 2), "{ext} lost deleted cells");
         }
     }
 

@@ -112,6 +112,16 @@ def main():
   s=len(t());type_line('2x2');q.key('ret')
   g['wait'](r'\[assuit\.table\] rows=2 cols=2\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-table.ppm')})
+  # Edit the table at its insertion caret and capture the native result.
+  s=len(t());press('ctrl','shift','t')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-table-edit-prompt.ppm')})
+  assert (a.out/'assuit-table-edit-prompt.ppm').stat().st_size>10000
+  type_line('row below');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=row below\n',s,120)
+  s=len(t());press('ctrl','shift','t');type_line('column right');q.key('ret')
+  g['wait'](r'\[assuit\.table-edit\] action=column right\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-table-edited.ppm')})
+  assert (a.out/'assuit-table-edited.ppm').stat().st_size>10000
   keys=('ctrl','shift','i')
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]});time.sleep(.5)
   s=len(t());type_line('assuitmark.png');q.key('ret')
