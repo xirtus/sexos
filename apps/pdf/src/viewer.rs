@@ -174,10 +174,15 @@ fn outline(out: &mut [u32], stride: usize, (x0, y0, x1, y1): (isize, isize, isiz
 }
 
 fn render_page(pdf: &Pdf, index: usize, scale: f32) -> Option<(Vec<u32>, usize, usize)> {
+    let cache = RenderCache::new();
+    render_page_cached(pdf, &cache, index, scale)
+}
+
+/// Share Hayro's glyph and interpreter work while drawing a batch of thumbnails.
+fn render_page_cached<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, index: usize, scale: f32) -> Option<(Vec<u32>, usize, usize)> {
     let pages = pdf.pages();
     let page = pages.get(index)?;
-    let cache = RenderCache::new();
-    let pixmap = render(page, &cache, &InterpreterSettings::default(), &RenderSettings::default(),
+    let pixmap = render(page, cache, &InterpreterSettings::default(), &RenderSettings::default(),
         &PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE });
     let (w, h) = (pixmap.width() as usize, pixmap.height() as usize);
     let pixels = pixmap.data_as_u8_slice().chunks_exact(4).map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32).collect();
@@ -510,6 +515,9 @@ impl Viewer {
     }
 
     fn draw_thumbs(&mut self, out: &mut [u32], width: usize, height: usize) {
+        let started = Instant::now();
+        // Keep temporary decoded resources bounded even on a very tall display.
+        let mut cache = RenderCache::new();
         let palette = self.palette;
         let top = if self.bar_shown() { BAR } else { 0 };
         let slot = self.thumb_slot().max(1);
@@ -519,8 +527,9 @@ impl Viewer {
         let mut rendered = 0;
         for i in self.thumb_top..(self.thumb_top + fits + 1).min(self.pages()) {
             if self.thumbs[i].is_none() {
+                if rendered != 0 && rendered % 2 == 0 { cache = RenderCache::new(); }
                 let pw = self.pdf.pages()[i].render_dimensions().0.max(1.0);
-                self.thumbs[i] = render_page(&self.pdf, i, (PANEL - 24) as f32 / pw);
+                self.thumbs[i] = render_page_cached(&self.pdf, &cache, i, (PANEL - 24) as f32 / pw);
                 rendered += 1;
             }
             let y = top + (i - self.thumb_top) * slot + 8;
@@ -538,7 +547,7 @@ impl Viewer {
             }
         }
         if rendered > 0 {
-            sex_std::record(&format!("[pdf.thumbs] rendered={rendered} cached={} first={}", self.thumbs.iter().filter(|t| t.is_some()).count(), self.thumb_top + 1));
+            sex_std::record(&format!("[pdf.thumbs] rendered={rendered} cached={} first={} ms={}", self.thumbs.iter().filter(|t| t.is_some()).count(), self.thumb_top + 1, started.elapsed().as_millis()));
         }
     }
 
@@ -1159,6 +1168,22 @@ fn open(name: &str) -> Result<(Vec<u8>, Pdf), String> {
     let bytes = std::fs::read(name).map_err(|e| format!("Could not read {name}: {e}"))?;
     let pdf = Pdf::new(bytes.clone()).map_err(|e| format!("{name} is not a PDF this viewer can read ({e:?})"))?;
     Ok((bytes, pdf))
+}
+
+#[cfg(test)]
+mod render_cache_tests {
+    use super::*;
+
+    #[test]
+    fn shared_cache_keeps_thumbnail_pixels_identical() {
+        let pdf = Pdf::new(include_bytes!("../../../tests/fixtures/pdf/find10.pdf").to_vec()).unwrap();
+        let cache = RenderCache::new();
+        for page in 0..2 {
+            let separate = render_page(&pdf, page, 0.2).unwrap();
+            let shared = render_page_cached(&pdf, &cache, page, 0.2).unwrap();
+            assert_eq!(shared, separate, "page {page}");
+        }
+    }
 }
 
 pub fn main() {
