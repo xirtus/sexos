@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use loom_core::session::{Session, Tab};
 use sex_app::{files, Window};
 
-use crate::{at, join, shown, App, FolderTab};
+use crate::{at, disk_root, join, shown, App, FolderTab};
 
 pub const FILE: &[u8] = b".loom-tabs";
 pub const PREVIOUS: &[u8] = b".loom-tabs.prev";
@@ -85,6 +85,8 @@ impl App {
         self.cursor = tab.cursor;
         self.top = tab.top;
         self.load(window);
+        let disk = disk_root(&self.cwd);
+        self.watching = (disk != b"/" && self.status.is_empty()).then_some(disk);
         sex_pdx::serial_record!("[loom.session.loaded] count={} active={} dir={}", self.tabs.len(), self.active_tab + 1, shown(&self.cwd));
     }
 }
