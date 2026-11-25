@@ -30,7 +30,6 @@ require_pattern() {
 # 1. Core microkernel servers: syscalls 102 (pdx_call_recv), 103 (pdx_reply_recv), 104 (sched::deadline)
 require_pattern "servers/sexfiles/src/trampoline.rs" "pdx_reply_recv" "sexfiles trampoline uses pdx_reply_recv (syscall 103)"
 require_pattern "servers/sexfiles/src/backends/diskfs.rs" "pdx_call_recv" "sexfiles diskfs block RPCs use pdx_call_recv (syscall 102)"
-require_pattern "servers/sexfiles/src/program_store.rs" "DIRECTORY_SECTORS" "sexfiles program_store caches directory sectors"
 require_pattern "apps/sexdrive/src/main.rs" "pdx_reply_recv" "sexdrive request-reply loop uses pdx_reply_recv (syscall 103)"
 require_pattern "servers/sexdisplay/src/main.rs" "sched::deadline\(" "sexdisplay declares deadline class (syscall 104)"
 require_pattern "servers/sexdisplay/src/main.rs" "OP_WINDOW_OPEN_COMBINED" "sexdisplay handles one-hop OP_WINDOW_OPEN_COMBINED"

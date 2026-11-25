@@ -46,6 +46,11 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
   server did a full handshake). It now allows three follow-up connections and requires
   one to resume; the root cause is a follow-up. Tests that add roots no longer rebuild
   the shared config mid-test.
+- Gemini's program-store directory cache (`DIRECTORY_SECTORS`) was dropped: it kept
+  serving a directory after it was deleted or found corrupt, which the recording image
+  loader test catches. Files reads the directory from disk on each load, as before.
+- The recording runtime host doubles gained `ipc_recv::pdx_call_recv` and the
+  trampoline's `reply_fast_queued!` for the new block call and reply paths.
 
 ## ABI
 - New: `sex_pdx::endpoint::E_RESTARTED = 0xFFFF_FFFF_FFFF_FFF7`, `OP_BIND_ENDPOINT =

@@ -191,6 +191,12 @@ pub fn pdx_listen_raw(_slot: u64) -> Message {
         .expect("finite nested reply stream exhausted")
 }
 pub fn sys_yield() {}
+// The fast-path IPC calls fall back to the plain call + listen pair the doubles model.
+pub mod ipc_recv {
+    pub fn pdx_call_recv(slot: u64, op: u64, a0: u64, a1: u64, a2: u64) -> Result<Option<super::Message>, u64> {
+        match super::pdx_call(slot, op, a0, a1, a2) { (0, _) => Ok(None), (status, _) => Err(status) }
+    }
+}
 pub fn get_ticks() -> u64 { 0 }
 pub const ERR_SERVICE_NOT_READY: u64 = 0xFFFF_FFFF_FFFF_FFFE;
 mod nested_disk {
