@@ -1,0 +1,15 @@
+[package]
+name = "quil-ls"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Quil's native LSP diagnostic helper"
+
+[[bin]]
+name = "quil-ls"
+path = "src/main.rs"
+
+[dependencies]
+quil-core = { path = "../../crates/quil-core" }
+serde_json = "1"
+sex-std = { path = "../../crates/sex-std" }

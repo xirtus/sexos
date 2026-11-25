@@ -15,3 +15,4 @@ sex-app = { path = "../../crates/sex-app" }
 sex-font = { path = "../../crates/sex-font" }
 sex-theme = { path = "../../crates/sex-theme" }
 quil-core = { path = "../../crates/quil-core" }
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }

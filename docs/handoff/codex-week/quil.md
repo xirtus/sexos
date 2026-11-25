@@ -6,7 +6,11 @@ keymaps, and Rust/Python/JavaScript syntax colors.
 
 Remaining gaps:
 
-- An LSP client for diagnostics, completion, navigation and rename.
+- Ctrl+Shift+J now starts a bundled native LSP helper through a run-scoped
+  stdin/stdout pipe and shows returned diagnostics. The first helper checks
+  delimiter balance and trailing whitespace for Rust, Python and JavaScript
+  files up to 256 KiB. Continuous diagnostics, completion, navigation, rename,
+  and full language-server implementations remain gaps.
 - A Git panel for status, diff, staging, commit and branches.
 - Tree-sitter style structural editing, debugging and extensions.
 - A save can truncate the live small file, and the large-file path removes the
