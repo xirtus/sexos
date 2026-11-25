@@ -357,7 +357,7 @@ struct Viewer {
     /// A sticky note being typed.
     note: Option<String>,
     /// Comment being edited for a highlight in the annotation list.
-    comment: Option<(usize, String)>,
+    comment: Option<(usize, String, &'static str)>,
     /// A typed visual signature; it is markup, not a cryptographic signature.
     signature: Option<String>,
     signing: Option<SigningChoice>,
@@ -601,8 +601,9 @@ impl Viewer {
             Some(("Visual signature:".to_string(), format!("{signature}_"), "Enter places, Escape cancels; not digital".to_string()))
         } else if let Some(note) = &self.note {
             Some(("Note:".to_string(), format!("{note}_"), "Enter adds it, Escape cancels".to_string()))
-        } else if let Some((_, comment)) = &self.comment {
-            Some(("Highlight comment:".to_string(), format!("{comment}_"), "Enter saves, Escape cancels".to_string()))
+        } else if let Some((_, comment, kind)) = &self.comment {
+            let label = if *kind == "Note" { "Note text:" } else { "Highlight comment:" };
+            Some((label.to_string(), format!("{comment}_"), "Enter saves, Escape cancels".to_string()))
         } else if let Some(form) = &self.form {
             form.fields.get(form.at).map(|(f, _, _)| {
                 let value = match f.kind {
@@ -1457,22 +1458,26 @@ impl Viewer {
     }
 
     fn comment_key(&mut self, key: sex_std::sex_pdx::app_key::Key) {
-        let Some((_, text)) = self.comment.as_mut() else { return };
+        let Some((_, text, _)) = self.comment.as_mut() else { return };
         match key.code {
             ESCAPE => { self.comment = None; self.status = Some("Comment edit cancelled".into()); },
             ENTER => {
-                let (index, text) = self.comment.take().unwrap();
+                let (index, text, kind) = self.comment.take().unwrap();
                 let page = self.page;
                 let Some(editor) = self.editor() else { return };
-                match editor.set_highlight_comment(page, index, &text) {
+                match editor.set_annotation_text(page, index, &text) {
                     Ok(before) => {
                         self.field_history.clear();
                         self.annotation_history.record_comment(page, index, before.unwrap_or_default(), text.clone());
                         self.load_annots(false);
-                        self.status = Some("Highlight comment saved. Ctrl+S saves the PDF.".into());
-                        sex_std::record(&format!("[pdf.annotate.comment] page={} index={index} chars={}", page + 1, text.chars().count()));
+                        self.status = Some(format!("{kind} text saved. Ctrl+S saves the PDF."));
+                        if kind == "Note" {
+                            sex_std::record(&format!("[pdf.annotate.note_edit] page={} index={index} chars={}", page + 1, text.chars().count()));
+                        } else {
+                            sex_std::record(&format!("[pdf.annotate.comment] page={} index={index} chars={}", page + 1, text.chars().count()));
+                        }
                     }
-                    Err(e) => self.status = Some(format!("Could not edit highlight comment: {e}")),
+                    Err(e) => self.status = Some(format!("Could not edit annotation text: {e}")),
                 }
             }
             BACKSPACE => { text.pop(); }
@@ -1581,9 +1586,10 @@ impl Viewer {
             (_, ESCAPE) => self.panel = Panel::None,
             (_, ENTER) => {
                 let Some(annot) = self.annots.get(self.chosen) else { return true };
-                if annot.subtype == "Highlight" {
-                    self.comment = Some((annot.index, annot.contents.clone().unwrap_or_default()));
-                } else { self.status = Some("Select a highlight to edit its comment".into()); }
+                let kind = match annot.subtype.as_str() { "Highlight" => Some("Highlight"), "Text" => Some("Note"), _ => None };
+                if let Some(kind) = kind {
+                    self.comment = Some((annot.index, annot.contents.clone().unwrap_or_default(), kind));
+                } else { self.status = Some("Select a highlight or note to edit its text".into()); }
             }
             (Some(Nav::Delete), _) | (_, BACKSPACE) => {
                 let Some(a) = self.annots.get(self.chosen).cloned() else { return true };
