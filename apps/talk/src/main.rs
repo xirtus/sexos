@@ -154,8 +154,9 @@ pub extern "C" fn _start() -> ! {
     window.title(b"Flirt");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let args = files::args(&mut window, &mut args).to_vec();
-    let mut screen = Screen(alloc::string::String::from("Talk. F11 closes.\n"));
+    let mut screen = Screen(alloc::string::String::from("Flirt. F11 closes.\n"));
     screen.line(&mut window, "");
+    sex_pdx::serial_record!("[flirt.ui] title=Flirt");
     match run(&mut window, &mut screen, &words(&args)) {
         Ok(()) => sex_pdx::serial_record!("[talk.done] target={} task={}", window.target, window.task),
         Err(e) => {
