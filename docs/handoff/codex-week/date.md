@@ -33,6 +33,10 @@ Remaining gaps:
   appearance tokens, and refreshes when Settings changes theme or accent.
 - Date already routes reminders, alarms and timers to Bell. A visible notice can
   now be snoozed for five minutes with Shift+S; the new timer survives restart.
+  **Timer transport:** visible Date and its hidden worker now retain due timers
+  when their Bell PDX post fails, retrying without losing the saved timer. This
+  does not prove Bell accepted a transported post: Bell can silently discard it
+  for mute, spam policy or a full queue. A Bell acknowledgement protocol remains.
   Date now keeps a bounded durable last-checked minute. When its window closes,
   a hidden Date run takes over reminders, alarms and timers and posts to Bell
   at the due time. An exclusive Files claim prevents duplicate hidden workers;

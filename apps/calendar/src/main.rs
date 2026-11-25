@@ -132,6 +132,16 @@ fn quick_event(day: Date, typed: &str) -> Entry {
 
 fn now_ms() -> u64 { sex_pdx::civil_time_ms().unwrap_or(0) }
 
+/// A `false` here means PDX transport failed, so no Bell post is confirmed.
+/// Bell's own mute, spam and queue policy is not acknowledged by this API.
+fn post_timer(t: &Timer) -> bool {
+    let title = if t.label.is_empty() { "Timer" } else { &t.label };
+    let body = format!("{} timer done", clock::format_duration(t.seconds as u64));
+    let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+    sex_pdx::serial_record!("[date.alarm.fired] kind=timer title={} notified={}", title, posted as u8);
+    posted
+}
+
 /// Each visible run keeps its own lease. A dead run's file stops participating
 /// after ten seconds; the smallest live task owns Bell delivery.
 fn notice_ui_owner(my_task: u32, now: u64) -> bool {
@@ -221,13 +231,7 @@ fn notice_worker() -> ! {
             if now == 0 { let _ = sex_pdx::sys_wait_self_ticks(500); continue; }
             let minute = NoticeCursor::current(now).minute;
             let mut rang = false;
-            for t in clock.timers_done(now) {
-                let title = if t.label.is_empty() { "Timer" } else { &t.label };
-                let body = format!("{} timer done", clock::format_duration(t.seconds as u64));
-                let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
-                sex_pdx::serial_record!("[date.alarm.fired] kind=timer title={} notified={}", title, posted as u8);
-                rang = true;
-            }
+            if !clock.deliver_timers(now, post_timer).is_empty() { rang = true; }
             if minute > cursor.minute {
                 let offset = clock.home_zone().offset(minute);
                 for (i, day, at) in cal.reminders_due(cursor.minute, minute, offset) {
@@ -595,8 +599,9 @@ impl App {
         self.now_ms = now_ms();
         if self.now_ms == 0 { return false; }
         let mut rang = false;
-        for t in self.clock.timers_done(self.now_ms) {
-            self.ring("timer", if t.label.is_empty() { "Timer" } else { &t.label }, &format!("{} timer done", clock::format_duration(t.seconds as u64)));
+        for t in self.clock.deliver_timers(self.now_ms, post_timer) {
+            let title = if t.label.is_empty() { "Timer" } else { &t.label };
+            self.banner = Some(format!("{title}: {} timer done", clock::format_duration(t.seconds as u64)));
             rang = true;
         }
         let minute = (self.now_ms / 60_000) as i64;
