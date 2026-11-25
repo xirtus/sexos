@@ -423,6 +423,38 @@ fn press(key: Key) -> Option<Press> {
 }
 
 impl App {
+    fn free_untitled_slot(&self) -> Option<u8> {
+        (0..draft::UNTITLED_SLOTS).find(|slot| {
+            if self.tabs.list.iter().any(|tab| tab.untitled_slot == Some(*slot)) { return false; }
+            let key = draft::untitled_key(*slot).unwrap();
+            matches!(files::direct::stat(&draft_name(&key)), Err(files::NOT_FOUND))
+        })
+    }
+
+    fn new_untitled_tab(&mut self) {
+        let mut tab = Tab::new(b"", Editor::from_bytes(b""));
+        tab.untitled_slot = self.free_untitled_slot();
+        if tab.untitled_slot.is_none() {
+            self.status = String::from("Untitled recovery unavailable; save this tab to a file.");
+        }
+        self.tabs.add(tab);
+    }
+
+    fn restore_untitled_tabs(&mut self) {
+        for slot in 0..draft::UNTITLED_SLOTS {
+            let key = draft::untitled_key(slot).unwrap();
+            let Some(text) = read_draft(&key).filter(|text| !text.is_empty()) else { continue };
+            let mut ed = Editor::from_bytes(b"");
+            ed.type_text(&text);
+            let version = ed.version();
+            let mut tab = Tab::new(b"", ed);
+            tab.untitled_slot = Some(slot);
+            self.tabs.add(tab);
+            self.drafted.insert(key, version);
+            sex_pdx::serial_record!("[quil.code.draft.recovered] untitled={} bytes={}", slot, text.len());
+            self.status = format!("Recovered untitled tab {}", slot + 1);
+        }
+    }
     fn complete_language(&mut self) {
         if self.focus != Focus::Editor { return; }
         let len = self.tab().ed.buf.len();
@@ -485,7 +517,7 @@ impl App {
     fn gutter(&self) -> usize { if self.numbers { 7 } else { 1 } }
 
     fn tab(&mut self) -> &mut Tab {
-        if self.tabs.is_empty() { self.tabs.add(Tab::new(b"", Editor::from_bytes(b""))); }
+        if self.tabs.is_empty() { self.new_untitled_tab(); }
         let i = self.tabs.active;
         &mut self.tabs.list[i]
     }
@@ -528,6 +560,7 @@ impl App {
 
     fn save(&mut self, as_new: bool, window: &mut Window) {
         let mut path = self.tab().path.clone();
+        let old_untitled = self.tab().untitled_slot.and_then(draft::untitled_key);
         if path.is_empty() || as_new {
             let mut out = [0u8; sex_pdx::fs::PATH_BYTES];
             let name = if path.is_empty() { b"untitled.txt".to_vec() } else { self.tab().name().to_vec() };
@@ -566,9 +599,11 @@ impl App {
                 }
                 let t = self.tab();
                 t.path = path.clone();
+                t.untitled_slot = None;
                 t.lang = highlight::Lang::from_path(&path);
                 t.ed.mark_saved();
                 let _ = files::direct::remove(&draft_name(&path));
+                if let Some(key) = &old_untitled { let _ = files::direct::remove(&draft_name(key)); self.drafted.remove(key); }
                 let _ = files::direct::sync();
                 self.drafted.remove(&path);
                 sex_pdx::serial_record!("[quil.code.saved] path={} bytes={} hash={:016x}", lossy(&path), n, h);
@@ -582,14 +617,23 @@ impl App {
     fn autosave_drafts(&mut self) {
         for i in 0..self.tabs.list.len() {
             let tab = &self.tabs.list[i];
-            if tab.path.is_empty() || !tab.ed.modified() || tab.ed.buf.len() > draft::MAX_TEXT { continue; }
-            let path = tab.path.clone();
+            if !tab.ed.modified() || tab.ed.buf.len() > draft::MAX_TEXT { continue; }
+            let path = if tab.path.is_empty() {
+                let Some(key) = tab.untitled_slot.and_then(draft::untitled_key) else { continue };
+                key
+            } else { tab.path.clone() };
             let version = tab.ed.version();
             if self.drafted.get(&path) == Some(&version) { continue; }
             let text = tab.ed.text();
             if write_draft(&path, &text) {
                 self.drafted.insert(path.clone(), version);
-                sex_pdx::serial_record!("[quil.code.draft.saved] path={} bytes={}", lossy(&path), text.len());
+                if let Some(slot) = tab.untitled_slot {
+                    sex_pdx::serial_record!("[quil.code.draft.saved] untitled={} bytes={}", slot, text.len());
+                } else {
+                    sex_pdx::serial_record!("[quil.code.draft.saved] path={} bytes={}", lossy(&path), text.len());
+                }
+            } else {
+                self.status = String::from("Recovery draft could not be saved; save this tab to a file.");
             }
         }
     }
@@ -619,20 +663,24 @@ impl App {
                 let mut out = [0u8; sex_pdx::fs::PATH_BYTES];
                 if let Ok(p) = files::pick(window, files::Pick::Folder, b"", &mut out) { let p = p.to_vec(); self.set_root(&p); }
             }
-            Command::NewTab => { self.tabs.add(Tab::new(b"", Editor::from_bytes(b""))); }
+            Command::NewTab => self.new_untitled_tab(),
             Command::CloseTab => {
                 if self.tab().ed.modified() && !self.quit_armed { self.quit_armed = true; self.status = String::from("Unsaved changes: Close Tab again to discard."); return; }
                 self.quit_armed = false;
                 let i = self.tabs.active;
                 if let Some(tab) = self.tabs.close(i) {
-                    if !tab.path.is_empty() { let _ = files::direct::remove(&draft_name(&tab.path)); self.drafted.remove(&tab.path); let _ = files::direct::sync(); }
+                    let key = if tab.path.is_empty() { tab.untitled_slot.and_then(draft::untitled_key) } else { Some(tab.path) };
+                    if let Some(key) = key { let _ = files::direct::remove(&draft_name(&key)); self.drafted.remove(&key); let _ = files::direct::sync(); }
                 }
             }
             Command::NextTab => self.tabs.next(),
             Command::PrevTab => self.tabs.prev(),
             Command::Quit => {
                 if self.tabs.list.iter().any(|t| t.ed.modified()) && !self.quit_armed { self.quit_armed = true; self.status = String::from("Unsaved changes: Quit again to discard them."); return; }
-                for tab in &self.tabs.list { if !tab.path.is_empty() { let _ = files::direct::remove(&draft_name(&tab.path)); } }
+                for tab in &self.tabs.list {
+                    let key = if tab.path.is_empty() { tab.untitled_slot.and_then(draft::untitled_key) } else { Some(tab.path.clone()) };
+                    if let Some(key) = key { let _ = files::direct::remove(&draft_name(&key)); }
+                }
                 let _ = files::direct::sync();
                 sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task);
                 sex_pdx::task_finish(0);
@@ -1028,7 +1076,7 @@ impl App {
                     // The tab bar: which tab is under the pointer.
                     let mut x = tc;
                     for (i, t) in self.tabs.list.iter().enumerate() {
-                        let w = t.name().len() + 4;
+                        let w = t.name().len() + if t.untitled_slot.is_some() { 6 } else { 4 };
                         if col >= x && col < x + w { self.tabs.active = i; return; }
                         x += w;
                     }
@@ -1087,7 +1135,8 @@ impl App {
         let mut x = tc;
         for i in 0..self.tabs.len() {
             let t = &self.tabs.list[i];
-            let label = format!(" {}{} ", lossy(t.name()), if t.ed.modified() { " *" } else { "  " });
+            let name = t.untitled_slot.map(|slot| format!("untitled {}", slot + 1)).unwrap_or_else(|| lossy(t.name()));
+            let label = format!(" {}{} ", name, if t.ed.modified() { " *" } else { "  " });
             let (fg, bg) = if i == self.tabs.active { (palette.fg, palette.bg) } else { (palette.dim, palette.bar) };
             x += self.p.text(x, 0, cols.saturating_sub(x), &label, fg, bg);
             if x < cols { self.p.ch(x, 0, '|', palette.panel, palette.bar); x += 1; }
@@ -1338,6 +1387,7 @@ extern "C" fn main() -> ! {
         palette, theme_generation, theme_next: sex_pdx::get_ticks().saturating_add(1000),
         draft_next: sex_pdx::get_ticks().saturating_add(2000), drafted: BTreeMap::new(), git_stage_undo: None, p,
     };
+    app.restore_untitled_tabs();
     // `quil @/path` opens a file or a folder; words like `vim` or `emacs` pick the keys.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args).to_vec();

@@ -7,6 +7,16 @@ const MAGIC: &[u8; 4] = b"QDR1";
 pub const MAX_TEXT: usize = 4 << 20;
 pub const MAX_PATH: usize = 1024;
 pub const HEADER: usize = 18;
+/// At most eight unsaved unnamed tabs are retained across a crash.
+pub const UNTITLED_SLOTS: u8 = 8;
+
+/// A recovery identity no granted file path can have (it contains NUL).
+pub fn untitled_key(slot: u8) -> Option<Vec<u8>> {
+    if slot >= UNTITLED_SLOTS { return None; }
+    let mut key = b"quil:untitled\0".to_vec();
+    key.push(slot);
+    Some(key)
+}
 
 pub fn hash(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3))
@@ -50,5 +60,17 @@ mod tests {
         let mut corrupt = packet;
         *corrupt.last_mut().unwrap() ^= 1;
         assert!(decode(b"project/main.rs", &corrupt).is_none());
+    }
+
+    #[test]
+    fn untitled_slots_are_distinct_and_bound_to_their_draft() {
+        let first = untitled_key(0).unwrap();
+        let second = untitled_key(1).unwrap();
+        assert_ne!(first, second);
+        assert!(untitled_key(UNTITLED_SLOTS).is_none());
+        let packet = encode(&first, b"unsaved text").unwrap();
+        assert_eq!(decode(&first, &packet), Some(&b"unsaved text"[..]));
+        assert!(decode(&second, &packet).is_none());
+        assert!(decode(b"quil:untitled", &packet).is_none());
     }
 }

@@ -48,6 +48,11 @@ and `:w` saves. The in-app reference shows its Vim commands below the Ctrl short
 
 The desktop handles F11 to close a Quil window; Quil asks before discarding edits.
 
+Quil writes a checked recovery draft every two seconds for edited tabs up to
+4 MiB. On the next launch it restores up to eight untitled tabs, numbered in
+the tab bar. Reopening a named file restores its draft. Save a recovered tab
+to give it a file name. Confirming Close Tab or Quit discards its draft.
+
 Ctrl+Shift+V reads `.git/index` inside the opened project's Files grant and
 compares tracked files with the index. The panel marks modified, deleted,
 conflicted, or too-large-to-check files. Right opens a read-only line diff for a
