@@ -4,4 +4,6 @@ Files pins SHA-256 of the canonical staged Vellum ELF at build time and hashes t
 
 The release build now stages Vellum before Files and records it as a consumed input, so a changed artifact invalidates the build receipt. A host test checks stage ordering and the image handoff; Rust unit tests cover altered image bytes, reply decoding, a queued recorder overwrite, Shell restart, stale receipts and row reuse. The PDF guest gate requires the attested signing run and captures Shibari's approval window.
 
+Shell requires a live Files epoch before each ordinary image load. If its post-copy epoch observation is transiently unavailable, it sends the consume receipt with the captured request epoch while withholding Vellum approval. Files checks that epoch against its own current incarnation and the lease generation, so a stale receipt after restart cannot release another image. A focused Rust regression covers the unknown observation and changed-epoch cases.
+
 This change authenticates the signing client image only. Shibari still signs client-supplied CMS attributes after approval and cannot yet verify or display the exact PDF covered by the signature. New digital signing remains unsuitable for sensitive documents until that document-bound consent protocol lands. Existing signed-PDF inspection and signed-edit guards are unchanged.
