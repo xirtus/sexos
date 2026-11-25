@@ -16,6 +16,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Alt+H / Ctrl+Alt+F | Edit the header or footer shown on the current page. Type and format text around existing fields; Esc returns to the body. An empty newly opened region is removed on exit. |
 | Ctrl+Alt+S | Set the current or selected paragraphs' line multiple (0.5–3), or an `exact` or `minimum` line height (6–72 pt), then space before and after (0–72 pt): `1.5 0 8`, `exact 18 0 8`, or `minimum 18 0 8` |
 | Ctrl+Alt+I | Set left, right, and relative first-line indents in inches. Use `0.5 0 -0.25` for a hanging indent. |
+| Ctrl+Shift+N | Insert a linked footnote at the body caret. Enter its text, continue editing the note on the page, then press Esc to return to the body. |
 | Ctrl+Alt+L | Edit the current list: `bullet`, `numbered`, `numbered paren`, `upper letter`, `lower letter`, `lower roman`, `legal`, `off`, `restart`, or `level 1` through `level 9` (1 is the outermost level) |
 | Ctrl+Alt+Right / Ctrl+Alt+Left | Move the list item at the caret one level deeper or shallower (levels 1–9) |
 | Ctrl+T | Insert a table by entering rows × columns |

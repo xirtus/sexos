@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::io::{Read, Write};
 use serde_json::{Value, json};
-use wordcraft_engine::Session;
-use wordcraft_engine::doc::{Document, StoryRef, StyleKind};
+use wordcraft_engine::{Selection, Session};
+use wordcraft_engine::doc::{Document, PartKind, Pos, StoryRef, StyleKind};
 use wordcraft_engine::layout::DocLayout;
 use wordcraft_engine::render::{RenderOptions, render_page};
 
@@ -38,6 +38,8 @@ pub struct Book {
     /// Commands run that change the document (WordCraft marks them `mutates`): typing,
     /// formatting, styles, undo. The window watches it to keep unsaved work.
     pub edits: u64,
+    /// Body caret saved when Assuit enters a newly inserted footnote.
+    note_return: Option<Pos>,
 }
 
 impl Book {
@@ -54,7 +56,7 @@ impl Book {
     /// An empty document that Ctrl+S saves to `path`.
     pub fn blank(path: &str) -> Book {
         #[allow(unused_mut)] // the SexOS build loads the app-owned dictionary below
-        let mut book = Book { session: Session::new(Document::new()), path: path.to_string(), edits: 0 };
+        let mut book = Book { session: Session::new(Document::new()), path: path.to_string(), edits: 0, note_return: None };
         #[cfg(target_os = "hermit")]
         book.load_dictionary(Path::new(Self::DICTIONARY));
         book
@@ -67,7 +69,7 @@ impl Book {
         session.path = Some(path.into());
         session.dirty = false;
         #[allow(unused_mut)] // the SexOS build loads the app-owned dictionary below
-        let mut book = Book { session, path: path.to_string(), edits: 0 };
+        let mut book = Book { session, path: path.to_string(), edits: 0, note_return: None };
         #[cfg(target_os = "hermit")]
         book.load_dictionary(Path::new(Self::DICTIONARY));
         Ok(book)
@@ -101,6 +103,35 @@ impl Book {
         if !self.editing_header_footer() { return Ok(()); }
         self.run("insert.closeHeader", json!({}))?;
         Ok(())
+    }
+
+    pub fn editing_inserted_footnote(&self) -> bool {
+        let StoryRef::Part(id) = self.session.sel.focus.story else { return false };
+        self.note_return.is_some()
+            && self.session.doc.parts.get(&id).is_some_and(|part| part.kind == PartKind::Footnote)
+    }
+
+    /// Insert a linked note at a collapsed body caret, then leave its rich
+    /// story active so the writer can continue editing it.
+    pub fn insert_footnote(&mut self, text: &str) -> Result<(), String> {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > 500 || text.chars().any(char::is_control) {
+            return Err("Enter 1–500 characters for the footnote".into());
+        }
+        if !self.session.sel.is_collapsed() || self.session.sel.focus.story != StoryRef::Body {
+            return Err("Place the caret in body text before inserting a footnote".into());
+        }
+        let back = self.session.sel.focus.clone();
+        self.run("references.footnote", json!({ "text": text }))?;
+        self.note_return = Some(back);
+        Ok(())
+    }
+
+    pub fn close_inserted_footnote(&mut self) {
+        if let Some(back) = self.note_return.take() {
+            self.session.sel = Selection::caret(back);
+            self.session.clamp_selection();
+        }
     }
 
     /// Plain text for SexOS's shared clipboard. WordCraft also retains its
@@ -1253,6 +1284,37 @@ mod tests {
             let header = reopened.session.doc.last_section.headers.default.unwrap();
             assert!(reopened.session.doc.plain_text(StoryRef::Part(header)).contains("Draft"), "{ext} lost header text");
             assert!(reopened.draw(0, 2.0).is_some());
+        }
+    }
+
+    #[test]
+    fn footnote_is_linked_editable_and_round_trips() {
+        use wordcraft_engine::doc::InlineObject;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("footnote.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("A documented claim").unwrap();
+            let before = book.draw(0, 1.5).unwrap().pixels;
+            assert!(book.insert_footnote("").is_err());
+            assert!(book.insert_footnote(&"x".repeat(501)).is_err());
+            book.insert_footnote("Source one").unwrap();
+            assert!(book.editing_inserted_footnote());
+            book.type_text(" updated").unwrap();
+            book.close_inserted_footnote();
+            assert_eq!(book.session.sel.focus.story, StoryRef::Body);
+            assert!(book.draw(0, 1.5).unwrap().pixels != before, "note must render on the page");
+            let note = |b: &Book| {
+                let id = b.session.doc.body.iter().filter_map(|block| block.as_para())
+                    .flat_map(|p| &p.objects)
+                    .find_map(|obj| match obj { InlineObject::NoteRef { id, .. } => Some(*id), _ => None })
+                    .expect("linked note reference");
+                assert_eq!(b.session.doc.parts.get(&id).unwrap().kind, PartKind::Footnote);
+                b.session.doc.plain_text(StoryRef::Part(id))
+            };
+            assert!(note(&book).contains("Source one updated"));
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert!(note(&reopened).contains("Source one updated"), "{ext} lost footnote text or link");
         }
     }
 
