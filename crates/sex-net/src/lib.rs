@@ -500,13 +500,16 @@ impl<'a> Engine<'a>{
     }
     /// Sends the flow's FIN after what is queued.
     pub fn open_shutdown(&mut self,flow:usize){
-        if let Ok(h)=self.tcp_handle(flow){self.flows.get_mut::<tcp::Socket>(h).close();}
+        // No keep-alives once ours is sent: a peer that never sends its FIN would
+        // answer them and hold FinWait2 forever; the 30 s timeout ends it instead.
+        if let Ok(h)=self.tcp_handle(flow){let s=self.flows.get_mut::<tcp::Socket>(h);s.set_keep_alive(None);s.close();}
     }
     /// Lets the flow go: reset, unless it was shut down and is finishing on its own.
     pub fn open_close(&mut self,flow:usize){
         self.open_take(flow);
         if let Ok(h)=self.tcp_handle(flow){
             let s=self.flows.get_mut::<tcp::Socket>(h);
+            s.set_keep_alive(None);
             if !matches!(s.state(),State::FinWait1|State::FinWait2|State::Closing|State::TimeWait|State::LastAck){let_go(s);}
         }
     }
