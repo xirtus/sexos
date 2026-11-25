@@ -28,8 +28,11 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   round-trip coverage plus a guest screenshot gate.
   Ctrl+Alt+Shift+E now reopens a linked note from its body reference after a
   document is saved and reopened. Editing and Esc return have DOCX/ODT tests
-  and a guest screenshot gate. Native note placement and numbering controls
-  remain.
+  and a guest screenshot gate. Ctrl+Alt+Shift+F now sets document-wide note
+  placement, number format, first number, and restart behavior through a
+  bounded prompt. DOCX/ODT persistence and guest screenshots cover it; ODT
+  placement choices that WordCraft cannot preserve are refused.
+  Per-section note options and custom note marks remain.
 - **Hyperlinks:** Ctrl+K now opens a native URL prompt for selected text or a
   new display label. Web and mail links are bounded, undoable, and covered by
   DOCX/ODT round trips. Ctrl+Alt+K now removes a link from selected text while

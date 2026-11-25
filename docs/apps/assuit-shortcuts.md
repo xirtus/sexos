@@ -20,6 +20,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Alt+E | Insert a linked endnote at the body caret. Enter its text, continue editing, then press Esc to return to the body. |
 | Ctrl+Alt+Shift+E | Edit a linked footnote or endnote from its body reference, including after reopening a document. Esc returns to the body. |
 | Ctrl+Alt+Shift+N | Convert all footnotes to endnotes, all endnotes to footnotes, or swap both kinds. Enter `endnote`, `footnote`, or `swap`. |
+| Ctrl+Alt+Shift+F | Set note placement or numbering for the document. Examples: `footnote format roman`, `footnote restart page`, `endnote start 3`, `endnote position section`. |
 | Ctrl+K | Link selected text or insert a new link. At a caret inside an existing link, selects its full label and prefills its address for editing. Enter an `https://`, `http://`, or `mailto:` address, optionally followed by display text after a space; Ctrl+A clears the prompt. |
 | Ctrl+Alt+K | Remove the link from selected text while keeping the words. |
 | Ctrl+Alt+T | Insert a generated table of contents from heading styles with `insert 1` through `insert 9` (maximum heading level), `update` after edits, or `remove` it. |
