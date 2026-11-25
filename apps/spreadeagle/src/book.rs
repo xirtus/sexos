@@ -533,9 +533,16 @@ impl Book {
     /// Change an existing chart through GridCraft's undoable command.
     pub fn edit_chart(&mut self, id: u32, input: &str) -> Result<String, String> {
         let input = input.trim();
-        let kind = self.session.doc().ok().and_then(|d| d.wb.active()
-            .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| chart.kind)));
-        let Some(kind) = kind else { return Err("Choose a chart on this sheet first".into()); };
+        let chart = self.session.doc().ok().and_then(|d| d.wb.active()
+            .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| (chart.kind, chart.by_rows))));
+        let Some((kind, by_rows)) = chart else { return Err("Choose a chart on this sheet first".into()); };
+        if input == "switch" {
+            self.run("chart.switchRowColumn", json!({ "chart": id }))?;
+            let switched = self.session.doc().ok().and_then(|d| d.wb.active()
+                .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| chart.by_rows != by_rows))).unwrap_or(false);
+            if !switched { return Err("This chart has no selectable source range".into()); }
+            return Ok("Chart series switched between rows and columns".into());
+        }
         if let Some(title) = input.strip_prefix("title ") {
             if title.is_empty() || title.chars().count() > 120 { return Err("Enter title followed by 1–120 characters".into()); }
             self.run("chart.set", json!({ "chart": id, "title": title }))?;
@@ -602,7 +609,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter type, title, legend, table, hole, angle, axes, labels or gridlines".into())
+        Err("Enter switch, type, title, legend, table, hole, angle, axes, labels or gridlines".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -1301,6 +1308,32 @@ mod tests {
         inserted.add_chart_kind(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3, "doughnut").unwrap();
         assert_eq!(state(&inserted).0, gridcraft_engine::model::ChartKind::Doughnut);
         assert!(inserted.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).is_some());
+    }
+
+    #[test]
+    fn chart_switch_rebuilds_series_and_survives_xlsx() {
+        let mut book = budget("chart-switch.xlsx");
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        book.edit_chart(id, "type line").unwrap();
+        let state = |book: &Book| {
+            let chart = &book.session.doc().unwrap().wb.active().unwrap().charts[0];
+            (chart.by_rows, chart.series.len())
+        };
+        let before = state(&book);
+        let pixels_before = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_eq!(before, (false, 1));
+        book.edit_chart(id, "switch").unwrap();
+        assert_eq!(state(&book), (true, 3));
+        let pixels_after = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(pixels_before, pixels_after);
+        book.undo().unwrap();
+        assert_eq!(state(&book), before);
+        book.redo().unwrap();
+        assert_eq!(state(&book), (true, 3));
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(state(&Book::open(&path).unwrap().0).1, 3);
     }
 
     #[test]
