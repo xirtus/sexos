@@ -78,6 +78,8 @@ enum Ask {
     TableEdit(String),
     /// Ctrl+Shift+I: image path in the program's granted folder.
     Picture(String),
+    /// Ctrl+Shift+R: alternative text for the selected image.
+    PictureAlt(String),
     /// Ctrl+Shift+P: a 1-based PDF page range such as `1-3,5`.
     PrintRange(String),
     /// Ctrl+Shift+L: paper size and orientation, for example `A4 landscape`.
@@ -114,7 +116,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table rows and columns"),
-    ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+S", "Apply paragraph style"),
+    ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+R", "Picture alt text"),
+    ("Ctrl+Shift+S", "Apply paragraph style"),
     ("Ctrl+B / I / U", "Bold / italic / underline"),
     ("Ctrl+Z / Y", "Undo / redo"), ("Ctrl+A", "Select all"),
     ("Ctrl+F / H", "Find / replace"),
@@ -137,6 +140,7 @@ mod code {
     pub const P: u8 = 0x19;
     pub const T: u8 = 0x14;
     pub const I: u8 = 0x17;
+    pub const R: u8 = 0x13;
     pub const Y: u8 = 0x15;
     pub const L: u8 = 0x26;
     pub const M: u8 = 0x32;
@@ -305,6 +309,7 @@ impl Ui {
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
                 Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge cells, split 2–10, shade RRGGBB, border all/outside/inside/none")),
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
+                Ask::PictureAlt(alt) => format!("Picture description: {alt}_   {}", said("Describe the selected picture for readers who cannot see it")),
                 Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
@@ -399,7 +404,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::Picture(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -460,6 +465,18 @@ impl Ui {
                     self.invalidate();
                     sex_std::record(&format!("[assuit.picture] path={typed}"));
                     self.message = format!("Inserted picture from {typed}");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
+        if matches!(ask, Ask::PictureAlt(_)) {
+            match self.book.picture_alt_text(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.picture-alt] chars={}", typed.chars().count()));
+                    self.message = "Updated picture description".into();
                 }
                 Err(e) => self.message = e,
             }
@@ -555,6 +572,7 @@ impl Ui {
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
                 (code::T, _) if key.shift => { self.ask = Some(Ask::TableEdit(String::new())); return; }
                 (code::I, _) if key.shift => { self.ask = Some(Ask::Picture(String::new())); return; }
+                (code::R, _) if key.shift => { self.ask = Some(Ask::PictureAlt(String::new())); return; }
                 (code::S, _) if key.shift => {
                     let styles = self.book.styles();
                     let current = self.book.paragraph_style();
