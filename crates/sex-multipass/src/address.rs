@@ -10,12 +10,14 @@ pub enum Provider {
     Bluesky, Mastodon, Matrix, Fediverse,
     /// CalDAV/CardDAV/WebDAV server (generic, Nextcloud, Fastmail, iCloud app password).
     Dav,
+    /// IMAP/SMTP account; endpoints are configured by Multipass, never the app.
+    Mail,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 5] = [Provider::Bluesky, Provider::Mastodon, Provider::Matrix, Provider::Fediverse, Provider::Dav];
+    pub const ALL: [Provider; 6] = [Provider::Bluesky, Provider::Mastodon, Provider::Matrix, Provider::Fediverse, Provider::Dav, Provider::Mail];
     pub fn as_str(self) -> &'static str {
-        match self { Self::Bluesky => "bluesky", Self::Mastodon => "mastodon", Self::Matrix => "matrix", Self::Fediverse => "fediverse", Self::Dav => "dav" }
+        match self { Self::Bluesky => "bluesky", Self::Mastodon => "mastodon", Self::Matrix => "matrix", Self::Fediverse => "fediverse", Self::Dav => "dav", Self::Mail => "mail" }
     }
     pub fn parse(s: &str) -> Option<Self> { Self::ALL.into_iter().find(|p| p.as_str() == s) }
 }
@@ -109,6 +111,7 @@ pub fn network_account(provider: Provider, raw: &str) -> Result<NetworkAccount> 
             let (user, url) = address.split_once("@https://").ok_or_else(bad)?;
             server_account(Provider::Dav, &format!("https://{url}"), user)
         }
+        Provider::Mail => Err(ApiError::new("invalid_mail", "Add mail through Multipass so its IMAP and SMTP servers can be checked.")),
         Provider::Fediverse => {
             // A URL is a profile URL even when its path holds an `@` (leeloo's pattern
             // would read `https://host/@x` as the account "https://host/" on server "x").

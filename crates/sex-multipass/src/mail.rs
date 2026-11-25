@@ -4,6 +4,7 @@
 //! host before it implements [`VerifiedMailTls`]. No such SexNet app flow is
 //! boot-routed yet; this module prepares the service-side secret boundary.
 use crate::{ApiError, Result};
+use alloc::string::{String, ToString};
 use sex_mail::{Auth, Conn, imap, smtp};
 use shibari::{Keeper, Knot, Owner};
 
@@ -11,6 +12,43 @@ use shibari::{Keeper, Knot, Owner};
 /// and name. Implemented only by a trusted Multipass transport, never by the
 /// requesting app. The fixture implementation below stands in for that proof.
 pub trait VerifiedMailTls: Conn {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailServer { pub host: String, pub port: u16 }
+
+impl MailServer {
+    /// A domain and TLS port chosen in Multipass's account setup. The requesting
+    /// app cannot provide or override either field when opening a flow.
+    pub fn new(host: &str, port: u16) -> Result<Self> {
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        let labels: alloc::vec::Vec<_> = host.split('.').collect();
+        if host.len() > 253 || labels.len() < 2 || port == 0 || labels.iter().any(|label| {
+            label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
+                || !label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        }) || !labels.last().is_some_and(|tld| tld.bytes().any(|b| b.is_ascii_alphabetic())) {
+            return Err(ApiError::new("mail_server", "Enter a mail server domain and a TLS port."));
+        }
+        Ok(Self { host, port })
+    }
+}
+
+/// The trusted Multipass transport opens a TLS connection and verifies the
+/// certificate for `server.host` before returning it. It must not yield a
+/// plaintext or unverified flow. The app cannot implement or call this trait.
+pub trait MailDialer {
+    type Flow: VerifiedMailTls;
+    fn open(&mut self, server: &MailServer) -> Result<Self::Flow>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailPurpose { Imap, Smtp }
+
+pub fn user_name(user: &str) -> Result<String> {
+    if user.is_empty() || user.len() > 254 || user.bytes().any(|b| b < b'!' || b == 0x7f) {
+        return Err(ApiError::new("mail_user", "Enter a mail account user name without spaces or control characters."));
+    }
+    Ok(user.to_string())
+}
 
 /// Multipass holds the Shibari owner and knot. Valentine receives only the
 /// already-authenticated connection after the network service moves its flow.

@@ -21,7 +21,11 @@ Remaining gaps:
   Multipass's host-tested SASL helper can use an app-password knot inside
   Shibari over a verified TLS mail stream and yield only an authenticated stream;
   transient SASL buffers are wiped after use. This is not yet wired to a guest
-  network flow.
+  network flow. Multipass's core now validates user-supplied IMAP and SMTP
+  server settings, confirms both sign-ins through a trusted TLS dialer before
+  keeping a mail stamp, and applies an app's read/write grant before opening
+  only those saved endpoints. The account password lives in Shibari and the
+  setup input buffer is wiped.
   The boot-routed Multipass service, boot-enforced account grants, TLS-capable SexNet app
   flows, and a capability-safe network flow handoff do not exist yet.
 - JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,
