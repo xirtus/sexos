@@ -228,6 +228,21 @@ def main():
   g['wait'](r'\[assuit\.margins\] narrow\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-margins.ppm')})
   assert (a.out/'assuit-margins.ppm').stat().st_size>10000
+  # A native list action must change the page, and the edited DOCX must save.
+  press('ctrl','end');q.key('ret')
+  s=len(t());press('ctrl','alt','l')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-list-prompt.ppm')})
+  prompt=(a.out/'assuit-list-prompt.ppm').read_bytes()
+  assert prompt.startswith(b'P6\n') and len(prompt)>10000
+  type_line('numbered');q.key('ret')
+  g['wait'](r'\[assuit\.list\] action=numbered\n',s,120)
+  type_line('First item');q.key('ret');type_line('Second item')
+  g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today!\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-numbered-list.ppm')})
+  numbered=(a.out/'assuit-numbered-list.ppm').read_bytes()
+  assert numbered.startswith(b'P6\n') and numbered!=prompt,'List edit did not change the document view'
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})
