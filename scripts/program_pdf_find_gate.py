@@ -90,6 +90,16 @@ def main():
   keys('lantern');q.key('ret')
   g['wait'](rf'\[pdf\.find\] term=lantern page={UNIQUE_PAGE} hits={PAGES} index={UNIQUE_PAGE}\n',s,300)
   press('ret',rf'\[pdf\.find\] term=lantern page={UNIQUE_PAGE+1} hits={PAGES} index={UNIQUE_PAGE+1}\n')
+  # One typed space finds the words across the page's extracted line break.
+  phrase=f'Page {UNIQUE_PAGE+1} of {PAGES} The quick'
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in 'lantern':q.key('backspace');time.sleep(.04)
+  keys(phrase);q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term={re.escape(phrase)} page={UNIQUE_PAGE+1} hits=1 index=1\n',s,300)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-find-across-lines.ppm')})
+  cross=(a.out/'pdf-find-across-lines.ppm').read_bytes()
+  assert cross.startswith(b'P6\n') and cross!=(a.out/'pdf-find.ppm').read_bytes()
   s=len(t());q.key('esc');time.sleep(.3)
   # The outline: four entries; Up to the first, Enter turns to page 1.
   press('o',r'\[pdf\.outline\] shown=1 entries=4\n')

@@ -22,6 +22,8 @@ Vellum's light, dark, and high-contrast colors.
 | Inspect digital signature fields and supported content integrity | Ctrl+Shift+V |
 | Save edits | Ctrl+S |
 
+In Find, a single space can match words separated by a line break in the PDF.
+
 Typed visual signatures are markup. Signature inspection verifies exact covered
 bytes for the supported P-256/SHA-256 detached CMS shape. It does not verify
 signer identity, certificate trust, or other CMS algorithms.

@@ -113,6 +113,10 @@ mod tests {
         let all = crate::search::hits(&pages, "zanzibar");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].page, 6);
+        let across = crate::search::hits(&pages, "Page 7 of 10 The quick");
+        assert_eq!(across.len(), 1, "a typed space should find the two visible lines");
+        assert_eq!(across[0].page, 6);
+        assert!(across[0].len > "Page 7 of 10 The quick".chars().count());
         // The hit's box is where the line was drawn: 72 pt from the left, and below the
         // first lines (Td 72 720 with 20 pt leading: the sixth line, y = 620 from the
         // bottom, so 172 from the top on a 792 pt page).
