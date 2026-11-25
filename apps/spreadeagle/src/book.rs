@@ -119,6 +119,7 @@ pub struct Book {
     session: Session,
     /// The file the workbook is saved to.
     pub path: String,
+    unreadable_ods_charts: bool,
 }
 
 impl Book {
@@ -137,7 +138,7 @@ impl Book {
     pub fn blank(path: &str) -> Book {
         let mut session = Session::new();
         session.new_workbook();
-        Book { session, path: path.to_string() }
+        Book { session, path: path.to_string(), unreadable_ods_charts: false }
     }
 
     /// Opens an xlsx, xls, ods, csv, tsv or GridCraft json file.
@@ -145,7 +146,7 @@ impl Book {
         let mut session = Session::new();
         let r = session.execute_headless("file.open", json!({ "path": path })).map_err(|e| e.to_string())?;
         let mut warnings: Vec<String> = r["warnings"].as_array().into_iter().flatten().filter_map(Json::as_str).map(str::to_string).collect();
-        let mut book = Book { session, path: path.to_string() };
+        let mut book = Book { session, path: path.to_string(), unreadable_ods_charts: false };
         if path.to_ascii_lowercase().ends_with(".ods") {
             match book.restore_ods_extras(path, &mut warnings) {
                 Ok(n) => if n > 0 { warnings.retain(|w| !w.contains("formulas become their saved results")); },
@@ -162,7 +163,16 @@ impl Book {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let extras = crate::ods::extras(&bytes)?;
         if extras == crate::ods::Extras::default() { return Ok(0); }
+        self.unreadable_ods_charts = extras.chart_warnings.iter().any(|w| w.contains("could not") || w.contains("cannot preserve"));
+        if !extras.charts.is_empty() {
+            for warning in warnings.iter_mut() {
+                if warning.starts_with("ODS data-only import:") {
+                    *warning = "ODS import: charts were restored; images and advanced formatting still need review before replacing the original file.".into();
+                }
+            }
+        }
         warnings.extend(extras.filter_warnings.iter().cloned());
+        warnings.extend(extras.chart_warnings.iter().cloned());
         let imported_names = self.sheets();
         let active = self.active_sheet();
         let mut sheet = usize::MAX;
@@ -197,7 +207,7 @@ impl Book {
             if s != sheet { self.activate(s)?; sheet = s; }
             if (width.round() as u32) != self.col_width(col) { self.set_col_width(col, width.round() as u32)?; }
         }
-        if !extras.validations.is_empty() || !extras.freezes.is_empty() {
+        if !extras.validations.is_empty() || !extras.freezes.is_empty() || !extras.charts.is_empty() {
             let d = self.session.doc_mut().map_err(|e| e.to_string())?;
             let mut wb = (*d.wb).clone();
             for &(s, row, col) in &extras.freezes {
@@ -209,6 +219,27 @@ impl Book {
                     .trim_start_matches('=').to_string();
                 rule.ranges = vec![range];
                 wb.sheet_mut(s).ok_or("Validation refers to a missing sheet")?.validations.push(rule);
+            }
+            for found in extras.charts {
+                let mut chart = found.chart;
+                chart.id = wb.next_object_id();
+                let sh = wb.sheet_mut(found.sheet).ok_or("Chart refers to a missing sheet")?;
+                let mut x = chart.anchor.dx;
+                let mut col = 0;
+                while col < 16_384 && x + 0.002 >= sh.col_width(col) * 0.75 {
+                    x -= sh.col_width(col) * 0.75;
+                    col += 1;
+                }
+                let mut y = chart.anchor.dy;
+                let mut row = 0;
+                while row < 1_048_576 && y + 0.002 >= sh.row_height(row) * 0.75 {
+                    y -= sh.row_height(row) * 0.75;
+                    row += 1;
+                }
+                chart.anchor.cell = CellRef::new(row, col);
+                chart.anchor.dx = x.max(0.0);
+                chart.anchor.dy = y.max(0.0);
+                sh.charts.push(chart);
             }
             d.wb = std::sync::Arc::new(wb);
         }
@@ -931,7 +962,10 @@ impl Book {
             return gridcraft_engine::io::base64_decode(data).ok_or_else(|| "bad PDF data".to_string());
         }
         let d = self.session.doc().map_err(|e| e.to_string())?;
-        if lower.ends_with(".ods") { return crate::ods::write(&d.wb); }
+        if lower.ends_with(".ods") {
+            if self.unreadable_ods_charts { return Err("ODS contains charts Spreadeagle could not read; keep the original file and save a reviewed copy as XLSX".into()); }
+            return crate::ods::write(&d.wb);
+        }
         gridcraft_engine::io::save_file_bytes(&d.wb, path).map_err(|e| e.to_string())
     }
 

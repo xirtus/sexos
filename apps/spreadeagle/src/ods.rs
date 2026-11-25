@@ -11,6 +11,7 @@ use gridcraft_engine::core::Value;
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::model::{FilterCriterion, Validation, ValidationKind};
 use std::io::Read;
+mod charts;
 
 /// A formula found in the file: sheet, row and column counted from 0, Excel spelling.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +43,9 @@ pub struct Extras {
     /// Frozen rows and columns from LibreOffice's per-sheet view settings.
     pub freezes: Vec<(usize, u32, u32)>,
     pub filters: Vec<FoundFilter>,
+    /// Embedded charts that ODS import must restore or report.
+    pub charts: Vec<charts::FoundChart>,
+    pub chart_warnings: Vec<String>,
     /// ODF filter expressions outside the native AutoFilter model are not silently applied.
     pub filter_warnings: Vec<String>,
 }
@@ -170,6 +174,9 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
     let (filters, filter_warnings) = read_filters(&xml, &out.sheet_names)?;
     out.filters = filters;
     out.filter_warnings = filter_warnings;
+    let (charts, warnings) = charts::read(&mut zip, &xml, &out.sheet_names)?;
+    out.charts = charts;
+    out.chart_warnings = warnings;
     Ok(out)
 }
 
@@ -822,6 +829,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     let mut cell_styles: BTreeMap<(bool, bool, bool, bool, Kind), String> = BTreeMap::new();
     let mut col_styles: BTreeMap<u32, String> = BTreeMap::new();
     let mut body = String::new();
+    let chart_parts = charts::write(wb)?;
     let mut validation_defs = String::new();
     for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
         let mut validation_cells: BTreeMap<(u32, u32), String> = BTreeMap::new();
@@ -934,6 +942,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
             let _ = write!(body, "<table:table-row>{row}</table:table-row>");
         }
         if next_row == 0 { body.push_str("<table:table-row><table:table-cell/></table:table-row>"); }
+        body.push_str(&chart_parts.frames[sheet_index]);
         body.push_str("</table:table>");
     }
 
@@ -963,6 +972,9 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
         "xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" ",
         "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" ",
         "xmlns:of=\"urn:oasis:names:tc:opendocument:xmlns:of:1.2\" ",
+        "xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" ",
+        "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" ",
+        "xmlns:xlink=\"http://www.w3.org/1999/xlink\" ",
         "office:version=\"1.3\"");
     let data_styles = concat!(
         "<number:date-style style:name=\"N1\"><number:year number:style=\"long\"/><number:text>-</number:text>",
@@ -995,14 +1007,15 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
         settings.push_str("</config:config-item-map-entry>");
     }
     settings.push_str("</config:config-item-map-named></config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set></office:settings></office:document-settings>");
-    let manifest = concat!(
+    let mut manifest = String::from(concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">",
         "<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.spreadsheet\"/>",
         "<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>",
         "<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>",
         "<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>",
-        "<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>",
-        "</manifest:manifest>");
+        "<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>"));
+    manifest.push_str(&chart_parts.manifest);
+    manifest.push_str("</manifest:manifest>");
 
     use std::io::Write as _;
     use zip::write::SimpleFileOptions;
@@ -1012,7 +1025,11 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     zip.start_file("mimetype", SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).map_err(|e| err(&e))?;
     zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet").map_err(|e| err(&e))?;
     let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    for (name, text) in [("META-INF/manifest.xml", manifest), ("content.xml", content.as_str()), ("styles.xml", styles_xml.as_str()), ("meta.xml", meta.as_str()), ("settings.xml", settings.as_str())] {
+    for (name, text) in [("META-INF/manifest.xml", manifest.as_str()), ("content.xml", content.as_str()), ("styles.xml", styles_xml.as_str()), ("meta.xml", meta.as_str()), ("settings.xml", settings.as_str())] {
+        zip.start_file(name, deflated).map_err(|e| err(&e))?;
+        zip.write_all(text.as_bytes()).map_err(|e| err(&e))?;
+    }
+    for (name, text) in chart_parts.objects {
         zip.start_file(name, deflated).map_err(|e| err(&e))?;
         zip.write_all(text.as_bytes()).map_err(|e| err(&e))?;
     }

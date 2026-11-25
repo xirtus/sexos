@@ -43,7 +43,7 @@ def main():
  elf=(ROOT/'iso_root/programs/spreadeagle').read_bytes();assert elf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('spreadeagle',elf)])
- fixtures={name:(ROOT/'apps/spreadeagle/assets'/name).read_bytes() for name in ('import-warning.ods','formula-compat.ods','filter-overflow.xlsx')}
+ fixtures={name:(ROOT/'apps/spreadeagle/assets'/name).read_bytes() for name in ('import-warning.ods','formula-compat.ods','filter-overflow.xlsx','lo-charts.ods')}
  class WarningServer(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=fixtures.get(self.path.lstrip('/'))
@@ -103,6 +103,15 @@ def main():
   s=len(t());q.key('esc');g['wait'](r'\[spreadeagle.warnings.closed\]',s,120)
   ctrl_shift('w',r'\[spreadeagle.warnings.shown\] count=1')
   q.key('esc');close(o)
+  s=len(t());run(f'fetch http://10.0.2.2:{server.server_address[1]}/lo-charts.ods /data/spreadeagle/lo-charts.ods')
+  g['wait'](r'\[spindle.fetch.line\] Saved \d+ bytes',s,240)
+  s=len(t());run('run spreadeagle lo-charts.ods')
+  charts=g['wait'](r'\[spreadeagle.open\] target=(\d+) task=(\d+) name=lo-charts.ods sheets=Sheet1\n',s,900)
+  g['wait'](r'\[spreadeagle.view\] charts=2 frozen=none\n',s,120)
+  g['focus'](SURFACE[int(charts[1])]);q.key('esc');time.sleep(.8)
+  q.cmd('screendump',{'filename':str(a.out/'spreadeagle-ods-charts.ppm')})
+  assert (a.out/'spreadeagle-ods-charts.ppm').stat().st_size>10000
+  close(charts)
   s=len(t());run(f'fetch http://10.0.2.2:{server.server_address[1]}/formula-compat.ods /data/spreadeagle/formula-compat.ods')
   g['wait'](r'\[spindle.fetch.line\] Saved \d+ bytes',s,240)
   s=len(t());run('run spreadeagle formula-compat.ods')

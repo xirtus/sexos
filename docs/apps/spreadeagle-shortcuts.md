@@ -21,6 +21,8 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert a column chart |
 | Ctrl+Shift+M | Choose a column, line, bar, pie or doughnut chart for the selection |
 | Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `remove 2` to drop the second series while keeping at least one, `data A1:B4` to change its source range, `switch` to exchange rows and columns as series, `type doughnut`, `style 1`–`style 16`, `title text`, `clear title`, `hole 10`–`hole 90` on doughnuts, `angle 0`–`angle 359` on pie or doughnut, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
+
+ODS keeps ordinary column and line chart objects, including live cell ranges. For other chart types or customized designs, Save As XLSX keeps more chart details; ODS save explains any unsupported setting. Ctrl+Shift+W reviews chart import warnings.
 | Ctrl+Shift+I | Search the function catalog by name, category or description; Up/Down chooses, Enter inserts `=NAME()` with the caret between the parentheses, Esc closes |
 | Ctrl+Shift+U | Toggle wrapped text in the selected cells; automatic row heights grow to show the lines |
 | Ctrl+Alt+C, Ctrl+Alt+R | Fit selected columns or rows to displayed contents; row fitting requires AutoFilter off |
