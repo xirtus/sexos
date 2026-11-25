@@ -327,6 +327,23 @@ def main():
   assert (a.out/'spreadeagle-filter-selected.ppm').stat().st_size>10000
   assert (a.out/'spreadeagle-filter-search.ppm').stat().st_size>10000
   column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)
+  s=len(t());q.key('right');column('B',r'Cost\|300\|150\|40\|490\|5880\|\|',s)
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=B\n')
+  s=len(t());type_line('top 2');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=B rule=top 2\n',s,120)
+  column('B',r'Cost\|~\|~\|~\|490\|5880\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-top-two.ppm')})
+  assert (a.out/'spreadeagle-filter-top-two.ppm').stat().st_size>10000
+  ctrl_shift('k',r'\[spreadeagle\.filter\.condition-prompt\] col=B\n')
+  s=len(t());type_line('bottom 2');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.condition\] col=B rule=bottom 2\n',s,120)
+  column('B',r'Cost\|~\|150\|40\|~\|~\|\|',s)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-bottom-two.ppm')})
+  assert (a.out/'spreadeagle-filter-bottom-two.ppm').stat().st_size>10000
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=B values=5\n')
+  s=len(t());q.key('spc');q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.choice\] col=B value=all\n',s,120)
+  s=len(t());q.key('left');column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)
   ctrl_shift('l',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|Food\|Fun\|Rent\|Total\|Per year\|\|\n')
   q.key('up');time.sleep(.3);q.key('right');time.sleep(.5)
   ctrl_shift('f',r'\[spreadeagle\.command\] view\.freezePanes\n')

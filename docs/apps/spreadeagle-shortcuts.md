@@ -17,7 +17,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+A, Ctrl+Shift+D | Sort ascending or descending |
 | Ctrl+Shift+J | Sort a selected table by two to eight columns in priority order, such as `A asc, C desc` |
 | Ctrl+Shift+L, Ctrl+Shift+E, Ctrl+Shift+O | Toggle filter; show rows matching the selected cell; choose column values or All rows |
-| Ctrl+Shift+K | Filter the current column by `= Food`, `<> Food` (`!=` also works), `contains text`, `starts text`, `ends text`, `notcontains text`, or a numeric rule such as `> 200`; `*` and `?` are wildcards with `=` and `<>`; join two comparisons with `and` or `or`, for example `>= 40 and <= 200` |
+| Ctrl+Shift+K | Filter the current column by `top 2`, `bottom 2`, `top 50%`, `= Food`, `<> Food` (`!=` also works), text commands `contains`, `starts`, `ends`, `notcontains`, or a numeric rule such as `> 200`; ranked filters include ties at the threshold and ignore nonnumeric cells; `*` and `?` are wildcards with `=` and `<>`; join two comparisons with `and` or `or`, for example `>= 40 and <= 200` |
 | Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert a column chart |
 | Ctrl+Shift+M | Choose a column, line, bar, pie or doughnut chart for the selection |
 | Ctrl+Shift+Q | Edit a selected chart (or chart at its anchor): `remove 2` to drop the second series while keeping at least one, `data A1:B4` to change its source range, `switch` to exchange rows and columns as series, `type doughnut`, `title text`, `clear title`, `hole 10`–`hole 90` on doughnuts, `angle 0`–`angle 359` on pie or doughnut, `legend right`, `table on/off`, `x title text`, `y title text`, `clear x title`, `clear y title`, `labels on/off`, or `gridlines on/off` |
