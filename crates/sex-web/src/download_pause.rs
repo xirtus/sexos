@@ -7,6 +7,10 @@ pub struct Transfer { paused: bool, written: u64, limit: u64 }
 
 impl Transfer {
     pub const fn new(limit: u64) -> Self { Self { paused: false, written: 0, limit } }
+    /// Start only from a validated, already stored partial file offset.
+    pub fn from_offset(limit: u64, written: u64) -> Option<Self> {
+        (written <= limit).then_some(Self { paused: false, written, limit })
+    }
     pub const fn paused(&self) -> bool { self.paused }
     pub const fn written(&self) -> u64 { self.written }
     pub fn toggle(&mut self) -> bool { self.paused = !self.paused; self.paused }

@@ -6,15 +6,27 @@
 
 use super::{net, state_file, Browser, Pending};
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use sex_app::files;
 use sex_web::download_history::{self, Record};
 use sex_web::download_pause::Transfer;
 use sex_web::download_promotion::{self, Step};
+use sex_web::download_resume::{self, Record as Resume};
 
 const DIR: &str = "Downloads";
 /// Largest download.
 const DOWNLOAD_MAX: usize = 4 << 30;
+fn part_name(path: &str) -> String { alloc::format!("{DIR}/.{}.part", &path[DIR.len() + 1..]) }
+fn part_offset(window: &mut sex_app::Window, r: &Resume) -> Option<u64> {
+    let part = part_name(&r.path);
+    let n = files::size(window, part.as_bytes()).ok()?;
+    if n == 0 || n >= r.total { return None; }
+    let mut byte = [0];
+    if files::read_at(window, part.as_bytes(), 0, &mut byte).ok() != Some(1)
+        || files::read_at(window, part.as_bytes(), n - 1, &mut byte).ok() != Some(1) { return None; }
+    Some(n)
+}
 
 /// Types the browser shows itself; anything else is saved.
 fn shown(content_type: &str) -> bool {
@@ -52,7 +64,7 @@ pub use sex_web::download_history::Record as Done;
 /// A failed transfer retained only for this browser window, with an explicit retry.
 pub struct Failure { pub name: String, pub url: String, pub why: String }
 
-enum Control { Continue, TogglePause, Cancel }
+enum Control { Continue, TogglePause, Cancel, Close }
 
 impl Browser {
     /// Escape stops a transfer; Ctrl+Shift+J pauses or resumes the live flow.
@@ -65,7 +77,7 @@ impl Browser {
             sex_app::Event::Close => {
                 self.download_events.clear();
                 self.download_events.push(sex_app::Event::Close);
-                Control::Cancel
+                Control::Close
             }
             sex_app::Event::Pointer(p) if matches!(p.kind, sex_pdx::app_pointer::Kind::Move) => Control::Continue,
             other @ (sex_app::Event::Key(_) | sex_app::Event::Pointer(_)) if self.download_events.len() < 32 => {
@@ -87,6 +99,23 @@ impl Browser {
             .unwrap_or_default();
         sex_pdx::serial_record!("[web.download.history.loaded] count={}", loaded.len());
         self.downloads = loaded;
+        self.download_resumes = state_file::read(&mut self.window, "Kaleidoscope/resumable.tsv", download_resume::MAX_FILE)
+            .and_then(|s| download_resume::decode(&s).ok()).unwrap_or_default();
+        self.download_resumes.retain(|r| part_offset(&mut self.window, r).is_some());
+        sex_pdx::serial_record!("[web.download.resume.loaded] count={}", self.download_resumes.len());
+    }
+
+    fn keep_resumes(&mut self) -> bool {
+        let _ = files::mkdir(&mut self.window, b"Kaleidoscope");
+        state_file::replace(&mut self.window, "Kaleidoscope/resumable.tsv", download_resume::encode(&self.download_resumes).as_bytes())
+    }
+
+    fn drop_resume(&mut self, url: &str) {
+        if !self.download_resumes.iter().any(|r| r.url == url) { return; }
+        let old: Vec<_> = self.download_resumes.iter().filter(|r| r.url == url).map(|r| part_name(&r.path)).collect();
+        self.download_resumes.retain(|r| r.url != url);
+        for part in old { let _ = files::remove(&mut self.window, part.as_bytes()); }
+        let _ = self.keep_resumes();
     }
 
     fn keep_downloads(&mut self) {
@@ -99,8 +128,17 @@ impl Browser {
     /// Loads `url` for showing as a page: like `fetch`, but an answer that is a download
     /// streams to Files instead (then `Ok(None)`).
     pub(super) fn fetch_or_download(&mut self, url: &str) -> Result<Option<(String, core::ops::Range<usize>)>, &'static [u8]> {
-        let mut p = Pending::new(0, "GET", url, &[], &[], DOWNLOAD_MAX, None);
-        loop {
+        let mut resume = if self.jarbox == super::profile::Jarbox::Private { None }
+            else { self.download_resumes.iter().find(|r| r.url == url).cloned() };
+        'request: loop {
+            let range = resume.as_ref().and_then(|r| part_offset(&mut self.window, r).map(|n| alloc::format!("bytes={n}-")));
+            if resume.is_some() && range.is_none() { self.drop_resume(url); resume = None; }
+            let headers: Vec<(&str, &str)> = match (&resume, &range) {
+                (Some(r), Some(range)) => vec![("Range", range.as_str()), ("If-Range", r.etag.as_str())],
+                _ => Vec::new(),
+            };
+            let mut p = Pending::new(0, "GET", url, &headers, &[], DOWNLOAD_MAX, None);
+            loop {
             let mut ex = self.send(&mut p, true)?;
             // Wait for the head.
             let head = loop {
@@ -109,6 +147,28 @@ impl Browser {
                 if done { return Err(net::message(net::Error::Failed)); }
                 if ex.idle() > 64 { super::pause() } else if ex.idle() > 0 { sex_pdx::sys_yield() }
             };
+            if let Some(r) = &resume {
+                let offset = range.as_ref().and_then(|s| s.strip_prefix("bytes=")).and_then(|s| s.strip_suffix('-')).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                if head.status == 206 && download_resume::appendable(&head, r, offset) && p.url == r.url {
+                    if let Ok(t) = sex_fetch::Url::parse(&p.url) {
+                        let mut jar = self.jar.borrow_mut();
+                        for c in head.all("set-cookie") { jar.store(&t, c, super::wall()); }
+                    }
+                    sex_pdx::serial_record!("[web.download.resume] path={} offset={} total={}", r.path, offset, r.total);
+                    let name = file_name(&head, &p.url);
+                    self.save_stream(ex, &head, &name, &p.url, Some(r.clone()))?;
+                    return Ok(None);
+                }
+                self.drop_resume(url);
+                resume = None;
+                if head.status != 200 || p.url != url {
+                    ex.cancel(&mut self.window);
+                    sex_pdx::serial_record!("[web.download.resume.restart] reason=range_response");
+                    continue 'request;
+                }
+                sex_pdx::serial_record!("[web.download.resume.restart] reason=full_response");
+            }
+            if head.status == 206 { ex.cancel(&mut self.window); return Err(b"The server sent an unexpected partial response."); }
             if head.is_redirect() || !is_download(&head) {
                 // A page (or a hop): read it whole, as before, within the page limit.
                 while !ex.poll(&mut self.window).map_err(net::message)? {
@@ -132,30 +192,36 @@ impl Browser {
                 for c in head.all("set-cookie") { jar.store(&t, c, super::wall()); }
             }
             let name = file_name(&head, &p.url);
-            self.save_stream(ex, &name, &p.url)?;
+            self.save_stream(ex, &head, &name, &p.url, None)?;
             return Ok(None);
+            }
         }
     }
 
     /// Streams the rest of `ex` into `Downloads/NAME` (a free name), showing progress.
     /// The bytes go to `Downloads/.NAME.part` and take the real name only once whole, so
     /// nothing (the Organizer, Loom, another program) ever sees half a download as a file.
-    fn save_stream(&mut self, mut ex: net::Exchange, name: &str, url: &str) -> Result<(), &'static [u8]> {
+    fn save_stream(&mut self, mut ex: net::Exchange, head: &sex_fetch::Head, name: &str, url: &str, resume: Option<Resume>) -> Result<(), &'static [u8]> {
         let _ = files::mkdir(&mut self.window, DIR.as_bytes());
-        let path = self.free_name(name);
-        let part = alloc::format!("{DIR}/.{}.part", &path[DIR.len() + 1..]);
-        let _ = files::remove(&mut self.window, part.as_bytes());
-        if files::write(&mut self.window, part.as_bytes(), &[]).is_err() {
+        let path = resume.as_ref().map(|r| r.path.clone()).unwrap_or_else(|| self.free_name(name));
+        let part = part_name(&path);
+        if resume.is_none() { let _ = files::remove(&mut self.window, part.as_bytes()); }
+        if resume.is_none() && files::write(&mut self.window, part.as_bytes(), &[]).is_err() {
             ex.cancel(&mut self.window);
             let _ = files::remove(&mut self.window, part.as_bytes());
             self.failed_download(name, url, b"Can't save in Downloads.");
             return Err(b"Can't save in Downloads.");
         }
-        sex_pdx::serial_record!("[web.download.start] path={} url={}", path, url);
+        let start = resume.as_ref().and_then(|_| files::size(&mut self.window, part.as_bytes()).ok()).unwrap_or(0);
+        let resumable = if self.jarbox == super::profile::Jarbox::Private { None }
+            else { resume.or_else(|| download_resume::eligible(head, url, &path)) };
+        sex_pdx::serial_record!("[web.download.start] path={} url={} offset={}", path, url, start);
         let mut cancelled = false;
+        let mut interrupted = false;
+        let mut written = start;
         let result = (|| -> Result<(u64, u64), &'static [u8]> {
         let began = sex_pdx::get_ticks();
-        let mut transfer = Transfer::new(DOWNLOAD_MAX as u64);
+        let mut transfer = Transfer::from_offset(DOWNLOAD_MAX as u64, start).ok_or(b"Download exceeds its size limit." as &'static [u8])?;
         let mut total: Option<u64> = None;
         let mut chunk: Vec<u8> = Vec::new();
         let mut shown_at = 0u64;
@@ -166,6 +232,11 @@ impl Browser {
                     ex.cancel(&mut self.window);
                     cancelled = true;
                     return Err(b"Download cancelled.");
+                }
+                Control::Close => {
+                    ex.cancel(&mut self.window);
+                    interrupted = true;
+                    return Err(b"Download interrupted.");
                 }
                 Control::TogglePause => {
                     let paused = transfer.toggle();
@@ -181,10 +252,10 @@ impl Browser {
                 Control::Continue => {}
             }
             if transfer.paused() { let _ = sex_pdx::sys_wait_self_ticks(16); continue; }
-            let done = match ex.poll(&mut self.window) { Ok(d) => d, Err(e) => return Err(net::message(e)) };
+            let done = match ex.poll(&mut self.window) { Ok(d) => d, Err(e) => { interrupted = true; return Err(net::message(e)); } };
             if let Some(t) = ex.stream(&mut chunk) {
                 streamed = true;
-                total = t;
+                total = resumable.as_ref().map(|r| r.total).or(t);
                 if !chunk.is_empty() {
                     let Some(offset) = transfer.write_offset(chunk.len()) else { ex.cancel(&mut self.window); return Err(b"Download exceeds its size limit."); };
                     if files::write_at(&mut self.window, part.as_bytes(), offset, &chunk).map_or(true, |n| n < chunk.len()) {
@@ -192,6 +263,7 @@ impl Browser {
                         return Err(b"Files is full: the download stopped.");
                     }
                     transfer.committed(chunk.len());
+                    written = transfer.written();
                     chunk.clear();
                 }
             }
@@ -213,6 +285,7 @@ impl Browser {
             transfer.committed(r.body.len());
         }
         if total.is_some_and(|expected| transfer.written() != expected) {
+            interrupted = true;
             return Err(b"Download ended before all bytes arrived.");
         }
         let check = self.check_file(&part, transfer.written());
@@ -233,12 +306,17 @@ impl Browser {
             Err((Step::Rename, _)) => return Err(b"Can't save in Downloads."),
             Err((Step::SyncName, _)) => return Err(b"The file may be in Downloads, but its save could not be confirmed."),
         }
+        if files::size(&mut self.window, path.as_bytes()).ok() != Some(transfer.written())
+            || (transfer.written() <= 64 << 20 && (check == 0 || self.check_file(&path, transfer.written()) != check)) {
+            return Err(b"The saved download did not match its staged bytes.");
+        }
         sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, transfer.written(), sex_pdx::get_ticks() - began, check);
         Ok((transfer.written(), check))
         })();
         self.download_status = None;
         match result {
             Ok((wrote, _)) => {
+                if resumable.is_some() { self.drop_resume(url); }
                 self.download_failures.retain(|f| f.url != url);
                 let private = self.jarbox == super::profile::Jarbox::Private;
                 self.downloads.push(Record { path, bytes: wrote, url: String::from(url), private });
@@ -247,7 +325,15 @@ impl Browser {
                 Ok(())
             }
             Err(why) => {
-                let _ = files::remove(&mut self.window, part.as_bytes());
+                let kept = !cancelled && interrupted && written > 0 && resumable.as_ref().is_some_and(|r| written < r.total)
+                    && files::sync(&mut self.window).is_ok() && {
+                        self.download_resumes.retain(|r| r.url != url);
+                        self.download_resumes.push(resumable.clone().unwrap());
+                        if self.download_resumes.len() > download_resume::MAX_RECORDS { self.download_resumes.remove(0); }
+                        self.keep_resumes()
+                    };
+                if !kept { let _ = files::remove(&mut self.window, part.as_bytes()); self.drop_resume(url); }
+                else { sex_pdx::serial_record!("[web.download.resume.kept] path={} bytes={}", path, written); }
                 if cancelled {
                     let clean = files::size(&mut self.window, part.as_bytes()).is_err();
                     sex_pdx::serial_record!("[web.download.cancelled] path={} cleaned={}", path, clean as u8);
@@ -293,7 +379,8 @@ impl Browser {
         let (stem, ext) = match name.rfind('.') { Some(i) if i > 0 => (&name[..i], &name[i..]), _ => (name, "") };
         for n in 1..1000 {
             let p = if n == 1 { alloc::format!("{DIR}/{name}") } else { alloc::format!("{DIR}/{stem} ({n}){ext}") };
-            if files::size(&mut self.window, p.as_bytes()).is_err() { return p; }
+            if files::size(&mut self.window, p.as_bytes()).is_err()
+                && files::size(&mut self.window, part_name(&p).as_bytes()).is_err() { return p; }
         }
         alloc::format!("{DIR}/{stem}-{}{ext}", sex_pdx::get_ticks())
     }
@@ -318,6 +405,13 @@ impl Browser {
             }
         }
         html.push_str("</ul>");
+        if self.jarbox != super::profile::Jarbox::Private && !self.download_resumes.is_empty() {
+            html.push_str("<h3>Resume downloads</h3><ul>");
+            for r in &self.download_resumes {
+                html.push_str(&alloc::format!("<li>{} — <a href=\"{}\">Resume verified download</a></li>", esc(&r.path), esc(&r.url)));
+            }
+            html.push_str("</ul>");
+        }
         if !self.download_failures.is_empty() {
             html.push_str("<h3>Needs attention</h3><ul>");
             for f in self.download_failures.iter().rev() {

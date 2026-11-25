@@ -17,6 +17,13 @@ and Shields. The remaining gaps are:
   synced again after rename. A failed sync is reported as a failed download;
   it cannot enter completed history. If the second sync fails, the visible
   file may remain but is explicitly marked unconfirmed for retry.
+  A network-interrupted or window-close partial with a strong ETag now stays hidden and is
+  synced alongside bounded resume metadata. Retrying its exact URL, including
+  after a browser restart, sends Range/If-Range and appends only after a matching
+  `206` with exact start, total, ETag, and identity body length. A changed reply
+  discards the partial and restarts from byte zero. Last-Modified alone and weak
+  ETags still require a fresh transfer; a process killed mid-transfer can leave
+  an orphan hidden part because no confirmed metadata was written yet.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an
