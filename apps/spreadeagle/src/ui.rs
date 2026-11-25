@@ -98,6 +98,8 @@ enum Ask {
     GoTo(Vec<char>),
     /// Ctrl+Shift+= (insert) or Ctrl+- (delete): R for rows, C for columns.
     Lines { insert: bool },
+    /// Ctrl+Shift+M: C, L, B or P picks a chart for the current selection.
+    Chart,
 }
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
@@ -111,7 +113,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
     ("Ctrl+Shift+A / D", "Sort ascending / descending"),
     ("Ctrl+Shift+L / E", "Filter / filter by cell"),
-    ("Ctrl+Shift+F / C", "Freeze panes / insert chart"),
+    ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
+    ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -145,6 +148,7 @@ mod code {
     pub const E: u8 = 0x12;
     pub const F: u8 = 0x21;
     pub const L: u8 = 0x26;
+    pub const M: u8 = 0x32;
     pub const C: u8 = 0x2E;
     pub const X: u8 = 0x2D;
     pub const V: u8 = 0x2F;
@@ -481,6 +485,7 @@ impl Ui {
                 Ask::GoTo(place) => format!("Go to: {}_   {}", place.iter().collect::<String>(), said("a cell like B7, B7:D9 or Sheet2!B7; Enter goes, Esc closes")),
                 Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
                 Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
+                Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, Esc cancels", self.selection().a1()),
             }
         } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
@@ -589,6 +594,24 @@ impl Ui {
                 let done = if insert { self.book.insert_lines(sel, rows) } else { self.book.delete_lines(sel, rows) };
                 let id = format!("home.{}{}", if insert { "insert" } else { "delete" }, if rows { "Rows" } else { "Columns" });
                 self.command(&id, done, format!("{} the {what} of {}", if insert { "Inserted" } else { "Deleted" }, sel.a1()))
+            }
+            Ask::Chart => {
+                if key.control { return false; }
+                let kind = match key.code {
+                    code::C => "column", code::L => "line", code::B => "bar", code::P => "pie",
+                    _ => return false,
+                };
+                self.ask = None;
+                let sel = self.selection();
+                let (top, _, _, right) = sel.bounds();
+                let done = self.book.add_chart_kind(sel, top, right + 2, kind);
+                let added = done.is_ok();
+                self.command("insert.chart", done, format!("{} chart of {}", kind, sel.a1()));
+                if let Some(chart) = self.book.charts().last().filter(|_| added) {
+                    sex_std::record(&format!("[spreadeagle.chart.type] kind={kind} at={}{} width={} height={}",
+                        column_name(chart.col), u64::from(chart.row) + 1, chart.width, chart.height));
+                }
+                false
             }
             Ask::SaveAs(text) | Ask::GoTo(text) => {
                 match key.code {
@@ -715,6 +738,7 @@ impl Ui {
             let ask = match key.code {
                 code::S if key.shift => Some(Ask::SaveAs(self.name.chars().collect())),
                 code::G => Some(Ask::GoTo(Vec::new())),
+                code::M if key.shift => { sex_std::record("[spreadeagle.chart.choose]"); Some(Ask::Chart) },
                 code::EQUALS if key.shift => Some(Ask::Lines { insert: true }),
                 code::MINUS => Some(Ask::Lines { insert: false }),
                 code::P => { self.export_pdf(); return false; }
