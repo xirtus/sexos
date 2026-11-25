@@ -57,3 +57,28 @@ fn failed_export_removes_only_its_partial_file() {
     fs.commit().unwrap();
     assert_eq!(fs.open(b"/attachment"), Err(Error::NotFound));
 }
+
+#[test]
+fn stale_checked_write_preserves_another_pending_write() {
+    let mut cache = [[0; BLOCK]; 16];
+    let mut slots = [Slot::EMPTY; 16];
+    let mut used = [0; 16];
+    let mut pending = [0; 16];
+    let mut scratch = [0; BLOCK];
+    let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+    let mut fs = Fs::format(Disk::new(), memory).unwrap();
+    let other = fs.create(b"/other", 0).unwrap();
+    let old = fs.create(b"/attachment", 0).unwrap();
+    fs.commit().unwrap();
+    fs.remove_path(b"/attachment").unwrap();
+    fs.create(b"/attachment", 0).unwrap();
+    fs.commit().unwrap();
+    assert_eq!(fs.write_path_if_id(b"/other", other, 0, b"kept", 0), Ok(4));
+    assert!(fs.has_changes());
+    assert_eq!(fs.write_path_if_id(b"/attachment", old, 0, b"leak", 0), Err(Error::Stale));
+    assert!(fs.has_changes());
+    fs.commit().unwrap();
+    let mut bytes = [0; 4];
+    assert_eq!(fs.read(other, 0, &mut bytes), Ok(4));
+    assert_eq!(&bytes, b"kept");
+}

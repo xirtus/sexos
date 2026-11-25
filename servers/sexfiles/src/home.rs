@@ -290,12 +290,15 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
     };
     if matches!(r.kind, w::REMOVE | w::RENAME) && inner == b"/" { return Err(w::DENIED); }
     let read_only = matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS);
+    // Files batches both write forms. A refused chunk has not changed this
+    // request's file; rollback would discard other accepted home writes.
+    let batched = matches!(r.kind, w::WRITE | w::WRITE_IF_ID);
     let result = lend(main, || crate::fs_service::run_on(fs, r, inner, data));
     match result {
         // Writes wait for home's next commit, which the system's batching drives.
         Ok(v) => Ok(v),
         Err(e) => {
-            if !read_only && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = lend(main, || fs.rollback()); }
+            if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = lend(main, || fs.rollback()); }
             Err(crate::fs_service::status(e))
         }
     }
