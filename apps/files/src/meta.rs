@@ -92,6 +92,15 @@ impl App {
         if tracked { sex_pdx::serial_record!("[files.app.meta.moved] from={} to={}", shown(&f), shown(&t)); }
         self.meta_save(window);
     }
+    /// Copy Loom's ratings and tags for an item and its children only once
+    /// the entire batch reached its destination.
+    pub(crate) fn meta_copied(&mut self, window: &mut Window, from: &[u8], to: &[u8]) {
+        let (Some(f), Some(t)) = (key(&self.root, from), key(&self.root, to)) else { return };
+        let tracked = self.loom.meta.store.get(&f).is_some();
+        self.loom.meta.store.copied(&f, &t);
+        if tracked { sex_pdx::serial_record!("[files.app.meta.copied] from={} to={}", shown(&f), shown(&t)); }
+        self.meta_save(window);
+    }
     /// After `path` was deleted for good.
     pub(crate) fn meta_removed(&mut self, window: &mut Window, path: &[u8]) {
         let Some(k) = key(&self.root, path) else { return };
@@ -105,6 +114,7 @@ impl App {
             Undo::TrashedBatch(items) => for (from, to, _) in items { self.meta_moved(window, to, from); },
             Undo::MovedBatch(items) => for (from, to) in items { self.meta_moved(window, to, from); },
             Undo::Copied { to } => self.meta_removed(window, to),
+            Undo::CopiedBatch(items) => for (_, to) in items { self.meta_removed(window, to); },
             Undo::Renamed { dir, moves } => {
                 for (f, t) in moves.iter() { self.meta_moved(window, &join(dir, f), &join(dir, t)); }
             }

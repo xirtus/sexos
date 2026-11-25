@@ -257,6 +257,18 @@ def main():
   step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM/ren count=4\b')
   step(lambda:ctrl('z'),r'\[files.app.undone\]')
   g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # Copy two files as one staged background job in this folder. Both taken
+  # names receive a suffix, the rating follows, and one undo removes both.
+  q.key('home');time.sleep(.2)
+  step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=0 last=1')
+  step(lambda:ctrl('c'),r'\[files.app.copy.batch\] count=2')
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=0',120)
+  g['wait'](r'\[files.app.meta.copied\] from=ren/pic_01.txt to=ren/pic_01 \(copy\).txt',0,10)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=5\b',0,10)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-batch-copy.ppm')})
+  assert (a.out/'loom-batch-copy.ppm').stat().st_size>10000
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
   # 5. Rate and tag the first file.
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:ctrl('3'),r'\[files.app.meta.rated\] path=ren/pic_01.txt stars=3')
