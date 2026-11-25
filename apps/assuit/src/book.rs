@@ -233,6 +233,17 @@ impl Book {
         Ok((path, bytes.len()))
     }
 
+    /// Prints a chosen 1-based page range (`1-3,5`) beside the document. The
+    /// engine keeps PDF links and validates the range against laid-out pages.
+    pub fn export_pdf_range(&self, pages: &str) -> Result<(String, usize), String> {
+        if pages.len() > 80 { return Err("Page range is too long".into()); }
+        let (bytes, _) = self.session.print_pdf(&json!({ "pages": pages }))
+            .map_err(|e| format!("Could not print pages: {e:?}"))?;
+        let path = self.beside("pages.pdf");
+        replace_file(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+        Ok((path, bytes.len()))
+    }
+
     /// Save As: writes the document as `path` in the format its extension names and, unless
     /// that is an export (pdf, png), goes on working in it. A name with no extension keeps
     /// this file's. Returns (path, size).
@@ -521,6 +532,11 @@ mod tests {
         let (pdf, n) = book.export_pdf().unwrap();
         assert!(pdf.ends_with("letter.pdf") && n > 1000);
         assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
+        let (pages, n) = book.export_pdf_range("1").unwrap();
+        assert!(pages.ends_with("letter.pages.pdf") && n > 1000);
+        assert!(std::fs::read(&pages).unwrap().starts_with(b"%PDF-"));
+        assert!(book.export_pdf_range("2").is_err(), "out-of-range pages must be refused");
+        assert_eq!(book.path, temp("letter.docx"), "printing does not switch documents");
         let (as_pdf, _) = book.save_as(&temp("printed.pdf")).unwrap();
         assert!(as_pdf.ends_with("printed.pdf"));
         assert!(book.path.ends_with("letter.docx"), "a PDF is an export");

@@ -68,6 +68,12 @@ def main():
   s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','p')),(False,('p','ctrl')))for x in ks]})
   pdf=g['wait'](r'\[assuit\.pdf\] name=welcome\.pdf bytes=(\d+)\n',s,300)
   assert int(pdf[1])>500,f'PDF is too small: {pdf[0]}'
+  s=len(t());press('ctrl','shift','p')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-print-range.ppm')})
+  assert (a.out/'assuit-print-range.ppm').stat().st_size>10000
+  type_line('1');q.key('ret')
+  selected=g['wait'](r'\[assuit\.pdf-range\] pages=1 name=welcome\.pages\.pdf bytes=(\d+)\n',s,300)
+  assert int(selected[1])>500,f'page-range PDF is too small: {selected[0]}'
   close(o)
   o=opened()
   s=len(t());q.key('end');press('shift','1')
