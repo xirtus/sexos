@@ -39,6 +39,29 @@ fn moving_personal_event_preserves_identity_and_refuses_series_or_invites() {
     local.uid = "legacy-conflict".into();
     assert!(local.moved_personal_to(to, false).is_err());
 }
+
+#[test]
+fn retitling_personal_event_preserves_details_and_sync_identity() {
+    let mut event = Event::all_day(d(2026, 11, 25), "Dentist");
+    event.uid = "personal-2".into();
+    event.time = Some((540, 600));
+    event.alarms = vec![30];
+    let local = event.retitled_personal("  Checkup  ", false).unwrap();
+    assert_eq!((local.title.as_str(), local.uid.as_str(), local.time, local.alarms.as_slice(), local.state),
+        ("Checkup", "personal-2", Some((540, 600)), &[30][..], SyncState::Clean));
+    assert_eq!(event.title, "Dentist", "undo needs the old value");
+    assert_eq!(event.retitled_personal("Checkup", true).unwrap().state, SyncState::New);
+    event.href = "/cal/personal-2.ics".into();
+    event.etag = "v1".into();
+    let linked = event.retitled_personal("Checkup", true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-2.ics", "v1", SyncState::Modified));
+    assert!(event.retitled_personal(" ", false).is_err());
+    event.rule = Rule::parse("FREQ=WEEKLY;COUNT=3");
+    assert!(event.retitled_personal("Checkup", true).is_err());
+    event.rule = None;
+    event.uid = "personal-2-conflict".into();
+    assert!(event.retitled_personal("Checkup", false).is_err());
+}
 fn unix_min(text: &str) -> i64 {
     // YYYY-MM-DDTHH:MM in UTC.
     let day = Date::parse(&text[..10]).unwrap();

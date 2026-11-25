@@ -244,6 +244,16 @@ def main():
   g['wait'](r'\[calendar.saved\] events=10 ',s,60)
   s=len(t());g['chord']('ctrl','y',r'\[date.redo\] events=10\n')
   g['wait'](r'\[calendar.saved\] events=10 ',s,60)
+  s=len(t());q.key('e');time.sleep(.3);keys('rescheduled power cut');q.key('ret')
+  g['wait'](rf'\[date.event.retitled\] date={move_day} from=power cut to=rescheduled power cut linked=0',s,60)
+  g['wait'](r'\[calendar.saved\] events=10 ',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-event-title-edited.ppm')})
+  title_pixels=(a.out/'date-event-title-edited.ppm').read_bytes()
+  assert title_pixels.startswith(b'P6\n') and title_pixels!=moved_pixels
+  s=len(t());g['chord']('ctrl','z',r'\[date.undo\] events=10\n')
+  g['wait'](r'\[calendar.saved\] events=10 ',s,60)
+  s=len(t());g['chord']('ctrl','y',r'\[date.redo\] events=10\n')
+  g['wait'](r'\[calendar.saved\] events=10 ',s,60)
   close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'today':str(today),'months_moved':months,'powercut_event':True})

@@ -69,7 +69,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub enum View { Month, Week, Day, Clock, Calendars }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Ask { Event, CopyDate, MoveDate, Alarm, Timer, Zone, Home, NewCalendar }
+pub enum Ask { Event, CopyDate, MoveDate, Title, Alarm, Timer, Zone, Home, NewCalendar }
 
 pub struct App {
     pub cal: Calendar,
@@ -371,6 +371,22 @@ impl App {
         self.picked = self.cal.on_day(day).iter().position(|e| **e == moved).unwrap_or(0);
         self.status = format!("Moved \"{}\" to {}.", moved.title, day);
         sex_pdx::serial_record!("[date.event.moved] from={} to={} title={} linked={}", from, day, moved.title, linked as u8);
+        self.save(window);
+    }
+    fn retitle(&mut self, window: &mut Window, title: &str) {
+        let Some(source) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
+        let Some(index) = self.cal.events.iter().position(|e| *e == source) else { return };
+        if title.trim() == source.title { self.status = String::from("The title is unchanged."); return; }
+        let linked = !self.cal.info(source.calendar).url.is_empty();
+        let edited = match source.retitled_personal(title, linked) {
+            Ok(event) => event,
+            Err(why) => { self.status = String::from(why); return; }
+        };
+        self.cal.events[index] = edited.clone();
+        self.event_history.push(EventEdit { index, before: Some(source.clone()), after: Some(edited.clone()) });
+        self.picked = self.cal.on_day(self.selected).iter().position(|e| **e == edited).unwrap_or(0);
+        self.status = format!("Renamed event to \"{}\".", edited.title);
+        sex_pdx::serial_record!("[date.event.retitled] date={} from={} to={} linked={}", self.selected, source.title, edited.title, linked as u8);
         self.save(window);
     }
     fn set_view(&mut self, view: View) {
@@ -677,6 +693,7 @@ impl App {
                 Some(day) => self.move_to(window, day),
                 None => self.status = String::from("Enter a date as YYYY-MM-DD."),
             },
+            Ask::Title => self.retitle(window, &text),
             Ask::Alarm => {
                 let (time, label) = text.split_once(' ').unwrap_or((&text, ""));
                 match clock::parse_time(time) {
@@ -830,6 +847,7 @@ impl App {
                 (_, _, Some(b'd')) => self.copy_tomorrow(window),
                 (_, _, Some(b'D')) => { self.ask = Some(Ask::CopyDate); self.input.clear(); },
                 (_, _, Some(b'm')) => { self.ask = Some(Ask::MoveDate); self.input.clear(); },
+                (_, _, Some(b'e')) => { self.ask = Some(Ask::Title); self.input.clear(); },
                 (_, Some(Nav::Delete), _) | (0x6F, _, _) => {
                     let Some(gone) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
                     let Some(index) = self.cal.events.iter().position(|e| *e == gone) else { return };
