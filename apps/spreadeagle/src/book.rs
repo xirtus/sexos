@@ -196,9 +196,12 @@ impl Book {
             if s != sheet { self.activate(s)?; sheet = s; }
             if (width.round() as u32) != self.col_width(col) { self.set_col_width(col, width.round() as u32)?; }
         }
-        if !extras.validations.is_empty() {
+        if !extras.validations.is_empty() || !extras.freezes.is_empty() {
             let d = self.session.doc_mut().map_err(|e| e.to_string())?;
             let mut wb = (*d.wb).clone();
+            for &(s, row, col) in &extras.freezes {
+                wb.sheet_mut(s).ok_or("Freeze refers to a missing sheet")?.freeze = Some((row, col));
+            }
             for (s, range, mut rule) in extras.validations {
                 let formula = format!("={}", rule.f1.trim_start_matches('='));
                 rule.f1 = crate::ods::remap_sheet_names(&formula, &extras.sheet_names, &imported_names)
@@ -1714,6 +1717,20 @@ mod tests {
         assert_eq!(Book::open(&path).unwrap().0.frozen(), Some((1, 1)));
         book.freeze(None).unwrap();
         assert_eq!(book.frozen(), None);
+    }
+
+    #[test]
+    fn ods_frozen_panes_round_trip() {
+        let path = temp("freeze.ods");
+        let mut book = Book::blank(&path);
+        book.freeze(Some((3, 2))).unwrap();
+        book.save().unwrap();
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(crate::ods::extras(&raw).unwrap().freezes, vec![(0, 3, 2)]);
+        assert_eq!(Book::open(&path).unwrap().0.frozen(), Some((3, 2)));
+        book.freeze(None).unwrap();
+        book.save().unwrap();
+        assert_eq!(Book::open(&path).unwrap().0.frozen(), None);
     }
 
     #[test]

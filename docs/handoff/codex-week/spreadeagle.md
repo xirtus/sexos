@@ -18,4 +18,6 @@ Baseline: a daily spreadsheet such as LibreOffice Calc or Excel. Checked against
 
 Claim each remaining feature after a focused host test and CI guest evidence.
 
-- **ODS list validation:** Spreadeagle now writes and reads ODF list rules, including literal choices and current-sheet source ranges, on filled and blank cells. The focused host round trip checks enforcement after reopen; the QEMU gate saves a validated workbook as ODS and reopens it. Charts, frozen panes, AutoFilter state, and non-list validation still need ODS fidelity work; list ranges above 100,000 cells currently require XLSX.
+- **ODS list validation:** Spreadeagle now writes and reads ODF list rules, including literal choices and current-sheet source ranges, on filled and blank cells. The focused host round trip checks enforcement after reopen; the QEMU gate saves a validated workbook as ODS and reopens it. Charts, AutoFilter state, and non-list validation still need ODS fidelity work; list ranges above 100,000 cells currently require XLSX.
+
+- **ODS frozen panes:** Spreadeagle now writes `settings.xml` per-sheet fixed split modes and positions and restores them on open. A focused round trip and a LibreOffice-format settings fixture distinguish frozen panes from movable splits. LibreOffice application compatibility remains to be verified in CI or manual review.
