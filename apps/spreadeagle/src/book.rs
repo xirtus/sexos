@@ -290,10 +290,18 @@ impl Book {
     /// Shows only the rows whose column `col` holds `value`, turning the AutoFilter on
     /// first if needed. `None` shows that column's rows again.
     pub fn filter_by(&mut self, at: Range, col: u32, value: Option<&str>) -> Result<(), String> {
+        let values: Vec<String> = value.into_iter().map(str::to_string).collect();
+        self.filter_by_values(at, col, &values)
+    }
+
+    /// Shows all selected values in one column. An empty choice clears that
+    /// column's filter while keeping AutoFilter available on the range.
+    pub fn filter_by_values(&mut self, at: Range, col: u32, values: &[String]) -> Result<(), String> {
         if self.filter_range().is_none() { self.toggle_filter(at)?; }
-        let params = match value {
-            Some(v) => json!({ "column": column_name(col), "values": [v] }),
-            None => json!({ "column": column_name(col), "clear": true }),
+        let params = if values.is_empty() {
+            json!({ "column": column_name(col), "clear": true })
+        } else {
+            json!({ "column": column_name(col), "values": values })
         };
         self.run("data.filterBy", params).map(|_| ())
     }
@@ -722,6 +730,10 @@ mod tests {
         book.filter_by(Range::cell(2, 0), 0, Some(&choice)).unwrap();
         assert_eq!((book.row_height(1), book.row_height(2) > 0), (0, true));
         book.filter_by(Range::cell(2, 0), 0, None).unwrap();
+        assert!((0..4).all(|r| book.row_height(r) > 0));
+        book.filter_by_values(Range::cell(2, 0), 0, &["Food".into(), "Fun".into()]).unwrap();
+        assert_eq!((book.row_height(1), book.row_height(2) > 0, book.row_height(3) > 0), (0, true, true));
+        book.filter_by_values(Range::cell(2, 0), 0, &[]).unwrap();
         assert!((0..4).all(|r| book.row_height(r) > 0));
         book.toggle_filter(Range::cell(2, 0)).unwrap();
         assert!(book.filter_range().is_none());
