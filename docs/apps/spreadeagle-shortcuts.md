@@ -24,6 +24,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+Shift+I | Search the function catalog by name, category or description; Up/Down chooses, Enter inserts `=NAME()` with the caret between the parentheses, Esc closes |
 | Ctrl+Shift+U | Toggle wrapped text in the selected cells; automatic row heights grow to show the lines |
 | Ctrl+Alt+C, Ctrl+Alt+R | Fit selected columns or rows to displayed contents; row fitting requires AutoFilter off |
+| Ctrl+Alt+L | Restrict selected cells to a comma-separated list of choices; blank prompt clears that rule |
 | Ctrl+Shift+W | Review warnings from importing the current workbook |
 | Ctrl+PageUp, Ctrl+PageDown | Previous or next sheet |
 
@@ -54,3 +55,7 @@ return no rows; All rows restores them.
 When import reports lost or unsupported features, a warning panel opens over the
 workbook. Up and Down review the warnings; Enter or Esc closes the panel. The
 shortcut reopens it during the current session.
+Ctrl+Alt+L adds a literal choice list to the selected range, such as
+`Food,Fun,Rent`; typing a value outside a stop-style list leaves the cell
+unchanged. The rule survives XLSX save and reopen. The native choice dropdown,
+range-backed lists, and paste validation remain open gaps.

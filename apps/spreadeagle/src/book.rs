@@ -221,7 +221,26 @@ impl Book {
     /// Types `input` into the cell, as Enter does: a formula, a number, a date or text.
     pub fn set(&mut self, row: u32, col: u32, input: &str) -> Result<(), String> {
         let cell = CellRef::new(row, col).a1();
+        let check = self.run("data.validate", json!({ "cell": cell, "input": input }))?;
+        if check.get("ok").and_then(Json::as_bool) == Some(false)
+            && check.get("style").and_then(Json::as_str) == Some("Stop") {
+            return Err(check.get("message").and_then(Json::as_str).unwrap_or("This value is not allowed in this cell.").into());
+        }
         self.run("cell.set", json!({ "cell": cell, "input": input })).map(|_| ())
+    }
+    /// Restrict a selected range to a literal, comma-separated choice list.
+    /// An empty entry clears validation from that range.
+    pub fn list_validation(&mut self, range: Range, input: &str) -> Result<(), String> {
+        let input = input.trim();
+        if input.is_empty() {
+            return self.run("data.validation", json!({ "range": range.a1(), "clear": true })).map(|_| ());
+        }
+        let values: Vec<_> = input.split(',').map(str::trim).collect();
+        if values.len() < 2 || values.len() > 30 || values.iter().any(|v| v.is_empty()) || input.chars().count() > 255 {
+            return Err("Enter 2–30 choices separated by commas (255 characters maximum).".into());
+        }
+        self.run("data.validation", json!({ "range": range.a1(), "type": "list", "formula1": values.join(","),
+            "errorStyle": "stop", "errorTitle": "Choose a listed value" })).map(|_| ())
     }
     pub fn clear(&mut self, row: u32, col: u32) -> Result<(), String> {
         let cell = CellRef::new(row, col).a1();
@@ -1299,6 +1318,31 @@ mod tests {
         book.save().unwrap();
         let reopened = Book::open(&path).unwrap().0;
         assert_eq!((reopened.col_width(0), reopened.row_height(0)), (fitted_col, fitted_row));
+    }
+
+    #[test]
+    fn literal_list_validation_rejects_bad_entries_and_round_trips() {
+        let mut book = Book::blank(&temp("validation-list.xlsx"));
+        let area = Range { r0: 1, c0: 1, r1: 2, c1: 1 };
+        for bad in ["Food", "Food,,Fun", "Food,Fun,"] {
+            assert!(book.list_validation(area, bad).is_err(), "{bad}");
+        }
+        book.list_validation(area, "Food, Fun").unwrap();
+        book.undo().unwrap();
+        assert!(book.session.doc().unwrap().wb.active().unwrap().validations.is_empty());
+        book.redo().unwrap();
+        assert!(book.set(1, 1, "Other").is_err());
+        assert!(book.input(1, 1).is_empty(), "invalid input must not replace a cell");
+        book.set(1, 1, "Food").unwrap();
+        book.set(2, 1, "fun").unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        let mut reopened = Book::open(&path).unwrap().0;
+        assert!(reopened.set(2, 1, "Other").is_err());
+        assert_eq!(reopened.input(2, 1).to_ascii_lowercase(), "fun");
+        reopened.list_validation(Range::cell(1, 1), "").unwrap();
+        reopened.set(1, 1, "Other").unwrap();
+        assert!(reopened.set(2, 1, "Other").is_err(), "clearing B2 must keep B3's rule");
     }
 
     #[test]
