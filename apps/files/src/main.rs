@@ -1232,7 +1232,16 @@ impl App {
                     // fails rather than replacing a note another item now owns.
                     match files::create_with_data(window, &at(info), from) {
                         Err(e) => Err(e),
-                        Ok(note_id) => match files::sync(window).and_then(|_| files::rename(window, &at(from), &at(to))) {
+                        Ok(note_id) => match files::sync(window).and_then(|_| {
+                            // As in trash_many: SexFS's plain file rename could
+                            // replace a name claimed since the check above.
+                            if !from.starts_with(b"/media/") && files::stat(window, &at(from)).map(|s| !s.dir).unwrap_or(false) {
+                                let id = files::file_id(window, &at(from))?;
+                                files::move_if_id(window, &at(from), &at(to), id)
+                            } else {
+                                files::rename(window, &at(from), &at(to))
+                            }
+                        }) {
                             Ok(()) => Ok(()),
                             Err(e) => {
                                 if note_id != 0 { let _ = files::remove_if_id(window, &at(info), note_id); }
