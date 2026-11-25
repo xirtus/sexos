@@ -491,7 +491,33 @@ def main():
    step(lambda:q.key('esc'),r'\[files.app.places.left\]')
    step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
    assert 'pw1234' not in t(),'a password reached the log'
-  assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
+  # A completed tab-session save survives an abrupt VM power cut, not just a
+  # normal Loom close. Reattach the same USB disk after boot and reopen Loom.
+  s=open_files('/media/LOOM')
+  s=len(t());cs('t')
+  g['wait'](r'\[loom.tab.opened\] active=2 count=2 dir=/media/LOOM',s,60)
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  s=len(t());q.key('ret')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/docs count=3\b',s,60)
+  g['wait'](r'\[loom.session.saved\] count=2 active=2',s,60)
+  pre_cut_log=t()
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'loom-session-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  q.cmd('blockdev-add',{'driver':'raw','node-name':'loomdrive','file':{'driver':'file','filename':str(stick)}})
+  s=len(t())
+  for _ in range(40):
+   try:q.cmd('device_add',{'driver':'usb-storage','bus':'xhci.0','drive':'loomdrive','id':'loom1'});break
+   except RuntimeError:time.sleep(.5)
+  g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
+  restored=open_files('/media/LOOM')
+  g['wait'](r'\[loom.session.loaded\] count=2 active=2 dir=/media/LOOM/docs\b',restored,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs-powercut-restored.ppm')})
+  assert (a.out/'folder-tabs-powercut-restored.ppm').stat().st_size>10000
+  step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
+  step(lambda:q.key('f11'),r'\[files.app.closed\]')
+  log=pre_cut_log+t()
+  assert 'KERNEL PANIC' not in log and 'panicked' not in log and '[files.app.fatal]' not in log
  except BaseException:
   # What the guest and the host servers said about the places, for a failed run.
   print('\n'.join(l for l in t().split('\n') if '[files.app.places' in l)[-4000:])
