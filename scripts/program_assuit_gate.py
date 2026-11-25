@@ -230,6 +230,10 @@ def main():
   type_line('en-GB');q.key('ret')
   g['wait'](r'\[assuit\.proofing-language\] en-GB\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-language.ppm')})
+  s=len(t());press('ctrl','shift','k');type_line('en-AU');q.key('ret')
+  g['wait'](r'\[assuit\.proofing-language\] en-AU\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-en-au.ppm')})
+  assert (a.out/'assuit-proofing-en-au.ppm').stat().st_size>10000
   s=len(t());press('ctrl','shift','l')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-paper-prompt.ppm')})
   assert (a.out/'assuit-paper-prompt.ppm').stat().st_size>10000

@@ -832,8 +832,14 @@ impl Book {
         let tag = match input.trim().to_ascii_lowercase().as_str() {
             "en-us" | "us" => "en-US",
             "en-gb" | "uk" => "en-GB",
-            _ => return Err("Choose en-US or en-GB".into()),
+            "en-au" => "en-AU",
+            "en-ca" => "en-CA",
+            "none" | "zxx" => "zxx",
+            _ => return Err("Choose en-US, en-GB, en-AU, en-CA or none".into()),
         };
+        if tag == "zxx" && self.path.to_ascii_lowercase().ends_with(".odt") {
+            return Err("ODT cannot preserve the no-proofing language; use DOCX".into());
+        }
         self.run("review.language", json!({ "lang": tag, "default": true }))?;
         Ok(tag)
     }
@@ -2445,6 +2451,36 @@ mod tests {
         book.save().unwrap();
         let reopened = Book::open(&path).unwrap();
         assert_eq!(reopened.session.doc.styles.default_chr.lang.as_deref(), Some("en-GB"));
+    }
+
+    #[test]
+    fn english_dialects_and_no_proofing_round_trip() {
+        use wordcraft_engine::proof::ProofLang;
+        assert_eq!(ProofLang::from_tag(Some("en-AU")), ProofLang::EnAu);
+        assert_eq!(ProofLang::from_tag(Some("en-CA")), ProofLang::EnCa);
+        assert_eq!(ProofLang::from_tag(Some("zxx")), ProofLang::Other);
+        for ext in ["docx", "odt"] {
+            for (choice, tag) in [("en-AU", "en-AU"), ("en-CA", "en-CA"), ("none", "zxx")] {
+                let path = temp(&format!("proofing-{choice}.{ext}"));
+                let mut book = Book::blank(&path);
+                if ext == "odt" && choice == "none" {
+                    let before = book.session.doc.styles.default_chr.lang.clone();
+                    assert!(book.proofing_language(choice).is_err());
+                    assert_eq!(book.session.doc.styles.default_chr.lang, before);
+                    continue;
+                }
+                assert_eq!(book.proofing_language(choice).unwrap(), tag);
+                assert_eq!(book.session.doc.styles.default_chr.lang.as_deref(), Some(tag));
+                book.type_text("Colour and centre.").unwrap();
+                book.save().unwrap();
+                let reopened = Book::open(&path).unwrap();
+                assert_eq!(reopened.session.doc.styles.default_chr.lang.as_deref(), Some(tag), "{choice}.{ext}");
+            }
+        }
+        let mut book = Book::blank(&temp("proofing-invalid.docx"));
+        let before = book.session.doc.styles.default_chr.lang.clone();
+        assert!(book.proofing_language("de-DE").is_err());
+        assert_eq!(book.session.doc.styles.default_chr.lang, before);
     }
 
     #[test]
