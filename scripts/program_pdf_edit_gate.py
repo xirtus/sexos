@@ -16,15 +16,16 @@ and the thumbnail's header, size and white paper are right."""
 import argparse,http.server,io,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from install_program import install
-from make_pdf_fixture import form_document,choice_document,advanced_choice_document,FORM_WORD
+from make_pdf_fixture import form_document,choice_document,advanced_choice_document,radio_document,FORM_WORD
 from browser_gate_viewport import chrome_metrics,content_rect
 from web_surface_geometry import latest_frame
 ROOT=Path(__file__).resolve().parents[1]
 FORM=form_document()
 CHOICE=choice_document()
 ADVANCED=advanced_choice_document()
+RADIO=radio_document()
 CATALOG_DOCMDP=form_document(catalog_docmdp=True)
-FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE,'/advanced-choice.pdf':ADVANCED,'/catalog-docmdp.pdf':CATALOG_DOCMDP}
+FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE,'/advanced-choice.pdf':ADVANCED,'/radio.pdf':RADIO,'/catalog-docmdp.pdf':CATALOG_DOCMDP}
 FILES['/certificate.der']=(ROOT/'crates/vellum-edit/tests/fixtures/cms-test-cert.der').read_bytes()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
@@ -296,6 +297,40 @@ def main():
   g['wait'](r'\[pdf\.save\.synced\] path=@/choice\.pdf bytes=\d+\n',s,300)
   g['wait'](r'\[pdf\.saved\] path=@/choice\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=2 ms=\d+\n',s,300)
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # A radio group's widgets have different PDF on-states. Keyboard and pointer
+  # choices must select that exact state, then survive incremental save/reopen.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/radio.pdf radio.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @radio.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=radio\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  step(lambda:chord('ctrl','e'),r'\[pdf\.form\] fields=1 first=color\n')
+  step(lambda:q.key('down'),r'\[pdf\.radio\.choice\] name=color selected=2 count=2\n')
+  step(lambda:q.key('spc'),r'\[pdf\.field\] name=color kind=radio value=Blue\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-radio-blue.ppm')})
+  assert (a.out/'pdf-radio-blue.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.saved\] path=@/radio\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=1 ms=\d+\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  s=len(t());line('run vellum @radio.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=radio\.pdf pages=1\n',s,600)
+  page_receipt=g['wait'](r'\[pdf\.page\] page=1 pages=1 width=(\d+) height=(\d+) ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  step(lambda:chord('ctrl','e'),r'\[pdf\.radio\.focus\] name=color selected=2 count=2\n')
+  tile=latest_frame(t(),sid);bx,by,client_w,_=content_rect(t(),tile)
+  ui=chrome_metrics(t())['scale'];page_w=int(page_receipt[1]);scale=page_w/612
+  client_w//=ui;left=(client_w-page_w)//2 if page_w+24<=client_w else 12
+  s=len(t());click(bx+round((left+82*scale)*ui),by+round((BAR+12+162*scale)*ui))
+  g['wait'](r'\[pdf\.widget\.pointer\] name=color kind=radio page=1\n',s,120)
+  g['wait'](r'\[pdf\.field\] name=color kind=radio value=Red\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-radio-red-pointer.ppm')})
+  assert (a.out/'pdf-radio-red-pointer.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.saved\] path=@/radio\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=1 ms=\d+\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # Editable combo text and multi-select list values survive a guest save.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/advanced-choice.pdf advanced-choice.pdf')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
@@ -480,6 +515,10 @@ def main():
  subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/choice.pdf',str(pointer_pdf)],check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_pointer_choice_survives_guest_save','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_POINTER_PDF':str(pointer_pdf)},check=True)
+ radio_pdf=a.out/'radio-saved.pdf'
+ subprocess.run([str(extractor),str(disk),saved_path[1:].rsplit('/',1)[0]+'/radio.pdf',str(radio_pdf)],check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_radio_widgets_survive_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_RADIO_PDF':str(radio_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_verifies_independently_when_supplied','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_SIGNED_PDF':str(signed_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_signed_pdf_refuses_annotation_edits_when_supplied','--','--exact'],

@@ -420,6 +420,7 @@ fn check_form(style: Style) {
     assert_eq!(get(&fields, "agree").states, ["Yes"]);
     assert_eq!(get(&fields, "color").kind, FieldKind::Radio);
     assert_eq!(get(&fields, "color").states, ["Red", "Blue"]);
+    assert_eq!(get(&fields, "color").widget_states, [vec!["Red".to_string()], vec!["Blue".to_string()]]);
     assert_eq!(get(&fields, "color").value, FieldValue::State("Red".into()));
     assert_eq!(get(&fields, "size").kind, FieldKind::ComboBox { editable: false });
     assert_eq!(get(&fields, "size").options, [("S".into(), "S".into()), ("M".into(), "Medium".into()), ("L".into(), "L".into())]);
@@ -549,6 +550,33 @@ fn guest_pointer_choice_survives_guest_save() {
     let fields = Editor::open(saved).unwrap().fields().unwrap();
     assert_eq!(fields.iter().find(|f| f.name == "size").unwrap().value, FieldValue::Text("L".into()));
     assert_eq!(fields.iter().find(|f| f.name == "team").unwrap().value, FieldValue::Text("E".into()));
+}
+
+#[test]
+fn guest_radio_widgets_survive_guest_save() {
+    let Ok(path) = std::env::var("SEXOS_VELLUM_GUEST_RADIO_PDF") else { return };
+    const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/radio.pdf");
+    let saved = std::fs::read(path).unwrap();
+    assert!(saved.starts_with(PDF));
+    let fields = Editor::open(saved.clone()).unwrap().fields().unwrap();
+    assert_eq!(fields[0].value, FieldValue::State("Red".into()));
+    let pdf = lopdf::Document::load_mem(&saved).unwrap();
+    assert_eq!(pdf.get_object((7, 0)).unwrap().as_dict().unwrap().get(b"AS").unwrap().as_name().unwrap(), b"Red");
+    assert_eq!(pdf.get_object((8, 0)).unwrap().as_dict().unwrap().get(b"AS").unwrap().as_name().unwrap(), b"Off");
+}
+
+#[test]
+fn radio_widget_states_round_trip_real_pdf() {
+    const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/radio.pdf");
+    let mut ed = Editor::open(PDF.to_vec()).unwrap();
+    let radio = &ed.fields().unwrap()[0];
+    assert_eq!(radio.kind, FieldKind::Radio);
+    assert_eq!(radio.widget_states, [vec!["Red".to_string()], vec!["Blue".to_string()]]);
+    ed.set_field("color", FieldValue::State("Blue".into())).unwrap();
+    let saved = ed.save_incremental().unwrap();
+    assert!(saved.starts_with(PDF));
+    let reopened = Editor::open(saved).unwrap().fields().unwrap();
+    assert_eq!(reopened[0].value, FieldValue::State("Blue".into()));
 }
 
 #[test]
