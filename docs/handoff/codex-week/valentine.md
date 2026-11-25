@@ -17,7 +17,7 @@ Remaining gaps:
   to those flows, with IDLE notifications through Bell. The mail clients can now
   resume a flow after Multipass authenticates it, but the boot-routed Multipass
   service and a capability-safe flow handoff do not exist yet.
-- JMAP, offline cache and conflict handling, folders, flags, sent copies,
+- JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,
   real attachment open/save via Loom, and a safe HTML view through sex-html.
 - Search across accounts, conversation view, filters, signatures, keyboard
   undo. Local drafts now save through staged replacement
@@ -27,3 +27,5 @@ The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
 keyboard reference for the controls that currently work.
 
 The local `.eml` viewer does not claim live mail sync or sending.
+It can now list immediate child folders within its granted local directory, and
+drafts created there stay there. Nested folder trees and account folders remain.

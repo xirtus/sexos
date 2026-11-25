@@ -15,6 +15,7 @@ pub mod draft;
 pub mod fixture;
 pub mod imap;
 pub mod inbox;
+pub mod local_folders;
 pub mod message;
 pub mod smtp;
 pub mod thread;
