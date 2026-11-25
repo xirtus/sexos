@@ -119,10 +119,27 @@ const FF_MULTISELECT: i64 = 1 << 21;
 const FF_COMB: i64 = 1 << 24;
 
 impl Editor {
+    /// A signed field or catalog certification reference needs DocMDP/FieldMDP
+    /// evaluation before ordinary form or annotation changes are permitted.
+    /// Malformed permissions fail closed.
+    pub fn signed_edit_restricted(&self) -> Result<bool, Error> {
+        let (_, catalog) = self.catalog()?;
+        let has_doc_mdp = match catalog.get(b"Perms") {
+            Some(perms) => self.dict_of(perms)
+                .ok_or(Error::Malformed("bad catalog /Perms"))?
+                .get(b"DocMDP").is_some(),
+            None => false,
+        };
+        Ok(has_doc_mdp || self.signatures()?.iter().any(|signature| signature.signed))
+    }
+
     /// Add a visible, empty signature widget on a page. This creates no signature
     /// value or key material; a signer can later fill the field via
     /// `embed_detached_signature_with` after the document has been saved.
     pub fn add_signature_field(&mut self, page: usize, name: &str, rect: [f64; 4]) -> Result<ObjId, Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot add a field to a signed PDF".into()));
+        }
         let pid = self.page_id(page)?;
         if name.trim() != name || name.is_empty() || name.len() > 80
             || name.contains('.') || name.chars().any(char::is_control) {
@@ -133,9 +150,6 @@ impl Editor {
         }
         // Adding a widget to a signed revision requires DocMDP/FieldMDP policy
         // evaluation. Do not risk invalidating an existing signature here.
-        if self.signatures()?.iter().any(|s| s.signed) {
-            return Err(Error::BadValue("cannot add a field to a signed PDF".into()));
-        }
         let crop = self.page_info(page)?.crop_box;
         if rect.iter().any(|v| !v.is_finite()) || rect[2] - rect[0] < 12.0
             || rect[3] - rect[1] < 12.0 || rect[0] < crop[0] || rect[1] < crop[1]
@@ -272,6 +286,9 @@ impl Editor {
         reserve_bytes: usize,
         sign: impl FnOnce(&[u8], &[u8]) -> Result<Vec<u8>, Error>,
     ) -> Result<Vec<u8>, Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot add a signature to a signed PDF".into()));
+        }
         const MARKER: &[u8] = b"/ByteRange [0 9999999991 9999999992 9999999993]";
         if !(1024..=65536).contains(&reserve_bytes) {
             return Err(Error::BadValue("signature reservation must be 1–64 KiB".into()));
@@ -328,6 +345,9 @@ impl Editor {
 
     /// Sets a field's value and regenerates its widgets' appearances.
     pub fn set_field(&mut self, name: &str, value: FieldValue) -> Result<(), Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot fill fields in a signed PDF".into()));
+        }
         let nodes = self.field_nodes();
         let node = nodes.iter().find(|n| n.name == name).ok_or_else(|| Error::NoSuchField(name.into()))?;
         let info = self.field_info(node);

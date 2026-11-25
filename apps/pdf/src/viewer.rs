@@ -1623,6 +1623,19 @@ impl Viewer {
 
     fn start_form(&mut self) {
         let Some(editor) = self.editor() else { return };
+        match editor.signed_edit_restricted() {
+            Ok(true) => {
+                self.status = Some("This signed PDF needs permission review before forms can change".into());
+                sex_std::record("[pdf.form.refused] reason=signed_revision");
+                return;
+            }
+            Err(e) => {
+                self.status = Some(format!("Cannot check form permissions: {e}"));
+                sex_std::record("[pdf.form.refused] reason=permissions_unreadable");
+                return;
+            }
+            Ok(false) => {}
+        }
         let fields = marks::fillable(&editor.fields().unwrap_or_default());
         if fields.is_empty() {
             self.status = Some("This document has no form fields to fill".into());

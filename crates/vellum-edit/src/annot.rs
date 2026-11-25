@@ -123,16 +123,7 @@ impl Editor {
     /// Annotation permissions in signed revisions require DocMDP/FieldMDP evaluation.
     /// Until that policy is implemented, do not silently invalidate a signature.
     fn require_unsigned_annotations(&self) -> Result<(), Error> {
-        // A certification signature can be referenced from the catalog's
-        // /Perms dictionary even when no signature field is discoverable.
-        let (_, catalog) = self.catalog()?;
-        let has_doc_mdp = match catalog.get(b"Perms") {
-            Some(perms) => self.dict_of(perms)
-                .ok_or(Error::Malformed("bad catalog /Perms"))?
-                .get(b"DocMDP").is_some(),
-            None => false,
-        };
-        if has_doc_mdp || self.signatures()?.iter().any(|signature| signature.signed) {
+        if self.signed_edit_restricted()? {
             return Err(Error::BadValue("cannot edit annotations in a signed PDF".into()));
         }
         Ok(())

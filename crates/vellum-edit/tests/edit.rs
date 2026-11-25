@@ -91,6 +91,10 @@ fn new_signature_field_rejects_bad_placement_and_signed_document() {
     assert!(!editor.is_modified());
     let mut signed = Editor::open(form(Style::Table, true)).unwrap();
     assert!(signed.add_signature_field(0, "New", [20.0, 20.0, 80.0, 50.0]).is_err());
+    assert_eq!(signed.set_field("person.name", FieldValue::Text("changed".into())).unwrap_err(),
+        Error::BadValue("cannot fill fields in a signed PDF".into()));
+    assert_eq!(signed.embed_detached_signature_with("sig", 1024, |_, _| panic!("must not sign")),
+        Err(Error::BadValue("cannot add a signature to a signed PDF".into())));
     assert!(!signed.is_modified());
 }
 
@@ -112,13 +116,19 @@ fn signed_pdf_refuses_annotation_add_and_remove_without_changes() {
 #[test]
 fn catalog_docmdp_without_signature_field_refuses_annotations() {
     let pdf = fixtures::build(&[
-        (1, "<< /Type /Catalog /Pages 2 0 R /Perms << /DocMDP 6 0 R >> >>".into()),
+        (1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> /Perms << /DocMDP 6 0 R >> >>".into()),
         (2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into()),
-        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".into()),
+        (3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R] >>".into()),
+        (4, "<< /Type /Annot /Subtype /Widget /T (name) /FT /Tx /Rect [20 20 100 40] /F 4 /P 3 0 R >>".into()),
         (6, "<< /Type /Sig /Filter /Adobe.PPKLite /ByteRange [0 1 2 3] /Contents <0000> >>".into()),
     ], Style::Table, 1);
     let mut editor = Editor::open(pdf).unwrap();
     assert!(editor.signatures().unwrap().is_empty());
+    assert_eq!(editor.fields().unwrap().len(), 1);
+    assert_eq!(editor.set_field("name", FieldValue::Text("changed".into())).unwrap_err(),
+        Error::BadValue("cannot fill fields in a signed PDF".into()));
+    assert_eq!(editor.add_signature_field(0, "New", [20.0, 50.0, 80.0, 70.0]).unwrap_err(),
+        Error::BadValue("cannot add a field to a signed PDF".into()));
     let highlight = NewAnnot {
         kind: AnnotKind::Highlight { rects: vec![[18.0, 145.0, 140.0, 170.0]] },
         style: AnnotStyle::default(),
@@ -140,6 +150,10 @@ fn guest_signed_pdf_refuses_annotation_edits_when_supplied() {
     };
     assert!(editor.signatures().unwrap().iter().any(|signature| signature.signed));
     assert!(matches!(editor.add_annotation(0, &highlight), Err(Error::BadValue(_))));
+    assert_eq!(editor.set_field("name", FieldValue::Text("changed".into())).unwrap_err(),
+        Error::BadValue("cannot fill fields in a signed PDF".into()));
+    assert_eq!(editor.add_signature_field(0, "Second", [20.0, 50.0, 80.0, 70.0]).unwrap_err(),
+        Error::BadValue("cannot add a field to a signed PDF".into()));
     assert!(!editor.is_modified());
 }
 

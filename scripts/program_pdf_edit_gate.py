@@ -447,6 +447,9 @@ def main():
   g['focus'](sid);time.sleep(.5)
   step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-digital-signature.ppm')})
+  step(lambda:chord('ctrl','e'),r'\[pdf\.form\.refused\] reason=signed_revision\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signed-form-refused.ppm')})
+  assert (a.out/'pdf-signed-form-refused.ppm').stat().st_size>10000
   # A signed revision needs DocMDP/FieldMDP permission evaluation before markup changes.
   step(lambda:chord('ctrl','r'),r'\[pdf\.region\] shown=1\n')
   step(lambda:q.key('ret'),r'\[pdf\.annotate\.refused\] action=highlight reason=bad value: cannot edit annotations in a signed PDF\n')
@@ -464,6 +467,7 @@ def main():
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(.5);g['focus'](sid)
   step(lambda:chord('ctrl','r'),r'\[pdf\.region\] shown=1\n')
   step(lambda:q.key('ret'),r'\[pdf\.annotate\.refused\] action=highlight reason=bad value: cannot edit annotations in a signed PDF\n')
+  step(lambda:chord('ctrl','e'),r'\[pdf\.form\.refused\] reason=signed_revision\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-catalog-docmdp-refused.ppm')})
   assert (a.out/'pdf-catalog-docmdp-refused.ppm').stat().st_size>10000
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
