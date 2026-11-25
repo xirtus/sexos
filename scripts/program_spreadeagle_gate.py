@@ -27,7 +27,7 @@
   makes that recovery the workbook's saved state, which survives another reopen.
 
 No kernel panic, page fault or std abort anywhere in the record."""
-import argparse,os,re,shutil,time
+import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 from install_program import install
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
@@ -42,11 +42,21 @@ def main():
  elf=(ROOT/'iso_root/programs/spreadeagle').read_bytes();assert elf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('spreadeagle',elf)])
+ warning_ods=(ROOT/'apps/spreadeagle/assets/import-warning.ods').read_bytes()
+ class WarningServer(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+   if self.path!='/import-warning.ods':self.send_error(404);return
+   self.send_response(200);self.send_header('Content-Length',str(len(warning_ods)));self.end_headers();self.wfile.write(warning_ods)
+  def log_message(self,*args):pass
+ server=http.server.ThreadingHTTPServer(('127.0.0.1',0),WarningServer)
+ threading.Thread(target=server.serve_forever,daemon=True).start()
+ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
  g=boot(a.iso,disk,a.out,'spreadeagle',a.resolution);t=g['text'];q=g['q']
  def type_line(line):
   for k in line:
    if k=='+':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'equal'}],'hold-time':80})
-   else:q.key({' ':'spc','.':'dot'}.get(k,k))
+   elif k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
+   else:q.key({' ':'spc','.':'dot','/':'slash','-':'minus'}.get(k,k))
    time.sleep(.05)
  def run(line):
   g['focus'](153);time.sleep(.5);type_line(line);q.key('ret')
@@ -70,6 +80,21 @@ def main():
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  # The first launch creates Spreadeagle's private folder for the fixture.
+  o=opened();close(o)
+  s=len(t());run(f'fetch http://10.0.2.2:{server.server_address[1]}/import-warning.ods /data/spreadeagle/import-warning.ods')
+  g['wait'](r'\[spindle.fetch.line\] Saved \d+ bytes',s,240)
+  s=len(t());run('run spreadeagle import-warning.ods')
+  warn=g['wait'](r'\[spreadeagle.warning\] (ODS data-only import:[^\n]+)',s,900)
+  assert 'Source formatting' in warn[1],warn[0]
+  o=g['wait'](r'\[spreadeagle.open\] target=(\d+) task=(\d+) name=import-warning.ods sheets=Harvest\n',s,120)
+  g['wait'](r'\[spreadeagle.warnings.shown\] count=1',s,120)
+  g['focus'](SURFACE[int(o[1])]);time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'spreadeagle-import-warning.ppm')})
+  assert (a.out/'spreadeagle-import-warning.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[spreadeagle.warnings.closed\]',s,120)
+  ctrl_shift('w',r'\[spreadeagle.warnings.shown\] count=1')
+  q.key('esc');close(o)
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|1200\|300\|150\|1650\|19800\|\|',s)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-opened.ppm')})
@@ -260,5 +285,5 @@ def main():
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1]),'powercut_recovered':True})
- finally:g['stop']()
+ finally:g['stop']();server.shutdown()
 if __name__=='__main__':main()
