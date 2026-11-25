@@ -3,7 +3,7 @@
 //! sex-office until GridCraft's own egui interface runs on SexOS (workstream M11).
 //! Frozen rows and columns stay put while the rest scrolls; filtered-out rows are
 //! skipped; charts float over the cells at their anchors.
-use crate::book::{Book, Range, column_name};
+use crate::book::{Book, Function, Range, column_name};
 use sex_office::{Canvas, Pen};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::{Kind, Pointer};
@@ -82,6 +82,8 @@ pub struct Ui {
     ask: Option<Ask>,
     /// Value picker opened from an AutoFilter header button or Ctrl+Shift+O.
     filter_menu: Option<FilterMenu>,
+    /// Searchable worksheet function catalog.
+    function_picker: Option<FunctionPicker>,
     /// An in-app shortcut reference, opened with Ctrl+Shift+/.
     help: bool,
     /// The workbook came back with last time's unsaved changes: Esc throws them away until
@@ -112,6 +114,22 @@ enum Ask {
 
 struct FilterMenu { col: u32, values: Vec<String>, selected: usize, checked: Vec<bool>, toggled: bool }
 
+struct FunctionPicker { entries: Vec<Function>, query: String, selected: usize }
+
+impl FunctionPicker {
+    fn matches(&self) -> Vec<usize> {
+        let mut matches: Vec<usize> = self.entries.iter().enumerate().filter_map(|(i, f)| f.matches(&self.query).then_some(i)).collect();
+        if !self.query.is_empty() {
+            let q = self.query.to_ascii_lowercase();
+            matches.sort_by_key(|i| {
+                let name = self.entries[*i].name.to_ascii_lowercase();
+                if name == q { 0 } else if name.starts_with(&q) { 1 } else { 2 }
+            });
+        }
+        matches
+    }
+}
+
 const FILTER_MENU_W: i32 = 230;
 const FILTER_MENU_ROW: i32 = 23;
 const FILTER_MENU_VISIBLE: usize = 8;
@@ -132,6 +150,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+F / C", "Freeze panes / column chart"),
     ("Ctrl+Shift+M", "Choose column, line, bar or pie chart"),
     ("Ctrl+Shift+Q", "Edit selected chart layout"),
+    ("Ctrl+Shift+I", "Search and insert a worksheet function"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
 ];
@@ -211,7 +230,7 @@ impl Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
-            ask: None, filter_menu: None, help: false, recovered: false, unkept: None,
+            ask: None, filter_menu: None, function_picker: None, help: false, recovered: false, unkept: None,
         }
     }
 
@@ -528,6 +547,8 @@ impl Ui {
             }
         } else if let Some(menu) = &self.filter_menu {
             format!("Filter {}: Up/Down chooses, Space marks, C condition, Enter applies, Esc closes ({} values)", column_name(menu.col), menu.values.len())
+        } else if let Some(picker) = &self.function_picker {
+            format!("Function: {}_   Type to search names, categories or descriptions; Up/Down chooses, Enter inserts, Esc closes ({} matches)", picker.query, picker.matches().len())
         } else if self.message.is_empty() {
             format!("{}{}  Ctrl+S save  Ctrl+Shift+S save as  Ctrl+P PDF  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+=/- insert/delete  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
@@ -554,6 +575,29 @@ impl Ui {
                 let mark = if index == 0 { "    " } else if menu.checked[index - 1] { "[x] " } else { "[ ] " };
                 let shown = format!("{mark}{}", if label.is_empty() { "(blank)" } else { label });
                 self.pen.text(&mut canvas, mx + 9, y + 3, &shown, if index == menu.selected { palette.accent } else { palette.ink }, Some((mx + 9, FILTER_MENU_W - 18)));
+            }
+        }
+        if let Some(picker) = &self.function_picker {
+            let matches = picker.matches();
+            let visible = matches.len().min(8);
+            let row_h = self.pen.line_height() + 7;
+            let (bw, bh) = ((w - 2 * PAD).min(620).max(1), 64 + visible as i32 * row_h);
+            let (bx, by) = ((w - bw) / 2, ((h - bh) / 2).max(0));
+            canvas.fill(bx + 3, by + 3, bw, bh, palette.grid);
+            canvas.fill(bx, by, bw, bh, palette.bar_bg);
+            canvas.frame(bx, by, bw, bh, palette.grid);
+            self.pen.text(&mut canvas, bx + 10, by + 7, &format!("Worksheet functions: {}", picker.query), palette.ink, Some((bx, bw - 20)));
+            let first = picker.selected.saturating_sub(visible.saturating_sub(1));
+            for (slot, &index) in matches.iter().skip(first).take(visible).enumerate() {
+                let f = &picker.entries[index];
+                let y = by + 31 + slot as i32 * row_h;
+                if first + slot == picker.selected { canvas.fill(bx + 4, y - 2, bw - 8, row_h, palette.head_on); }
+                self.pen.text(&mut canvas, bx + 10, y, &format!("{}  ·  {}", f.name, f.category), palette.ink, Some((bx + 10, bw - 20)));
+            }
+            if let Some(&index) = matches.get(picker.selected) {
+                let f = &picker.entries[index];
+                self.pen.text(&mut canvas, bx + 10, by + bh - 29, &f.signature, palette.accent, Some((bx + 10, bw - 20)));
+                self.pen.text(&mut canvas, bx + 10, by + bh - 15, &f.description, palette.dim, Some((bx + 10, bw - 20)));
             }
         }
         if self.help {
@@ -881,6 +925,30 @@ impl Ui {
         }
     }
 
+    fn function_picker_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        if key.code == code::ESC { self.function_picker = None; return false; }
+        let Some(picker) = &mut self.function_picker else { return false };
+        match (key.code, sex_app::nav(key)) {
+            (code::BACKSPACE, _) => { picker.query.pop(); picker.selected = 0; }
+            (_, Some(Nav::Up)) => picker.selected = picker.selected.saturating_sub(1),
+            (_, Some(Nav::Down)) => picker.selected = (picker.selected + 1).min(picker.matches().len().saturating_sub(1)),
+            (code::ENTER, _) => {
+                let Some(&index) = picker.matches().get(picker.selected) else { return false };
+                let name = picker.entries[index].name.clone();
+                let formula = format!("={name}()");
+                self.edit = Some(Edit { text: formula.chars().collect(), caret: name.chars().count() + 2, replace: false });
+                self.anchor = None;
+                self.function_picker = None;
+                self.message = format!("{}: type arguments, then Enter", name);
+                sex_std::record(&format!("[spreadeagle.functions.insert] name={name} at={}", self.cell_name()));
+            }
+            _ => if !key.control && picker.query.chars().count() < 60 {
+                if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { picker.query.push(ch); picker.selected = 0; }
+            },
+        }
+        false
+    }
+
     /// One key. Returns whether the cells (or the sheet) changed: worth a record of the column.
     fn key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         if key.control && key.shift && key.code == code::SLASH {
@@ -892,6 +960,7 @@ impl Ui {
             if key.code == code::ESC { self.help = false; }
             return false;
         }
+        if self.function_picker.is_some() { return self.function_picker_key(key); }
         let (row, col) = (self.row as i64, self.col as i64);
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
@@ -901,6 +970,16 @@ impl Ui {
         }
         if key.control && self.edit.is_none() {
             let ask = match key.code {
+                code::I if key.shift => {
+                    match self.book.functions() {
+                        Ok(entries) => {
+                            sex_std::record(&format!("[spreadeagle.functions.open] count={}", entries.len()));
+                            self.function_picker = Some(FunctionPicker { entries, query: String::new(), selected: 0 });
+                        }
+                        Err(e) => self.message = e,
+                    }
+                    return false;
+                }
                 code::S if key.shift => Some(Ask::SaveAs(self.name.chars().collect())),
                 code::G => Some(Ask::GoTo(Vec::new())),
                 code::M if key.shift => { sex_std::record("[spreadeagle.chart.choose]"); Some(Ask::Chart) },
@@ -1148,6 +1227,7 @@ impl Ui {
 
     /// A click picks a cell or a sheet tab; the wheel scrolls.
     fn pointer(&mut self, p: Pointer, window: &sex_app::Window) {
+        if self.function_picker.is_some() { return; }
         let (_, height) = window.size();
         let (x, y) = (p.x as i32, p.y as i32);
         match p.kind {
