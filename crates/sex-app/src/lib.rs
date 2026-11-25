@@ -1260,8 +1260,18 @@ pub mod files {
     /// Writes `/home` out and forgets its key.
     pub fn home_lock(window: &mut Window) -> Result<(), Error> { request(window, sex_pdx::home_lock::LOCK, b"", 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
+    /// Create a new file and receive its identity from the same Files request.
+    /// Removable formats without stable IDs answer UNSUPPORTED before creating.
+    pub fn create_with_id(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        exchange(Some(window), w::CREATE_WITH_ID, path, 0, 0, |_| {}, |_, d| u64::from_le_bytes(d[..8].try_into().unwrap()))
+    }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }
+    /// Remove only the object returned by `create_with_id`.
+    pub fn remove_if_id(window: &mut Window, path: &[u8], expected_id: u64) -> Result<(), Error> {
+        if expected_id == 0 { return Err(w::NAME); }
+        request(window, w::REMOVE_IF_ID, path, expected_id, 0).map(|_| ())
+    }
     pub fn truncate(window: &mut Window, path: &[u8], len: u64) -> Result<(), Error> { request(window, w::TRUNCATE, path, len, 0).map(|_| ()) }
     /// Moves or renames. Between two disks Files answers `OTHER_DISK`: copy, then remove.
     pub fn rename(window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), Error> {
@@ -1299,6 +1309,22 @@ pub mod files {
         while done < data.len() {
             let n = (data.len() - done).min(w::IO_MAX);
             let wrote = direct::write_at_held(Some(&mut *window), path, offset + done as u64, &data[done..done + n])?;
+            done += wrote;
+            if wrote < n { return Err(w::NO_SPACE); }
+        }
+        Ok(done)
+    }
+    /// Write each chunk only if the same path still names `expected_id` when
+    /// Files processes that chunk. A replacement gets no bytes from this call.
+    pub fn write_if_id(window: &mut Window, path: &[u8], expected_id: u64, offset: u64, data: &[u8]) -> Result<usize, Error> {
+        if expected_id == 0 { return Err(w::NAME); }
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::IO_MAX - 8);
+            let piece = &data[done..done + n];
+            let wrote = exchange(Some(&mut *window), w::WRITE_IF_ID, path, offset + done as u64, (n + 8) as u64,
+                |d| { d[..8].copy_from_slice(&expected_id.to_le_bytes()); d[8..8 + n].copy_from_slice(piece); },
+                |value, _| value as usize)?;
             done += wrote;
             if wrote < n { return Err(w::NO_SPACE); }
         }

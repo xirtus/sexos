@@ -265,17 +265,20 @@ impl App {
             Err(sex_pdx::fs::DENIED) => { self.status = "Attachment save cancelled in Loom.".into(); return; },
             Err(e) => { self.status = format!("Loom could not choose a location: {}", String::from_utf8_lossy(files::message(e))); return; },
         };
-        // CREATE is no-clobber on every Files volume. A failed write may leave
-        // a partial file; path-based removal could delete another run's replacement.
-        if let Err(e) = files::create(window, path) {
+        // Files returns the new identity in CREATE's reply, so a replacement
+        // between requests cannot receive any attachment bytes.
+        let id = match files::create_with_id(window, path) {
+            Ok(id) => id,
+            Err(e) => {
             if e == sex_pdx::fs::EXISTS {
                 sex_pdx::serial_record!("[valentine.attachment.exists] path={}", String::from_utf8_lossy(path));
             }
             self.status = if e == sex_pdx::fs::EXISTS { "That file already exists; choose another name in Loom.".into() }
                 else { format!("Attachment not saved: {}", String::from_utf8_lossy(files::message(e))) };
             return;
-        }
-        let saved = files::write_at(window, path, 0, &chosen.data)
+            }
+        };
+        let saved = files::write_if_id(window, path, id, 0, &chosen.data)
             .and_then(|n| if n == chosen.data.len() { files::sync(window) } else { Err(sex_pdx::fs::NO_SPACE) });
         match saved {
             Ok(()) => {
@@ -283,8 +286,10 @@ impl App {
                 sex_pdx::serial_record!("[valentine.attachment.saved] path={} bytes={}", String::from_utf8_lossy(path), chosen.data.len());
             }
             Err(e) => {
-                self.status = format!("Attachment save failed: {}; an incomplete file may remain", String::from_utf8_lossy(files::message(e)));
-                sex_pdx::serial_record!("[valentine.attachment.failed] status={} partial_possible=1", e);
+                let cleanup = files::remove_if_id(window, path, id);
+                self.status = if cleanup.is_ok() { format!("Attachment save failed: {}; incomplete file removed", String::from_utf8_lossy(files::message(e))) }
+                    else { format!("Attachment save failed: {}; incomplete file may remain", String::from_utf8_lossy(files::message(e))) };
+                sex_pdx::serial_record!("[valentine.attachment.failed] status={} cleanup_status={}", e, cleanup.err().unwrap_or(0));
             }
         }
     }
