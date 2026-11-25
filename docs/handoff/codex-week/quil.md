@@ -18,8 +18,10 @@ Remaining gaps:
 - Ctrl+Shift+V shows tracked modified, deleted and conflicted files from a
   checked Git index in the project's Files grant. Right shows a bounded,
   read-only line diff against an authenticated loose Git blob for UTF-8 files.
-  Packed blobs, untracked/ignored files, staging, commit and branches still
-  need native controls.
+  S stages a modified tracked UTF-8 file up to 64 KiB in a v2/v3 index with no
+  extensions; U undoes only Quil's last stage if the index is unchanged.
+  Packed blobs, untracked/ignored files, extended indexes, deleted-file staging,
+  broad unstaging, commit and branches still need native controls.
 - Tree-sitter style structural editing, debugging and extensions.
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the

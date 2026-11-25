@@ -100,6 +100,11 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-diff.ppm')})
   assert (a.out/'quil-git-diff.ppm').stat().st_size>100000
   q.key('esc')
+  s=len(t());send('ctrl','shift','v');g['wait'](r'\[quil.code.git\] tracked_changes=1 note=\n',s,60)
+  s=len(t());q.key('s');g['wait'](r'\[quil.code.git.staged\] path=demo.rs tracked_changes=0\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-staged.ppm')})
+  s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=1\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-unstaged.ppm')})
   # Vim mode from the command palette; dd deletes the first line, :w saves.
   s=len(t());q.key('esc');send('ctrl','shift','p');time.sleep(.3);keys('vim mode');q.key('ret');g['wait'](r'\[quil.code.keymap\] vim',s,30)
   s=len(t());keys('gg');keys('dd');keys(':w');q.key('ret')

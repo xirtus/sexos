@@ -69,6 +69,45 @@ pub struct Tracked { pub path: Vec<u8>, pub id: [u8; 20], pub size: u32, pub sta
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Header, Version, Truncated, Checksum, Path, Limit }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StageError { Index(Error), Path, Conflict, Extension, Limit }
+
+/// Prepare one tracked, unconflicted v2/v3 index entry and its loose blob.
+/// Refuse index extensions: a cached tree or resolve-undo extension cannot be
+/// preserved correctly by this small writer. Caller stages both with Files.
+pub fn stage_tracked(index: &[u8], path: &[u8], bytes: &[u8]) -> Result<(Vec<u8>, [u8; 20], Vec<u8>), StageError> {
+    if bytes.len() > MAX_DIFF_BYTES || bytes.contains(&0) || core::str::from_utf8(bytes).is_err() { return Err(StageError::Limit); }
+    let entries = parse_index(index).map_err(StageError::Index)?;
+    let mut at = HEADER;
+    let body = index.len() - CHECKSUM;
+    let mut target = None;
+    for entry in entries {
+        let flags = u16::from_be_bytes(index[at + 60..at + ENTRY].try_into().unwrap());
+        if entry.path == path {
+            if entry.stage != 0 || target.is_some() { return Err(StageError::Conflict); }
+            target = Some(at);
+        }
+        let name_at = at + ENTRY + if flags & 0x4000 != 0 { 2 } else { 0 };
+        let nul = index[name_at..body].iter().position(|b| *b == 0).unwrap() + name_at;
+        at += (nul + 1 - at + 7) & !7;
+    }
+    if at != body { return Err(StageError::Extension); }
+    let target = target.ok_or(StageError::Path)?;
+    let id = blob_id(bytes);
+    let mut raw = format!("blob {}\0", bytes.len()).into_bytes();
+    raw.extend_from_slice(bytes);
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+    let mut updated = index.to_vec();
+    updated[target + 36..target + 40].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+    updated[target + 40..target + 60].copy_from_slice(&id);
+    // Reset timestamps/device/inode, but preserve the tracked file mode and
+    // ownership metadata. Git must refresh the worktree stat after staging.
+    updated[target..target + 24].fill(0);
+    let checksum: [u8; 20] = Sha1::digest(&updated[..body]).into();
+    updated[body..].copy_from_slice(&checksum);
+    Ok((updated, id, compressed))
+}
+
 pub fn parse_index(data: &[u8]) -> Result<Vec<Tracked>, Error> {
     if data.len() > MAX_INDEX { return Err(Error::Limit); }
     if data.len() < HEADER + CHECKSUM || &data[..4] != b"DIRC" { return Err(Error::Header); }
@@ -158,5 +197,27 @@ mod tests {
     fn limits_diff_size_and_rejects_binary() {
         assert_eq!(diff_text(&vec![b'a'; MAX_DIFF_BYTES + 1], b""), Err(DiffError::Limit));
         assert_eq!(diff_text(b"a\0b", b"a\nb"), Err(DiffError::Binary));
+    }
+
+    #[test]
+    fn stages_one_tracked_text_blob_without_rebuilding_other_entries() {
+        let replacement = b"fn main() { println!(\"staged\"); }\n";
+        let (updated, id, compressed) = stage_tracked(INDEX, b"demo.rs", replacement).unwrap();
+        assert_eq!(id, blob_id(replacement));
+        assert_eq!(loose_blob(&compressed, &id).unwrap(), replacement);
+        let before = parse_index(INDEX).unwrap();
+        let after = parse_index(&updated).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(after[0].path, before[0].path);
+        assert_eq!(after[1], before[1]);
+        assert_eq!(after[0].id, id);
+        assert_eq!(&updated[HEADER + 24..HEADER + 28], &INDEX[HEADER + 24..HEADER + 28], "tracked file mode changed");
+        assert_eq!(stage_tracked(INDEX, b"absent.rs", replacement), Err(StageError::Path));
+        assert_eq!(stage_tracked(INDEX, b"demo.rs", b"bad\0bytes"), Err(StageError::Limit));
+        let mut extended = INDEX[..INDEX.len() - CHECKSUM].to_vec();
+        extended.extend_from_slice(b"TREE\0\0\0\0");
+        let digest: [u8; 20] = Sha1::digest(&extended).into();
+        extended.extend_from_slice(&digest);
+        assert_eq!(stage_tracked(&extended, b"demo.rs", replacement), Err(StageError::Extension));
     }
 }
