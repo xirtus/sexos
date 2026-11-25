@@ -1,4 +1,8 @@
 //! Read one file from the actual SexFS image; extraction never writes the disk.
+extern crate self as sha2;
+#[path = "sha256_shim.rs"]
+mod sha256_shim;
+pub use sha256_shim::{Digest, Sha256};
 #[path = "../crates/sexfs/src/lib.rs"]
 mod sexfs;
 use sexfs::{Device, BLOCK};

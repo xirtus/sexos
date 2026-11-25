@@ -1,5 +1,9 @@
 // The filesystem against a model of what it should hold, and against power cuts at
 // every write. Whatever a crash does to unflushed writes, the last commit must be whole.
+extern crate self as sha2;
+#[path = "../scripts/sha256_shim.rs"]
+mod sha256_shim;
+pub use sha256_shim::{Digest, Sha256};
 #[path = "../crates/sexfs/src/lib.rs"]
 mod sexfs;
 use sexfs::*;
