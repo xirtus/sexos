@@ -306,6 +306,25 @@ impl Book {
         self.run("data.filterBy", params).map(|_| ())
     }
 
+    /// Apply one native AutoFilter comparison to a column. GridCraft evaluates
+    /// the criterion against cells, including numeric values and formula results.
+    pub fn filter_by_condition(&mut self, at: Range, col: u32, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter contains text, starts text, ends text, notcontains text, or >, >=, <, <= number";
+        let (name, value) = input.trim().split_once(' ').ok_or(HELP)?;
+        let value = value.trim();
+        if value.is_empty() || value.chars().count() > 128 { return Err(HELP.into()); }
+        let op = match name.to_ascii_lowercase().as_str() {
+            "contains" => "contains", "notcontains" => "notContains",
+            "starts" => "beginsWith", "ends" => "endsWith",
+            ">" => ">", ">=" => ">=", "<" => "<", "<=" => "<=",
+            _ => return Err(HELP.into()),
+        };
+        if matches!(op, ">" | ">=" | "<" | "<=")
+            && !value.parse::<f64>().is_ok_and(f64::is_finite) { return Err(HELP.into()); }
+        if self.filter_range().is_none() { self.toggle_filter(at)?; }
+        self.run("data.filterBy", json!({ "column": column_name(col), "custom": { "op": op, "value": value } })).map(|_| ())
+    }
+
     /// Rows above and columns left of the frozen corner, if panes are frozen.
     pub fn frozen(&self) -> Option<(u32, u32)> {
         self.session.doc().ok().and_then(|d| d.wb.active().and_then(|s| s.freeze))
@@ -743,6 +762,23 @@ mod tests {
         book.toggle_filter(Range::cell(2, 0)).unwrap();
         assert!(book.filter_range().is_none());
         assert!((0..4).all(|r| book.row_height(r) > 0));
+    }
+
+    #[test]
+    fn filter_conditions_match_text_and_numeric_cells() {
+        let mut book = budget("condition.xlsx");
+        assert!(book.filter_by_condition(Range::cell(1, 0), 0, "contains").is_err());
+        assert!(book.filter_by_condition(Range::cell(1, 0), 1, "> many").is_err());
+        assert!(book.filter_range().is_none());
+        book.filter_by_condition(Range::cell(1, 0), 0, "contains oo").unwrap();
+        assert_eq!((book.row_height(1), book.row_height(2) > 0, book.row_height(3)), (0, true, 0));
+        book.filter_by_condition(Range::cell(1, 0), 0, "starts f").unwrap();
+        assert_eq!((book.row_height(1), book.row_height(2) > 0, book.row_height(3) > 0), (0, true, true));
+        book.filter_by_condition(Range::cell(1, 0), 0, "contains impossible").unwrap();
+        assert_eq!((book.row_height(1), book.row_height(2), book.row_height(3)), (0, 0, 0));
+        book.filter_by_values(Range::cell(1, 0), 0, &[]).unwrap();
+        book.filter_by_condition(Range::cell(1, 1), 1, "> 200").unwrap();
+        assert_eq!((book.row_height(1) > 0, book.row_height(2) > 0, book.row_height(3)), (true, true, 0));
     }
 
     #[test]
