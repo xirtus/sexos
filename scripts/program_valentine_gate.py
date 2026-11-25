@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Valentine's native local mail view: import an RFC 5322 message through Files,
-parse a multipart body, search it, reload it and preserve a screenshot in CI."""
+"""Valentine's native local mail view and draft recovery through a QEMU power cut."""
 import argparse,http.server,os,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -88,7 +87,23 @@ def main():
   shot('valentine-folder')
   s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name= messages=2',s,60)
   close(target,task)
+  # Let the idle composer save a draft, then cut QEMU power with the window open.
+  # No Close or Ctrl+S runs for this draft.
+  target,task,s=launch()
+  s=len(t());ctrl('n');keys('reboot@example.org');q.key('ret');keys('power cut');q.key('ret');keys('saved after crash')
+  saved=g['wait'](r'\[valentine.draft.saved\] path=(draft-[^ ]+\.eml) bytes=\d+',s,90)
+  shot('valentine-before-powercut')
+  assert '[valentine.fatal]' not in t() and 'KERNEL PANIC' not in t()
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'valentine-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  shell(f'cat /data/valentine/{saved[1]}',r'\[spindle.fs.cat\] saved after crash',90)
+  target,task,s=launch();g['wait'](r'\[valentine.loaded\] messages=3',s,60)
+  s=len(t());keys('power cut');g['wait'](r'\[valentine.search\] query=power cut matches=1',s,60)
+  s=len(t());q.key('ret');g['wait'](r'\[valentine.opened\] file=draft-[^ ]+\.eml bytes=\d+ subject=power cut',s,60)
+  shot('valentine-autosaved-reboot')
+  close(target,task)
   assert '[valentine.fatal]' not in t() and 'KERNEL PANIC' not in t()
  finally:g['stop']();server.shutdown()
- print({'ok':True,'messages':1})
+ print({'ok':True,'messages':1,'powercut_draft':True})
 if __name__=='__main__':main()
