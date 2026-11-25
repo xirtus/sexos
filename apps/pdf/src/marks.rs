@@ -6,7 +6,7 @@
 //! vellum-edit works in PDF user space: points from the bottom left of the unrotated
 //! page. These convert between the two, merge a found word's character boxes into one
 //! rectangle per line, order form fields as the eye reads them, and date annotations.
-use vellum_edit::{FieldInfo, FieldKind, PageInfo, PdfDate};
+use vellum_edit::{AnnotInfo, FieldInfo, FieldKind, PageInfo, PdfDate};
 
 /// A shown point in user space.
 pub fn to_user(p: &PageInfo, (x, y): (f64, f64)) -> (f64, f64) {
@@ -42,6 +42,28 @@ pub fn rect_to_shown(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     let (ax, ay) = to_shown(p, (r[0], r[1]));
     let (bx, by) = to_shown(p, (r[2], r[3]));
     [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)]
+}
+
+/// Topmost visible annotation under a shown page point. Text markup uses its
+/// individual quads, so a click between highlighted lines is not a hit.
+pub fn annotation_hit(annots: &[AnnotInfo], page: &PageInfo, point: (f64, f64)) -> Option<usize> {
+    let contains = |r: [f64; 4]| point.0 >= r[0] && point.0 <= r[2] && point.1 >= r[1] && point.1 <= r[3];
+    annots.iter().enumerate().rev().find_map(|(index, annot)| {
+        if annot.hidden { return None; }
+        let quads = &annot.quad_points;
+        let hit = if quads.len() >= 8 && quads.len() % 8 == 0 {
+            quads.chunks_exact(8).any(|quad| {
+                let shown = [to_shown(page, (quad[0], quad[1])), to_shown(page, (quad[2], quad[3])),
+                    to_shown(page, (quad[4], quad[5])), to_shown(page, (quad[6], quad[7]))];
+                let r = [shown.iter().map(|p| p.0).fold(f64::INFINITY, f64::min),
+                    shown.iter().map(|p| p.1).fold(f64::INFINITY, f64::min),
+                    shown.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max),
+                    shown.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)];
+                contains(r)
+            })
+        } else { contains(rect_to_shown(page, annot.rect)) };
+        hit.then_some(index)
+    })
 }
 
 /// Character boxes (shown, `[left, top, right, bottom]`) merged into one rectangle per
@@ -100,7 +122,7 @@ pub fn date(unix: u64) -> PdfDate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vellum_edit::{Editor, FieldValue};
+    use vellum_edit::{AnnotKind, AnnotStyle, Editor, FieldValue, NewAnnot};
 
     fn page(rotate: i32) -> PageInfo {
         PageInfo { media_box: [0.0, 0.0, 612.0, 792.0], crop_box: [10.0, 20.0, 610.0, 780.0], rotate }
@@ -128,6 +150,24 @@ mod tests {
         let boxes = [[10.0, 100.0, 16.0, 114.0], [16.0, 101.0, 22.0, 114.0], [22.0, 100.0, 30.0, 115.0], [5.0, 120.0, 11.0, 134.0], [11.0, 120.0, 17.0, 134.0]];
         assert_eq!(line_rects(&boxes), vec![[10.0, 100.0, 30.0, 115.0], [5.0, 120.0, 17.0, 134.0]]);
         assert!(line_rects(&[]).is_empty());
+    }
+
+    #[test]
+    fn annotation_hit_uses_highlight_quads_and_topmost_order() {
+        const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        let page = editor.page_info(0).unwrap();
+        let first = [40.0, 40.0, 100.0, 54.0];
+        let second = [40.0, 100.0, 100.0, 114.0];
+        let rects = vec![rect_to_user(&page, first), rect_to_user(&page, second)];
+        editor.add_annotation(0, &NewAnnot { kind: AnnotKind::Highlight { rects }, style: AnnotStyle::default() }).unwrap();
+        let annots: Vec<_> = editor.annotations(0).unwrap().into_iter().filter(|a| a.subtype == "Highlight").collect();
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 47.0)), Some(0));
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 107.0)), Some(0));
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 80.0)), None, "gap between highlighted lines");
+        editor.add_annotation(0, &NewAnnot { kind: AnnotKind::Highlight { rects: vec![rect_to_user(&page, first)] }, style: AnnotStyle::default() }).unwrap();
+        let annots: Vec<_> = editor.annotations(0).unwrap().into_iter().filter(|a| a.subtype == "Highlight").collect();
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 47.0)), Some(1), "later annotation is on top");
     }
 
     #[test]
