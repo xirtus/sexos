@@ -74,6 +74,14 @@ pub const ORGANIZE_RULE: u8 = 50;
 /// The post-commit event log: files that arrived in organized folders since sequence
 /// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
 pub const ORGANIZE_LOG: u8 = 51;
+/// Create without replacing a name; on success data[0..8] is the new SexFS object ID.
+/// Supported on the primary and encrypted home filesystems.
+pub const CREATE_WITH_ID: u8 = 52;
+/// Write only while path still names the ID in data[0..8]. `length` includes
+/// that prefix; the remaining bytes are written at `offset`.
+pub const WRITE_IF_ID: u8 = 53;
+/// Remove only while path still names the object ID in `offset`.
+pub const REMOVE_IF_ID: u8 = 54;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;
