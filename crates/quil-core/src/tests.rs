@@ -178,6 +178,21 @@ fn ctrl_d_selects_the_word_then_each_next_occurrence() {
 }
 
 #[test]
+fn ctrl_d_skips_selected_hits_after_wrapping() {
+    let mut ed = Editor::from_bytes(b"foo foo foo foo\n");
+    ed.set_cursor(9); // third word
+    for expected in 1..=4 {
+        assert!(ed.add_next_occurrence());
+        assert_eq!(ed.sels.len(), expected);
+    }
+    assert!(!ed.add_next_occurrence());
+    ed.type_text(b"bar");
+    assert_eq!(s(&ed), "bar bar bar bar\n");
+    ed.undo();
+    assert_eq!(s(&ed), "foo foo foo foo\n");
+}
+
+#[test]
 fn select_all_occurrences_and_paste_one_line_per_cursor() {
     let mut ed = Editor::from_bytes(b"a1 a2 a3");
     ed.set_selection(0, 1);
