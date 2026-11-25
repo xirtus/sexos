@@ -3,7 +3,7 @@
 
 use crate::cos::{fmt_num as n, Dict, ObjId, Object, Stream};
 use crate::text::{content_string, decode_text, encode_text, text_width, wrap};
-use crate::{rect_of, Editor, Error};
+use crate::{rect_obj, rect_of, Editor, Error};
 
 fn find_once(data: &[u8], needle: &[u8]) -> Result<usize, Error> {
     let mut found = data.windows(needle.len()).enumerate().filter(|(_, window)| *window == needle);
@@ -117,6 +117,61 @@ const FF_MULTISELECT: i64 = 1 << 21;
 const FF_COMB: i64 = 1 << 24;
 
 impl Editor {
+    /// Add a visible, empty signature widget on a page. This creates no signature
+    /// value or key material; a signer can later fill the field via
+    /// `embed_detached_signature_with` after the document has been saved.
+    pub fn add_signature_field(&mut self, page: usize, name: &str, rect: [f64; 4]) -> Result<ObjId, Error> {
+        let pid = self.page_id(page)?;
+        if name.trim() != name || name.is_empty() || name.len() > 80
+            || name.contains('.') || name.chars().any(char::is_control) {
+            return Err(Error::BadValue("invalid signature field name".into()));
+        }
+        if self.fields()?.iter().any(|f| f.name == name) {
+            return Err(Error::BadValue("signature field name already exists".into()));
+        }
+        // Adding a widget to a signed revision requires DocMDP/FieldMDP policy
+        // evaluation. Do not risk invalidating an existing signature here.
+        if self.signatures()?.iter().any(|s| s.signed) {
+            return Err(Error::BadValue("cannot add a field to a signed PDF".into()));
+        }
+        let crop = self.page_info(page)?.crop_box;
+        if rect.iter().any(|v| !v.is_finite()) || rect[2] - rect[0] < 12.0
+            || rect[3] - rect[1] < 12.0 || rect[0] < crop[0] || rect[1] < crop[1]
+            || rect[2] > crop[2] || rect[3] > crop[3] {
+            return Err(Error::BadValue("signature field rectangle must fit on the page".into()));
+        }
+        let (catalog_id, mut catalog) = self.catalog()?;
+        let form_ref = catalog.get(b"AcroForm").and_then(Object::as_ref);
+        let mut form = catalog.get(b"AcroForm").and_then(|o| self.dict_of(o)).unwrap_or_default();
+        let fields_ref = form.get(b"Fields").and_then(Object::as_ref);
+        let mut fields = match form.get(b"Fields") {
+            Some(o) => self.resolve(o).as_array().cloned().ok_or(Error::Malformed("bad AcroForm fields"))?,
+            None => Vec::new(),
+        };
+        let width = rect[2] - rect[0];
+        let height = rect[3] - rect[1];
+        let appearance = Stream {
+            dict: Dict::new().with(b"Type", Object::name("XObject"))
+                .with(b"Subtype", Object::name("Form"))
+                .with(b"BBox", rect_obj([0.0, 0.0, width, height])),
+            data: format!("0.8 0.45 0.5 RG 1 w 0.5 0.5 {} {} re S\n", n(width - 1.0), n(height - 1.0)).into_bytes(),
+        };
+        let ap_id = self.add(appearance);
+        let widget = Dict::new().with(b"Type", Object::name("Annot"))
+            .with(b"Subtype", Object::name("Widget"))
+            .with(b"FT", Object::name("Sig"))
+            .with(b"T", Object::Str(encode_text(name)))
+            .with(b"Rect", rect_obj(rect)).with(b"P", pid).with(b"F", 4i64)
+            .with(b"AP", Dict::new().with(b"N", ap_id));
+        let id = self.add(widget);
+        fields.push(Object::Ref(id));
+        match fields_ref { Some(r) => self.set(r, Object::Array(fields)), None => form.set(b"Fields", Object::Array(fields)) }
+        form.set(b"SigFlags", 3i64);
+        match form_ref { Some(r) => self.set(r, form), None => { catalog.set(b"AcroForm", form); self.set(catalog_id, catalog); } }
+        self.push_annot(pid, Object::Ref(id));
+        Ok(id)
+    }
+
     /// Verify a stored P-256/SHA-256 detached CMS against its exact PDF byte
     /// ranges. Other algorithms/layouts stay unsupported; none are called valid.
     pub fn signature_content_integrity(&self, field_name: &str) -> Result<ContentIntegrity, Error> {

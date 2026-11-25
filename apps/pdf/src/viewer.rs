@@ -56,6 +56,7 @@ const BACKSPACE: u8 = 0x0E;
 const ENTER: u8 = 0x1C;
 const KEY_F: u8 = 0x21;
 const KEY_G: u8 = 0x22;
+const KEY_D: u8 = 0x20;
 /// Shell keeps F3 for itself today; it is honoured if it ever arrives.
 const F3: u8 = 0x3D;
 const TAB: u8 = 0x0F;
@@ -84,6 +85,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
     "Ctrl+Shift+V inspects stored digital signature fields",
+    "Ctrl+Shift+D places an empty digital signature field",
     "Ctrl+S saves edits; Ctrl+Shift+/ opens this help",
 ];
 /// The chosen region's outline, and a focused form field's.
@@ -736,6 +738,7 @@ impl Viewer {
             return true;
         }
         if ctrl(KEY_V) && key.shift { self.inspect_signatures(); return true; }
+        if ctrl(KEY_D) && key.shift { self.place_signature_field(); return true; }
         if ctrl(KEY_S) { self.save(); return true; }
         if ctrl(KEY_H) { self.highlight(); return true; }
         if ctrl(KEY_R) {
@@ -793,6 +796,33 @@ impl Viewer {
                 sex_std::record(&format!("[pdf.signatures] fields={} signed={signed} malformed={malformed} verified=0 content_intact={intact} content_changed={changed} unsupported={unsupported}", signatures.len()));
             }
             None => self.status = Some("Cannot inspect signatures in this PDF".into()),
+        }
+    }
+
+    fn place_signature_field(&mut self) {
+        let page = self.page;
+        let Some(info) = self.page_info(page) else { let _ = self.editor(); return };
+        let (w, h) = self.pdf.pages().get(page).map_or((612.0, 792.0), |p| p.render_dimensions());
+        let shown = self.region.unwrap_or([w as f64 * 0.2, h as f64 * 0.78, w as f64 * 0.7, h as f64 * 0.84]);
+        let rect = marks::rect_to_user(&info, shown);
+        let Some(editor) = self.editor() else { return };
+        let names: Vec<String> = match editor.fields() {
+            Ok(fields) => fields.into_iter().map(|f| f.name).collect(),
+            Err(e) => { self.status = Some(format!("Cannot list fields: {e}")); return; }
+        };
+        let name = (1..=999).map(|i| format!("Vellum signature {i}"))
+            .find(|n| !names.contains(n));
+        let Some(name) = name else { self.status = Some("Too many signature fields".into()); return };
+        match editor.add_signature_field(page, &name, rect) {
+            Ok(_) => {
+                self.field_history.clear();
+                self.annotation_history.clear();
+                self.region = None;
+                self.refresh();
+                self.status = Some(format!("{name} added. Ctrl+S saves this empty field."));
+                sex_std::record(&format!("[pdf.sign.field] page={} name={name} empty=1", page + 1));
+            }
+            Err(e) => self.status = Some(format!("Could not add signature field: {e}")),
         }
     }
 

@@ -154,6 +154,26 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-cms-signed-inspection.ppm')})
   q.cmd('screendump',{'filename':str(a.out/'pdf-cms-content-intact.ppm')})
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # Place a real empty signature widget from the Vellum window, save it,
+  # and reopen the persisted PDF before reporting the field as available.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf signature-field.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @signature-field.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=signature-field\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  step(lambda:chord('ctrl','shift','d'),r'\[pdf\.sign\.field\] page=1 name=Vellum signature 1 empty=1\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signature-field.ppm')})
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.saved\] path=@/signature-field\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=0 ms=\d+\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  s=len(t());line('run vellum @signature-field.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=signature-field\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  s=len(t());chord('ctrl','shift','v')
+  g['wait'](r'\[pdf\.signatures\] fields=1 signed=0 malformed=0 verified=0 content_intact=0 content_changed=0 unsupported=0\n',s,120)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A separate source stays untouched while a complete unsaved PDF is kept.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
