@@ -33,6 +33,9 @@ in Downloads and survives a browser restart. Removing a private row affects only
 the current window and leaves the normal saved history alone.
 Ctrl+Alt+J clears the panel's saved history and failed-transfer list. It keeps
 downloaded files and resumable transfers.
+In a private tab or window, it clears only private rows and current failures;
+normal saved history stays available. Normal rows cannot be removed individually
+from a private tab; switch to a normal tab for that action.
 Ctrl+Shift+J pauses the live transfer at its current staged file offset and
 resumes the same connection; if the site closes it while paused, the download
 fails with a retry link. Esc stops it, removes the hidden partial file, and

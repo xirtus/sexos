@@ -31,7 +31,9 @@ and Shields. The remaining gaps are:
   The downloads panel now offers Ctrl+Alt+J to clear saved history and current
   failures after a durable state write. Downloaded files and resumable transfers
   remain available. Individual completed rows can now be removed from history
-  without deleting the saved file; the removal survives restart. Nonempty orphan
+  without deleting the saved file; the removal survives restart. Clearing from a
+  private tab or window affects only private rows and current failures, leaving
+  normal saved history intact. Nonempty orphan
   hidden-part cleanup is still open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
