@@ -55,6 +55,8 @@ pub struct Ui {
     ask: Option<Ask>,
     /// Ctrl+Shift+Y's selected issue and its suggestion list.
     proof: Option<Proof>,
+    /// An in-app shortcut reference, opened with Ctrl+Shift+/.
+    help: bool,
     /// The document came back with last time's unsaved changes: Esc throws them away until
     /// the next edit.
     recovered: bool,
@@ -97,6 +99,17 @@ impl Prompt {
 }
 
 const GAP: i32 = 12;
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("Ctrl+S", "Save"), ("Ctrl+Shift+E", "Save as / choose format"),
+    ("Ctrl+P", "Export PDF"), ("Ctrl+T", "Insert table"),
+    ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+S", "Apply paragraph style"),
+    ("Ctrl+B / I / U", "Bold / italic / underline"),
+    ("Ctrl+Z / Y", "Undo / redo"), ("Ctrl+A", "Select all"),
+    ("Ctrl+F / H", "Find / replace"),
+    ("Ctrl+G", "Go to page"), ("Ctrl+Shift+Y", "Spelling suggestions"),
+    ("Ctrl+= / - / 0", "Zoom in / out / reset"),
+    ("Ctrl+Shift+/", "Show or hide this reference"),
+];
 
 /// Set-1 scan codes Shell passes.
 mod code {
@@ -113,6 +126,7 @@ mod code {
     pub const T: u8 = 0x14;
     pub const I: u8 = 0x17;
     pub const Y: u8 = 0x15;
+    pub const SLASH: u8 = 0x35;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -143,7 +157,7 @@ impl Ui {
         let palette = Palette::from_tokens(theme);
         let theme_generation = sex_app::settings::generation().unwrap_or(0);
         sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, palette.selected));
-        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, recovered: false, unkept: None, scroll_to: None }
+        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, help: false, recovered: false, unkept: None, scroll_to: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -244,6 +258,25 @@ impl Ui {
                 let y = by + 30 + (i - first) as i32 * row;
                 if i == *at { canvas.fill(bx + 4, y - 2, bw - 8, row, palette.selected); }
                 self.pen.text(&mut canvas, bx + 12, y + 2, name, if i == *at { palette.on_selected } else { palette.ink }, Some((bx, bw - 12)));
+            }
+        }
+        if self.help {
+            let row = self.pen.line_height() + 6;
+            let bw = (w - 2 * MARGIN).min(520).max(0);
+            let bh = (row * (SHORTCUTS.len() as i32 + 2)).min(view_h - 2 * MARGIN);
+            if bw > 0 && bh > 0 {
+                let bx = (w - bw) / 2;
+                let by = ((view_h - bh) / 2).max(0);
+                canvas.fill(bx + 3, by + 3, bw, bh, palette.shadow);
+                canvas.fill(bx, by, bw, bh, palette.bar_bg);
+                canvas.frame(bx, by, bw, bh, palette.line);
+                self.pen.text(&mut canvas, bx + 12, by + 8, "Assuit keyboard shortcuts (Esc closes)", palette.ink, Some((bx, bw - 16)));
+                for (i, (shortcut, action)) in SHORTCUTS.iter().enumerate() {
+                    let y = by + row * (i as i32 + 1) + 8;
+                    if y + row > by + bh { break; }
+                    self.pen.text(&mut canvas, bx + 12, y, shortcut, palette.selected, Some((bx, 170)));
+                    self.pen.text(&mut canvas, bx + 180, y, action, palette.ink, Some((bx + 180, (bw - 192).max(0))));
+                }
             }
         }
         canvas.fill(0, view_h, w, STATUS_H, palette.bar_bg);
@@ -430,6 +463,15 @@ impl Ui {
 
     /// One key: Assuit's own (save, zoom), then WordCraft's shortcut, then typed text.
     fn key(&mut self, key: Key) {
+        if key.control && key.shift && key.code == code::SLASH {
+            self.help = !self.help;
+            sex_std::record(&format!("[assuit.shortcuts] shown={}", self.help as u8));
+            return;
+        }
+        if self.help {
+            if key.code == code::ESC { self.help = false; }
+            return;
+        }
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
         if self.picker.is_some() { return self.picker_key(key); }

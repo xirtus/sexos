@@ -51,6 +51,11 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-opened.ppm')})
   shot=(a.out/'assuit-opened.ppm').read_bytes()
   assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>10000,'Light theme desk missing'
+  s=len(t());press('ctrl','shift','slash')
+  g['wait'](r'\[assuit\.shortcuts\] shown=1',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-shortcuts.ppm')})
+  assert (a.out/'assuit-shortcuts.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','slash');g['wait'](r'\[assuit\.shortcuts\] shown=0',s,60)
   s=len(t());q.key('end');type_line(' today')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today\n',s,300)
   s=len(t());press('shift','home')
