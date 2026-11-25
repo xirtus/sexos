@@ -25,6 +25,29 @@ pub struct Faces { pub small: Face, pub tiny: Face, pub big: Face }
 
 pub const TABS: [&str; 6] = ["Month", "Week", "Day", "Clock", "Calendars", "Sync"];
 
+/// The in-app reference and `docs/DATE_SHORTCUTS.md` describe these actions.
+pub const HELP_ROWS: &[(&str, &str)] = &[
+    ("?", "Open or close this shortcut reference"),
+    ("M W D C L", "Month, week, day, clock, calendars"),
+    ("S / E", "Sync CalDAV / export shown events to .ics"),
+    ("Month: arrows", "Move one day or one week"),
+    ("Month: PgUp/PgDn", "Previous or next month"),
+    ("T / Home", "Return to today"),
+    ("Enter / Esc", "Open a day's agenda / return to calendar"),
+    ("N", "New event on the selected day"),
+    ("Agenda: Up/Down", "Choose an event"),
+    ("Agenda: Delete", "Remove the selected event"),
+    ("Agenda: A / X", "Accept or decline an invitation"),
+    ("Week/Day: Left/Right", "Move one day"),
+    ("Week/Day: Up/Down", "Scroll through hours"),
+    ("Week/Day: PgUp/PgDn", "Previous or next week"),
+    ("Clock: N / R", "New alarm / new timer"),
+    ("Clock: Z / H", "Add zone / choose local zone"),
+    ("Clock: Space/Delete", "Toggle alarm / remove chosen item"),
+    ("Calendars: N", "Add a local calendar"),
+    ("Calendars: Space", "Show or hide selected calendar"),
+];
+
 /// Where the parts of the window are.
 pub struct Layout { pub w: i32, pub h: i32, pub grid_x: i32, pub grid_y: i32, pub cell_w: i32, pub cell_h: i32, pub side_x: i32 }
 
@@ -123,14 +146,31 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
         None if !app.status.is_empty() => app.status.clone(),
         None if app.agenda => String::from("Up/Down pick, Delete removes, a accepts, x declines, Esc back"),
         None => String::from(match app.view {
-            View::Month => "Enter opens a day, n adds, m w d c l views, s syncs, e exports",
-            View::Week | View::Day => "Arrows move, Up/Down hours, n adds, Enter opens the day",
-            View::Clock => "n alarm, r timer, z zone, h local zone, Space on/off, Delete removes",
-            View::Calendars => "Space shows/hides, n adds a calendar; new events go to the picked one",
+            View::Month => "Enter opens a day, n adds, m w d c l views, s syncs, e exports, ? shortcuts",
+            View::Week | View::Day => "Arrows move, Up/Down hours, n adds, Enter opens the day, ? shortcuts",
+            View::Clock => "n alarm, r timer, z zone, h local zone, Space on/off, Delete removes, ? shortcuts",
+            View::Calendars => "Space shows/hides, n adds a calendar; ? shortcuts",
         }),
     };
     c.text(&mut f.small, 12, l.h - 26, &bottom, if app.ask.is_some() { TEXT } else { DIM }, l.side_x - 20);
+    if app.help { help(&mut c, app, &l, f); }
     window.show_pixels(w, h);
+}
+
+fn help(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
+    let shown = (((l.h - 120) / 22).max(3) as usize).min(HELP_ROWS.len());
+    let (x, width) = (24, l.w - 48);
+    let height = 68 + shown as i32 * 22;
+    let y = ((l.h - height) / 2).max(8);
+    c.fill(x, y, width, height, PANEL);
+    c.outline(x, y, width, height, 2, ACCENT);
+    c.text(&mut f.big, x + 18, y + 12, "Date shortcuts", TEXT, width - 36);
+    for (row, &(keys, action)) in HELP_ROWS.iter().skip(app.help_offset).take(shown).enumerate() {
+        let line_y = y + 50 + row as i32 * 22;
+        c.text(&mut f.small, x + 18, line_y, keys, ACCENT, 205);
+        c.text(&mut f.small, x + 225, line_y, action, TEXT, width - 242);
+    }
+    c.text(&mut f.tiny, x + 18, y + height - 20, "Up/Down scroll  Page Up/Down jumps  ? or Esc closes", DIM, width - 36);
 }
 
 fn month(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {

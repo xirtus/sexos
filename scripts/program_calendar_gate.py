@@ -55,6 +55,13 @@ def main():
   s2=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'m'}],'hold-time':80})
   g['wait'](r'\[shell.wm.action\] action=ToggleMonocle done=1',s2,30);g['wait'](rf'\[shell.program.resize\] pd={target} task={task} w=\d+ h=\d+ status=0',s2,30);time.sleep(2)
   g['focus'](sid);time.sleep(.5)
+  # In-app reference covers the calendar, clock, invitation and sync keys.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'slash'}],'hold-time':80})
+  g['wait'](r'\[date.help\] open=1 offset=0',s,30)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'date-shortcuts.ppm')});time.sleep(.5)
+  shot=(a.out/'date-shortcuts.ppm').read_bytes();assert shot.startswith(b'P6\n') and len(shot)>100000
+  s=len(t());q.key('down');g['wait'](r'\[date.help\] open=1 offset=1',s,30)
+  s=len(t());q.key('esc');g['wait'](r'\[date.help\] open=0 offset=0',s,30)
   # Today is the machine's clock (QEMU's RTC follows this host, in UTC).
   host=datetime.datetime.now(datetime.timezone.utc).date()
   assert abs((today-host).days)<=1,(today,host)
