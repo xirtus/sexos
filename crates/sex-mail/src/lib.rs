@@ -22,6 +22,7 @@ pub mod thread;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -86,14 +87,17 @@ pub enum Auth<'a> {
 }
 
 impl Auth<'_> {
-    pub(crate) fn sasl(&self) -> (&'static str, String) {
+    pub(crate) fn sasl(&self) -> (&'static str, Zeroizing<String>) {
         match self {
             Auth::Plain { user, password } => {
-                let mut raw = Vec::new();
+                let mut raw = Zeroizing::new(Vec::new());
                 raw.push(0); raw.extend_from_slice(user.as_bytes()); raw.push(0); raw.extend_from_slice(password.as_bytes());
-                ("PLAIN", b64::encode(&raw))
+                ("PLAIN", Zeroizing::new(b64::encode(&raw)))
             }
-            Auth::XOAuth2 { user, token } => ("XOAUTH2", b64::encode(alloc::format!("user={user}\x01auth=Bearer {token}\x01\x01").as_bytes())),
+            Auth::XOAuth2 { user, token } => {
+                let raw = Zeroizing::new(alloc::format!("user={user}\x01auth=Bearer {token}\x01\x01"));
+                ("XOAUTH2", Zeroizing::new(b64::encode(raw.as_bytes())))
+            }
         }
     }
 }

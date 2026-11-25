@@ -18,6 +18,10 @@ Remaining gaps:
   resume a flow after Multipass authenticates it. The versioned
   `OPEN_MAIL_FLOW` request now names IMAP or SMTP without carrying credentials,
   forbids caller-chosen endpoints, and checks the response sequence and flow ID.
+  Multipass's host-tested SASL helper can use an app-password knot inside
+  Shibari over a verified TLS mail stream and yield only an authenticated stream;
+  transient SASL buffers are wiped after use. This is not yet wired to a guest
+  network flow.
   The boot-routed Multipass service, boot-enforced account grants, TLS-capable SexNet app
   flows, and a capability-safe network flow handoff do not exist yet.
 - JMAP, offline cache and conflict handling, account-backed folders and flags, sent copies,

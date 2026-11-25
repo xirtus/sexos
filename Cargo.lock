@@ -7717,6 +7717,9 @@ dependencies = [
 [[package]]
 name = "sex-mail"
 version = "0.1.0"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "sex-map"
@@ -7753,6 +7756,7 @@ dependencies = [
  "p256",
  "serde",
  "serde_json",
+ "sex-mail",
  "sha2 0.10.9",
  "shibari",
 ]
