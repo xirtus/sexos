@@ -473,6 +473,17 @@ impl Event {
         else if linked { edited.state = SyncState::New; }
         Ok(edited)
     }
+    /// Set or clear the place of one personal event without changing its identity.
+    pub fn located_personal(&self, location: &str, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        let location = location.trim();
+        if location.chars().count() > 120 { return Err("Enter a location of at most 120 characters."); }
+        let mut edited = self.clone();
+        edited.location = String::from(location);
+        if !edited.href.is_empty() { edited.state = SyncState::Modified; }
+        else if linked { edited.state = SyncState::New; }
+        Ok(edited)
+    }
     /// Calls `f` with each occurrence's first day that lies in `from..=to`, in order.
     /// RFC 5545: DTSTART is the first occurrence, COUNT counts before EXDATE removes
     /// any, RDATE adds days, and a day that does not exist is skipped, not moved.

@@ -62,6 +62,26 @@ fn retitling_personal_event_preserves_details_and_sync_identity() {
     event.uid = "personal-2-conflict".into();
     assert!(event.retitled_personal("Checkup", false).is_err());
 }
+
+#[test]
+fn personal_location_can_be_set_and_cleared_without_losing_identity() {
+    let mut event = Event::all_day(d(2026, 11, 25), "Checkup");
+    event.uid = "personal-3".into();
+    event.time = Some((540, 600));
+    event.alarms = vec![30];
+    let located = event.located_personal("  North room  ", false).unwrap();
+    assert_eq!((located.location.as_str(), located.uid.as_str(), located.time, located.alarms.as_slice(), located.state),
+        ("North room", "personal-3", Some((540, 600)), &[30][..], SyncState::Clean));
+    assert!(event.location.is_empty(), "undo needs the old value");
+    assert_eq!(located.located_personal("", false).unwrap().location, "");
+    assert_eq!(event.located_personal("North room", true).unwrap().state, SyncState::New);
+    event.href = "/cal/personal-3.ics".into();
+    event.etag = "v1".into();
+    let linked = event.located_personal("North room", true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-3.ics", "v1", SyncState::Modified));
+    event.invitation = true;
+    assert!(event.located_personal("North room", true).is_err());
+}
 fn unix_min(text: &str) -> i64 {
     // YYYY-MM-DDTHH:MM in UTC.
     let day = Date::parse(&text[..10]).unwrap();

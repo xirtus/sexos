@@ -25,6 +25,7 @@ keeps the help key as ordinary text until that entry is finished.
 | Open agenda | Shift+D | Copy the chosen occurrence to a YYYY-MM-DD date as a separate event |
 | Open agenda | M | Move a personal, nonrecurring event to a YYYY-MM-DD date; linked events sync the change |
 | Open agenda | E | Change a personal, nonrecurring event's title; linked events sync the change |
+| Open agenda | L | Set or clear a personal, nonrecurring event's location; linked events sync the change |
 | Open agenda | A, X | Prepare accepting or declining an invitation and open a reply preview |
 | Reply preview | Enter | Queue the local reply file and update the invitation |
 | Reply preview | Escape or Ctrl+Z, then Ctrl+Y | Cancel the choice, then restore it before queueing |
