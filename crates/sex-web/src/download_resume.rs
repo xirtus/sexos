@@ -10,10 +10,11 @@ pub struct Record { pub url: String, pub path: String, pub etag: String, pub tot
 
 /// A crash can leave the browser's just-created hidden part with no bytes and
 /// no durable resume record. Only that empty, unreferenced part is disposable.
-pub fn empty_orphan_part(name: &[u8], dir: bool, size: u64, records: &[Record]) -> bool {
-    if dir || size != 0 || name.len() < 7 || name.len() > 261
-        || !name.starts_with(b".") || !name.ends_with(b".part") { return false; }
-    let stem = &name[1..name.len() - 5];
+pub fn empty_orphan_part(name: &[u8], dir: bool, size: u64, valid_ticket: bool, records: &[Record]) -> bool {
+    const PREFIX: &[u8] = b".kaleidoscope-";
+    if !valid_ticket || dir || size != 0 || name.len() < PREFIX.len() + 6 || name.len() > PREFIX.len() + 256 + 5
+        || !name.starts_with(PREFIX) || !name.ends_with(b".part") { return false; }
+    let stem = &name[PREFIX.len()..name.len() - 5];
     if stem.is_empty() || stem.iter().any(|b| *b == b'/' || *b == b'\\' || *b < 0x20 || *b == 0x7f) { return false; }
     !records.iter().any(|r| r.path.as_bytes().strip_prefix(b"Downloads/") == Some(stem))
 }
@@ -95,11 +96,13 @@ mod tests {
     #[test]
     fn reaps_only_empty_unreferenced_browser_parts() {
         let saved = Record { url: "https://example.test/a".into(), path: "Downloads/kept.bin".into(), etag: "\"v1\"".into(), total: 100 };
-        assert!(empty_orphan_part(b".lost.bin.part", false, 0, &[saved.clone()]));
-        for (name, dir, size) in [(b".kept.bin.part".as_slice(), false, 0),
-            (b".lost.bin.part", false, 1), (b".lost.bin.part", true, 0),
+        assert!(empty_orphan_part(b".kaleidoscope-lost.bin.part", false, 0, true, &[saved.clone()]));
+        assert!(!empty_orphan_part(b".kaleidoscope-lost.bin.part", false, 0, false, &[saved.clone()]));
+        for (name, dir, size) in [(b".kaleidoscope-kept.bin.part".as_slice(), false, 0),
+            (b".kaleidoscope-lost.bin.part", false, 1), (b".kaleidoscope-lost.bin.part", true, 0),
+            (b".notes.part", false, 0), (b".lost.bin.part", false, 0),
             (b".notes", false, 0), (b"lost.bin.part", false, 0)] {
-            assert!(!empty_orphan_part(name, dir, size, &[saved.clone()]));
+            assert!(!empty_orphan_part(name, dir, size, true, &[saved.clone()]));
         }
     }
     fn head(status: u16, etag: &str, range: Option<&str>, len: u64) -> Head {

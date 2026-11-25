@@ -112,9 +112,13 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
   # A hard stop before the first download write leaves an empty hidden part.
   # A nonempty hidden part may still contain recoverable bytes and must stay.
-  for command in ('mkdir Downloads','touch Downloads/.empty.bin.part','write Downloads/.recoverable.bin.part x'):
+  for command in ('mkdir Downloads','mkdir Kaleidoscope','mkdir Kaleidoscope/empty-parts',
+                  'write Kaleidoscope/empty-parts/empty.bin.ticket .kaleidoscope-empty.bin.part',
+                  'touch Downloads/.kaleidoscope-empty.bin.part',
+                  'write Downloads/.kaleidoscope-recoverable.bin.part x',
+                  'touch Downloads/.kaleidoscope-unrecorded.bin.part','touch Downloads/.notes.part'):
    g['focus'](153);time.sleep(.3);s=len(t());keys(command);q.key('ret')
-   g['wait'](r'\[spindle.fs.line\] ok',s,90)
+   g['wait'](r'\[spindle.fs.line\] (ok|already exists)' if command.startswith('mkdir ') else r'\[spindle.fs.line\] ok',s,90)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {base}/big.bin');q.key('ret')
   g['wait'](r'\[web.download.empty_parts.cleaned\] count=1',s,120)
   g['wait'](r'\[web.download.start\] path=Downloads/big.bin ',s,300)
@@ -238,9 +242,33 @@ def main():
   g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
   g['wait'](r'\[web.download.history.loaded\] count=0',s,300)
   g['wait'](r'\[web.download.panel\] done=0 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-hidden-parts-review.ppm')})
+  assert (a.out/'browser-download-hidden-parts-review.ppm').stat().st_size>10000
   g['focus'](153);time.sleep(.3);s=len(t());keys('ls Downloads');q.key('ret')
-  g['wait'](r'\[spindle.fs.line\] \.recoverable\.bin\.part  2',s,90)
-  assert '.empty.bin.part' not in t()[s:],t()[s:]
+  g['wait'](r'\[spindle.fs.line\] \.kaleidoscope-recoverable\.bin\.part  2',s,90)
+  assert '.notes.part' in t()[s:],t()[s:]
+  assert '.kaleidoscope-unrecorded.bin.part' in t()[s:],t()[s:]
+  assert '.kaleidoscope-empty.bin.part' not in t()[s:],t()[s:]
+  # Power loss after a ticket and CREATE must clean only that zero-byte part.
+  for command in ('write Kaleidoscope/empty-parts/reboot.bin.ticket .kaleidoscope-reboot.bin.part',
+                  'touch Downloads/.kaleidoscope-reboot.bin.part',
+                  'write Kaleidoscope/empty-parts/stale.bin.ticket .kaleidoscope-stale.bin.part',
+                  'write Kaleidoscope/empty-parts/nonempty.bin.ticket .kaleidoscope-nonempty.bin.part',
+                  'write Downloads/.kaleidoscope-nonempty.bin.part x',
+                  'touch Kaleidoscope/empty-parts/keep.txt'):
+   g['focus'](153);time.sleep(.3);s=len(t());keys(command);q.key('ret')
+   g['wait'](r'\[spindle.fs.line\] ok',s,90)
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'download-powercut',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
+  g['wait'](r'\[web.download.empty_parts.cleaned\] count=1',s,300)
+  g['focus'](153);time.sleep(.3);s=len(t());keys('ls Downloads');q.key('ret')
+  g['wait'](r'\[spindle.fs.line\] \.kaleidoscope-nonempty\.bin\.part  2',s,90)
+  assert '.kaleidoscope-reboot.bin.part' not in t()[s:],t()[s:]
+  g['focus'](153);time.sleep(.3);s=len(t());keys('ls Kaleidoscope/empty-parts');q.key('ret')
+  g['wait'](r'\[spindle.fs.line\] keep\.txt  0',s,90)
+  assert 'reboot.bin.ticket' not in t()[s:] and 'stale.bin.ticket' not in t()[s:] and 'nonempty.bin.ticket' not in t()[s:],t()[s:]
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fnv':m.group(0)})
  finally:g['stop']()

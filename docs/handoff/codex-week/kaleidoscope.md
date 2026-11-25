@@ -17,8 +17,8 @@ and Shields. The remaining gaps are:
   synced again after rename. A failed sync is reported as a failed download;
   it cannot enter completed history. If the second sync fails, the visible
   file may remain but is explicitly marked unconfirmed for retry.
-  A zero-byte hidden part left by an interrupted create is now cleaned on
-  browser start; nonempty parts without valid metadata stay available for
+  A zero-byte hidden part left by an interrupted create is cleaned on browser
+  start only when a durable ticket names it; unticketed and nonempty parts stay available for
   manual recovery. A network-interrupted or window-close partial with a strong ETag now stays hidden and is
   synced alongside bounded resume metadata. Retrying its exact URL, including
   after a browser restart, sends Range/If-Range and appends only after a matching
