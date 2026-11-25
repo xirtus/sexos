@@ -196,6 +196,15 @@ impl Book {
             if s != sheet { self.activate(s)?; sheet = s; }
             if (width.round() as u32) != self.col_width(col) { self.set_col_width(col, width.round() as u32)?; }
         }
+        if !extras.validations.is_empty() {
+            let d = self.session.doc_mut().map_err(|e| e.to_string())?;
+            let mut wb = (*d.wb).clone();
+            for (s, range, mut rule) in extras.validations {
+                rule.ranges = vec![range];
+                wb.sheet_mut(s).ok_or("Validation refers to a missing sheet")?.validations.push(rule);
+            }
+            d.wb = std::sync::Arc::new(wb);
+        }
         self.activate(active)?;
         if let Ok(d) = self.session.doc_mut() {
             d.undo.clear();
@@ -1529,6 +1538,33 @@ mod tests {
         assert_eq!(reopened.input(1, 1), "Meals");
         assert!(reopened.set(2, 1, "Food").is_err());
         reopened.set(2, 1, "Meals").unwrap();
+    }
+
+    #[test]
+    fn ods_list_validation_keeps_blank_cells_and_live_sources() {
+        let mut book = Book::blank(&temp("validation-ods.xlsx"));
+        book.set(1, 3, "Food").unwrap();
+        book.set(2, 3, "Fun").unwrap();
+        book.list_validation(Range { r0: 1, c0: 0, r1: 3, c1: 0 }, "Food,Fun").unwrap();
+        book.list_validation(Range { r0: 1, c0: 1, r1: 3, c1: 1 }, "=D2:D3").unwrap();
+        let (path, _) = book.save_as(&temp("validation-ods.ods")).unwrap();
+        let xml = {
+            let bytes = std::fs::read(&path).unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name("content.xml").unwrap(), &mut xml).unwrap();
+            xml
+        };
+        assert!(xml.contains("table:content-validations"));
+        assert!(xml.contains("cell-content-is-in-list"));
+        assert!(xml.contains("table:content-validation-name"));
+        let mut reopened = Book::open(&path).unwrap().0;
+        assert_eq!(reopened.validation_choices(3, 0), Some(vec!["Food".into(), "Fun".into()]));
+        assert_eq!(reopened.validation_choices(3, 1), Some(vec!["Food".into(), "Fun".into()]));
+        assert!(reopened.set(3, 0, "Other").is_err());
+        reopened.set(1, 3, "Rent").unwrap();
+        assert_eq!(reopened.validation_choices(3, 1), Some(vec!["Rent".into(), "Fun".into()]));
+        assert!(reopened.set(3, 1, "Food").is_err());
     }
 
     #[test]

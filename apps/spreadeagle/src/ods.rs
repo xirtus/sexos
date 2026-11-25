@@ -8,6 +8,8 @@
 //! Format reference: ODF 1.3 part 3 section 9.1 (tables), 16 (styles) and part 4 (OpenFormula).
 use quick_xml::events::{BytesStart, Event};
 use gridcraft_engine::core::Value;
+use gridcraft_engine::core::{CellRef, RangeRef};
+use gridcraft_engine::model::{Validation, ValidationKind};
 use std::io::Read;
 
 /// A formula found in the file: sheet, row and column counted from 0, Excel spelling.
@@ -31,6 +33,8 @@ pub struct Extras {
     /// Percentages with other than two decimal places (GridCraft imports `0.00%`): sheet,
     /// row, column, format code.
     pub percents: Vec<(usize, u32, u32, String)>,
+    /// List rules and their cell ranges, recovered from ODF content validations.
+    pub validations: Vec<(usize, RangeRef, Validation)>,
 }
 
 /// Rows and columns past these are not walked (a repeat count can say a million).
@@ -56,6 +60,7 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
     let mut places: std::collections::HashMap<String, usize> = Default::default();
     let mut percent_style: Option<String> = None;
     let mut cell_percent: std::collections::HashMap<String, usize> = Default::default();
+    let mut validations: std::collections::HashMap<String, Validation> = Default::default();
     loop {
         let event = reader.read_event().map_err(|e| e.to_string())?;
         match event {
@@ -86,6 +91,11 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
                         sheet = Some(sheet.map_or(0, |s| s + 1)); row = 0; column = 0;
                         out.sheet_names.push(attr(e, b"name").unwrap_or_default());
                     }
+                    b"content-validation" if sheet.is_none() => {
+                        if let (Some(name), Some(condition)) = (attr(e, b"name"), attr(e, b"condition")) {
+                            if let Some(rule) = list_rule(&condition, e) { validations.insert(name, rule); }
+                        }
+                    }
                     b"table-column" => {
                         let repeat = number(e, b"number-columns-repeated").max(1);
                         if let (Some(s), Some(w)) = (sheet, attr(e, b"style-name").and_then(|n| widths.get(&n).copied())) {
@@ -100,6 +110,15 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
                     }
                     b"table-cell" | b"covered-table-cell" => {
                         let repeat = number(e, b"number-columns-repeated").max(1);
+                        if let (Some(s), Some(name)) = (sheet, attr(e, b"content-validation-name")) {
+                            if let Some(rule) = validations.get(&name) {
+                                if row < MAX_ROW && col < MAX_COL {
+                                    let end = CellRef::new(row.saturating_add(row_repeat).min(MAX_ROW) - 1,
+                                        col.saturating_add(repeat).min(MAX_COL) - 1);
+                                    out.validations.push((s, RangeRef::new(CellRef::new(row, col), end), rule.clone()));
+                                }
+                            }
+                        }
                         let cells = || (row..row.saturating_add(row_repeat).min(MAX_ROW)).flat_map(move |r| (col..col.saturating_add(repeat).min(MAX_COL)).map(move |c| (r, c)));
                         if let (Some(s), Some(f)) = (sheet, attr(e, b"formula")) {
                             if let Some(formula) = to_excel(&f) {
@@ -137,6 +156,24 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
         }
     }
     Ok(out)
+}
+
+fn list_rule(condition: &str, e: &BytesStart) -> Option<Validation> {
+    let body = condition.strip_prefix("of:").unwrap_or(condition)
+        .strip_prefix("cell-content-is-in-list(")?.strip_suffix(')')?;
+    let f1 = if body.starts_with('[') {
+        to_excel(&format!("of:={body}"))?.trim_start_matches('=').to_string()
+    } else {
+        let items: Vec<_> = body.split(';').map(|s| s.trim().strip_prefix('"')?.strip_suffix('"')).collect::<Option<_>>()?;
+        format!("\"{}\"", items.join(",").replace('"', "\"\""))
+    };
+    Some(Validation {
+        kind: ValidationKind::List,
+        f1,
+        allow_blank: attr(e, b"allow-empty-cell").as_deref() != Some("false"),
+        in_cell_dropdown: attr(e, b"display-list").as_deref() != Some("none"),
+        ..Validation::default()
+    })
 }
 
 /// Whether the cell style's percentage shows other than GridCraft's two places.
@@ -419,7 +456,33 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     let mut cell_styles: BTreeMap<(bool, bool, bool, bool, Kind), String> = BTreeMap::new();
     let mut col_styles: BTreeMap<u32, String> = BTreeMap::new();
     let mut body = String::new();
-    for sheet in &wb.sheets {
+    let mut validation_defs = String::new();
+    for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
+        let mut validation_cells: BTreeMap<(u32, u32), String> = BTreeMap::new();
+        for (rule_index, rule) in sheet.validations.iter().enumerate() {
+            if rule.kind != ValidationKind::List {
+                return Err("ODS export currently supports list validation rules only; save as XLSX to keep this rule".into());
+            }
+            let name = format!("v{sheet_index}_{rule_index}");
+            let source = if rule.f1.starts_with('"') {
+                let items = rule.f1.trim_matches('"').replace("\"\"", "\"");
+                items.split(',').map(|s| format!("\"{}\"", s.trim().replace('"', "\"\""))).collect::<Vec<_>>().join(";")
+            } else { to_odf(&format!("={}", rule.f1)).trim_start_matches("of:=").to_string() };
+            let condition = escape(&format!("of:cell-content-is-in-list({source})"));
+            let allow = if rule.allow_blank { "true" } else { "false" };
+            let display = if rule.in_cell_dropdown { "unsorted" } else { "none" };
+            let _ = write!(validation_defs, "<table:content-validation table:name=\"{name}\" table:condition=\"{condition}\" table:allow-empty-cell=\"{allow}\" table:display-list=\"{display}\"/>");
+            for range in &rule.ranges {
+                if range.count() > 100_000 {
+                    return Err("ODS export of a list validation over 100,000 cells is not supported yet; save as XLSX to keep this rule".into());
+                }
+                for r in range.start.row..=range.end.row {
+                    for c in range.start.col..=range.end.col {
+                        validation_cells.insert((r, c), name.clone());
+                    }
+                }
+            }
+        }
         let _ = write!(body, "<table:table table:name=\"{}\">", escape(&sheet.name));
         let used = sheet.used_range();
         let cols = used.map_or(0, |r| r.end.col + 1);
@@ -441,6 +504,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
         for at in sheet.cells.iter().map(|(at, _)| at).chain(sheet.spill.keys().copied()) {
             occupied.entry(at.row).or_default().insert(at.col);
         }
+        for &(r, c) in validation_cells.keys() { occupied.entry(r).or_default().insert(c); }
         let mut next_row = 0u32;
         for (&r, in_row) in &occupied {
             let mut row = String::new();
@@ -453,7 +517,8 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
                 let wrap = style.align.wrap;
                 let value = sheet.value(at);
                 let formula = cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text));
-                if matches!(value, Value::Empty) && formula.is_none() && font == (false, false, false) && !wrap { continue; }
+                let validation = validation_cells.get(&(r, c));
+                if matches!(value, Value::Empty) && formula.is_none() && font == (false, false, false) && !wrap && validation.is_none() { continue; }
                 let blanks = c - next_col;
                 if blanks > 0 { let _ = write!(row, "<table:table-cell table:number-columns-repeated=\"{blanks}\"/>"); }
                 next_col = c + 1;
@@ -464,6 +529,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
                     _ => Kind::Plain,
                 };
                 let mut open = String::from("<table:table-cell");
+                if let Some(name) = validation { let _ = write!(open, " table:content-validation-name=\"{name}\""); }
                 if font != (false, false, false) || wrap || kind != Kind::Plain {
                     let n = cell_styles.len();
                     let name = cell_styles.entry((font.0, font.1, font.2, wrap, kind)).or_insert_with(|| format!("ce{}", n + 1));
@@ -542,7 +608,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     let data_styles: String = std::iter::once(data_styles.to_string()).chain(places.iter().map(|d| format!(
         "<number:percentage-style style:name=\"P{d}\"><number:number number:decimal-places=\"{d}\" number:min-decimal-places=\"{d}\" number:min-integer-digits=\"1\"/><number:text>%</number:text></number:percentage-style>"))).collect();
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{data_styles}{styles}</office:automatic-styles><office:body><office:spreadsheet>{body}</office:spreadsheet></office:body></office:document-content>");
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}><office:automatic-styles>{data_styles}{styles}</office:automatic-styles><office:body><office:spreadsheet><table:content-validations>{validation_defs}</table:content-validations>{body}</office:spreadsheet></office:body></office:document-content>");
     let styles_xml = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles><style:default-style style:family=\"table-cell\"/><style:style style:name=\"Default\" style:family=\"table-cell\"/></office:styles></office:document-styles>");
     let meta = format!(

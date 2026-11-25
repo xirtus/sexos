@@ -17,3 +17,5 @@ Baseline: a daily spreadsheet such as LibreOffice Calc or Excel. Checked against
   recalculated totals, saves, and verifies an ordinary reopen.
 
 Claim each remaining feature after a focused host test and CI guest evidence.
+
+- **ODS list validation:** Spreadeagle now writes and reads ODF list rules, including literal choices and current-sheet source ranges, on filled and blank cells. The focused host round trip checks enforcement after reopen; the QEMU gate saves a validated workbook as ODS and reopens it. Charts, frozen panes, AutoFilter state, and non-list validation still need ODS fidelity work; list ranges above 100,000 cells currently require XLSX.
