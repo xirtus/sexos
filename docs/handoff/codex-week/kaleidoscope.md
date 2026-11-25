@@ -78,8 +78,9 @@ matching keyboard reference in `docs/apps/kaleidoscope-shortcuts.md`.
 Reader view now extracts the article from the currently shown DOM. It keeps
 script-added text and avoids a second request for a page that may have changed
 or required a sign-in. Direct `about:reader?url=` addresses still fetch once.
-Article data tables now retain captions, rows, header/data cells, links, and bounded
-column spans in reader view. Hidden rows, page styles, and event handlers stay
+Article data tables now retain captions, rows, header/data cells including empty
+cells, links, and bounded column spans in reader view. Hidden rows, page styles,
+and event handlers stay
 out. The reader QEMU fixture shows the table in its screenshot; complex nested
 tables and row spans remain gaps.
 

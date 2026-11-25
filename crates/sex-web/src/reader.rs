@@ -68,6 +68,19 @@ fn clean(text: &str) -> String {
     out
 }
 
+fn visible_words(dom: &Dom, n: NodeId) -> usize {
+    fn collect(dom: &Dom, n: NodeId, text: &mut String) {
+        if unwanted(dom, n) { return; }
+        match &dom.nodes[n].kind {
+            Kind::Text(value) => text.push_str(value),
+            _ => for &child in &dom.nodes[n].children { collect(dom, child, text); },
+        }
+    }
+    let mut text = String::new();
+    collect(dom, n, &mut text);
+    clean(&text).split_whitespace().count()
+}
+
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") }
 
 /// The page's article, or `None` when it has too little running text to be one.
@@ -171,7 +184,7 @@ fn table(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut usize) 
             let mut text = String::new();
             inline(dom, caption, base, &mut text);
             if !text.trim().is_empty() {
-                *words += clean(&dom.text_content(caption)).split_whitespace().count();
+                *words += visible_words(dom, caption);
                 out.push_str(&alloc::format!("<caption>{}</caption>", text.trim()));
             }
         }
@@ -193,8 +206,9 @@ fn table_rows(dom: &Dom, n: NodeId, base: &str, out: &mut String, words: &mut us
                     let mut content = String::new();
                     inline(dom, cell, base, &mut content);
                     let content = content.trim();
-                    if content.is_empty() { continue; }
-                    *words += clean(&dom.text_content(cell)).split_whitespace().count();
+                    // Empty cells still occupy a column. Dropping one shifts
+                    // every following value under the wrong heading.
+                    *words += visible_words(dom, cell);
                     let span = dom.attr(cell, "colspan").and_then(|v| v.trim().parse::<usize>().ok())
                         .filter(|v| (2..=64).contains(v));
                     cells.push_str(&alloc::format!("<{tag}{}>{content}</{tag}>",

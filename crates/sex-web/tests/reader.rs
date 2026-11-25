@@ -70,3 +70,20 @@ fn article_data_table_keeps_rows_cells_and_safe_links() {
     assert!(!article.html.contains("Secret row") && !article.html.contains("onclick") && !article.html.contains("colspan=\"999\""));
     assert!(reader::page(&article, "https://news.example/story").contains("border-collapse:collapse"));
 }
+
+#[test]
+fn article_data_table_keeps_empty_cells_in_their_columns() {
+    let body = format!(
+        "<article><h1>Survey</h1>{}<table><thead><tr><th>Place</th><th>Count</th></tr></thead>\
+         <tbody><tr><td></td><td>Three<span hidden> hidden words do not count</span></td></tr><tr><td>Hill</td><td></td></tr></tbody></table></article>",
+        "<p>The survey followed the same route each evening and recorded the weather and the count at every stop.</p>".repeat(4)
+    );
+    let dom = sex_web::sex_html::parse::parse(&body);
+    let article = reader::article(&dom, "https://news.example/survey").unwrap();
+    assert!(article.html.contains("<tr><td></td><td>Three</td></tr>"), "{}", article.html);
+    assert!(article.html.contains("<tr><td>Hill</td><td></td></tr>"), "{}", article.html);
+    assert!(!article.html.contains("hidden words"));
+    let without_hidden = body.replace("<span hidden> hidden words do not count</span>", "");
+    let plain = sex_web::sex_html::parse::parse(&without_hidden);
+    assert_eq!(article.words, reader::article(&plain, "https://news.example/survey").unwrap().words);
+}
