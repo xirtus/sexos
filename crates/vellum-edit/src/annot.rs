@@ -329,6 +329,32 @@ impl Editor {
         Ok(id)
     }
 
+    /// Change a highlight's comment without replacing its geometry or appearance.
+    /// Empty text removes `/Contents`. Returns the previous comment for undo.
+    pub fn set_highlight_comment(&mut self, page: usize, index: usize, text: &str) -> Result<Option<String>, Error> {
+        self.require_unsigned_annotations()?;
+        let pid = self.page_id(page)?;
+        let (mut arr, holder) = self.annots_array(pid);
+        let entry = arr.get(index).cloned().ok_or(Error::NoSuchAnnotation(index))?;
+        let mut dict = self.dict_of(&entry).ok_or(Error::NoSuchAnnotation(index))?;
+        if dict.get(b"Subtype").and_then(Object::as_name) != Some(b"Highlight") {
+            return Err(Error::Unsupported("comments on non-highlight annotations"));
+        }
+        let before = self.lookup(&dict, b"Contents").and_then(|v| v.as_str().map(decode_text));
+        let after = (!text.is_empty()).then(|| text.to_string());
+        if before == after { return Ok(before); }
+        match after {
+            Some(value) => dict.set(b"Contents", Object::Str(encode_text(&value))),
+            None => { dict.remove(b"Contents"); },
+        }
+        if let Some(id) = entry.as_ref() { self.set_dict(id, dict); }
+        else {
+            arr[index] = Object::Dict(dict);
+            self.store_annots(pid, holder, arr);
+        }
+        Ok(before)
+    }
+
     /// Removes the annotation at `index` of the page's `/Annots` (and its popup).
     /// Form widgets are refused: change them through fields.
     pub fn delete_annotation(&mut self, page: usize, index: usize) -> Result<(), Error> {

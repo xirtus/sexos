@@ -142,6 +142,12 @@ def main():
   step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=3\n')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-deletion-undone.ppm')})
   step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
+  q.key('up');q.key('ret');keys('Review green')
+  step(lambda:q.key('ret'),r'\[pdf\.annotate\.comment\] page=1 index=0 chars=12\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-highlight-comment.ppm')})
+  assert (a.out/'pdf-highlight-comment.ppm').stat().st_size>10000
+  step(lambda:chord('ctrl','z'),r'\[pdf\.annotate\.history\] action=undo page=1 annots=2\n')
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.annotate\.history\] action=redo page=1 annots=2\n')
   q.key('esc');time.sleep(.3)
   # Edit inside the name, including a forward delete and an end-of-field edit.
   # The committed value remains NAME after these caret operations.
@@ -432,6 +438,8 @@ def main():
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_COLOR_PDF':str(out_pdf)},check=True)
  subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_highlight_opacity_survives_guest_save','--','--exact'],
                 cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_OPACITY_PDF':str(out_pdf)},check=True)
+ subprocess.run(['cargo','test','-p','vellum-edit','--test','edit','guest_highlight_comment_survives_guest_save','--','--exact'],
+                cwd=ROOT,env={**os.environ,'SEXOS_VELLUM_GUEST_COMMENT_PDF':str(out_pdf)},check=True)
  update=data[len(FORM):]
  for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/Subtype /FreeText',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
  assert NOTE.encode() in update and NAME.encode() in update

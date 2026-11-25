@@ -356,6 +356,8 @@ struct Viewer {
     region_drag: Option<(usize, (f64, f64))>,
     /// A sticky note being typed.
     note: Option<String>,
+    /// Comment being edited for a highlight in the annotation list.
+    comment: Option<(usize, String)>,
     /// A typed visual signature; it is markup, not a cryptographic signature.
     signature: Option<String>,
     signing: Option<SigningChoice>,
@@ -568,7 +570,7 @@ impl Viewer {
     }
 
     fn bar_shown(&self) -> bool {
-        self.finding || self.note.is_some() || self.signature.is_some() || self.signing.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
+        self.finding || self.note.is_some() || self.comment.is_some() || self.signature.is_some() || self.signing.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
     }
 
     fn draw_shortcuts(&mut self, out: &mut [u32], width: usize, height: usize) {
@@ -599,6 +601,8 @@ impl Viewer {
             Some(("Visual signature:".to_string(), format!("{signature}_"), "Enter places, Escape cancels; not digital".to_string()))
         } else if let Some(note) = &self.note {
             Some(("Note:".to_string(), format!("{note}_"), "Enter adds it, Escape cancels".to_string()))
+        } else if let Some((_, comment)) = &self.comment {
+            Some(("Highlight comment:".to_string(), format!("{comment}_"), "Enter saves, Escape cancels".to_string()))
         } else if let Some(form) = &self.form {
             form.fields.get(form.at).map(|(f, _, _)| {
                 let value = match f.kind {
@@ -984,7 +988,7 @@ impl Viewer {
     }
 
     fn widget_pointer(&mut self, kind: Kind, point: (usize, usize), l: &Layout, size: (usize, usize)) -> bool {
-        if !matches!(kind, Kind::Down { button: 0 }) || self.shortcuts || self.region.is_some() || self.signing.is_some() || self.note.is_some() || self.signature.is_some() {
+        if !matches!(kind, Kind::Down { button: 0 }) || self.shortcuts || self.region.is_some() || self.signing.is_some() || self.note.is_some() || self.comment.is_some() || self.signature.is_some() {
             return false;
         }
         let Some(shown) = self.shown.as_ref().and_then(|r| shown_at_click(point, l, r, self.scroll, self.hscroll)) else { return false };
@@ -1081,6 +1085,7 @@ impl Viewer {
             return true;
         }
         if self.signature.is_some() { self.signature_key(key); return true; }
+        if self.comment.is_some() { self.comment_key(key); return true; }
         if ctrl(KEY_Z) {
             self.commit_field();
             if self.annotation_history.has_step(key.shift) { self.annotation_history_step(key.shift); }
@@ -1451,6 +1456,32 @@ impl Viewer {
         }
     }
 
+    fn comment_key(&mut self, key: sex_std::sex_pdx::app_key::Key) {
+        let Some((_, text)) = self.comment.as_mut() else { return };
+        match key.code {
+            ESCAPE => { self.comment = None; self.status = Some("Comment edit cancelled".into()); },
+            ENTER => {
+                let (index, text) = self.comment.take().unwrap();
+                let page = self.page;
+                let Some(editor) = self.editor() else { return };
+                match editor.set_highlight_comment(page, index, &text) {
+                    Ok(before) => {
+                        self.field_history.clear();
+                        self.annotation_history.record_comment(page, index, before.unwrap_or_default(), text.clone());
+                        self.load_annots(false);
+                        self.status = Some("Highlight comment saved. Ctrl+S saves the PDF.".into());
+                        sex_std::record(&format!("[pdf.annotate.comment] page={} index={index} chars={}", page + 1, text.chars().count()));
+                    }
+                    Err(e) => self.status = Some(format!("Could not edit highlight comment: {e}")),
+                }
+            }
+            BACKSPACE => { text.pop(); }
+            _ => if let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
+                if text.chars().count() < 400 { text.push(c); }
+            },
+        }
+    }
+
     fn signature_key(&mut self, key: sex_std::sex_pdx::app_key::Key) {
         let Some(name) = self.signature.as_mut() else { return };
         match key.code {
@@ -1548,6 +1579,12 @@ impl Viewer {
             (Some(Nav::Up), _) => self.chosen = self.chosen.saturating_sub(1),
             (Some(Nav::Down), _) => self.chosen = (self.chosen + 1).min(self.annots.len().saturating_sub(1)),
             (_, ESCAPE) => self.panel = Panel::None,
+            (_, ENTER) => {
+                let Some(annot) = self.annots.get(self.chosen) else { return true };
+                if annot.subtype == "Highlight" {
+                    self.comment = Some((annot.index, annot.contents.clone().unwrap_or_default()));
+                } else { self.status = Some("Select a highlight to edit its comment".into()); }
+            }
             (Some(Nav::Delete), _) | (_, BACKSPACE) => {
                 let Some(a) = self.annots.get(self.chosen).cloned() else { return true };
                 let page = self.page;
@@ -2108,7 +2145,7 @@ pub fn main() {
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
-        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), highlight_color: 0, highlight_opacity: 0, region: None, region_drag: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
+        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), highlight_color: 0, highlight_opacity: 0, region: None, region_drag: None, note: None, comment: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),
         status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };

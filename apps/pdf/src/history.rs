@@ -14,7 +14,11 @@ pub struct FieldHistory { undo: Vec<Change>, redo: Vec<Change> }
 struct AddedAnnotation { page: usize, annot: NewAnnot, id: ObjId, removed: Option<RemovedAnnot> }
 
 #[derive(Clone)]
-enum AnnotationChange { Added(AddedAnnotation), Deleted { page: usize, removed: RemovedAnnot } }
+enum AnnotationChange {
+    Added(AddedAnnotation),
+    Deleted { page: usize, removed: RemovedAnnot },
+    Comment { page: usize, index: usize, before: String, after: String },
+}
 
 #[derive(Default)]
 pub struct AnnotationHistory { undo: Vec<AnnotationChange>, redo: Vec<AnnotationChange> }
@@ -32,6 +36,13 @@ impl AnnotationHistory {
     pub fn record_delete(&mut self, page: usize, removed: RemovedAnnot) {
         if self.undo.len() == LIMIT { self.undo.remove(0); }
         self.undo.push(AnnotationChange::Deleted { page, removed });
+        self.redo.clear();
+    }
+
+    pub fn record_comment(&mut self, page: usize, index: usize, before: String, after: String) {
+        if before == after { return; }
+        if self.undo.len() == LIMIT { self.undo.remove(0); }
+        self.undo.push(AnnotationChange::Comment { page, index, before, after });
         self.redo.clear();
     }
 
@@ -56,6 +67,10 @@ impl AnnotationHistory {
             AnnotationChange::Deleted { page, removed } => {
                 if redo { editor.remove_restored_annotation(removed)?; }
                 else { editor.restore_annotation(removed)?; }
+                *page
+            }
+            AnnotationChange::Comment { page, index, before, after } => {
+                editor.set_highlight_comment(*page, *index, if redo { after } else { before })?;
                 *page
             }
         };
@@ -109,6 +124,23 @@ mod tests {
         assert_eq!(history.step(&mut editor, true).unwrap(), Some("name".into()));
         assert_eq!(value(&editor, "name"), after);
         assert_eq!(value(&Editor::open(editor.save_incremental().unwrap()).unwrap(), "name"), after);
+    }
+
+    #[test]
+    fn undo_redo_highlight_comment() {
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        editor.add_annotation(0, &NewAnnot {
+            kind: AnnotKind::Highlight { rects: vec![[20.0, 175.0, 80.0, 185.0]] },
+            style: AnnotStyle::default(),
+        }).unwrap();
+        let index = editor.annotations(0).unwrap().into_iter().find(|a| a.subtype == "Highlight").unwrap().index;
+        editor.set_highlight_comment(0, index, "Review green").unwrap();
+        let mut history = AnnotationHistory::default();
+        history.record_comment(0, index, String::new(), "Review green".into());
+        assert_eq!(history.step(&mut editor, false).unwrap(), Some(0));
+        assert_eq!(editor.annotations(0).unwrap()[index].contents, None);
+        assert_eq!(history.step(&mut editor, true).unwrap(), Some(0));
+        assert_eq!(editor.annotations(0).unwrap()[index].contents.as_deref(), Some("Review green"));
     }
 
     #[test]
