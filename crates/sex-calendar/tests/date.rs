@@ -166,6 +166,24 @@ fn snoozed_notice_survives_restart_and_rings_once() {
     assert!(restored.timers_done(1_300_001).is_empty());
 }
 
+#[test]
+fn failed_timer_transport_stays_due_after_save_and_retries_once() {
+    let mut clock = Clock::default();
+    clock.timers.push(sex_calendar::clock::Timer { ends_ms: 5_000, seconds: 5, label: "Tea".into() });
+    let mut attempts = 0;
+    assert!(clock.deliver_timers(5_000, |_| { attempts += 1; false }).is_empty());
+    assert_eq!(attempts, 1);
+    let mut restored = Clock::parse(&clock.serialize());
+    assert_eq!(restored.timers.len(), 1, "failed post must remain in clock.txt");
+    let done = restored.deliver_timers(5_500, |_| { attempts += 1; true });
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].label, "Tea");
+    assert_eq!(attempts, 2);
+    assert!(restored.deliver_timers(6_000, |_| { attempts += 1; true }).is_empty());
+    assert_eq!(attempts, 2, "confirmed transport removes exactly one timer");
+    assert!(Clock::parse(&restored.serialize()).timers.is_empty());
+}
+
 const INVITE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:plan@example.org\r\nSEQUENCE:2\r\n\
 DTSTART:20261120T140000Z\r\nDTEND:20261120T150000Z\r\nSUMMARY:Planning\r\nORGANIZER;CN=Boss:mailto:boss@example.org\r\n\
 ATTENDEE;CN=Boss;PARTSTAT=ACCEPTED:mailto:boss@example.org\r\nATTENDEE;CN=\"Me, Myself\";PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.org\r\n\

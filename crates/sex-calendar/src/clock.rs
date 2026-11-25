@@ -162,4 +162,15 @@ impl Clock {
         self.timers = left;
         done
     }
+    /// Try each due timer once. A failed transport leaves its original deadline
+    /// in the clock file so the next check can retry it.
+    pub fn deliver_timers(&mut self, now_ms: u64, mut post: impl FnMut(&Timer) -> bool) -> Vec<Timer> {
+        let mut delivered = Vec::new();
+        self.timers.retain(|timer| {
+            if timer.ends_ms > now_ms || !post(timer) { return true; }
+            delivered.push(timer.clone());
+            false
+        });
+        delivered
+    }
 }
