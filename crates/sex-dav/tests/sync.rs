@@ -140,6 +140,7 @@ fn both_ways(supports_sync: bool) {
     s.put_here("a.ics", &ev("a", "Changed there"));
     let r = sync::sync(&mut s, Kind::Calendar, &mut col, &mut items).unwrap();
     assert_eq!(r.conflicts, [ev("a", "Changed here")]);
+    assert_eq!(r.conflict_hrefs, ["/dav/cal/me@x/home/a.ics"]);
     assert_eq!(titles(&items), ["Changed there", "Third"]);
     // A change here alone goes up with If-Match; a removal here is deleted there.
     let c = items.iter().position(|i| i.uid == "c").unwrap();
@@ -173,6 +174,7 @@ fn push_conflict_412_keeps_note() {
     items[0].state = State::Modified;
     let r = sync::sync(&mut s, Kind::Calendar, &mut col, &mut items).unwrap();
     assert_eq!((r.pushed, r.conflicts.clone()), (0, vec![ev("x", "Ours")]));
+    assert_eq!(r.conflict_hrefs, ["/c/x.ics"]);
     assert_eq!((titles(&items), items[0].state, items[0].etag.as_str()), (vec!["Server's".to_string()], State::Clean, "\"e99\""));
 }
 
