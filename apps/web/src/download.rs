@@ -46,6 +46,8 @@ use sex_web::sex_html;
 
 /// A finished download: its file and size.
 pub struct Done { pub path: String, pub bytes: u64, pub url: String }
+/// A failed transfer retained only for this browser window, with an explicit retry.
+pub struct Failure { pub name: String, pub url: String, pub why: String }
 
 impl Browser {
     /// Loads `url` for showing as a page: like `fetch`, but an answer that is a download
@@ -97,8 +99,14 @@ impl Browser {
         let path = self.free_name(name);
         let part = alloc::format!("{DIR}/.{}.part", &path[DIR.len() + 1..]);
         let _ = files::remove(&mut self.window, part.as_bytes());
-        if files::write(&mut self.window, part.as_bytes(), &[]).is_err() { ex.cancel(&mut self.window); return Err(b"Can't save in Downloads."); }
+        if files::write(&mut self.window, part.as_bytes(), &[]).is_err() {
+            ex.cancel(&mut self.window);
+            let _ = files::remove(&mut self.window, part.as_bytes());
+            self.failed_download(name, url, b"Can't save in Downloads.");
+            return Err(b"Can't save in Downloads.");
+        }
         sex_pdx::serial_record!("[web.download.start] path={} url={}", path, url);
+        let result = (|| -> Result<(u64, u64), &'static [u8]> {
         let began = sex_pdx::get_ticks();
         let mut wrote: u64 = 0;
         let mut total: Option<u64> = None;
@@ -106,7 +114,7 @@ impl Browser {
         let mut shown_at = 0u64;
         let mut streamed = false;
         loop {
-            let done = match ex.poll(&mut self.window) { Ok(d) => d, Err(e) => { self.status = None; return Err(net::message(e)); } };
+            let done = match ex.poll(&mut self.window) { Ok(d) => d, Err(e) => return Err(net::message(e)) };
             if let Some(t) = ex.stream(&mut chunk) {
                 streamed = true;
                 total = t;
@@ -135,13 +143,40 @@ impl Browser {
             if files::write(&mut self.window, part.as_bytes(), &r.body).is_err() { return Err(b"Files is full: the download stopped."); }
             wrote = r.body.len() as u64;
         }
+        if total.is_some_and(|expected| wrote != expected) {
+            return Err(b"Download ended before all bytes arrived.");
+        }
         let check = self.check_file(&part, wrote);
-        if files::rename(&mut self.window, part.as_bytes(), path.as_bytes()).is_err() { self.download_status = None; return Err(b"Can't save in Downloads."); }
+        if files::rename(&mut self.window, part.as_bytes(), path.as_bytes()).is_err() { return Err(b"Can't save in Downloads."); }
         let _ = files::sync(&mut self.window);
-        self.download_status = None;
         sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, wrote, sex_pdx::get_ticks() - began, check);
-        self.downloads.push(Done { path, bytes: wrote, url: String::from(url) });
-        Ok(())
+        Ok((wrote, check))
+        })();
+        self.download_status = None;
+        match result {
+            Ok((wrote, _)) => {
+                self.download_failures.retain(|f| f.url != url);
+                self.downloads.push(Done { path, bytes: wrote, url: String::from(url) });
+                Ok(())
+            }
+            Err(why) => {
+                let _ = files::remove(&mut self.window, part.as_bytes());
+                self.failed_download(name, url, why);
+                Err(why)
+            }
+        }
+    }
+
+    fn failed_download(&mut self, name: &str, url: &str, why: &'static [u8]) {
+        self.download_status = None;
+        let why = core::str::from_utf8(why).unwrap_or("Download stopped");
+        sex_pdx::serial_record!("[web.download.failed] name={} reason={}", name, why);
+        if self.download_failures.len() == 32 { self.download_failures.remove(0); }
+        self.download_failures.push(Failure {
+            name: name.chars().take(120).collect(),
+            url: if url.len() <= 2048 && (url.starts_with("https://") || url.starts_with("http://")) { String::from(url) } else { String::new() },
+            why: why.chars().take(120).collect(),
+        });
     }
 
     /// Reads the saved file back and gives its FNV-1a 64 hash, so what landed on disk
@@ -172,6 +207,7 @@ impl Browser {
 
     /// The `about:downloads` page: this run's downloads, then what else is in the folder.
     pub(super) fn downloads_page(&mut self) -> String {
+        sex_pdx::serial_record!("[web.download.panel] done={} failed={}", self.downloads.len(), self.download_failures.len());
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
         let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2>");
         if self.downloads.is_empty() { html.push_str("<p>Nothing downloaded in this window yet.</p>"); }
@@ -189,6 +225,17 @@ impl Browser {
             }
         }
         html.push_str("</ul>");
+        if !self.download_failures.is_empty() {
+            html.push_str("<h3>Needs attention</h3><ul>");
+            for f in self.download_failures.iter().rev() {
+                if f.url.is_empty() {
+                    html.push_str(&alloc::format!("<li>{} — {}</li>", esc(&f.name), esc(&f.why)));
+                } else {
+                    html.push_str(&alloc::format!("<li>{} — {} <a href=\"{}\">Try again</a></li>", esc(&f.name), esc(&f.why), esc(&f.url)));
+                }
+            }
+            html.push_str("</ul>");
+        }
         if let Ok(list) = files::list(&mut self.window, DIR.as_bytes()) {
             if list.iter().any(|e| !e.name.starts_with(b".")) {
                 html.push_str("<h3>In Downloads</h3><ul>");

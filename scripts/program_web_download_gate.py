@@ -12,6 +12,7 @@ def fnv(b):
  for x in b:h=((h^x)*0x100000001b3)&0xFFFFFFFFFFFFFFFF
  return h
 class Handler(http.server.BaseHTTPRequestHandler):
+ broken_requests=0
  def do_GET(self):
   if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
   if self.path.startswith('/files/big.bin'):
@@ -20,6 +21,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
    return
   if self.path=='/files/small.zip':
    body=b'PK\x03\x04small';self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+  if self.path=='/files/retry.bin':
+   Handler.broken_requests+=1
+   body=bytes(range(256))*4
+   self.send_response(200);self.send_header('Content-Type','application/octet-stream');self.send_header('Content-Length',str(len(body)));self.end_headers()
+   self.wfile.write(body if Handler.broken_requests>1 else body[:256]);self.close_connection=True;return
   self.send_response(404);self.end_headers()
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
@@ -58,6 +64,19 @@ def main():
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/small.zip');q.key('ret')
   g['wait'](r'\[web.download.done\] path=Downloads/small.zip bytes=9 ',s,300)
   m=g['wait'](r'\[web.loaded\] bytes_ok=1 items=(\d+) links=(\d+)',s,60);assert int(m[2])>=3,m.group(0)
+  # A truncated transfer leaves no hidden .part file, and the panel offers retry.
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/retry.bin');q.key('ret')
+  g['wait'](r'\[web.download.failed\] name=retry.bin reason=',s,300)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.panel\] done=3 failed=1',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-retry.ppm')})
+  assert (a.out/'browser-download-retry.ppm').stat().st_size>10000
+  s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/retry.bin');q.key('ret')
+  g['wait'](r'\[web.download.done\] path=Downloads/retry.bin bytes=1024 ',s,300)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'j'}],'hold-time':80})
+  g['wait'](r'\[web.download.panel\] done=4 failed=0',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-recovered.ppm')})
+  assert (a.out/'browser-download-recovered.ppm').stat().st_size>10000
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fnv':m.group(0)})
  finally:g['stop']()
