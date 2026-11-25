@@ -70,7 +70,7 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 send(
                     out,
-                    &json!({"jsonrpc":"2.0","id":id,"result":{"capabilities":{"textDocumentSync":1,"completionProvider":{}},"serverInfo":{"name":"Quil Language Service","version":"0.1"}}}),
+                    &json!({"jsonrpc":"2.0","id":id,"result":{"capabilities":{"textDocumentSync":1,"completionProvider":{},"documentSymbolProvider":true},"serverInfo":{"name":"Quil Language Service","version":"0.1"}}}),
                 )?;
             }
             Some("textDocument/didOpen") => {
@@ -97,6 +97,18 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                         let at = lsp::offset_at_position(text, pos["line"].as_u64()?, pos["character"].as_u64()?)?;
                         Some(lsp::complete(text, language, at).1)
                     }).unwrap_or_default().into_iter().map(|label| json!({"label":label,"kind":14})).collect();
+                send(out, &json!({"jsonrpc":"2.0","id":id,"result":items}))?;
+            }
+            Some("textDocument/documentSymbol") => {
+                let id = request.get("id").cloned().unwrap_or(Value::Null);
+                let requested_uri = request["params"]["textDocument"]["uri"].as_str();
+                let items: Vec<_> = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                    .map(|(_, language, text)| lsp::symbols(text, language))
+                    .unwrap_or_default().into_iter().map(|symbol| json!({
+                        "name":symbol.name,"kind":symbol.kind,
+                        "range":{"start":{"line":symbol.line,"character":symbol.character},"end":{"line":symbol.line,"character":symbol.character}},
+                        "selectionRange":{"start":{"line":symbol.line,"character":symbol.character},"end":{"line":symbol.line,"character":symbol.character}}
+                    })).collect();
                 send(out, &json!({"jsonrpc":"2.0","id":id,"result":items}))?;
             }
             Some("shutdown") => {
@@ -158,5 +170,20 @@ mod tests {
         assert_eq!(replies[2]["id"], 2);
         assert_eq!(replies[2]["result"][0]["label"], "return");
         assert_eq!(replies[3]["result"], json!([]));
+    }
+
+    #[test]
+    fn document_symbols_use_open_document_and_reject_other_uri() {
+        let open = json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///quil/demo.rs","languageId":"rust","version":1,"text":"fn main() {}\nstruct Item;\n"}}});
+        let request = |id, uri| json!({"jsonrpc":"2.0","id":id,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":uri}}});
+        let mut input = Vec::new();
+        for value in [open, request(2, "file:///quil/demo.rs"), request(3, "file:///quil/other.rs")] { input.extend(lsp::frame(&serde_json::to_vec(&value).unwrap())); }
+        let mut out = Vec::new();
+        serve(&mut BufReader::new(input.as_slice()), &mut out).unwrap();
+        let mut replies = Vec::new();
+        while let Some(body) = lsp::take_frame(&mut out).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
+        assert_eq!(replies[1]["result"][0]["name"], "main");
+        assert_eq!(replies[1]["result"][1]["selectionRange"]["start"]["line"], 1);
+        assert_eq!(replies[2]["result"], json!([]));
     }
 }

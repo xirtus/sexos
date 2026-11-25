@@ -14,6 +14,37 @@ pub struct Diagnostic {
     pub message: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Symbol {
+    pub name: String,
+    pub kind: u32,
+    pub line: u32,
+    pub character: u32,
+}
+
+/// A bounded outline for Quil's bundled service. This recognizes declaration
+/// heads, not full language syntax; the client still uses LSP documentSymbol.
+pub fn symbols(text: &str, language: &str) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    for (line, source) in text.lines().enumerate() {
+        if out.len() == 128 { break; }
+        let head = source.trim_start();
+        let column = source.len() - head.len();
+        let choices: &[(&str, u32)] = match language {
+            "rust" => &[("pub async fn ", 12), ("async fn ", 12), ("pub fn ", 12), ("fn ", 12), ("pub struct ", 23), ("struct ", 23), ("pub enum ", 10), ("enum ", 10), ("pub trait ", 11), ("trait ", 11), ("impl ", 5), ("pub mod ", 2), ("mod ", 2)],
+            "python" => &[("async def ", 12), ("def ", 12), ("class ", 5)],
+            "javascript" => &[("export async function ", 12), ("async function ", 12), ("export function ", 12), ("function ", 12), ("export class ", 5), ("class ", 5)],
+            _ => &[],
+        };
+        let Some((prefix, kind)) = choices.iter().find(|(prefix, _)| head.starts_with(prefix)) else { continue };
+        let rest = &head[prefix.len()..];
+        let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').take(64).collect();
+        if name.is_empty() || !name.as_bytes()[0].is_ascii_alphabetic() && name.as_bytes()[0] != b'_' { continue; }
+        out.push(Symbol { name, kind: *kind, line: line as u32, character: (source[..column].encode_utf16().count() + prefix.len()) as u32 });
+    }
+    out
+}
+
 /// A small, bounded completion set for the bundled language service. The
 /// replacement start is a byte offset in the snapshot supplied by the editor.
 pub fn complete(text: &str, language: &str, cursor: usize) -> (usize, Vec<String>) {
@@ -254,5 +285,13 @@ mod tests {
         assert_eq!(items, ["return"]);
         assert_eq!(offset_at_position(text, 0, 4), None); // inside surrogate pair
         assert!(complete(text, "rust", text.len() + 1).1.is_empty());
+    }
+
+    #[test]
+    fn outline_bounds_and_recognizes_declaration_heads() {
+        assert_eq!(symbols("// fn fake() {}\npub fn real() {}\nstruct Thing;\n", "rust").iter().map(|s| (&*s.name, s.line, s.kind)).collect::<Vec<_>>(), [("real", 1, 12), ("Thing", 2, 23)]);
+        assert_eq!(symbols("  async def fetch():\n    pass\nclass Client:\n", "python").iter().map(|s| (&*s.name, s.character)).collect::<Vec<_>>(), [("fetch", 12), ("Client", 6)]);
+        assert_eq!(symbols("export function go() {}\n", "javascript")[0].name, "go");
+        assert!(symbols("fn x() {}\n".repeat(140).as_str(), "rust").len() == 128);
     }
 }

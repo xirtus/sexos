@@ -124,6 +124,15 @@ def main():
   g['wait'](r'\[quil.lsp.diagnostics\] language=rust count=1 first_line=1',s,90)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostics.ppm')})
   assert (a.out/'quil-lsp-diagnostics.ppm').stat().st_size>100000
+  # The same child serves documentSymbol. The picker jumps to helper on line 2.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('other');q.key('ret');time.sleep(.5)
+  s=len(t());send('ctrl','shift','m')
+  g['wait'](r'\[quil.lsp.symbols\] language=rust count=1',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-symbols.ppm')})
+  assert (a.out/'quil-lsp-symbols.ppm').stat().st_size>100000
+  s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.symbol.jump\] line=2 name=helper',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-symbol-jump.ppm')})
+  assert (a.out/'quil-lsp-symbol-jump.ppm').stat().st_size>100000
   # Completion is a second request over the same native LSP pipe, and Enter
   # replaces the prefix in the editor's undoable document.
   s=len(t());send('ctrl','p');time.sleep(.3);keys('complete');q.key('ret');time.sleep(.5)

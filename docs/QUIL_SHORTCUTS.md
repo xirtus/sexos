@@ -27,6 +27,7 @@ to scroll, and Esc or Ctrl+Shift+/ to close the reference. The command palette
 | Toggle line comment | Ctrl+/ | Esc, ; |
 | Check current file through Quil Language Service | Ctrl+Shift+J | Ctrl+Shift+J |
 | Request Quil Language Service completion | Ctrl+Shift+Space | Ctrl+Shift+Space |
+| Show document symbols | Ctrl+Shift+M | Ctrl+Shift+M |
 
 Default editing also supports Ctrl+Shift+Up for a cursor above, Ctrl+Shift+I
 for a cursor on each selected line, Ctrl+G for next match, Ctrl+L for a line,
@@ -40,7 +41,13 @@ checks delimiter balance and trailing whitespace in UTF-8 files up to 256 KiB.
 Ctrl+Shift+Space requests up to eight keyword completions for the typed prefix.
 Use Up/Down to choose, Enter to insert, or Esc to dismiss. Quil refuses a choice
 if the document revision or cursor changed after the request. Semantic
-completion, navigation, rename and richer language analysis remain future work.
+completion, cross-file navigation, rename and richer language analysis remain future work.
+
+Ctrl+Shift+M asks the same service for document symbols and opens an outline.
+Use Up/Down and Enter to jump to a declaration; Esc closes it. The bounded
+first service recognizes Rust functions, structs, enums, traits, modules and
+implementations; Python functions and classes; and JavaScript functions and
+classes. It does not parse full language syntax or resolve references.
 
 Vim mode keeps the default Ctrl shortcuts for application commands. Esc enters
 normal mode, `i` enters insert mode, `dd` deletes a line, `u` undoes, `/` searches,
