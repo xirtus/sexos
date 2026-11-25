@@ -69,7 +69,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub enum View { Month, Week, Day, Clock, Calendars }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Ask { Event, CopyDate, MoveDate, Title, Location, Alarm, Timer, Zone, Home, NewCalendar }
+pub enum Ask { Event, CopyDate, MoveDate, Title, Location, Time, Alarm, Timer, Zone, Home, NewCalendar }
 
 pub struct App {
     pub cal: Calendar,
@@ -406,6 +406,29 @@ impl App {
         sex_pdx::serial_record!("[date.event.location] date={} title={} from={} to={} linked={}", self.selected, source.title, source.location, edited.location, linked as u8);
         self.save(window);
     }
+    fn retime(&mut self, window: &mut Window, text: &str) {
+        let time = if text.eq_ignore_ascii_case("all day") { None } else {
+            let Some((start, end)) = text.split_once('-') else { self.status = String::from("Enter HH:MM-HH:MM or all day."); return };
+            let (Some(start), Some(end)) = (clock::parse_time(start), clock::parse_time(end)) else {
+                self.status = String::from("Enter HH:MM-HH:MM or all day."); return;
+            };
+            Some((start, end))
+        };
+        let Some(source) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
+        let Some(index) = self.cal.events.iter().position(|e| *e == source) else { return };
+        if time == source.time { self.status = String::from("The time is unchanged."); return; }
+        let linked = !self.cal.info(source.calendar).url.is_empty();
+        let edited = match source.timed_personal(time, linked) {
+            Ok(event) => event,
+            Err(why) => { self.status = String::from(why); return; }
+        };
+        self.cal.events[index] = edited.clone();
+        self.event_history.push(EventEdit { index, before: Some(source.clone()), after: Some(edited.clone()) });
+        self.picked = self.cal.on_day(self.selected).iter().position(|e| **e == edited).unwrap_or(0);
+        self.status = format!("Set \"{}\" to {}.", edited.title, when(&edited));
+        sex_pdx::serial_record!("[date.event.timed] date={} title={} from={} to={} linked={}", self.selected, edited.title, when(&source), when(&edited), linked as u8);
+        self.save(window);
+    }
     fn set_view(&mut self, view: View) {
         self.view = view;
         self.agenda = false;
@@ -712,6 +735,7 @@ impl App {
             },
             Ask::Title => self.retitle(window, &text),
             Ask::Location => self.relocate(window, &text),
+            Ask::Time => self.retime(window, &text),
             Ask::Alarm => {
                 let (time, label) = text.split_once(' ').unwrap_or((&text, ""));
                 match clock::parse_time(time) {
@@ -867,6 +891,7 @@ impl App {
                 (_, _, Some(b'm')) => { self.ask = Some(Ask::MoveDate); self.input.clear(); },
                 (_, _, Some(b'e')) => { self.ask = Some(Ask::Title); self.input.clear(); },
                 (_, _, Some(b'l')) => { self.ask = Some(Ask::Location); self.input.clear(); },
+                (_, _, Some(b't')) => { self.ask = Some(Ask::Time); self.input.clear(); },
                 (_, Some(Nav::Delete), _) | (0x6F, _, _) => {
                     let Some(gone) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
                     let Some(index) = self.cal.events.iter().position(|e| *e == gone) else { return };

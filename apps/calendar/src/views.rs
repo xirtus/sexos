@@ -56,6 +56,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("Agenda: M", "Move a personal event to a chosen date"),
     ("Agenda: E", "Edit a personal event title"),
     ("Agenda: L", "Set or clear a personal event location"),
+    ("Agenda: T", "Set a same-day time or all day"),
     ("Agenda: A / X", "Prepare accept / decline; Enter queues, Esc cancels"),
     ("Week/Day: Left/Right", "Move one day"),
     ("Week/Day: Up/Down", "Scroll through hours"),
@@ -170,6 +171,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
                 Ask::MoveDate => String::from("Move picked personal event to date (YYYY-MM-DD)"),
                 Ask::Title => format!("New title for {}", app.cal.on_day(app.selected).get(app.picked).map_or("event", |e| e.title.as_str())),
                 Ask::Location => String::from("Event location (blank clears)"),
+                Ask::Time => String::from("Event time (HH:MM-HH:MM or all day)"),
                 Ask::Alarm => String::from("New alarm (07:30 label)"),
                 Ask::Timer => String::from("New timer (5m label)"),
                 Ask::Zone => String::from("Add zone (city or Area/City)"),
@@ -179,7 +181,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
             format!("{what}: {}_", app.input)
         }
         None if !app.status.is_empty() => app.status.clone(),
-        None if app.agenda => String::from("Up/Down pick, d copy, Shift+D date, m move, e title, l location, Delete removes"),
+        None if app.agenda => String::from("Up/Down pick, d copy, Shift+D date, m move, e title, l place, t time, Delete removes"),
         None => String::from(match app.view {
             View::Month => "Enter opens a day, n adds, v conflicts, s syncs, ? shortcuts",
             View::Week | View::Day => "Arrows move, Up/Down hours, n adds, Enter opens the day, ? shortcuts",

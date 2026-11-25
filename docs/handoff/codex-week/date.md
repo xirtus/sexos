@@ -15,7 +15,8 @@ Remaining gaps:
   requires explicit series/attendee semantics and remains outside this slice;
   the agenda now changes a personal event title with E as one undo step;
   the agenda now changes or clears a personal event location with L as one undo
-  step. Full time editing remains.
+  step. T now sets a same-day time range or all-day status for a personal
+  event. Overnight and multi-day time editing still need explicit semantics.
 - Saved event, clock and account files truncate the current copy during a write.
   This change stages and syncs them before replacement.
 - Account secrets still live in a local `dav.txt` file. Move them into Multipass

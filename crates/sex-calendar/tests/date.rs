@@ -82,6 +82,27 @@ fn personal_location_can_be_set_and_cleared_without_losing_identity() {
     event.invitation = true;
     assert!(event.located_personal("North room", true).is_err());
 }
+
+#[test]
+fn personal_time_can_change_or_become_all_day_without_losing_identity() {
+    let mut event = Event::all_day(d(2026, 11, 25), "Checkup");
+    event.uid = "personal-4".into();
+    event.alarms = vec![30];
+    let timed = event.timed_personal(Some((690, 735)), false).unwrap();
+    assert_eq!((timed.time, timed.uid.as_str(), timed.alarms.as_slice(), timed.state),
+        (Some((690, 735)), "personal-4", &[30][..], SyncState::Clean));
+    assert_eq!(event.time, None, "undo needs the old value");
+    assert_eq!(timed.timed_personal(None, false).unwrap().time, None);
+    assert_eq!(event.timed_personal(Some((690, 735)), true).unwrap().state, SyncState::New);
+    event.href = "/cal/personal-4.ics".into();
+    event.etag = "v1".into();
+    let linked = event.timed_personal(Some((690, 735)), true).unwrap();
+    assert_eq!((linked.href.as_str(), linked.etag.as_str(), linked.state), ("/cal/personal-4.ics", "v1", SyncState::Modified));
+    assert!(event.timed_personal(Some((735, 690)), true).is_err());
+    assert!(event.timed_personal(Some((690, 1440)), true).is_err());
+    event.span = 2;
+    assert!(event.timed_personal(Some((690, 735)), true).is_err());
+}
 fn unix_min(text: &str) -> i64 {
     // YYYY-MM-DDTHH:MM in UTC.
     let day = Date::parse(&text[..10]).unwrap();
