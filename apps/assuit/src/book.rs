@@ -169,6 +169,25 @@ impl Book {
     /// Gives the caret's (or the selection's) paragraphs the style `id`.
     pub fn set_style(&mut self, id: &str) -> Result<(), String> { self.run("para.style", json!({ "style": id })).map(|_| ()) }
 
+    /// Edit an actual WordCraft list at the caret or across selected paragraphs.
+    /// The names stay deliberately finite so a typo cannot pick a different list.
+    pub fn edit_list(&mut self, input: &str) -> Result<&'static str, String> {
+        let (command, params, result) = match input.trim().to_ascii_lowercase().as_str() {
+            "bullet" | "bullets" => ("para.bullets", json!({}), "Toggled bullets"),
+            "numbered" | "numbers" => ("para.numbering", json!({}), "Toggled numbering"),
+            "numbered paren" => ("para.numbering", json!({ "kind": "numberedParen" }), "Toggled parenthesized numbering"),
+            "upper letter" => ("para.numbering", json!({ "kind": "upperLetter" }), "Toggled upper-letter numbering"),
+            "lower letter" => ("para.numbering", json!({ "kind": "lowerLetter" }), "Toggled lower-letter numbering"),
+            "lower roman" => ("para.numbering", json!({ "kind": "lowerRoman" }), "Toggled lower-roman numbering"),
+            "legal" => ("para.multilevel", json!({ "kind": "legal" }), "Toggled legal numbering"),
+            "off" => ("para.numbering", json!({ "off": true }), "Removed list formatting"),
+            "restart" => ("para.restartNumbering", json!({}), "Restarted numbering at one"),
+            _ => return Err("Choose bullet, numbered, numbered paren, upper letter, lower letter, lower roman, legal, off or restart".into()),
+        };
+        self.run(command, params).map_err(|_| "Place the caret in a paragraph that can take this list action".to_string())?;
+        Ok(result)
+    }
+
     /// Inserts an editable table at the caret. Keep the UI's dimensions bounded so
     /// one accidental input cannot lay out thousands of cells at once.
     pub fn insert_table(&mut self, rows: usize, cols: usize) -> Result<(), String> {
@@ -693,6 +712,64 @@ mod tests {
         // Shift+Home selects the line, Ctrl+B makes it bold.
         assert_eq!(book.key(&Chord { name: "Home", ctrl: false, shift: true }).as_deref(), Some("caret.home"));
         assert_eq!(book.key(&Chord { name: "B", ctrl: true, shift: false }).as_deref(), Some("format.bold"));
+    }
+
+    #[test]
+    fn numbered_lists_round_trip_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("list-edit.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First item").unwrap();
+            assert!(book.edit_list("number maybe").is_err());
+            assert_eq!(book.edit_list("numbered").unwrap(), "Toggled numbering");
+            book.key(&Chord { name: "Enter", ctrl: false, shift: false });
+            book.type_text("Second item").unwrap();
+            let numbered = |b: &Book| b.session.doc.body.iter().filter_map(|block| block.as_para())
+                .filter(|para| para.props.numbering.is_some_and(|n| n.num != 0)).count();
+            assert_eq!(numbered(&book), 2, "{ext} did not continue the list");
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert_eq!(numbered(&reopened), 2, "{ext} lost the list on save");
+            assert!(reopened.text().contains("First item\nSecond item"));
+            let before_restart = reopened.session.doc.body[1].as_para().unwrap().props.numbering.unwrap().num;
+            reopened.edit_list("restart").unwrap();
+            let after_restart = reopened.session.doc.body[1].as_para().unwrap().props.numbering.unwrap().num;
+            assert_ne!(before_restart, after_restart, "{ext} did not restart numbering");
+            reopened.edit_list("off").unwrap();
+            assert_eq!(numbered(&reopened), 1, "off should change the caret paragraph");
+            reopened.edit_list("bullet").unwrap();
+            assert_eq!(numbered(&reopened), 2, "bullet should create a list again");
+        }
+    }
+
+    #[test]
+    fn list_format_choices_round_trip() {
+        let choices = [
+            ("bullet", "bullet", "•"),
+            ("numbered paren", "decimal", "%1)"),
+            ("upper letter", "upperLetter", "%1."),
+            ("lower letter", "lowerLetter", "%1)"),
+            ("lower roman", "lowerRoman", "%1."),
+            ("legal", "decimal", "%1."),
+        ];
+        for ext in ["docx", "odt"] {
+            for (action, format, marker) in choices {
+                let path = temp(&format!("list-{}.{ext}", action.replace(' ', "-")));
+                let mut book = Book::blank(&path);
+                book.type_text("An item").unwrap();
+                book.edit_list(action).unwrap();
+                let check = |book: &Book| {
+                    let para = book.session.doc.body[0].as_para().unwrap();
+                    let num = para.props.numbering.unwrap().num;
+                    let level = book.session.doc.numbering.level(num, 0).unwrap();
+                    assert_eq!(level.format.ooxml(), format, "{ext} {action}");
+                    assert_eq!(level.text, marker, "{ext} {action}");
+                };
+                check(&book);
+                book.save().unwrap();
+                check(&Book::open(&path).unwrap());
+            }
+        }
     }
 
     #[test]

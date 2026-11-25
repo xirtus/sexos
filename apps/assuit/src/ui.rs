@@ -83,6 +83,8 @@ enum Ask {
     Table(String),
     /// Ctrl+Shift+T: edit the table cell containing the caret.
     TableEdit(String),
+    /// Ctrl+Alt+L: choose a list kind, remove it or restart numbering.
+    List(String),
     /// Ctrl+Shift+I: image path in the program's granted folder.
     Picture(String),
     /// Ctrl+Shift+R: alternative text for the selected image.
@@ -131,6 +133,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
+    ("Ctrl+Alt+L", "Bullets, numbering, list off or restart"),
     ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+R", "Picture alt text"),
     ("Ctrl+Shift+O", "Picture width"),
     ("Ctrl+Shift+C", "Crop selected picture"),
@@ -391,6 +394,7 @@ impl Ui {
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
                 Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge/split, shade, border, style to browse, or style NAME")),
+                Ask::List(kind) => format!("List: {kind}_   {}", said("bullet, numbered, upper/lower letter, lower roman, legal, off, restart")),
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
                 Ask::PictureAlt(alt) => format!("Picture description: {alt}_   {}", said("Describe the selected picture for readers who cannot see it")),
                 Ask::PictureWidth(width) => format!("Picture width: {width}_   {}", said("Inches, 0.1 to 20; proportions stay the same")),
@@ -530,7 +534,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -591,6 +595,18 @@ impl Ui {
                     self.ask = None;
                     self.invalidate();
                     sex_std::record(&format!("[assuit.table-edit] action={typed}"));
+                    self.message = description.into();
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
+        if matches!(ask, Ask::List(_)) {
+            match self.book.edit_list(&typed) {
+                Ok(description) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.list] action={typed}"));
                     self.message = description.into();
                 }
                 Err(e) => self.message = e,
@@ -789,6 +805,7 @@ impl Ui {
                 (code::P, _) if !key.shift => return self.export_pdf(),
                 (code::P, _) if key.shift => { self.ask = Some(Ask::PrintRange(String::new())); return; }
                 (code::L, _) if key.shift => { self.ask = Some(Ask::Paper(String::new())); return; }
+                (code::L, _) if key.alt => { self.ask = Some(Ask::List(String::new())); return; }
                 (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
