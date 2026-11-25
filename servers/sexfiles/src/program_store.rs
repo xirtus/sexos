@@ -24,17 +24,21 @@ static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; s
 pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
     // the store's program NAME, still with its arguments.
-    match try_load(name,true,requester) {
-        Ok((len, approved)) => if approved { store::loaded_approved_vellum(len) } else { store::loaded(len) },
+    let shell_epoch = sex_pdx::crash_log::peer_state(6).ok()
+        .filter(|peer| peer.live()).map_or(0, |peer| peer.epoch);
+    let files_epoch = sex_pdx::crash_log::self_epoch().unwrap_or(0);
+    match try_load(name,true,requester,shell_epoch,files_epoch) {
+        Ok((len, approved, generation)) => store::loaded_with_generation(len, generation, approved),
         Err(error) => { crate::fs_service::load_failed(); store::failed(error) }
     }
 }
 /// Image bytes only: never consume an unrelated prepared ticket or loaded latch.
 pub fn load_unbound(name:[u64;2])->u64 {
-    match try_load(name,false,0) { Ok((len,_))=>store::loaded(len),Err(error)=>store::failed(error) }
+    match try_load(name,false,0,0,0) { Ok((len,_,_))=>store::loaded(len),Err(error)=>store::failed(error) }
 }
-fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<(u32, bool), u32> {
-    let _writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
+fn try_load(mut name: [u64; 2], remember:bool, requester: u32, shell_epoch:u64, files_epoch:u64) -> Result<(u32, bool, u32), u32> {
+    if remember && (shell_epoch == 0 || files_epoch == 0) { return Err(store::IMAGE_BUSY); }
+    let mut writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
     if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
@@ -51,7 +55,11 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<(u32, b
         else { crate::fs_service::read_named_unbound(&bytes[..len], image) }
     };
     match found {
-        crate::fs_service::Program::Loaded(len) => return Ok((len, remember && approved_image(&image[..len as usize]))),
+        crate::fs_service::Program::Loaded(len) => {
+            let approved = remember && approved_image(&image[..len as usize]);
+            let generation = if remember { writer.seal_ordinary(shell_epoch, files_epoch).ok_or(store::IMAGE_BUSY)? } else { 0 };
+            return Ok((len, approved, generation));
+        },
         crate::fs_service::Program::Failed(error) => return Err(error),
         crate::fs_service::Program::Absent if name[0] == store::TICKET => match store_name {
             Some(packed) => name = packed,
@@ -95,7 +103,9 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<(u32, b
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
     let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
     if remember { crate::fs_service::loaded_from_store(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
-    Ok((entry.len, remember && approved_image(&image[..entry.len as usize])))
+    let approved = remember && approved_image(&image[..entry.len as usize]);
+    let generation = if remember { writer.seal_ordinary(shell_epoch, files_epoch).ok_or(store::IMAGE_BUSY)? } else { 0 };
+    Ok((entry.len, approved, generation))
 }
 
 #[cfg(test)]

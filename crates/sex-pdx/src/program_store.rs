@@ -63,6 +63,9 @@ pub const TICKET: u64 = 0;
 pub const REPLY_TAG: u64 = 0x50;
 /// Files verified the exact image bytes against the release Vellum pin.
 pub const APPROVED_VELLUM: u64 = 1 << 49;
+/// Shell has copied the image; Files may surrender this exact staging lease.
+pub const OP_IMAGE_CONSUMED: u64 = 0x2e9;
+pub const MAX_IMAGE_GENERATION: u32 = (1 << 22) - 1;
 pub const NOT_FOUND: u32 = 1;
 pub const TOO_LARGE: u32 = 2;
 pub const IO: u32 = 3;
@@ -89,16 +92,21 @@ pub fn refusal(code: u64) -> &'static [u8] {
     }
 }
 pub const fn loaded(len: u32) -> u64 { REPLY_TAG << 56 | 1 << 48 | len as u64 }
-pub const fn loaded_approved_vellum(len: u32) -> u64 { loaded(len) | APPROVED_VELLUM }
+pub const fn loaded_with_generation(len: u32, generation: u32, approved: bool) -> u64 {
+    loaded(len) | ((generation as u64 & 0xffff) << 32)
+        | (((generation as u64 >> 16) & 0x3f) << 50)
+        | if approved { APPROVED_VELLUM } else { 0 }
+}
 pub const fn failed(error: u32) -> u64 { REPLY_TAG << 56 | error as u64 }
 pub fn decode_reply(value: u64) -> Option<Result<u32, u32>> {
     if value >> 56 != REPLY_TAG { return None; }
     if value >> 48 & 1 == 1 { Some(Ok(value as u32)) } else { Some(Err(value as u32)) }
 }
-pub fn decode_attested_reply(value: u64) -> Option<Result<(u32, bool), u32>> {
+pub fn decode_attested_reply(value: u64) -> Option<Result<(u32, bool, u32), u32>> {
     if value >> 56 != REPLY_TAG { return None; }
     if value >> 48 & 1 != 1 { return Some(Err(value as u32)); }
-    Some(Ok((value as u32, value & APPROVED_VELLUM != 0)))
+    let generation = ((value >> 32) & 0xffff) as u32 | (((value >> 50) & 0x3f) as u32) << 16;
+    Some(Ok((value as u32, value & APPROVED_VELLUM != 0, generation)))
 }
 pub fn pack_name(name: &[u8]) -> Option<[u64; 2]> {
     if name.is_empty() || name.len() > NAME_BYTES || !name.iter().all(|b| b.is_ascii_graphic()) { return None; }
@@ -117,11 +125,12 @@ mod attestation_tests {
     use super::*;
     #[test]
     fn certified_reply_is_distinct_from_plain_and_failure() {
-        assert_eq!(decode_attested_reply(loaded(123)), Some(Ok((123, false))));
-        assert_eq!(decode_attested_reply(loaded_approved_vellum(123)), Some(Ok((123, true))));
+        assert_eq!(decode_attested_reply(loaded(123)), Some(Ok((123, false, 0))));
+        assert_eq!(decode_attested_reply(loaded_with_generation(123, 0x2a1234, true)), Some(Ok((123, true, 0x2a1234))));
+        assert_eq!(decode_attested_reply(loaded_with_generation(123, 7, false)), Some(Ok((123, false, 7))));
         assert_eq!(decode_attested_reply(failed(CORRUPT)), Some(Err(CORRUPT)));
         assert_eq!(decode_attested_reply(0), None);
-        assert_eq!(decode_reply(loaded_approved_vellum(123)), Some(Ok(123)));
+        assert_eq!(decode_reply(loaded_with_generation(123, 7, true)), Some(Ok(123)));
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

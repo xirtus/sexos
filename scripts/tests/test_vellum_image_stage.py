@@ -35,4 +35,18 @@ class VellumImageStage(unittest.TestCase):
         self.assertIn('approved_image(&image[..entry.len as usize])', files)
         self.assertIn('op == p::BEGIN && !approved(caller)', broker)
 
+    def test_shared_image_is_fenced_through_kernel_copy(self):
+        files = (ROOT / 'servers/sexfiles/src/program_store.rs').read_text()
+        lease = (ROOT / 'servers/sexfiles/src/restricted_image.rs').read_text()
+        shell = (ROOT / 'servers/silk-shell/src/main.rs').read_text()
+        dispatch = (ROOT / 'servers/sexfiles/src/trampoline.rs').read_text()
+        # Recorder's queued load must hit the same writer fence as a signed run.
+        self.assertIn('writer.seal_ordinary(shell_epoch, files_epoch)', files)
+        self.assertIn('self.ordinary.is_some()', lease)
+        self.assertIn('ordinary_consumed(msg.arg0 as u32,msg.arg1)', dispatch)
+        self.assertIn('let copied_epoch=program_files_epoch();', shell)
+        self.assertIn('program_image_consumed(generation,copied_epoch);', shell)
+        self.assertIn('image_approval_after_copy(approved,generation,requested_epoch,copied_epoch)', shell)
+        self.assertIn('ordinary_recover(peer.epoch, peer.life == PeerLife::Dead)', lease)
+
 if __name__ == '__main__': unittest.main()
