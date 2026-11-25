@@ -135,6 +135,8 @@ jobs:
       run: cargo test --locked -p sex-html
     - name: Kaleidoscope password fill eligibility policy
       run: cargo test --locked -p sex-web --test autofill_policy
+    - name: Kaleidoscope reader table structure and safe content
+      run: cargo test --locked -p sex-web --test reader
     - name: Leather SDK sample models and real Weft widgets
       run: cargo test --locked -p leather-samples --no-default-features
     - name: Live autofill capability broker and SDK (host transport)
