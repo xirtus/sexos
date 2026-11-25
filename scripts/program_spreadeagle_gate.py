@@ -79,6 +79,22 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-shortcuts.ppm')})
   assert (a.out/'spreadeagle-shortcuts.ppm').stat().st_size>10000
   ctrl_shift('slash',r'\[spreadeagle\.shortcuts\] shown=0')
+  # Search the engine's function catalog, inspect the native picker, and insert
+  # a formula without changing the existing budget cells.
+  s=len(t())
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'g'}],'hold-time':80});time.sleep(.3)
+  type_line('D8');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=D8 cell=D8\n',s,120)
+  ctrl_shift('i',r'\[spreadeagle\.functions\.open\] count=\d+\n')
+  type_line('sum')
+  time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-function-picker.ppm')})
+  assert (a.out/'spreadeagle-function-picker.ppm').stat().st_size>10000
+  s=len(t());q.key('ret')
+  g['wait'](r'\[spreadeagle\.functions\.insert\] name=SUM at=D8\n',s,120)
+  type_line('B2');q.key('ret')
+  g['wait'](r'\[spreadeagle\.set\] cell=D8 input==SUM\(B2\)\n',s,120)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'g'}],'hold-time':80});time.sleep(.3)
+  type_line('B1');q.key('ret');g['wait'](r'\[spreadeagle\.goto\] place=B1 cell=B1\n',s,120)
   s=len(t());q.key('down');type_line('40');q.key('ret')
   g['wait'](r'\[spreadeagle\.set\] cell=B2 input=40\n',s,120)
   column('B',r'Cost\|40\|300\|150\|490\|5880\|\|',s)

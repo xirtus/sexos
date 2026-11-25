@@ -48,6 +48,19 @@ pub struct Label { pub x: f32, pub y: f32, pub text: String, pub size: f32, pub 
 /// A drawn chart: 0x00RRGGBB pixels at the asked size, with the text still to draw over them.
 pub struct ChartPicture { pub pixels: Vec<u32>, pub text: Vec<Label> }
 
+/// One entry from GridCraft's built-in worksheet function catalog.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Function { pub name: String, pub category: String, pub signature: String, pub description: String }
+
+impl Function {
+    pub fn matches(&self, query: &str) -> bool {
+        let q = query.to_ascii_lowercase();
+        self.name.to_ascii_lowercase().contains(&q)
+            || self.category.to_ascii_lowercase().contains(&q)
+            || self.description.to_ascii_lowercase().contains(&q)
+    }
+}
+
 pub struct Book {
     session: Session,
     /// The file the workbook is saved to.
@@ -55,6 +68,17 @@ pub struct Book {
 }
 
 impl Book {
+    /// The current engine's functions, not a hand-maintained shortcut list.
+    pub fn functions(&mut self) -> Result<Vec<Function>, String> {
+        let catalog = self.run("formulas.functions", json!({}))?;
+        let entries = catalog.as_array().ok_or("Invalid function catalog")?;
+        Ok(entries.iter().filter_map(|entry| Some(Function {
+            name: entry["name"].as_str()?.to_string(),
+            category: entry["category"].as_str().unwrap_or("").to_string(),
+            signature: entry["signature"].as_str().unwrap_or("").to_string(),
+            description: entry["description"].as_str().unwrap_or("").to_string(),
+        })).collect())
+    }
     /// An empty workbook that Ctrl+S saves to `path`.
     pub fn blank(path: &str) -> Book {
         let mut session = Session::new();
@@ -1127,6 +1151,11 @@ mod tests {
         for required in ["SUM", "IF", "XLOOKUP", "FILTER", "LET"] {
             assert!(names.contains(required), "missing {required}");
         }
+        let functions = book.functions().unwrap();
+        assert!(functions.len() >= 200);
+        let sum = functions.iter().find(|f| f.name == "SUM").unwrap();
+        assert!(!sum.signature.is_empty() && !sum.description.is_empty());
+        assert!(sum.matches("sum") && sum.matches(&sum.category) && !sum.matches("not-a-function"));
     }
 
     #[test]
