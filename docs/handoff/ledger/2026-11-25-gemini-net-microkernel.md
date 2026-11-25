@@ -17,9 +17,9 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
   The Wi-Fi driver and tether code are untouched.
 
 ## Microkernel servers
-- Files: 4 MiB CLOCK page cache and 8-stream read-ahead (`page_cache.rs`), IPC v2
-  endpoint serving (`ipc_v2.rs`).
-  Host gate: `scripts/sexfiles_page_cache_host_gate.sh`.
+- Files: IPC v2 endpoint serving (`ipc_v2.rs`). A CLOCK page cache with 8-stream
+  read-ahead (`page_cache.rs`) is in the tree with its host gate
+  (`scripts/sexfiles_page_cache_host_gate.sh`) but Files does not use it yet.
 - Fault recovery: every exit, fault, retirement and restart path purges per-core
   handoff slots naming the dead task (`scheduler::purge_handoff_for_task/_pd`) and
   tears down its IPC v2 state (`ipc_v2::syscall::teardown_task/_pd`), waking blocked
@@ -49,11 +49,15 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 - Gemini's program-store directory cache (`DIRECTORY_SECTORS`) was dropped: it kept
   serving a directory after it was deleted or found corrupt, which the recording image
   loader test catches. Files reads the directory from disk on each load, as before.
+- Files does not use the page cache yet. With it in, a running program lost its Files
+  binding partway through (every request denied with `bound=0`) and a Polyamour save
+  never finished, on Gemini's run and on the re-land. The likely cause: Files' heap is
+  128 KiB (`sex-rt` `HEAP_BYTES`), and the cache's smallest fallback takes about half of
+  it. The cache needs its own memory grant before Files uses it.
 - Drive's reply-and-receive loop, Files' block calls through syscall 102 and the wider
   reply-and-receive use in Files' trampoline were taken back out. With them in, Drive
-  restarted during boot (a second `[sexdrive.init.start]` in the app-resource proof) and
-  a Polyamour save never finished, on Gemini's run and on the re-land. Files keeps
-  master's reply-and-receive for `fs::OP` and serves the IPC v2 bind request.
+  restarted during boot (a second `[sexdrive.init.start]` in the app-resource proof).
+  Files keeps master's reply-and-receive for `fs::OP` and serves the IPC v2 bind request.
 - `Window::open` is back to its separate calls. With the combined open, Display never
   admitted the program as its surface's owner (no `[display.app.admitted]`), its first
   text was never committed (the Jot gate timed out), and a program replaced by a new

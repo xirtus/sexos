@@ -26,6 +26,7 @@ mod restricted_control;
 mod restricted_load;
 mod restricted_data;
 mod fs_service;
+#[allow(dead_code)]
 mod page_cache;
 mod ipc_v2;
 mod organize;
