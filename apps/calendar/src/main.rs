@@ -48,6 +48,9 @@ use sex_pdx::app_pointer::Kind;
 const FILE: &[u8] = b"events.txt";
 const CLOCK: &[u8] = b"clock.txt";
 const NOTICE_CURSOR: &[u8] = b"notice.cursor";
+const NOTICE_UI: &[u8] = b"notice.ui-open";
+const NOTICE_WORKER_ACTIVE: &[u8] = b"notice.worker-active";
+const NOTICE_WORKER_ARG: &[u8] = b"--notice-worker";
 const ACCOUNT: &[u8] = b"dav.txt";
 /// The event file as read, and an imported `.ics` file.
 static mut STORE: [u8; 1 << 20] = [0; 1 << 20];
@@ -123,6 +126,94 @@ fn quick_event(day: Date, typed: &str) -> Entry {
 }
 
 fn now_ms() -> u64 { sex_pdx::civil_time_ms().unwrap_or(0) }
+
+/// The hidden Date run owns notices while the window is closed. The marker is
+/// deliberately left in place for the whole visible run: a worker launched
+/// late must see it before it can post anything.
+fn notice_worker() -> ! {
+    use files::direct as fs;
+    if fs::create(NOTICE_WORKER_ACTIVE).is_err() { sex_app::launch::exit(0); }
+    let store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
+    sex_pdx::serial_record!("[date.notice.worker.started]");
+    // Files are private to Date. With the window closed, only this run edits
+    // them, so keep one snapshot instead of rereading a megabyte twice a second.
+    let now = loop {
+        if fs::stat(NOTICE_UI).is_ok() { let _ = fs::remove(NOTICE_WORKER_ACTIVE); sex_app::launch::exit(0); }
+        let now = now_ms();
+        if now != 0 { break now; }
+        let _ = sex_pdx::sys_wait_self_ticks(500);
+    };
+    let cal = match fs::read_at(FILE, 0, &mut store[..]) {
+        Ok(n) => Calendar::parse(&String::from_utf8_lossy(&store[..n])),
+        Err(_) => Calendar::default(),
+    };
+    let mut clock = match fs::read_at(CLOCK, 0, &mut store[..]) {
+        Ok(n) => Clock::parse(&String::from_utf8_lossy(&store[..n])),
+        Err(_) => Clock::default(),
+    };
+    let mut cursor = match fs::read_at(NOTICE_CURSOR, 0, &mut store[..]) {
+        Ok(n) => NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now),
+        Err(_) => NoticeCursor::current(now),
+    };
+    loop {
+        if fs::stat(NOTICE_UI).is_ok() {
+            sex_pdx::serial_record!("[date.notice.worker.handoff]");
+            let _ = fs::remove(NOTICE_WORKER_ACTIVE);
+            sex_app::launch::exit(0);
+        }
+        let now = now_ms();
+        if now != 0 {
+            let minute = NoticeCursor::current(now).minute;
+            let mut rang = false;
+            for t in clock.timers_done(now) {
+                let title = if t.label.is_empty() { "Timer" } else { &t.label };
+                let body = format!("{} timer done", clock::format_duration(t.seconds as u64));
+                let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                sex_pdx::serial_record!("[date.alarm.fired] kind=timer title={} notified={}", title, posted as u8);
+                rang = true;
+            }
+            if minute > cursor.minute {
+                let offset = clock.home_zone().offset(minute);
+                for (i, day, at) in cal.reminders_due(cursor.minute, minute, offset) {
+                    let e = &cal.events[i];
+                    let start = e.start_minute_utc(day, offset);
+                    let lead = (start - at).max(0);
+                    let body = if lead == 0 { format!("now, {}", when(e)) } else { format!("in {} min, {} {}", lead, day, when(e)) };
+                    let posted = sex_pdx::notify::post(e.title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                    sex_pdx::serial_record!("[date.alarm.fired] kind=reminder title={} notified={}", e.title, posted as u8);
+                    rang = true;
+                }
+                for a in clock.alarms_due(cursor.minute, minute) {
+                    let title = if a.label.is_empty() { "Alarm" } else { &a.label };
+                    let body = format!("{:02}:{:02}", a.minute / 60, a.minute % 60);
+                    let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                    sex_pdx::serial_record!("[date.alarm.fired] kind=alarm title={} notified={}", title, posted as u8);
+                    rang = true;
+                }
+            }
+            if rang && !save_notice_direct(CLOCK, clock.serialize().as_bytes()) {
+                sex_pdx::serial_record!("[date.notice.worker.save.failed] file=clock");
+            } else if minute > cursor.minute && !save_notice_direct(NOTICE_CURSOR, NoticeCursor { minute }.serialize().as_bytes()) {
+                sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor");
+            }
+            // Even when a save fails, do not post the same notice each half second.
+            // A new run can still recover from the last durable cursor.
+            if minute > cursor.minute { cursor.minute = minute; }
+        }
+        let _ = sex_pdx::sys_wait_self_ticks(500);
+    }
+}
+
+fn save_notice_direct(path: &[u8], bytes: &[u8]) -> bool {
+    use files::direct as fs;
+    const STAGE: &[u8] = b"notice.worker-stage";
+    let _ = fs::remove(STAGE);
+    if fs::create(STAGE).is_err() || fs::write_at(STAGE, 0, bytes) != Ok(bytes.len()) || fs::sync().is_err() {
+        let _ = fs::remove(STAGE);
+        return false;
+    }
+    fs::rename(STAGE, path).is_ok() && fs::sync().is_ok()
+}
 
 /// `20261114T101500Z` for DTSTAMP.
 fn stamp(ms: u64) -> String {
@@ -734,6 +825,20 @@ impl App {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let mut worker_args = [0u8; sex_pdx::fs::ARGS_MAX];
+    let worker_len = files::direct::args(&mut worker_args);
+    if &worker_args[..worker_len] == NOTICE_WORKER_ARG { notice_worker(); }
+    let _ = files::direct::create(NOTICE_UI);
+    let handoff_end = sex_pdx::get_ticks().saturating_add(3000);
+    while files::direct::stat(NOTICE_WORKER_ACTIVE).is_ok() && sex_pdx::get_ticks() < handoff_end {
+        let _ = sex_pdx::sys_wait_self_ticks(50);
+    }
+    // A previous worker may have died without removing its claim. The visible
+    // run has priority and its marker prevents a late worker from posting.
+    if files::direct::stat(NOTICE_WORKER_ACTIVE).is_ok() {
+        sex_pdx::serial_record!("[date.notice.worker.stale]");
+        let _ = files::direct::remove(NOTICE_WORKER_ACTIVE);
+    }
     let mut window = Window::open();
     window.title(b"Date");
     let mut faces = views::Faces { small: Face::new(10, 20), tiny: Face::new(8, 16), big: Face::new(16, 30) };
@@ -803,7 +908,14 @@ pub extern "C" fn _start() -> ! {
             continue;
         };
         match event {
-            Event::Close => { sex_pdx::serial_record!("[calendar.closed] target={} task={}", window.target, window.task); window.close() }
+            Event::Close => {
+                sex_pdx::serial_record!("[calendar.closed] target={} task={}", window.target, window.task);
+                let _ = files::remove(&mut window, NOTICE_UI);
+                if let Err(e) = sex_app::launch::run_hidden(b"date", NOTICE_WORKER_ARG, 0) {
+                    sex_pdx::serial_record!("[date.notice.worker.launch.failed] {:?}", e);
+                }
+                window.close()
+            }
             Event::Key(key) => {
                 app.status.clear();
                 if app.banner.is_some() && key.shift && !key.control && key.code == 0x1F {

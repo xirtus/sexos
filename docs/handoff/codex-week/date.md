@@ -22,12 +22,14 @@ Remaining gaps:
   appearance tokens, and refreshes when Settings changes theme or accent.
 - Date already routes reminders, alarms and timers to Bell. A visible notice can
   now be snoozed for five minutes with Shift+S; the new timer survives restart.
-  Date now keeps a bounded durable last-checked minute. A reminder or alarm due
-  while the window is closed rings on the next open, up to seven days later;
-  an overdue timer already survives in `clock.txt`. Continuous delivery while
-  Date is closed still needs a userspace worker with a single owner and a clean
-  handoff to the window. A power cut after Bell posts but before the cursor save
-  can replay a notice, so exactly-once delivery is not claimed.
+  Date now keeps a bounded durable last-checked minute. When its window closes,
+  a hidden Date run takes over reminders, alarms and timers and posts to Bell
+  at the due time. An exclusive Files claim prevents duplicate hidden workers;
+  reopening Date leaves a handoff marker until the worker exits. A dead worker
+  is not automatically restarted while Date stays closed; the durable cursor
+  catches up when Date opens again. Multiple simultaneous visible Date windows
+  still need a shared owner protocol. A power cut after Bell posts but before
+  the cursor save can replay a notice, so exactly-once delivery is not claimed.
 - Ctrl+Z/Ctrl+Y undo and redo local event additions and removals, with each
   result saved immediately. A CalDAV sync clears the event history so undo cannot roll
   back server changes. In Clock, those keys now undo and redo world-zone additions,
