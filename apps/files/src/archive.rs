@@ -149,11 +149,19 @@ enum ArchiveEnd { Done, Stopped, Failed(String), Unconfirmed(String) }
 
 /// A completed archive must be durable before it gets a visible name, and the
 /// visible rename must be durable before we report success or offer undo.
-fn promote(window: &mut Window, from: &[u8], to: &[u8]) -> ArchiveEnd {
+fn promote(window: &mut Window, from: &[u8], to: &[u8], file: bool) -> ArchiveEnd {
     if let Err(e) = files::sync(window) {
         return ArchiveEnd::Failed(format!("staged output sync failed: {}", shown(files::message(e))));
     }
-    if let Err(e) = files::rename(window, &at(from), &at(to)) {
+    // SexFS rename replaces a destination file. Use its checked no-replace
+    // move for archive files, including those in encrypted home. FAT/exFAT
+    // rename already refuses a taken name; their object IDs are not SexFS IDs.
+    let moved = if file && !from.starts_with(b"/media/") {
+        files::file_id(window, &at(from)).and_then(|id| files::move_if_id(window, &at(from), &at(to), id))
+    } else {
+        files::rename(window, &at(from), &at(to))
+    };
+    if let Err(e) = moved {
         return ArchiveEnd::Failed(format!("couldn't give output its final name: {}", shown(files::message(e))));
     }
     if let Err(e) = files::sync(window) {
@@ -332,12 +340,18 @@ impl App {
             let mut cb = |p: Progress| ticker.tick(self, window, p);
             arch.extract_all(&mut writer, &mut cb)
         };
+        let mut cleanup_warning = None;
         let end = match result {
             Ok(()) if writer.files == 0 && !whole && member_is_file => ArchiveEnd::Failed("nothing could be read for it".into()),
             Ok(()) => {
                 let from = if whole || !member_is_file { part.clone() } else { join(&part, base(only.as_bytes())) };
-                let promoted = promote(window, &from, &to);
-                if matches!(promoted, ArchiveEnd::Done) && from != part { let _ = self.remove_all(window, &part); }
+                let promoted = promote(window, &from, &to, member_is_file);
+                if matches!(promoted, ArchiveEnd::Done) && from != part {
+                    if let Err(e) = self.remove_all(window, &part).and_then(|_| files::sync(window)) {
+                        sex_pdx::serial_record!("[files.app.archive.cleanup-unconfirmed] part={} code={}", shown(&part), e);
+                        cleanup_warning = Some(shown(files::message(e)).to_string());
+                    }
+                }
                 promoted
             }
             Err(sex_archive::Error::Cancelled) => ArchiveEnd::Stopped,
@@ -346,7 +360,10 @@ impl App {
         match end {
             ArchiveEnd::Done => {
                 sex_pdx::serial_record!("[files.app.archive.extracted] archive={} member={} to={} files={} bytes={}", shown(&file), if whole { "*" } else { &only }, shown(&to), writer.files, writer.bytes);
-                self.status = format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes));
+                self.status = match cleanup_warning {
+                    Some(why) => format!("Extracted {} safely, but hidden partial cleanup is unconfirmed: {}. Ctrl+Z takes the extracted output back.", shown(base(&to)), why),
+                    None => format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes)),
+                };
                 self.undo.push(Undo::Copied { to: to.clone() });
             }
             ArchiveEnd::Stopped => {
@@ -449,7 +466,7 @@ impl App {
             builder.write(&mut sink, &mut cb)
         };
         let end = match result {
-            Ok(_) => promote(window, &part, &to),
+            Ok(_) => promote(window, &part, &to, true),
             Err(sex_archive::Error::Cancelled) => ArchiveEnd::Stopped,
             Err(e) => ArchiveEnd::Failed(e.to_string()),
         };
