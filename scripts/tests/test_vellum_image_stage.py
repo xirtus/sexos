@@ -45,7 +45,7 @@ class VellumImageStage(unittest.TestCase):
         self.assertIn('self.ordinary.is_some()', lease)
         self.assertIn('ordinary_consumed(msg.arg0 as u32,msg.arg1)', dispatch)
         self.assertIn('let copied_epoch=program_files_epoch();', shell)
-        self.assertIn('program_image_consumed(generation,copied_epoch);', shell)
+        self.assertIn('program_image_consumed(generation,image_consume_epoch(requested_epoch,copied_epoch));', shell)
         self.assertIn('image_approval_after_copy(approved,generation,requested_epoch,copied_epoch)', shell)
         self.assertIn('ordinary_recover(peer.epoch, peer.life == PeerLife::Dead)', lease)
 
