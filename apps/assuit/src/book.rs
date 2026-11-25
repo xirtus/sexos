@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::io::{Read, Write};
 use serde_json::{Value, json};
 use wordcraft_engine::{Selection, Session};
-use wordcraft_engine::doc::{Document, PartKind, Pos, StoryRef, StyleKind};
+use wordcraft_engine::doc::{Document, InlineObject, PartKind, Pos, StoryRef, StyleKind};
 use wordcraft_engine::layout::DocLayout;
 use wordcraft_engine::render::{RenderOptions, render_page};
 
@@ -150,6 +150,37 @@ impl Book {
         let mut params = json!({ "url": url });
         if let Some(label) = label { params["text"] = json!(label); }
         self.run("insert.link", params)?;
+        Ok(())
+    }
+
+    fn has_table_of_contents(&self) -> bool {
+        let is_toc = |instr: &str| instr.split_whitespace().next() == Some("TOC") && !instr.contains("\\c");
+        self.session.doc.body.iter().filter_map(|block| block.as_para())
+            .flat_map(|para| &para.objects)
+            .any(|obj| matches!(obj, InlineObject::Field { instr, .. } if is_toc(instr)))
+            || self.session.doc.field_ranges(StoryRef::Body).iter().any(|field| is_toc(&field.instr))
+    }
+
+    /// Insert a generated table from heading styles, refresh it after edits,
+    /// or remove it. WordCraft owns field updates and DOCX/ODT serialization.
+    pub fn table_of_contents(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter insert 1–9 (heading levels), update, or remove";
+        let words: Vec<_> = input.split_whitespace().collect();
+        match words.as_slice() {
+            ["insert", levels] => {
+                let n = levels.parse::<u8>().map_err(|_| HELP.to_string())?;
+                if !(1..=9).contains(&n) { return Err(HELP.into()); }
+                if !self.has_table_of_contents()
+                    && (!self.session.sel.is_collapsed() || self.session.sel.focus.story != StoryRef::Body) {
+                    return Err("Place the caret in body text without a selection".into());
+                }
+                self.run("references.toc", json!({ "levels": n }))?;
+            }
+            ["update"] if self.has_table_of_contents() => { self.run("references.updateToc", json!({}))?; }
+            ["remove"] if self.has_table_of_contents() => { self.run("references.removeToc", json!({}))?; }
+            ["update" | "remove"] => return Err("This document has no table of contents".into()),
+            _ => return Err(HELP.into()),
+        }
         Ok(())
     }
 
@@ -1365,6 +1396,43 @@ mod tests {
             assert!(links(&reopened).contains(&"https://example.org".to_string()), "{ext} lost web link");
             assert!(links(&reopened).contains(&"mailto:help@example.org".to_string()), "{ext} lost mail link");
             assert!(reopened.text().contains("Contact"), "{ext} lost display label");
+        }
+    }
+
+    #[test]
+    fn contents_table_inserts_updates_and_round_trips() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("contents.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Chapter One").unwrap();
+            book.set_style("Heading1").unwrap();
+            book.key(&Chord { name: "Enter", ctrl: false, shift: false });
+            book.type_text("Body paragraph").unwrap();
+            book.key(&Chord { name: "Home", ctrl: true, shift: false });
+            for bad in ["", "insert", "insert 0", "insert 10", "insert many"] {
+                assert!(book.table_of_contents(bad).is_err(), "{bad}");
+            }
+            assert!(book.table_of_contents("update").is_err(), "no table yet");
+            let before = book.draw(0, 1.0).unwrap().pixels;
+            book.table_of_contents("insert 2").unwrap();
+            assert!(book.has_table_of_contents());
+            assert!(book.text().contains("Contents") && book.text().matches("Chapter One").count() >= 2);
+            assert!(book.draw(0, 1.0).unwrap().pixels != before, "contents must render");
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert!(reopened.has_table_of_contents(), "{ext} lost contents field");
+            reopened.key(&Chord { name: "End", ctrl: true, shift: false });
+            reopened.key(&Chord { name: "Enter", ctrl: false, shift: false });
+            reopened.type_text("Chapter Two").unwrap();
+            reopened.set_style("Heading2").unwrap();
+            reopened.table_of_contents("update").unwrap();
+            assert!(reopened.text().matches("Chapter Two").count() >= 2, "refresh must add new heading");
+            reopened.save().unwrap();
+            let mut refreshed = Book::open(&path).unwrap();
+            assert!(refreshed.text().matches("Chapter Two").count() >= 2, "{ext} lost refreshed entry");
+            refreshed.table_of_contents("remove").unwrap();
+            assert!(!refreshed.has_table_of_contents());
+            assert!(refreshed.text().contains("Chapter One") && refreshed.text().contains("Chapter Two"));
         }
     }
 

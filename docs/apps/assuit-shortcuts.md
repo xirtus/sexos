@@ -18,6 +18,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Alt+I | Set left, right, and relative first-line indents in inches. Use `0.5 0 -0.25` for a hanging indent. |
 | Ctrl+Shift+N | Insert a linked footnote at the body caret. Enter its text, continue editing the note on the page, then press Esc to return to the body. |
 | Ctrl+K | Link selected text or insert a new link. Enter an `https://`, `http://`, or `mailto:` address, optionally followed by display text after a space. |
+| Ctrl+Alt+T | Insert a generated table of contents from heading styles with `insert 1` through `insert 9` (maximum heading level), `update` after edits, or `remove` it. |
 | Ctrl+Alt+L | Edit the current list: `bullet`, `numbered`, `numbered paren`, `upper letter`, `lower letter`, `lower roman`, `legal`, `off`, `restart`, or `level 1` through `level 9` (1 is the outermost level) |
 | Ctrl+Alt+Right / Ctrl+Alt+Left | Move the list item at the caret one level deeper or shallower (levels 1–9) |
 | Ctrl+T | Insert a table by entering rows × columns |
