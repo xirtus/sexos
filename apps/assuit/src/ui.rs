@@ -141,6 +141,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+G", "Go to page"), ("Ctrl+Shift+Y", "Spelling suggestions"),
     ("Ctrl+Shift+K", "Proofing language"),
+    ("Ctrl+Shift+U", "Show or hide spelling marks"),
     ("Ctrl+Shift+D", "Manage custom dictionary"),
     ("Ctrl+= / - / 0", "Zoom in / out / reset"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
@@ -166,6 +167,7 @@ mod code {
     pub const X: u8 = 0x2D;
     pub const V: u8 = 0x2F;
     pub const Y: u8 = 0x15;
+    pub const U: u8 = 0x16;
     pub const L: u8 = 0x26;
     pub const M: u8 = 0x32;
     pub const K: u8 = 0x25;
@@ -767,6 +769,18 @@ impl Ui {
         if self.proof.is_some() { return self.proof_key(key); }
         if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         self.message.clear();
+        if key.code == code::U && key.control && key.shift {
+            let enabled = !self.book.proofing_marks();
+            match self.book.set_proofing_marks(enabled) {
+                Ok(()) => {
+                    self.invalidate();
+                    self.message = format!("Spelling marks {}", if enabled { "shown" } else { "hidden" });
+                    sex_std::record(&format!("[assuit.proofing.marks] enabled={}", enabled as u8));
+                }
+                Err(e) => self.message = format!("Could not change spelling marks: {e}"),
+            }
+            return;
+        }
         if key.code == code::Y && key.control && key.shift { return self.check_spelling(); }
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
