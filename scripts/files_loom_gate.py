@@ -500,6 +500,10 @@ def main():
   s=len(t());q.key('ret')
   g['wait'](r'\[files.app.list\] dir=/media/LOOM/docs count=3\b',s,60)
   g['wait'](r'\[loom.session.saved\] count=2 active=2',s,60)
+  # The archive receipt comes only after both the hidden bytes and visible
+  # rename have been synced. Cut power immediately after that receipt.
+  packed_at=len(t());cs('a')
+  g['wait'](r'\[files.app.archive.created\] from=/media/LOOM/docs/sub to=/media/LOOM/docs/sub.zip files=1 bytes=\d+',packed_at,180)
   pre_cut_log=t()
   g['stop']()
   g=boot(a.iso,disk,a.out,'loom-session-reboot',a.resolution);t=g['text'];q=g['q']
@@ -512,8 +516,14 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
   restored=open_files('/media/LOOM')
   g['wait'](r'\[loom.session.loaded\] count=2 active=2 dir=/media/LOOM/docs\b',restored,60)
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/docs count=4\b',restored,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs-powercut-restored.ppm')})
   assert (a.out/'folder-tabs-powercut-restored.ppm').stat().st_size>10000
+  step(lambda:q.key('end'),r'\[display.text.committed\]',10)
+  step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs/sub.zip format=Zip entries=\d+',60)
+  q.cmd('screendump',{'filename':str(a.out/'archive-powercut-restored.ppm')})
+  assert (a.out/'archive-powercut-restored.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs/sub.zip')
   step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
   step(lambda:q.key('f11'),r'\[files.app.closed\]')
   log=pre_cut_log+t()
@@ -528,6 +538,9 @@ def main():
  z=zipfile.ZipFile(io.BytesIO(mread(stick,'docs.zip')))
  assert z.testzip() is None
  for name,data in CONTENT.items():assert z.read(name)==data,name
+ powercut_zip=zipfile.ZipFile(io.BytesIO(mread(stick,'docs/sub.zip')))
+ assert powercut_zip.testzip() is None
+ assert powercut_zip.read('sub/gamma.bin')==CONTENT['docs/sub/gamma.bin']
  compressed=mread(stick,'docs.tar.zst')
  plain=subprocess.run(['zstd','-dc'],input=compressed,capture_output=True,check=True).stdout
  with tarfile.open(fileobj=io.BytesIO(plain),mode='r:') as packed:
