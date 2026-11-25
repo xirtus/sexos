@@ -8,6 +8,53 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalDraft { pub to: String, pub subject: String, pub body: String }
 
+/// A tail edit in one composer field. Each step stores one character, so even a
+/// long body does not copy into the undo history on every keystroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftEdit { Insert { field: u8, ch: char }, Delete { field: u8, ch: char } }
+
+pub struct DraftHistory {
+    saved: Option<LocalDraft>,
+    undo: Vec<DraftEdit>,
+    redo: Vec<DraftEdit>,
+}
+
+impl DraftHistory {
+    pub fn new(saved: Option<LocalDraft>) -> Self { Self { saved, undo: Vec::new(), redo: Vec::new() } }
+    pub fn dirty(&self, draft: &LocalDraft) -> bool { self.saved.as_ref() != Some(draft) }
+    pub fn mark_saved(&mut self, draft: &LocalDraft) { self.saved = Some(draft.clone()); }
+
+    pub fn edit(&mut self, draft: &mut LocalDraft, change: DraftEdit) -> bool {
+        if !apply(draft, change, false) { return false; }
+        if self.undo.len() == 1024 { self.undo.remove(0); }
+        self.undo.push(change);
+        self.redo.clear();
+        true
+    }
+    pub fn undo(&mut self, draft: &mut LocalDraft) -> bool {
+        let Some(&change) = self.undo.last() else { return false };
+        if !apply(draft, change, true) { return false; }
+        self.undo.pop(); self.redo.push(change); true
+    }
+    pub fn redo(&mut self, draft: &mut LocalDraft) -> bool {
+        let Some(&change) = self.redo.last() else { return false };
+        if !apply(draft, change, false) { return false; }
+        self.redo.pop(); self.undo.push(change); true
+    }
+}
+
+fn apply(draft: &mut LocalDraft, change: DraftEdit, reverse: bool) -> bool {
+    let field = match change { DraftEdit::Insert { field, .. } | DraftEdit::Delete { field, .. } => field };
+    let value = match field { 0 => &mut draft.to, 1 => &mut draft.subject, 2 => &mut draft.body, _ => return false };
+    let (ch, insert) = match change {
+        DraftEdit::Insert { ch, .. } => (ch, !reverse),
+        DraftEdit::Delete { ch, .. } => (ch, reverse),
+    };
+    if insert { value.push(ch); return true; }
+    if !value.ends_with(ch) { return false; }
+    value.pop(); true
+}
+
 impl LocalDraft {
     /// Reject controls in header fields so an imported or edited draft cannot
     /// inject an extra recipient or message header.
@@ -42,5 +89,30 @@ mod tests {
         assert!(LocalDraft::from_message(&message::parse(b"From: a@b\r\n\r\nHi")).is_none());
         assert!(LocalDraft { to: "amy@example.org\r\nBcc: spy@example.org".into(), ..d.clone() }.encode().is_none());
         assert!(LocalDraft { subject: "Hi\nX-Evil: yes".into(), ..d }.encode().is_none());
+    }
+
+    #[test]
+    fn draft_history_tracks_edits_across_save_and_unicode() {
+        let mut draft = LocalDraft::default();
+        let mut history = DraftHistory::new(None);
+        assert!(history.dirty(&draft));
+        for (field, ch) in [(0, 'é'), (1, 'P'), (2, 'α'), (2, '\n')] {
+            assert!(history.edit(&mut draft, DraftEdit::Insert { field, ch }));
+        }
+        assert_eq!((&*draft.to, &*draft.subject, &*draft.body), ("é", "P", "α\n"));
+        history.mark_saved(&draft);
+        assert!(!history.dirty(&draft));
+        assert!(history.undo(&mut draft));
+        assert_eq!(draft.body, "α");
+        assert!(history.dirty(&draft));
+        assert!(history.redo(&mut draft));
+        assert_eq!(draft.body, "α\n");
+        assert!(!history.dirty(&draft));
+        assert!(history.edit(&mut draft, DraftEdit::Delete { field: 0, ch: 'é' }));
+        assert!(history.dirty(&draft));
+        assert!(!history.redo(&mut draft), "new edit clears redo");
+        assert!(history.undo(&mut draft));
+        assert_eq!(draft.to, "é");
+        assert!(!history.dirty(&draft));
     }
 }
