@@ -123,6 +123,21 @@ impl Book {
         self.run("insert.picture", json!({ "data": data, "alt": path.rsplit('/').next().unwrap_or(path) })).map(|_| ())
     }
 
+    /// Selects the next proofing issue and returns its word and suggestions.
+    pub fn next_spelling_issue(&mut self) -> Result<Option<(String, Vec<String>)>, String> {
+        let issue = self.run("review.spelling", json!({}))?;
+        if issue["done"] == true { return Ok(None); }
+        let word = issue["text"].as_str().ok_or("Proofing returned no word")?.to_string();
+        let suggestions = issue["suggestions"].as_array().into_iter().flatten()
+            .filter_map(|s| s.as_str().map(str::to_string)).collect();
+        Ok(Some((word, suggestions)))
+    }
+
+    /// Replaces the selected issue with one of the engine's suggestions.
+    pub fn apply_spelling(&mut self, suggestion: &str) -> Result<(), String> {
+        self.run("review.applySuggestion", json!({ "text": suggestion })).map(|_| ())
+    }
+
     /// Words in the body, as a word processor's status bar counts them.
     pub fn words(&self) -> usize { self.text().split_whitespace().count() }
 
@@ -630,6 +645,20 @@ mod tests {
             assert_eq!(again.session.doc.media.len(), 1, "{ext} lost the picture");
             assert!(again.session.doc.media.values().next().unwrap().starts_with(b"\x89PNG"));
         }
+    }
+
+    #[test]
+    fn spelling_selects_and_corrects_a_word() {
+        let mut book = Book::blank(&temp("spelling.docx"));
+        book.type_text("Hello helo world").unwrap();
+        book.key(&Chord { name: "Home", ctrl: true, shift: false });
+        let (word, suggestions) = book.next_spelling_issue().unwrap().unwrap();
+        assert_eq!(word, "helo");
+        assert!(suggestions.iter().any(|s| s == "hello"), "{suggestions:?}");
+        book.apply_spelling("hello").unwrap();
+        assert_eq!(book.text().trim(), "Hello hello world");
+        book.save().unwrap();
+        assert_eq!(Book::open(&book.path).unwrap().text().trim(), "Hello hello world");
     }
 
 }
