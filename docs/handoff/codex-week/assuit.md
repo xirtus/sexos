@@ -20,8 +20,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   header/footer in a single-section document, refusing unrelated header/footer
   content. This slice also exposes a bounded start number or continuation for
   the section at the caret, preserved through DOCX/ODT. This slice adds decimal,
-  Roman and letter number formats for the current section. Alternate first/even
-  header controls remain.
+  Roman and letter number formats for the current section. This slice exposes
+  different-first-page and different-odd/even header/footer options, with
+  DOCX/ODT persistence and guest screenshots. First-page choice is per section;
+  odd/even choice is document-wide. Rich header/footer editing remains.
 - **List editing:** WordCraft can create bullet and numbered lists, but Assuit
   exposes no native way to choose numbered formats, remove a list, or restart
   numbering. This slice adds a bounded list prompt for those document edits and
