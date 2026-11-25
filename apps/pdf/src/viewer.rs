@@ -13,6 +13,7 @@ use sex_theme::Tokens;
 use vellum_edit::{AnnotInfo, AnnotKind, AnnotStyle, Editor, FieldInfo, FieldKind, FieldValue, NewAnnot, NoteIcon, PageInfo};
 
 use crate::marks;
+use crate::history::FieldHistory;
 use crate::search::{self, Hit};
 use crate::text::{self, PageText};
 use crate::zoom::{self, Zoom};
@@ -64,6 +65,7 @@ const KEY_S: u8 = 0x1F;
 const KEY_H: u8 = 0x23;
 const KEY_L: u8 = 0x26;
 const KEY_N: u8 = 0x31;
+const KEY_Z: u8 = 0x2C;
 const SLASH: u8 = 0x35;
 const SHORTCUTS: &[&str] = &[
     "Pages: Right / Space / N next; Left / P previous",
@@ -77,6 +79,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
     "Type in text fields; Space toggles checkbox; Escape ends",
+    "Ctrl+Z / Ctrl+Shift+Z undo / redo committed form fields",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
     "Ctrl+S saves edits; Ctrl+Shift+/ opens this help",
@@ -216,6 +219,7 @@ struct Viewer {
     path: String,
     /// The editing engine over the file's bytes, or why this file cannot be edited.
     editor: Result<Editor, String>,
+    field_history: FieldHistory,
     /// The region Ctrl+R chose: shown points `[left, top, right, bottom]` on the page.
     region: Option<[f64; 4]>,
     /// A sticky note being typed.
@@ -704,6 +708,7 @@ impl Viewer {
     fn edit_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         let ctrl = |code: u8| key.control && key.code == code;
         if self.signature.is_some() { self.signature_key(key); return true; }
+        if ctrl(KEY_Z) { self.field_history_step(key.shift); return true; }
         if ctrl(KEY_G) && key.shift {
             if self.editor().is_some() { self.signature = Some(String::new()); }
             return true;
@@ -822,6 +827,7 @@ impl Viewer {
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(_) => {
+                self.field_history.clear();
                 self.region = None;
                 self.refresh();
                 self.status = Some("Highlighted. Ctrl+S saves.".into());
@@ -878,6 +884,7 @@ impl Viewer {
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(_) => {
+                self.field_history.clear();
                 self.region = None;
                 self.refresh();
                 self.status = Some("Visual signature placed. Ctrl+S saves; no digital signature".into());
@@ -909,6 +916,7 @@ impl Viewer {
         let Some(editor) = self.editor() else { return };
         match editor.add_annotation(page, &annot) {
             Ok(_) => {
+                self.field_history.clear();
                 self.region = None;
                 self.refresh();
                 self.status = Some("Note added. Ctrl+S saves.".into());
@@ -941,6 +949,7 @@ impl Viewer {
                 let Some(editor) = self.editor() else { return true };
                 match editor.delete_annotation(page, a.index) {
                     Ok(()) => {
+                        self.field_history.clear();
                         self.refresh();
                         self.load_annots(false);
                         sex_std::record(&format!("[pdf.annotate] kind=delete page={} was={} annots={}", page + 1, a.subtype, self.annotation_count()));
@@ -990,15 +999,43 @@ impl Viewer {
     }
 
     fn set_field(&mut self, name: &str, value: FieldValue, kind: &str, shown: &str) {
-        let Some(editor) = self.editor() else { return };
-        match editor.set_field(name, value) {
-            Ok(()) => {
-                let fields = marks::fillable(&editor.fields().unwrap_or_default());
+        let result = {
+            let Some(editor) = self.editor() else { return };
+            let before = editor.fields().ok().and_then(|fields| fields.into_iter().find(|f| f.name == name)).map(|f| f.value);
+            editor.set_field(name, value.clone()).map(|()| (before, marks::fillable(&editor.fields().unwrap_or_default())))
+        };
+        match result {
+            Ok((before, fields)) => {
+                if let Some(before) = before { self.field_history.record(name, before, value); }
                 if let Some(form) = self.form.as_mut() { form.fields = fields; }
                 self.refresh();
                 sex_std::record(&format!("[pdf.field] name={name} kind={kind} value={shown}"));
             }
             Err(e) => self.status = Some(format!("Could not fill {name}: {e}")),
+        }
+    }
+
+    fn field_history_step(&mut self, redo: bool) {
+        self.commit_field();
+        let result = match self.editor.as_mut() {
+            Ok(editor) => self.field_history.step(editor, redo),
+            Err(why) => { self.status = Some(format!("This file cannot be edited: {why}")); return; }
+        };
+        match result {
+            Ok(Some(name)) => {
+                let fields = self.editor.as_ref().ok().map(|e| marks::fillable(&e.fields().unwrap_or_default())).unwrap_or_default();
+                if let Some(form) = self.form.as_mut() {
+                    form.fields = fields;
+                    if let Some((field, _, _)) = form.fields.get(form.at) {
+                        form.text = match &field.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
+                    }
+                }
+                self.refresh();
+                self.status = Some(format!("{} form field {name}. Ctrl+S saves.", if redo { "Redid" } else { "Undid" }));
+                sex_std::record(&format!("[pdf.field.history] action={} name={name}", if redo { "redo" } else { "undo" }));
+            }
+            Ok(None) => self.status = Some(format!("No form field edit to {}", if redo { "redo" } else { "undo" })),
+            Err(e) => self.status = Some(format!("Could not {} form field: {e}", if redo { "redo" } else { "undo" })),
         }
     }
 
@@ -1076,6 +1113,7 @@ impl Viewer {
             Err(e) => { self.status = Some(format!("Saved, but it does not open: {e:?}")); sex_std::record("[pdf.save.failed] reopen"); return; }
         };
         self.editor = Editor::open(back.clone()).map_err(|e| e.to_string());
+        self.field_history.clear();
         self.pdf = pdf;
         self.clear_page_cache();
         self.thumbs = vec![None; self.pages()];
@@ -1164,7 +1202,7 @@ pub fn main() {
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
-        path: name, editor, region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
+        path: name, editor, field_history: FieldHistory::default(), region: None, note: None, signature: None, form: None, annots: Vec::new(), status: None,
         shortcuts: false, shortcuts_top: 0,
     };
     viewer.draw(window);
