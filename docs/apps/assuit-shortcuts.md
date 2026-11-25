@@ -42,7 +42,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+Y | Check spelling and choose a suggestion |
 | Ctrl+Shift+U | Show or hide continuous spelling marks on the editable page; Assuit remembers the choice across launches |
 | A (during a spelling suggestion) | Add the selected word to Assuit's persistent dictionary |
-| Ctrl+Shift+K | Set the document default and selected text's proofing language to `en-US` or `en-GB` |
+| Ctrl+Shift+K | Set the document default and selected text's proofing language to `en-US`, `en-GB`, `en-AU`, or `en-CA`; `none` disables proofing for DOCX |
 | Ctrl+Shift+D | Manage Assuit's custom dictionary: A adds a word, Up/Down chooses, Delete removes, Esc closes |
 | Ctrl+=, Ctrl+-, Ctrl+0 | Zoom in, out, or reset |
 
