@@ -20,6 +20,7 @@ to scroll, and Esc or Ctrl+Shift+/ to close the reference. The command palette
 | Search folder | Ctrl+Shift+F | Ctrl+Shift+F |
 | Command palette | Ctrl+Shift+P | Esc, X or Ctrl+Shift+P |
 | File tree | Ctrl+B | Command palette |
+| Tracked Git changes | Ctrl+Shift+V | Ctrl+Shift+V |
 | Add cursor below | Ctrl+Shift+Down | Ctrl+Shift+Down |
 | Next occurrence | Ctrl+D | Command palette |
 | All occurrences | Ctrl+Shift+L | Ctrl+Shift+L |
@@ -42,3 +43,8 @@ normal mode, `i` enters insert mode, `dd` deletes a line, `u` undoes, `/` search
 and `:w` saves. The in-app reference shows its Vim commands below the Ctrl shortcuts.
 
 The desktop handles F11 to close a Quil window; Quil asks before discarding edits.
+
+Ctrl+Shift+V reads `.git/index` inside the opened project's Files grant and
+compares tracked files with the index. The panel marks modified, deleted,
+conflicted, or too-large-to-check files. Enter opens a selected existing file.
+It does not yet show untracked/ignored files, diffs, staging, commits or branches.

@@ -8,7 +8,8 @@ ROOT=Path(__file__).resolve().parents[1]
 DEMO=b'fn main() {\n    let needle = 1;\n    println!("{}", needle);\n}\n'
 OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
 BROKEN=b'fn main() {\n    let value = 1;\n'
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN}
+INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/git-index':INDEX}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -60,6 +61,8 @@ def main():
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
   for name in ('demo.rs','other.rs','broken.rs'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
+  line('mkdir /data/quil/.git')
+  m=expect(f'fetch http://10.0.2.2:{PORT}/git-index /data/quil/.git/index',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   target,task,sid=m[1],m[2],int(m[3])
   g['wait'](r'\[quil.theme\] mode=Light accent=d6336c',s,60)
@@ -81,6 +84,11 @@ def main():
   want=b''.join(b'// '+l+b'\n' if i<3 else l+b'\n' for i,l in enumerate(DEMO.rstrip(b'\n').split(b'\n')))
   g['wait'](rf'\[quil.code.saved\] path=demo.rs bytes={len(want)} hash={fnv(want):016x}',s,60)
   g['wait'](rf'\[quil.code.save.committed\] path=demo.rs bytes={len(want)}',s,60)
+  s=len(t());send('ctrl','shift','v')
+  g['wait'](r'\[quil.code.git\] tracked_changes=1 note=\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-status.ppm')})
+  assert (a.out/'quil-git-status.ppm').stat().st_size>100000
+  q.key('esc')
   # Vim mode from the command palette; dd deletes the first line, :w saves.
   s=len(t());q.key('esc');send('ctrl','shift','p');time.sleep(.3);keys('vim mode');q.key('ret');g['wait'](r'\[quil.code.keymap\] vim',s,30)
   s=len(t());keys('gg');keys('dd');keys(':w');q.key('ret')
