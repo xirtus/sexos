@@ -69,10 +69,14 @@ Remaining gaps:
   UID-backed reminders now have a stable, length-framed semantic key from the
   source calendar, iCalendar UID, occurrence day and due UTC minute. A host
   test checks that event reordering leaves the key intact and that different
-  occurrences and reminder times stay distinct. This is a source-side key
-  only: Bell and Shell do not yet receive or persist it. Legacy events without
-  UIDs, Clock alarms and timers still need persistent source identities before
-  cross-restart dedupe can be sound. The guest gate checks
+  occurrences and reminder times stay distinct. Date now sends its fixed-size
+  digest with the ticketed post; Bell binds it to the sender task and ticket,
+  then Shell requires it for that Bell event before acknowledging the text.
+  Shell logs the key after matching Bell's task and event, but does not yet
+  persist or suppress it. A digest collision is possible, and no durable
+  receiver receipt exists, so replay remains at least once. Legacy events
+  without UIDs, Clock alarms and timers still need persistent source identities
+  before cross-restart dedupe can be sound. The guest gate checks
   a healthy Shell-handled receipt and screenshot; it
   does not inject a queue-full or muted Bell state. Host receipt tests check
   muted versus transient refusal cursor policy.

@@ -14,6 +14,10 @@ pub const OP_BELL_POST: u64 = 0xCC;
 /// A Date due notice. Bell replies after policy denial or after Shell handles
 /// its last forwarded chunk. Ordinary posts remain one-way.
 pub const OP_BELL_POST_CONFIRMED: u64 = 0xCF;
+/// Program -> Bell: ticket, low and high halves of a stable semantic digest.
+/// Must precede a matching `OP_BELL_POST_CONFIRMED_KEYED` chunk stream.
+pub const OP_BELL_POST_KEY: u64 = 0xD0;
+pub const OP_BELL_POST_CONFIRMED_KEYED: u64 = 0xD1;
 /// Bell's BOOT domain. Check the reply's kernel-stamped sender, not its text.
 pub const BELL_PD: u32 = 10;
 /// Bell -> Shell: one chunk of an accepted notification.
@@ -28,6 +32,19 @@ pub const OP_NOTIFICATION_BEGIN: u64 = 0x2DB;
 /// Shell -> Bell: handling of that exact Bell run's event.
 /// Arguments are `Presentation::ack_words`.
 pub const OP_NOTIFICATION_HANDLED: u64 = 0x2DC;
+/// Bell -> Shell: event ID and low/high semantic digest, after BEGIN.
+pub const OP_NOTIFICATION_KEY: u64 = 0x2DD;
+/// High bit in BEGIN's sender word requires a matching KEY before text ACK.
+pub const BEGIN_KEY_REQUIRED: u64 = 1 << 32;
+pub fn begin_sender_word(sender: u32, keyed: bool) -> Option<u64> {
+    (sender != 0 && sender <= u16::MAX as u32)
+        .then_some(sender as u64 | if keyed { BEGIN_KEY_REQUIRED } else { 0 })
+}
+pub fn decode_begin_sender(word: u64) -> Option<(u32, bool)> {
+    let keyed = word & BEGIN_KEY_REQUIRED != 0;
+    let sender = word & !BEGIN_KEY_REQUIRED;
+    (sender != 0 && sender <= u16::MAX as u64).then_some((sender as u32, keyed))
+}
 
 /// Most text bytes in a notification: eight chunks.
 pub const TEXT_MAX: usize = 128;
@@ -37,6 +54,29 @@ pub const CHUNKS_MAX: usize = TEXT_MAX / CHUNK_BYTES;
 pub const URGENCY_LOW: u8 = 0;
 pub const URGENCY_NORMAL: u8 = 1;
 pub const URGENCY_CRITICAL: u8 = 2;
+
+/// Fixed-size wire identity for a Date semantic key. FNV-1a 128 is stable
+/// across runs and needs no allocation while hashing an arbitrary iCal UID.
+/// A digest is not a collision-free durable receipt.
+pub fn semantic_digest(key: &[u8]) -> (u64, u64) {
+    let mut hash = 0x6c62272e07bb014262b821756295c58du128;
+    for &byte in key { hash = (hash ^ byte as u128)
+        .wrapping_mul(0x0000000001000000000000000000013bu128); }
+    (hash as u64, (hash >> 64) as u64)
+}
+
+/// Bell's bounded, volatile ticket binding for a keyed post.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingKey {
+    pub caller: u32, pub task: u32, pub ticket: u32,
+    pub low: u64, pub high: u64,
+}
+impl PendingKey {
+    pub fn take_for(self, caller: u32, task: u32, ticket: u32) -> Option<(u64, u64)> {
+        (self.caller == caller && self.task != 0 && self.task == task && self.ticket == ticket)
+            .then_some((self.low, self.high))
+    }
+}
 
 const RECEIPT_MARK: u64 = 0xB311;
 /// Shell queued the panel/history event, a person hid or muted it, or the
@@ -66,6 +106,9 @@ impl Presentation {
     }
     pub fn matches_text(self, text: &Text, bell_task: u32) -> bool {
         self.bell_task == bell_task && self.event_id as u16 == text.id && self.sender as u16 == text.sender
+    }
+    pub fn matches_key(self, event_id: u64, bell_task: u32) -> bool {
+        self.event_id == event_id && self.bell_task == bell_task
     }
     pub fn ack_words(self, disposition: Disposition) -> (u64, u64, u64) {
         (self.event_id, (self.bell_task as u64) << 32 | self.ticket as u64,
@@ -244,5 +287,31 @@ mod receipt_tests {
         assert!(p.matches_text(&text, 901));
         assert!(!p.matches_text(&text, 902));
         assert!(!p.matches_text(&Text { id: 3, ..text }, 901));
+    }
+
+    #[test]
+    fn semantic_digest_is_stable_and_separates_framed_keys() {
+        let one = semantic_digest(b"date:reminder:2:7:uid:one:1:1234");
+        assert_eq!(one, semantic_digest(b"date:reminder:2:7:uid:one:1:1234"));
+        assert_ne!(one, semantic_digest(b"date:reminder:2:7:uid:one:1:1235"));
+        assert_ne!(one, semantic_digest(b"date:reminder:2:7:uid:two:1:1234"));
+    }
+
+    #[test]
+    fn keyed_begin_and_key_reject_wrong_identity() {
+        let sender = begin_sender_word(44, true).unwrap();
+        assert_eq!(decode_begin_sender(sender), Some((44, true)));
+        assert_eq!(decode_begin_sender(begin_sender_word(44, false).unwrap()), Some((44, false)));
+        assert_eq!(decode_begin_sender(sender | (1 << 48)), None);
+        assert_eq!(begin_sender_word(0, true), None);
+        let p = Presentation::new(0x1_0002, 7, 44, 901).unwrap();
+        assert!(p.matches_key(0x1_0002, 901));
+        assert!(!p.matches_key(2, 901));
+        assert!(!p.matches_key(0x1_0002, 902));
+        let key = PendingKey { caller: 44, task: 801, ticket: 7, low: 11, high: 12 };
+        assert_eq!(key.take_for(44, 801, 7), Some((11, 12)));
+        assert_eq!(key.take_for(44, 802, 7), None);
+        assert_eq!(key.take_for(44, 801, 8), None);
+        assert_eq!(key.take_for(45, 801, 7), None);
     }
 }
