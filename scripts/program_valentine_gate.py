@@ -80,6 +80,7 @@ def main():
   s=len(t());ctrl('y');g['wait'](r'\[valentine.draft.redo\] changed=1 dirty=0',s,60)
   close(target,task)
   target,task,s=launch();g['wait'](r'\[valentine.loaded\] messages=2',s,60)
+  surface=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,5)[1])
   keys('plans');g['wait'](r'\[valentine.search\] query=plans matches=1',s,60)
   s=len(t());q.key('ret');g['wait'](r'\[valentine.opened\] file=draft-[^ ]+\.eml bytes=\d+ subject=plans',s,60)
   s=len(t());ctrl('e');time.sleep(.4);shot('valentine-draft-reopened');q.key('esc')
@@ -95,9 +96,21 @@ def main():
   shot('valentine-nested-folder')
   nested_pixels=(a.out/'valentine-nested-folder.ppm').read_bytes()
   assert nested_pixels.startswith(b'P6\n') and nested_pixels!=(a.out/'valentine-folder.ppm').read_bytes()
-  s=len(t());ctrl('n');keys('bob@example.org');q.key('ret');keys('nested note');q.key('ret');keys('See the itinerary.')
-  ctrl('s');g['wait'](r'\[valentine.draft.saved\] path=Travel/2026/draft-[^ ]+\.eml bytes=\d+',s,60)
+  # Another writer takes the name after the new composer selected it. The
+  # first save must choose a new name without replacing that writer's mail.
+  s=len(t());ctrl('n')
+  taken=g['wait'](r'\[valentine.draft.new\] path=(Travel/2026/draft-[^ ]+\.eml)',s,60)[1]
+  m=shell(f'fetch http://10.0.2.2:{PORT}/inbox.eml /data/valentine/{taken}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
+  assert m[1].startswith('Saved'),m[1]
+  g['focus'](surface);time.sleep(.4)
+  keys('bob@example.org');q.key('ret');keys('nested note');q.key('ret');keys('See the itinerary.')
+  s=len(t());ctrl('s')
+  saved_nested=g['wait'](r'\[valentine.draft.saved\] path=(Travel/2026/draft-[^ ]+\.eml) bytes=\d+',s,60)[1]
+  assert saved_nested != taken,(saved_nested,taken)
+  shot('valentine-draft-collision-saved')
   q.key('esc')
+  shell(f'cat /data/valentine/{taken}',r'\[spindle.fs.cat\] .*Dinner on Friday',90)
+  g['focus'](surface);time.sleep(.4)
   s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name= messages=2',s,60)
   close(target,task)
   # Let the idle composer save a draft, then cut QEMU power with the window open.
