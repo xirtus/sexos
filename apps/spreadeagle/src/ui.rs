@@ -939,7 +939,7 @@ impl Ui {
         } else {
             chosen.map(|i| menu.values[i].clone()).into_iter().collect()
         };
-        let label = match values.as_slice() { [] => "all".to_string(), [one] => one.clone(), _ => format!("{}-values", values.len()) };
+        let label = match values.as_slice() { [] => "all".to_string(), [one] if one.is_empty() => "(blank)".to_string(), [one] => one.clone(), _ => format!("{}-values", values.len()) };
         let done = self.book.filter_by_values(self.selection(), menu.col, &values);
         let changed = self.command("data.filterBy", done, format!("Filter {}: {label}", column_name(menu.col)));
         if changed { sex_std::record(&format!("[spreadeagle.filter.choice] col={} value={label}", column_name(menu.col))); }
