@@ -605,11 +605,15 @@ impl App {
                 if let Some(name) = self.job_select.take() { self.select(&name); }
                 true
             }
-            Outcome::Failed(kind, why) => {
-                sex_pdx::serial_record!("[files.app.job.failed] kind={:?} why={}", kind, why);
+            Outcome::Failed(kind, why, cleaned) => {
+                sex_pdx::serial_record!("[files.app.job.failed] kind={:?} cleaned={} why={}", kind, cleaned as u8, why);
                 self.job = None;
                 self.job_undo = None;
-                self.status = format!("Couldn't finish: {}. Nothing half-done was left.", why);
+                self.status = match (kind, cleaned) {
+                    (Kind::Sum, _) => format!("Couldn't finish checking: {}. No files changed.", why),
+                    (Kind::Copy | Kind::Move, true) => format!("Couldn't finish: {}. Copied paths were removed; source files remain.", why),
+                    _ => format!("Couldn't finish: {}. Storage state is unconfirmed; check source and destination before retrying.", why),
+                };
                 if !self.look_for_pulled(window) { self.load(window); }
                 true
             }

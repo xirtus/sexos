@@ -6,6 +6,19 @@ use crate::ReadAt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Read, Short, Length, Mismatch }
 
+/// Completion cannot be reported until the final durability barrier succeeds.
+/// A failed barrier invokes rollback; its result determines whether the
+/// caller can claim the changed paths were removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinalSync<E> { Complete, Failed { error: E, cleaned: bool } }
+
+pub fn finish_sync<E>(result: Result<(), E>, rollback: impl FnOnce() -> bool) -> FinalSync<E> {
+    match result {
+        Ok(()) => FinalSync::Complete,
+        Err(error) => FinalSync::Failed { error, cleaned: rollback() },
+    }
+}
+
 pub struct CopyVerifier {
     size: u64,
     source_len: u64,
@@ -73,5 +86,15 @@ mod tests {
         assert_eq!(run(b"abcdefg", b"abc", None), Err(Error::Short));
         assert_eq!(run(b"abcdefg", b"abcdefg", Some(3)), Err(Error::Read));
         assert_eq!(run(b"abc", b"abcd", None), Err(Error::Length));
+    }
+    #[test]
+    fn final_sync_failure_never_reports_success_and_tracks_cleanup() {
+        let mut called = false;
+        assert_eq!(finish_sync::<u8>(Ok(()), || { called = true; false }), FinalSync::Complete);
+        assert!(!called);
+        assert_eq!(finish_sync(Err(9u8), || { called = true; true }),
+            FinalSync::Failed { error: 9, cleaned: true });
+        assert!(called);
+        assert_eq!(finish_sync(Err(9u8), || false), FinalSync::Failed { error: 9, cleaned: false });
     }
 }

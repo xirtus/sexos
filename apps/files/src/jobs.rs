@@ -15,7 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use loom_core::journal::TransferProgress;
-use loom_core::verify::CopyVerifier;
+use loom_core::verify::{finish_sync, CopyVerifier, FinalSync};
 use sex_app::files;
 use sex_app::Window;
 use sha2::{Digest, Sha256};
@@ -41,7 +41,7 @@ enum Step {
 pub enum Outcome {
     Running,
     Done(Kind, String),
-    Failed(Kind, String),
+    Failed(Kind, String, bool),
 }
 
 pub struct Job {
@@ -184,16 +184,24 @@ impl Job {
                 Outcome::Running
             }
             Ok(false) => {
-                self.transfer.complete();
-                Outcome::Done(self.kind, self.summary())
+                match finish_sync(files::sync(window), || self.cleanup_if_possible(window)) {
+                    FinalSync::Complete => {
+                        sex_pdx::serial_record!("[files.app.job.final-sync.ok] kind={:?}", self.kind);
+                        self.transfer.complete();
+                        Outcome::Done(self.kind, self.summary())
+                    }
+                    FinalSync::Failed { error, cleaned } => {
+                        self.transfer.fail();
+                        sex_pdx::serial_record!("[files.app.job.final-sync.failed] kind={:?} cleaned={}", self.kind, cleaned as u8);
+                        Outcome::Failed(self.kind, shown(files::message(error)).into(), cleaned)
+                    }
+                }
             }
             Err(e) => {
                 let why = shown(files::message(e)).into();
-                // A copy that failed is cleaned like a cancelled one; a move keeps
-                // its source whenever the copy did not finish.
-                if self.kind != Kind::Delete && self.kind != Kind::Sum && !self.committed { self.undo_made(window); }
+                let cleaned = self.cleanup_if_possible(window);
                 self.transfer.fail();
-                Outcome::Failed(self.kind, why)
+                Outcome::Failed(self.kind, why, cleaned)
             }
         }
     }
@@ -286,23 +294,38 @@ impl Job {
                 }
             }
         }
-        if self.steps.is_empty() { let _ = files::sync(window); return Ok(false); }
+        if self.steps.is_empty() { return Ok(false); }
         Ok(true)
     }
 
+    fn cleanup_if_possible(&mut self, window: &mut Window) -> bool {
+        match self.kind {
+            Kind::Copy => self.undo_made(window),
+            Kind::Move if !self.committed => self.undo_made(window),
+            Kind::Sum => true,
+            Kind::Move | Kind::Delete => false,
+        }
+    }
     /// Removes the half-written file and everything this job made, newest first.
-    fn undo_made(&mut self, window: &mut Window) {
-        if let Some(part) = self.open_part.take() { let _ = files::remove(window, &at(&part)); }
-        while let Some(p) = self.made.pop() { let _ = files::remove(window, &at(&p)); }
-        let _ = files::sync(window);
+    fn undo_made(&mut self, window: &mut Window) -> bool {
+        let mut cleaned = true;
+        if let Some(part) = self.open_part.take() {
+            cleaned &= matches!(files::remove(window, &at(&part)), Ok(()) | Err(sex_pdx::fs::NOT_FOUND));
+        }
+        while let Some(p) = self.made.pop() {
+            cleaned &= matches!(files::remove(window, &at(&p)), Ok(()) | Err(sex_pdx::fs::NOT_FOUND));
+        }
+        cleaned & files::sync(window).is_ok()
     }
 
     /// Stops the job. Returns what was kept, as shown to the person.
     pub fn cancel(&mut self, window: &mut Window) -> String {
         let label: String = shown(&self.what).into();
         let s = match self.kind {
-            Kind::Copy => { self.undo_made(window); format!("Stopped copying {}: nothing half-copied was left.", label) }
-            Kind::Move if !self.committed => { self.undo_made(window); format!("Stopped moving {}: it is still where it was.", label) }
+            Kind::Copy => if self.undo_made(window) { format!("Stopped copying {}: copied paths were removed.", label) }
+                else { format!("Stopped copying {}: source remains, but cleanup could not be confirmed. Check the destination.", label) },
+            Kind::Move if !self.committed => if self.undo_made(window) { format!("Stopped moving {}: it is still where it was.", label) }
+                else { format!("Stopped moving {}: source remains, but cleanup could not be confirmed. Check the destination.", label) },
             Kind::Move => return format!("Moving {}: almost done, finishing.", label),
             Kind::Delete => format!("Stopped deleting: {} items were already gone.", self.removed),
             Kind::Sum => format!("Stopped checking {}.", label),
