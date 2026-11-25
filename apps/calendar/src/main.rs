@@ -305,6 +305,7 @@ fn notice_worker() -> ! {
             Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
             Err(_) => ReceiptJournal::default(),
         };
+        sex_pdx::serial_record!("[date.notice.receipts.loaded] owner=worker count={}", receipts.len());
         if !cursor_ready { sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor-initial"); }
         let mut retry = NoticeRetry::default();
         sex_pdx::serial_record!("[date.notice.worker.resumed]");
@@ -1218,6 +1219,7 @@ pub extern "C" fn _start() -> ! {
         Ok(n) => ReceiptJournal::parse(&String::from_utf8_lossy(&store[..n])).unwrap_or_default(),
         Err(_) => ReceiptJournal::default(),
     };
+    sex_pdx::serial_record!("[date.notice.receipts.loaded] owner=visible count={}", receipts.len());
     let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, review_choice: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, cursor_ready, notice_retry: NoticeRetry::default(), receipts, uid_counter: 0 };

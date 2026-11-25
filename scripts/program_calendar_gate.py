@@ -329,6 +329,14 @@ def main():
   keyed=(a.out/'date-keyed-reminder.ppm').read_bytes()
   assert keyed.startswith(b'P6\n') and len(keyed)>100000 and keyed!=(a.out/'date-keyed-before.ppm').read_bytes()
   close(target,task)
+  # The Date-owned receipt file must survive a run restart. The host test
+  # verifies that a parsed journal recognizes the recorded key.
+  target,task,sid,_,s=start('')
+  g['wait'](r'\[date.notice.receipts.loaded\] owner=visible count=[1-9]\d*',s,60)
+  q.cmd('screendump',{'filename':str(a.out/'date-keyed-reopened.ppm')})
+  reopened=(a.out/'date-keyed-reopened.ppm').read_bytes()
+  assert reopened.startswith(b'P6\n') and len(reopened)>100000
+  close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'today':str(today),'months_moved':months,'powercut_event':True})
  finally:g['stop']()

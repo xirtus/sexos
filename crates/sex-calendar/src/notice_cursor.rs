@@ -21,6 +21,7 @@ pub const RECEIPT_LIMIT: usize = 256;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReceiptJournal { entries: Vec<(i64, u128)> }
 impl ReceiptJournal {
+    pub fn len(&self) -> usize { self.entries.len() }
     pub fn parse(text: &str) -> Option<Self> {
         let mut lines = text.lines();
         if lines.next() != Some(RECEIPT_HEADER) { return None; }
