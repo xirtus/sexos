@@ -234,6 +234,24 @@ impl Book {
         Ok(())
     }
 
+    /// Crop the selected picture's left, top, right and bottom edges by whole
+    /// percentages of the original image, leaving at least five percent visible.
+    pub fn picture_crop(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter four crop percentages: left top right bottom (0–95)";
+        let values: Vec<u8> = input.split_whitespace().map(str::parse::<u8>)
+            .collect::<Result<_, _>>().map_err(|_| HELP.to_string())?;
+        if values.len() != 4 || values.iter().any(|v| *v > 95)
+            || u16::from(values[0]) + u16::from(values[2]) > 95
+            || u16::from(values[1]) + u16::from(values[3]) > 95 {
+            return Err(HELP.into());
+        }
+        let fractions: Vec<f32> = values.into_iter().map(|v| f32::from(v) / 100.0).collect();
+        self.run("picture.crop", json!({ "left": fractions[0], "top": fractions[1],
+            "right": fractions[2], "bottom": fractions[3] }))
+            .map_err(|_| "Select a picture first".to_string())?;
+        Ok(())
+    }
+
     /// Selects the next proofing issue and returns its word and suggestions.
     pub fn next_spelling_issue(&mut self) -> Result<Option<(String, Vec<String>)>, String> {
         let issue = self.run("review.spelling", json!({}))?;
@@ -932,6 +950,28 @@ mod tests {
             let saved = size(&Book::open(&path).unwrap());
             assert!((saved.0 - 144.0).abs() < 0.1, "{ext} lost picture width: {saved:?}");
             assert!((saved.1 / saved.0 - before.1 / before.0).abs() < 0.01, "{ext} lost picture proportions");
+        }
+    }
+
+    #[test]
+    fn picture_crop_round_trips_in_docx_and_odt() {
+        let picture = temp("crop-mark.png");
+        std::fs::write(&picture, include_bytes!("../../../assets/brand/sexos-lips-badge-64.png")).unwrap();
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("picture-crop.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.picture_crop("10 0 5 0").is_err());
+            book.insert_picture(&picture).unwrap();
+            assert!(book.picture_crop("80 0 20 0").is_err());
+            book.picture_crop("10 0 5 0").unwrap();
+            let crop = |book: &Book| book.session.doc.body.iter().filter_map(|b| b.as_para())
+                .flat_map(|p| p.object_offsets().into_iter().filter_map(|off| p.object_at(off)))
+                .find_map(|o| match o { wordcraft_engine::doc::para::InlineObject::Image { crop, .. } => Some(*crop), _ => None }).unwrap();
+            let want = [0.1, 0.0, 0.05, 0.0];
+            assert_eq!(crop(&book), want);
+            book.save().unwrap();
+            let kept = crop(&Book::open(&path).unwrap());
+            assert!(kept.iter().zip(want).all(|(got, want)| (*got - want).abs() < 0.001), "{ext} lost crop: {kept:?}");
         }
     }
 
