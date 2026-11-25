@@ -197,6 +197,55 @@ impl Book {
         Ok(result["converted"].as_u64().unwrap_or(0) as usize)
     }
 
+    /// Change document-wide note placement or numbering through WordCraft's
+    /// undoable note-options command. Values use the user's words, never XML.
+    pub fn set_note_options(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Use footnote/endnote start N, restart continuous/section/page, format decimal/roman/letters, or position bottom/beneath/section/end";
+        let words: Vec<_> = input.split_whitespace().collect();
+        if words.len() != 3 { return Err(HELP.into()); }
+        let kind = match words[0].to_ascii_lowercase().as_str() {
+            "footnote" => "footnote", "endnote" => "endnote", _ => return Err(HELP.into()),
+        };
+        let mut params = json!({"kind": kind, "scope": "document"});
+        let value = words[2].to_ascii_lowercase();
+        match words[1].to_ascii_lowercase().as_str() {
+            "start" => {
+                let n: u32 = value.parse().map_err(|_| HELP.to_string())?;
+                if !(1..=32767).contains(&n) { return Err(HELP.into()); }
+                params["numStart"] = json!(n);
+            }
+            "restart" => {
+                let restart = match value.as_str() {
+                    "continuous" => "continuous", "section" => "eachSect",
+                    "page" if kind == "footnote" => "eachPage", _ => return Err(HELP.into()),
+                };
+                params["numRestart"] = json!(restart);
+            }
+            "format" => {
+                let format = match value.as_str() {
+                    "decimal" => "decimal", "roman" => "lowerRoman", "romanupper" => "upperRoman",
+                    "letters" => "lowerLetter", "lettersupper" => "upperLetter", _ => return Err(HELP.into()),
+                };
+                params["numFmt"] = json!(format);
+            }
+            "position" => {
+                if self.path.to_ascii_lowercase().ends_with(".odt")
+                    && (kind == "endnote" || value != "bottom") {
+                    return Err("ODT saves only footnotes at the page bottom; use DOCX for other note placement".into());
+                }
+                let pos = match (kind, value.as_str()) {
+                    ("footnote", "bottom") => "pageBottom", ("footnote", "beneath") => "beneathText",
+                    ("endnote", "section") => "sectEnd", ("endnote", "end") => "docEnd",
+                    _ => return Err(HELP.into()),
+                };
+                params["pos"] = json!(pos);
+            }
+            _ => return Err(HELP.into()),
+        }
+        self.run("references.noteOptions", params)?;
+        Ok(())
+    }
+
     /// Apply a web or mail link to selected text, or insert its URL (or an
     /// optional following label) at the caret. WordCraft keeps the link style.
     pub fn insert_hyperlink(&mut self, input: &str) -> Result<(), String> {
@@ -1529,6 +1578,45 @@ mod tests {
                 .find_map(|obj| match obj { InlineObject::NoteRef { id, .. } => Some(*id), _ => None }).unwrap();
             let text = saved.session.doc.plain_text(StoryRef::Part(id));
             assert!(text.contains("Updated") && text.contains("First"), "saved note: {text}");
+        }
+    }
+
+    #[test]
+    fn note_placement_and_numbering_round_trip() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("note-options.{ext}"));
+            let mut book = Book::blank(&path);
+            for invalid in ["footnote start 0", "footnote start 32768", "endnote restart page",
+                "footnote position end", "endnote format unknown"] {
+                assert!(book.set_note_options(invalid).is_err(), "{invalid}");
+            }
+            book.type_text("Claim").unwrap();
+            book.insert_footnote("Source").unwrap();
+            book.close_inserted_note();
+            book.set_note_options("footnote start 5").unwrap();
+            book.set_note_options("footnote restart page").unwrap();
+            book.set_note_options("footnote format roman").unwrap();
+            if ext == "docx" { book.set_note_options("footnote position beneath").unwrap(); }
+            else {
+                assert!(book.set_note_options("footnote position beneath").is_err());
+                assert!(book.set_note_options("endnote position section").is_err());
+                book.set_note_options("footnote position bottom").unwrap();
+            }
+            book.set_note_options("endnote start 3").unwrap();
+            book.set_note_options("endnote restart section").unwrap();
+            if ext == "docx" { book.set_note_options("endnote position section").unwrap(); }
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            let foot = reopened.session.doc.settings.footnote_pr;
+            let end = reopened.session.doc.settings.endnote_pr;
+            use wordcraft_engine::doc::section::{NotePos, NoteRestart, NumFormat};
+            assert_eq!(foot.num_start, Some(5), "{ext}");
+            assert_eq!(foot.num_restart, Some(NoteRestart::EachPage), "{ext}");
+            assert_eq!(foot.pos, Some(if ext == "docx" { NotePos::BeneathText } else { NotePos::PageBottom }), "{ext}");
+            assert_eq!(reopened.session.doc.settings.footnote_format, NumFormat::LowerRoman, "{ext}");
+            assert_eq!(end.num_start, Some(3), "{ext}");
+            assert_eq!(end.num_restart, Some(NoteRestart::EachSect), "{ext}");
+            if ext == "docx" { assert_eq!(end.pos, Some(NotePos::SectEnd)); }
         }
     }
 

@@ -381,6 +381,13 @@ def main():
   time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-footnote-edit.ppm')})
   assert (a.out/'assuit-footnote-edit.ppm').stat().st_size>10000
   s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
+  s=len(t());press('ctrl','alt','shift','f')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-note-options-prompt.ppm')})
+  assert (a.out/'assuit-note-options-prompt.ppm').stat().st_size>10000
+  type_line('footnote format roman');q.key('ret')
+  g['wait'](r'\[assuit\.note\.options\] value=footnote format roman',s,120)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'assuit-note-roman-numbering.ppm')})
+  assert (a.out/'assuit-note-roman-numbering.ppm').stat().st_size>10000
   s=len(t());press('ctrl','alt','shift','e')
   g['wait'](r'\[assuit\.note\.open\] kind=footnote',s,120)
   type_line(' revisited')
