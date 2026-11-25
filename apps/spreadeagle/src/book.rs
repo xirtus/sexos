@@ -260,6 +260,32 @@ impl Book {
         self.run(id, params).map(|_| ())
     }
 
+    /// Sort an explicitly selected block by two or more columns, in priority order.
+    /// A header row is detected by GridCraft and kept at the top.
+    pub fn sort_multi(&mut self, range: Range, input: &str) -> Result<(), String> {
+        if range.single() { return Err("Select the whole table before sorting by several columns".into()); }
+        let (_, left, _, right) = range.bounds();
+        let mut keys = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for part in input.split(',') {
+            let words: Vec<_> = part.split_whitespace().collect();
+            if words.len() != 2 { return Err("Enter column and order, for example A asc, C desc".into()); }
+            let name = words[0].to_ascii_uppercase();
+            if !name.bytes().all(|c| c.is_ascii_uppercase()) { return Err("Enter a column letter such as A or BC".into()); }
+            let col = CellRef::parse(&format!("{name}1")).ok_or("Enter a valid column letter")?.col;
+            if !(left..=right).contains(&col) { return Err(format!("Column {name} is outside {}", range.a1())); }
+            if !seen.insert(col) { return Err(format!("Column {name} appears more than once")); }
+            let order = match words[1].to_ascii_lowercase().as_str() {
+                "asc" => "asc", "desc" => "desc",
+                _ => return Err("Choose asc or desc for each column".into()),
+            };
+            keys.push(json!({ "column": name, "order": order }));
+        }
+        if !(2..=8).contains(&keys.len()) { return Err("Choose 2–8 different sort columns".into()); }
+        self.select(range)?;
+        self.run("data.sort", json!({ "range": range.a1(), "keys": keys })).map(|_| ())
+    }
+
     /// The AutoFilter's range on the active sheet, if it has one.
     pub fn filter_range(&self) -> Option<Range> {
         let d = self.session.doc().ok()?;
@@ -792,6 +818,30 @@ mod tests {
         assert_eq!(column(&book, 0, 4), ["Item", "Rent", "Fun", "Food"]);
         book.undo().unwrap();
         assert_eq!(column(&book, 0, 4), ["Item", "Fun", "Food", "Rent"]);
+    }
+
+    #[test]
+    fn sorts_by_two_columns_and_preserves_header_after_save() {
+        let mut book = Book::blank(&temp("multi-sort.xlsx"));
+        for (row, group, score) in [(1, "B", "2"), (2, "A", "1"), (3, "B", "5"), (4, "A", "3")] {
+            book.set(row, 0, group).unwrap();
+            book.set(row, 1, score).unwrap();
+        }
+        book.set(0, 0, "Group").unwrap();
+        book.set(0, 1, "Score").unwrap();
+        let range = Range { r0: 0, c0: 0, r1: 4, c1: 1 };
+        for bad in ["A asc", "A asc, A desc", "C asc, B desc", "A up, B desc", "A asc, B"] {
+            assert!(book.sort_multi(range, bad).is_err(), "{bad}");
+        }
+        book.sort_multi(range, "A asc, B desc").unwrap();
+        let rows = |book: &Book| (0..=4).map(|r| (book.shown(r, 0).text, book.shown(r, 1).text)).collect::<Vec<_>>();
+        assert_eq!(rows(&book), [("Group", "Score"), ("A", "3"), ("A", "1"), ("B", "5"), ("B", "2")].map(|(a, b)| (a.to_string(), b.to_string())));
+        book.undo().unwrap();
+        assert_eq!(rows(&book)[1], ("B".into(), "2".into()));
+        book.redo().unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(rows(&Book::open(&path).unwrap().0), rows(&book));
     }
 
     #[test]

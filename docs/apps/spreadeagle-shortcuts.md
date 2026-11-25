@@ -15,6 +15,7 @@ window. Press it again, or Esc, to return to the grid.
 | Ctrl+F, Ctrl+H | Find, find and replace |
 | Ctrl+Shift+=, Ctrl+- | Insert or delete rows or columns |
 | Ctrl+Shift+A, Ctrl+Shift+D | Sort ascending or descending |
+| Ctrl+Shift+J | Sort a selected table by two to eight columns in priority order, such as `A asc, C desc` |
 | Ctrl+Shift+L, Ctrl+Shift+E, Ctrl+Shift+O | Toggle filter; show rows matching the selected cell; choose column values or All rows |
 | Ctrl+Shift+K | Filter the current column by `contains text`, `starts text`, `ends text`, `notcontains text`, or a numeric rule such as `> 200` or `<= 40` |
 | Ctrl+Shift+F, Ctrl+Shift+C | Freeze panes; insert a column chart |
