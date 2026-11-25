@@ -83,13 +83,14 @@ const KEY_N: u8 = 0x31;
 const KEY_Z: u8 = 0x2C;
 const KEY_V: u8 = 0x2F;
 const KEY_B: u8 = 0x30;
+const KEY_M: u8 = 0x32;
 const SLASH: u8 = 0x35;
 const SHORTCUTS: &[&str] = &[
     "Pages: Right / Space / N next; Left / P previous",
     "Home / End first / last; Up / Down scroll",
     "+ / - zoom; 0 / W fit width; F fit page; 1 actual size",
     "T thumbnails; O outline (Up / Down / Enter choose)",
-    "Search: Ctrl+F find; Enter / Ctrl+G next; spaces cross lines",
+    "Search: Ctrl+F; Enter / Ctrl+G next; Ctrl+Shift+M match case",
     "Escape closes search",
     "Markup: Ctrl+R region; drag on page or use arrow keys",
     "Shift+arrows size the region; Enter highlights it",
@@ -328,6 +329,7 @@ struct Viewer {
     chosen: usize,
     /// The find bar: open, what is typed, the hits for `searched`, the hit shown.
     finding: bool,
+    match_case: bool,
     term: String,
     searched: String,
     hits: Vec<Hit>,
@@ -463,7 +465,7 @@ impl Viewer {
         if self.term != self.searched {
             let term = self.term.clone();
             let pages: Vec<Vec<char>> = self.texts().iter().map(|t| t.chars.clone()).collect();
-            self.hits = search::hits(&pages, &term);
+            self.hits = search::hits_with_case(&pages, &term, self.match_case);
             self.searched = term;
             self.hit = None;
         }
@@ -650,11 +652,13 @@ impl Viewer {
         let status = if self.term != self.searched || self.term.is_empty() { String::new() }
             else if self.found_none { "not found".into() }
             else { self.hit.and_then(|h| self.hits.iter().position(|x| *x == h)).map(|i| format!("{} of {}", i + 1, self.hits.len())).unwrap_or_default() };
+        let status = format!("Case: {}  {}", if self.match_case { "on" } else { "off" }, status);
         let y = (bar.saturating_sub(CH)) / 2;
         let Some(letters) = self.letters.as_mut() else { return };
-        letters.draw(out, width, (8, y), width, "Find:", palette.dim);
-        letters.draw(out, width, (8 + 6 * CW, y), width.saturating_sub(16 * CW), &format!("{}_", self.term), palette.ink);
         let sx = width.saturating_sub(8 + status.len() * CW);
+        let term_x = 8 + 6 * CW;
+        letters.draw(out, width, (8, y), width, "Find:", palette.dim);
+        letters.draw(out, width, (term_x, y), sx.saturating_sub(term_x + CW), &format!("{}_", self.term), palette.ink);
         letters.draw(out, width, (sx, y), width, &status, if self.found_none { palette.danger } else { palette.dim });
     }
 
@@ -812,13 +816,21 @@ impl Viewer {
     }
 
     fn view_key(&mut self, key: sex_std::sex_pdx::app_key::Key, size: (usize, usize)) -> bool {
-        let before = (self.page, self.zoom, self.scroll, self.hscroll, self.panel, self.chosen, self.finding, self.term.clone(), self.hit);
+        let before = (self.page, self.zoom, self.scroll, self.hscroll, self.panel, self.chosen, self.finding, self.match_case, self.term.clone(), self.hit);
         let l = self.layout(size);
         let fit_width = zoom::scale(Zoom::FitWidth, self.pdf.pages().get(self.page).map_or((612.0, 792.0), |p| p.render_dimensions()), (l.aw.saturating_sub(2 * MARGIN), l.ah.saturating_sub(2 * MARGIN)));
         let now = self.scale(&l);
         let last = self.pages().saturating_sub(1);
         let step = size.1 * 3 / 4;
-        if key.control && key.code == KEY_F {
+        if self.finding && key.control && key.shift && key.code == KEY_M {
+            self.match_case = !self.match_case;
+            self.searched.clear();
+            self.hits.clear();
+            self.hit = None;
+            self.found_none = false;
+            sex_std::record(&format!("[pdf.find.case] match={}", self.match_case as u8));
+            if !self.term.is_empty() { self.find(false); }
+        } else if key.control && key.code == KEY_F {
             self.finding = true;
         } else if key.code == F3 || key.control && key.code == KEY_G {
             self.finding = true;
@@ -868,7 +880,7 @@ impl Viewer {
                 _ => {}
             }
         }
-        before != (self.page, self.zoom, self.scroll, self.hscroll, self.panel, self.chosen, self.finding, self.term.clone(), self.hit)
+        before != (self.page, self.zoom, self.scroll, self.hscroll, self.panel, self.chosen, self.finding, self.match_case, self.term.clone(), self.hit)
     }
 
     /// A click in the panel chooses a page; the wheel scrolls the page.
@@ -2207,7 +2219,7 @@ pub fn main() {
         palette, theme_generation,
         pdf, name: short, page: 0, zoom: Zoom::FitWidth, scroll: 0, hscroll: 0, shown: None, page_cache: Vec::new(), cache_bytes: 0,
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
-        finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
+        finding: false, match_case: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
         field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), highlight_color: 0, highlight_opacity: 0, region: None, region_drag: None, note: None, comment: None, signature: None, signing: None, close_after_sign: false, form: None, text_drag: None, annots: Vec::new(),

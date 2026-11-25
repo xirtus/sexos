@@ -18,7 +18,7 @@ fn fold(c: char) -> char {
 
 /// Collapse each whitespace run to one space, keeping the range of source
 /// characters it replaced so highlights can cover the actual extracted text.
-fn normalized(chars: impl IntoIterator<Item = char>) -> Vec<(char, usize, usize)> {
+fn normalized(chars: impl IntoIterator<Item = char>, match_case: bool) -> Vec<(char, usize, usize)> {
     let mut out: Vec<(char, usize, usize)> = Vec::new();
     for (at, c) in chars.into_iter().enumerate() {
         if c.is_whitespace() {
@@ -26,19 +26,19 @@ fn normalized(chars: impl IntoIterator<Item = char>) -> Vec<(char, usize, usize)
                 if *last == ' ' { *end = at + 1; continue; }
             }
             out.push((' ', at, at + 1));
-        } else { out.push((fold(c), at, at + 1)); }
+        } else { out.push((if match_case { c } else { fold(c) }, at, at + 1)); }
     }
     out
 }
 
-fn spans(text: &[char], term: &str) -> Vec<(usize, usize)> {
-    let needle: Vec<char> = normalized(term.chars()).into_iter().map(|x| x.0).collect();
+fn spans(text: &[char], term: &str, match_case: bool) -> Vec<(usize, usize)> {
+    let needle: Vec<char> = normalized(term.chars(), match_case).into_iter().map(|x| x.0).collect();
     let first = needle.iter().position(|c| *c != ' ');
     let Some(first) = first else { return Vec::new(); };
     let last = needle.iter().rposition(|c| *c != ' ').unwrap();
     let needle = &needle[first..=last];
     if needle.is_empty() { return Vec::new(); }
-    let hay = normalized(text.iter().copied());
+    let hay = normalized(text.iter().copied(), match_case);
     if needle.len() > hay.len() { return Vec::new(); }
     (0..=hay.len() - needle.len())
         .filter(|&i| hay[i..i + needle.len()].iter().map(|x| x.0).eq(needle.iter().copied()))
@@ -48,12 +48,17 @@ fn spans(text: &[char], term: &str) -> Vec<(usize, usize)> {
 /// Where `term` starts in `text`, ignoring case and layout whitespace, in
 /// character indices. Overlapping occurrences each count.
 pub fn find_all(text: &[char], term: &str) -> Vec<usize> {
-    spans(text, term).into_iter().map(|(at, _)| at).collect()
+    spans(text, term, false).into_iter().map(|(at, _)| at).collect()
 }
 
 /// Every hit in the document, in page order.
 pub fn hits(pages: &[Vec<char>], term: &str) -> Vec<Hit> {
-    pages.iter().enumerate().flat_map(|(page, text)| spans(text, term).into_iter().map(move |(at, end)| Hit { page, at, len: end - at })).collect()
+    hits_with_case(pages, term, false)
+}
+
+/// Every hit in page order, optionally retaining the PDF's original letter case.
+pub fn hits_with_case(pages: &[Vec<char>], term: &str, match_case: bool) -> Vec<Hit> {
+    pages.iter().enumerate().flat_map(|(page, text)| spans(text, term, match_case).into_iter().map(move |(at, end)| Hit { page, at, len: end - at })).collect()
 }
 
 /// The hit after `from` (or the first at or after the start of `page` when there is
@@ -101,5 +106,14 @@ mod tests {
         assert_eq!(previous(&all, Some(all[0]), 0), Some(all[2]));
         assert_eq!(previous(&all, None, 2), Some(all[0]));
         assert_eq!(next(&[], None, 0), None);
+    }
+
+    #[test]
+    fn match_case_filters_hits_without_changing_source_spans() {
+        let pages = vec![chars("Lantern lantern\nLANTERN"), chars("lantern")];
+        assert_eq!(hits_with_case(&pages, "Lantern", true), vec![Hit { page: 0, at: 0, len: 7 }]);
+        assert_eq!(hits_with_case(&pages, "lantern", true), vec![Hit { page: 0, at: 8, len: 7 }, Hit { page: 1, at: 0, len: 7 }]);
+        assert_eq!(hits_with_case(&pages, "lantern", false).len(), 4);
+        assert_eq!(hits_with_case(&[chars("A\nB")], "A B", true), vec![Hit { page: 0, at: 0, len: 3 }]);
     }
 }

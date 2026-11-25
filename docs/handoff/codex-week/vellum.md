@@ -21,6 +21,10 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
   two visible lines. This slice makes whitespace runs match one query space and
   highlights the exact source character span. Hyphenated word joins and
   multi-column reading order remain separate gaps.
+- **Match Case:** Find now offers Ctrl+Shift+M while its bar is open. The bar
+  shows the mode, and changing it reruns the existing query against the same
+  source character spans. The default still ignores case; the guest gate
+  captures the uppercase-only fixture returning no hits in Match Case mode.
 - **Save safety:** edited PDF saves overwrite the destination directly; thumbnail output can delete an existing destination on a partial write. First slice: stage and sync complete bytes, then replace through Files' rename.
   Form and markup saves now require Files' final sync after the staged rename;
   a failed sync retains unsaved edits and the recovery copy and reports the
