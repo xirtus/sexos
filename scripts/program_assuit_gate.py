@@ -103,6 +103,12 @@ def main():
   s=len(t());type_line('assuitmark.png');q.key('ret')
   g['wait'](r'\[assuit\.picture\] path=assuitmark\.png\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-picture.ppm')})
+  type_line(' helo');q.key('home')
+  keys=('ctrl','shift','y')
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
+  g['wait'](r'\[assuit\.spelling\] word=helo suggestions=\d+\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-spelling.ppm')})
+  q.key('esc')
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})

@@ -38,6 +38,8 @@ pub struct Ui {
     picker: Option<(Vec<(String, String)>, usize)>,
     /// The Save As or Go To prompt, while it is open.
     ask: Option<Ask>,
+    /// Ctrl+Shift+Y's selected issue and its suggestion list.
+    proof: Option<Proof>,
     /// The document came back with last time's unsaved changes: Esc throws them away until
     /// the next edit.
     recovered: bool,
@@ -70,6 +72,8 @@ struct Prompt {
     on_with: bool,
 }
 
+struct Proof { word: String, suggestions: Vec<String>, at: usize }
+
 impl Prompt {
     /// The text being typed into.
     fn field(&mut self) -> &mut String {
@@ -94,6 +98,7 @@ mod code {
     pub const P: u8 = 0x19;
     pub const T: u8 = 0x14;
     pub const I: u8 = 0x17;
+    pub const Y: u8 = 0x15;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -120,7 +125,7 @@ fn key_name(key: Key) -> Option<String> {
 
 impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
-        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, recovered: false, unkept: None, scroll_to: None }
+        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, recovered: false, unkept: None, scroll_to: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -246,8 +251,15 @@ impl Ui {
                     format!("Find: {}{a}   Replace with: {with}{b}   {said}", p.what)
                 }
             }
+        } else if let Some(proof) = &self.proof {
+            if proof.suggestions.is_empty() {
+                format!("Spelling: {}. No suggestion; Ctrl+Shift+Y next, Esc closes", proof.word)
+            } else {
+                format!("Spelling: {} → {} ({}/{})   Up/Down choose, Enter changes, Ctrl+Shift+Y next, Esc closes",
+                    proof.word, proof.suggestions[proof.at], proof.at + 1, proof.suggestions.len())
+            }
         } else if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
+            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  Ctrl+Shift+Y spelling  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
                 self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
         } else {
             self.message.clone()
@@ -402,8 +414,10 @@ impl Ui {
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
         if self.picker.is_some() { return self.picker_key(key); }
+        if self.proof.is_some() { return self.proof_key(key); }
         if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         self.message.clear();
+        if key.code == code::Y && key.control && key.shift { return self.check_spelling(); }
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
                 (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }
@@ -443,6 +457,40 @@ impl Ui {
         if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
             let mut s = [0u8; 4];
             if self.book.type_text(ch.encode_utf8(&mut s)).is_ok() { self.invalidate(); }
+        }
+    }
+
+    fn check_spelling(&mut self) {
+        match self.book.next_spelling_issue() {
+            Ok(Some((word, suggestions))) => {
+                sex_std::record(&format!("[assuit.spelling] word={word} suggestions={}", suggestions.len()));
+                self.proof = Some(Proof { word, suggestions, at: 0 });
+            }
+            Ok(None) => self.message = "Spelling and grammar check complete".into(),
+            Err(e) => self.message = e,
+        }
+    }
+
+    fn proof_key(&mut self, key: Key) {
+        if key.code == code::ESC { self.proof = None; return; }
+        if key.code == code::Y && key.control && key.shift { self.proof = None; return self.check_spelling(); }
+        let Some(proof) = &mut self.proof else { return };
+        match sex_app::nav(key) {
+            Some(Nav::Up) => proof.at = proof.at.saturating_sub(1),
+            Some(Nav::Down) => proof.at = (proof.at + 1).min(proof.suggestions.len().saturating_sub(1)),
+            _ if key.code == code::ENTER => {
+                let Some(suggestion) = proof.suggestions.get(proof.at).cloned() else { return };
+                match self.book.apply_spelling(&suggestion) {
+                    Ok(()) => {
+                        sex_std::record(&format!("[assuit.spelling.change] to={suggestion}"));
+                        self.proof = None;
+                        self.invalidate();
+                        self.message = format!("Changed spelling to {suggestion}");
+                    }
+                    Err(e) => self.message = e,
+                }
+            }
+            _ => {}
         }
     }
 
