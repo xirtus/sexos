@@ -8,6 +8,7 @@ open prompt determine which keys act. F11 closes the window.
 | Open a file or enter a folder | Enter |
 | Go to the parent folder | Backspace |
 | Rename the selected item | F2 |
+| Preview UTF-8 text or a picture in place; refresh the folder | F3; F5 |
 | Select a range in the text folder list | Shift+Up/Down/Home/End |
 | Toggle a row in a text-list selection; move focus without clearing marks | Ctrl+Space; Ctrl+Up/Down/Home/End |
 | Toggle tiles in the graphical grid; move focus without clearing marks | Ctrl+click; Ctrl+Space; Ctrl+arrows |
@@ -66,3 +67,7 @@ In split grid view, a click in either pane focuses that folder. Clicking a tile
 also selects it; Ctrl+Page Up/Down changes the active folder from the keyboard.
 Local Places lists only folders available through this Loom window's Files grant.
 Use Up/Down and Enter to navigate; Escape returns to the folder view.
+
+In the F3 preview, Up/Down scroll, Home/End jump, and Escape or F3 closes it.
+The preview is read only and shows at most the first 32 KiB of UTF-8 text.
+Picture previews fit PNG, JPEG, GIF and WebP files up to 16 MiB to the window.

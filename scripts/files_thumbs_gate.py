@@ -102,6 +102,12 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=THUMBS format=FAT32 [^\n]*source=usb',s,120)
   for run in ('first','again'):
    target,surface=open_files('/media/THUMBS',N+3)
+   if run=='first':
+    s=len(t());q.key('f3')
+    g['wait'](r'\[files.app.picture.preview.opened\] path=/media/THUMBS/IMG00.PNG w=\d+ h=\d+',s,30)
+    time.sleep(1);preview=a.out/'image-preview.ppm';q.cmd('screendump',{'filename':str(preview)})
+    assert colour(0) in seen(preview,{colour(0):0}),'the full-size preview did not show the selected picture'
+    s=len(t());q.key('esc');g['wait'](r'\[files.app.picture.preview.closed\]',s,10)
    s=len(t());ctrl('g')
    g['wait'](r'\[files.app.grid\] on=1 dir=/media/THUMBS',s,30)
    m=g['wait'](r'\[files.app.thumbs\] dir=/media/THUMBS pictures=(\d+) made=(\d+) cached=(\d+) failed=(\d+) ms=(\d+) documents=(\d+) drawn=(\d+) from_cache=(\d+)',s,budget/1000+120)

@@ -27,6 +27,7 @@ pub mod glob;
 pub mod hash;
 pub mod journal;
 pub mod quick_places;
+pub mod preview;
 pub mod rename;
 pub mod selection;
 pub mod session;

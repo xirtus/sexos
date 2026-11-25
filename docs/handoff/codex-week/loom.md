@@ -78,3 +78,10 @@ Remaining gaps:
   replayable too, as are cut-and-paste moves across and within volumes.
   Cross-volume undo and redo wait for their background transfer before changing
   history. Redo for copy and for multi-item trash, cut and copy groups remain.
+- Quick look: F3 opens a read-only, bounded UTF-8 text preview with line
+  scrolling; the QEMU gate captures the actual preview. F3 also shows a
+  selected PNG, JPEG, GIF or WebP at window size inside Loom, using the bounded
+  native image decoder. Escape returns to the folder without starting another
+  app. Picture inputs over 16 MiB are refused. The text preview shows the first
+  32 KiB only and rejects binary or control-bearing files; Enter still opens
+  the chosen app. Richer document previews remain.
