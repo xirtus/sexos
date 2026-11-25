@@ -107,6 +107,7 @@ pub struct App {
     pub now_ms: u64,
     /// Reminders and alarms are looked for after this minute (since 1970 UTC).
     last_minute: i64,
+    cursor_ready: bool,
     notice_retry: NoticeRetry,
     uid_counter: u32,
 }
@@ -219,10 +220,27 @@ fn poll_visible_notices(window: &mut Window, app: &mut App, store: &mut [u8],
         // disk copy must not ring again every half second.
         if saved.as_ref() != seen_clock.as_str() { app.clock = Clock::parse(&saved); *seen_clock = saved.into_owned(); }
     }
-    if let Ok(n) = files::read(window, NOTICE_CURSOR, store) {
-        let cursor = NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now);
-        app.last_minute = app.last_minute.max(cursor.minute);
+    match files::read(window, NOTICE_CURSOR, store) {
+        Ok(n) => {
+            if let Some(cursor) = NoticeCursor::decode(&String::from_utf8_lossy(&store[..n]), now) {
+                app.last_minute = app.last_minute.max(cursor.minute);
+                app.cursor_ready = true;
+            } else {
+                let (cursor, ready) = NoticeCursor::bootstrap(None, now, true,
+                    |initial| save_file(window, NOTICE_CURSOR, initial.serialize().as_bytes()).is_ok());
+                app.last_minute = app.last_minute.min(cursor.minute);
+                app.cursor_ready = ready;
+            }
+        }
+        Err(e) if e == files::NOT_FOUND => {
+            let (cursor, ready) = NoticeCursor::bootstrap(None, now, true,
+                |initial| save_file(window, NOTICE_CURSOR, initial.serialize().as_bytes()).is_ok());
+            app.last_minute = app.last_minute.min(cursor.minute);
+            app.cursor_ready = ready;
+        }
+        Err(_) => app.cursor_ready = false,
     }
+    if !app.cursor_ready { app.now_ms = now; return false; }
     app.tick(window)
 }
 
@@ -253,28 +271,22 @@ fn notice_worker() -> ! {
             let _ = sex_pdx::sys_wait_self_ticks(500);
         };
         // A visible run may have changed any of these while the worker waited.
-        let cal = match fs::read_at(FILE, 0, &mut store[..]) {
-            Ok(n) => Calendar::parse(&String::from_utf8_lossy(&store[..n])),
-            Err(_) => Calendar::default(),
+        let (cal, saved_events) = match fs::read_at(FILE, 0, &mut store[..]) {
+            Ok(n) => (Calendar::parse(&String::from_utf8_lossy(&store[..n])), true),
+            Err(_) => (Calendar::default(), false),
         };
-        let mut clock = match fs::read_at(CLOCK, 0, &mut store[..]) {
-            Ok(n) => Clock::parse(&String::from_utf8_lossy(&store[..n])),
-            Err(_) => Clock::default(),
+        let (mut clock, saved_clock) = match fs::read_at(CLOCK, 0, &mut store[..]) {
+            Ok(n) => (Clock::parse(&String::from_utf8_lossy(&store[..n])), true),
+            Err(_) => (Clock::default(), false),
         };
-        let mut cursor = match fs::read_at(NOTICE_CURSOR, 0, &mut store[..]) {
-            Ok(n) => NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now),
-            Err(e) => {
-                let initial = NoticeCursor::current(now);
-                if e == files::NOT_FOUND {
-                    if save_notice_direct(NOTICE_CURSOR, initial.serialize().as_bytes()) {
-                        sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=worker minute={}", initial.minute);
-                    } else {
-                        sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor-initial");
-                    }
-                }
-                initial
-            }
+        let (mut cursor, mut cursor_ready) = match fs::read_at(NOTICE_CURSOR, 0, &mut store[..]) {
+            Ok(n) => NoticeCursor::bootstrap(Some(&String::from_utf8_lossy(&store[..n])), now,
+                saved_events || saved_clock, |initial| save_notice_direct(NOTICE_CURSOR, initial.serialize().as_bytes())),
+            Err(e) if e == files::NOT_FOUND => NoticeCursor::bootstrap(None, now,
+                saved_events || saved_clock, |initial| save_notice_direct(NOTICE_CURSOR, initial.serialize().as_bytes())),
+            Err(_) => NoticeCursor::bootstrap(None, now, saved_events || saved_clock, |_| false),
         };
+        if !cursor_ready { sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor-initial"); }
         let mut retry = NoticeRetry::default();
         sex_pdx::serial_record!("[date.notice.worker.resumed]");
         loop {
@@ -285,6 +297,22 @@ fn notice_worker() -> ! {
                 break;
             }
             if now == 0 { let _ = sex_pdx::sys_wait_self_ticks(500); continue; }
+            if !cursor_ready {
+                match fs::read_at(NOTICE_CURSOR, 0, &mut store[..]) {
+                    Ok(n) => {
+                        if let Some(saved) = NoticeCursor::decode(&String::from_utf8_lossy(&store[..n]), now) {
+                            cursor = saved;
+                            cursor_ready = true;
+                        } else { cursor_ready = save_notice_direct(NOTICE_CURSOR, cursor.serialize().as_bytes()); }
+                    }
+                    Err(e) if e == files::NOT_FOUND => {
+                        cursor_ready = save_notice_direct(NOTICE_CURSOR, cursor.serialize().as_bytes());
+                    }
+                    Err(_) => {}
+                }
+                if !cursor_ready { let _ = sex_pdx::sys_wait_self_ticks(500); continue; }
+                sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=worker minute={}", cursor.minute);
+            }
             let minute = NoticeCursor::current(now).minute;
             let mut rang = false;
             if !clock.deliver_timers(now, post_timer).is_empty() { rang = true; }
@@ -1103,28 +1131,36 @@ pub extern "C" fn _start() -> ! {
     let mut faces = views::Faces { small: Face::new(10, 20), tiny: Face::new(8, 16), big: Face::new(16, 30) };
     let now = now_ms();
     let store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
-    let cal = match files::read(&mut window, FILE, store) {
-        Ok(n) => Calendar::parse(&String::from_utf8_lossy(&store[..n])),
-        Err(_) => Calendar::default(),
+    let (cal, saved_events) = match files::read(&mut window, FILE, store) {
+        Ok(n) => (Calendar::parse(&String::from_utf8_lossy(&store[..n])), true),
+        Err(_) => (Calendar::default(), false),
     };
-    let clock = match files::read(&mut window, CLOCK, store) {
-        Ok(n) => Clock::parse(&String::from_utf8_lossy(&store[..n])),
-        Err(_) => Clock::default(),
+    let (clock, saved_clock) = match files::read(&mut window, CLOCK, store) {
+        Ok(n) => (Clock::parse(&String::from_utf8_lossy(&store[..n])), true),
+        Err(_) => (Clock::default(), false),
     };
-    let cursor = match files::read(&mut window, NOTICE_CURSOR, store) {
-        Ok(n) => NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now),
-        Err(e) => {
-            let initial = NoticeCursor::current(now);
-            if e == files::NOT_FOUND {
-                if save_file(&mut window, NOTICE_CURSOR, initial.serialize().as_bytes()).is_ok() {
-                    sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=visible minute={}", initial.minute);
-                } else {
-                    sex_pdx::serial_record!("[date.notice.cursor.failed] status=initial");
-                }
+    let (cursor, cursor_ready) = match files::read(&mut window, NOTICE_CURSOR, store) {
+        Ok(n) => {
+            let raw = String::from_utf8_lossy(&store[..n]);
+            let had_valid = NoticeCursor::decode(&raw, now).is_some();
+            let result = NoticeCursor::bootstrap(Some(&raw), now, saved_events || saved_clock,
+                |initial| save_file(&mut window, NOTICE_CURSOR, initial.serialize().as_bytes()).is_ok());
+            if !had_valid && result.1 {
+                sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=visible minute={}", result.0.minute);
             }
-            initial
+            result
         }
+        Err(e) if e == files::NOT_FOUND => {
+            let result = NoticeCursor::bootstrap(None, now, saved_events || saved_clock,
+                |initial| save_file(&mut window, NOTICE_CURSOR, initial.serialize().as_bytes()).is_ok());
+            if result.1 {
+                sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=visible minute={}", result.0.minute);
+            }
+            result
+        }
+        Err(_) => NoticeCursor::bootstrap(None, now, saved_events || saved_clock, |_| false),
     };
+    if !cursor_ready { sex_pdx::serial_record!("[date.notice.cursor.failed] status=initial"); }
     let current_minute = NoticeCursor::current(now).minute;
     sex_pdx::serial_record!("[date.notice.cursor.loaded] minute={} now={} catchup={}",
         cursor.minute, current_minute, (cursor.minute < current_minute) as u8);
@@ -1139,7 +1175,7 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
     let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, review_choice: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
-        picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, notice_retry: NoticeRetry::default(), uid_counter: 0 };
+        picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, cursor_ready, notice_retry: NoticeRetry::default(), uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
     let mut path_copy = [0u8; sex_pdx::fs::ARGS_MAX];

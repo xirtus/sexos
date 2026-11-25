@@ -94,16 +94,35 @@ pub struct NoticeCursor { pub minute: i64 }
 impl NoticeCursor {
     pub fn current(now_ms: u64) -> Self { Self { minute: (now_ms / 60_000) as i64 } }
 
-    /// Use a well-formed previous minute, never one in the future. An old cursor
-    /// is clipped to seven days before `now` so catch-up stays bounded.
-    pub fn recover(text: &str, now_ms: u64) -> Self {
+    /// A missing or damaged cursor with saved notices must replay a bounded
+    /// window. Otherwise a failed first cursor write followed by a reopen
+    /// could silently discard the notice. No delivery starts until `save` has
+    /// committed this baseline.
+    pub fn bootstrap(raw: Option<&str>, now_ms: u64, has_saved_state: bool,
+        mut save: impl FnMut(Self) -> bool) -> (Self, bool) {
+        if let Some(valid) = raw.and_then(|text| Self::decode(text, now_ms)) { return (valid, true); }
+        let now = Self::current(now_ms);
+        let baseline = if has_saved_state {
+            Self { minute: now.minute.saturating_sub(MAX_CATCHUP_MINUTES).max(0) }
+        } else { now };
+        let ready = save(baseline);
+        (baseline, ready)
+    }
+
+    pub fn decode(text: &str, now_ms: u64) -> Option<Self> {
         let now = Self::current(now_ms);
         let mut lines = text.lines();
         let prior = if lines.next() == Some(HEADER) && lines.clone().count() == 1 {
             lines.next().and_then(|s| s.parse::<i64>().ok())
         } else { None };
-        let Some(prior) = prior.filter(|m| *m >= 0 && *m <= now.minute) else { return now };
-        Self { minute: prior.max(now.minute.saturating_sub(MAX_CATCHUP_MINUTES)) }
+        let prior = prior.filter(|m| *m >= 0 && *m <= now.minute)?;
+        Some(Self { minute: prior.max(now.minute.saturating_sub(MAX_CATCHUP_MINUTES)) })
+    }
+
+    /// Use a well-formed previous minute, never one in the future. An old cursor
+    /// is clipped to seven days before `now` so catch-up stays bounded.
+    pub fn recover(text: &str, now_ms: u64) -> Self {
+        Self::decode(text, now_ms).unwrap_or_else(|| Self::current(now_ms))
     }
 
     pub fn serialize(self) -> String { format!("{HEADER}\n{}\n", self.minute) }
@@ -190,5 +209,30 @@ mod tests {
         assert_eq!(second.delivered.len(), 2, "earlier success may replay in the failed minute");
         assert!(!clock.alarms[0].enabled);
         assert!(deliver_due(&cal, &mut clock, second.cursor, 62, 0, |_| true).delivered.is_empty());
+    }
+
+    #[test]
+    fn failed_initial_cursor_save_reopens_from_bounded_replay_floor() {
+        let now = 20_000 * 60_000u64;
+        let (first, ready) = NoticeCursor::bootstrap(None, now, false, |_| false);
+        assert_eq!(first.minute, 20_000);
+        assert!(!ready, "delivery must pause until the baseline is durable");
+        // A saved alarm or event exists by the time the window closes. The
+        // next run cannot distinguish a failed first save from a lost cursor.
+        let mut saved = None;
+        let reopened_at = now + 2 * 60_000;
+        let (reopened, ready) = NoticeCursor::bootstrap(None, reopened_at, true, |cursor| {
+            saved = Some(cursor.serialize());
+            true
+        });
+        assert!(ready);
+        assert_eq!(reopened.minute, 20_002 - MAX_CATCHUP_MINUTES);
+        assert_eq!(NoticeCursor::decode(saved.as_deref().unwrap(), reopened_at), Some(reopened));
+        let cal = Calendar { events: vec![], calendars: vec![] };
+        let mut clock = Clock { alarms: vec![Alarm { minute: 20_001i64.rem_euclid(1440) as u16,
+            days: 0, enabled: true, label: String::from("first notice") }], ..Clock::default() };
+        let delivery = deliver_due(&cal, &mut clock, reopened.minute, 20_002, 0, |_| true);
+        assert_eq!(delivery.delivered.len(), 1, "the failed first notice remains in catch-up");
+        assert!(!clock.alarms[0].enabled);
     }
 }
