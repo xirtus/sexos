@@ -11,6 +11,7 @@
 //! Ctrl+Shift+G the tab into a new group or out of its group (a click on a group's
 //! label folds it), Ctrl+Shift+B the side panel, Ctrl+Shift+E site settings,
 //! Ctrl+Shift+K asks Chastity to fill a visible HTTPS login form.
+//! Ctrl+Shift+/ opens Kaleidoscope's keyboard reference.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -23,6 +24,11 @@ impl Browser {
     /// True when `key` (with Ctrl) was one of the browser's.
     pub(super) fn shortcut(&mut self, key: sex_pdx::app_key::Key) -> bool {
         match key.code {
+            // The reference is a built-in page, so it works without a network grant.
+            0x35 if key.shift => {
+                self.open("about:shortcuts", true);
+                sex_pdx::serial_record!("[web.shortcuts.opened] url=about:shortcuts");
+            }
             // Ctrl+T: a new tab; from a private tab it is private too, from a container
             // tab it is an ordinary one (as in Firefox).
             0x14 => { let b = if self.jarbox == Jarbox::Private { Jarbox::Private } else { Jarbox::Own }; self.new_tab(None, b) }
