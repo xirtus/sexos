@@ -69,6 +69,7 @@ def main():
   s=len(t());ctrl('home');send('ctrl','shift','down');send('ctrl','shift','down');keys('// ');ctrl('s')
   want=b''.join(b'// '+l+b'\n' if i<3 else l+b'\n' for i,l in enumerate(DEMO.rstrip(b'\n').split(b'\n')))
   g['wait'](rf'\[quil.code.saved\] path=demo.rs bytes={len(want)} hash={fnv(want):016x}',s,60)
+  g['wait'](rf'\[quil.code.save.committed\] path=demo.rs bytes={len(want)}',s,60)
   # Vim mode from the command palette; dd deletes the first line, :w saves.
   s=len(t());q.key('esc');send('ctrl','shift','p');time.sleep(.3);keys('vim mode');q.key('ret');g['wait'](r'\[quil.code.keymap\] vim',s,30)
   s=len(t());keys('gg');keys('dd');keys(':w');q.key('ret')
@@ -87,6 +88,7 @@ def main():
   print('large',m[0],flush=True)
   assert int(m[2])<5000,f'opening took {m[2]} ms'
   g['wait'](rf'\[quil.code.saved\] path=large-check.txt bytes={len(big)} hash={fnv(big):016x}',s,1200)
+  g['wait'](rf'\[quil.code.save.committed\] path=large-check.txt bytes={len(big)}',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-large.ppm')});time.sleep(.5)
   s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={target} task={task}',s,60)
   assert 'KERNEL PANIC'not in t() and 'panicked' not in t() and '[quil.code.fatal]' not in t()
