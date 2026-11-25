@@ -40,12 +40,14 @@ use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
 use sex_calendar::history::{ClockEditKind, ClockHistory, ClockState, EventEdit, EventHistory, ReplyDraftHistory};
+use sex_calendar::notice_cursor::NoticeCursor;
 use sex_calendar::conflicts;
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
 
 const FILE: &[u8] = b"events.txt";
 const CLOCK: &[u8] = b"clock.txt";
+const NOTICE_CURSOR: &[u8] = b"notice.cursor";
 const ACCOUNT: &[u8] = b"dav.txt";
 /// The event file as read, and an imported `.ics` file.
 static mut STORE: [u8; 1 << 20] = [0; 1 << 20];
@@ -395,7 +397,9 @@ impl App {
             rang = true;
         }
         let minute = (self.now_ms / 60_000) as i64;
-        if minute > self.last_minute {
+        if self.last_minute == 0 { self.last_minute = minute; }
+        let advanced = minute > self.last_minute;
+        if advanced {
             let offset = self.local_offset();
             for (i, day, at) in self.cal.reminders_due(self.last_minute, minute, offset) {
                 let e = &self.cal.events[i];
@@ -413,7 +417,14 @@ impl App {
             let today = self.clock.home_zone().local(minute).0;
             if today != self.today { self.today = today; rang = true; }
         }
-        if rang { self.save_clock(window); }
+        let clock_saved = if rang { self.save_clock(window) } else { true };
+        if advanced && clock_saved {
+            let cursor = NoticeCursor { minute }.serialize();
+            match save_file(window, NOTICE_CURSOR, cursor.as_bytes()) {
+                Ok(()) => sex_pdx::serial_record!("[date.notice.cursor.saved] minute={}", minute),
+                Err(e) => sex_pdx::serial_record!("[date.notice.cursor.failed] status={}", e),
+            }
+        }
         rang
     }
     fn typed_done(&mut self, window: &mut Window, ask: Ask) {
@@ -736,10 +747,17 @@ pub extern "C" fn _start() -> ! {
         Ok(n) => Clock::parse(&String::from_utf8_lossy(&store[..n])),
         Err(_) => Clock::default(),
     };
+    let cursor = match files::read(&mut window, NOTICE_CURSOR, store) {
+        Ok(n) => NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now),
+        Err(_) => NoticeCursor::current(now),
+    };
+    let current_minute = NoticeCursor::current(now).minute;
+    sex_pdx::serial_record!("[date.notice.cursor.loaded] minute={} now={} catchup={}",
+        cursor.minute, current_minute, (cursor.minute < current_minute) as u8);
     sex_pdx::serial_record!("[calendar.loaded] events={}", cal.events.len());
     // Today as the kernel's civil clock has it, in the local zone; a machine without
     // one starts where the program was written.
-    let minute = (now / 60_000) as i64;
+    let minute = current_minute;
     let today = if now == 0 { Date { year: 2026, month: 1, day: 1 } } else { clock.home_zone().local(minute).0 };
     let theme = settings::theme();
     let palette = views::Palette::from_tokens(theme);
@@ -747,7 +765,7 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
     let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
-        picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
+        picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
     let mut path_copy = [0u8; sex_pdx::fs::ARGS_MAX];
