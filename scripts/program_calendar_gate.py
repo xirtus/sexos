@@ -155,6 +155,26 @@ def main():
   g['wait'](rf'\[calendar.event\] date={today} when=10:20-11:20 title=power cut\n',s,60)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-after-powercut.ppm')})
   close(target,task)
+  # Two visible Date windows share one Bell owner. The first window reloads a
+  # timer created before the second opens; only one notice may be posted.
+  first_target,first_task,first_sid,_,first_s=start('')
+  q.key('c');time.sleep(.3);s=len(t());q.key('r');time.sleep(.3);keys('20s two windows');q.key('ret')
+  g['wait'](r'\[date.timer.started\] seconds=20 label=two windows',s,30)
+  second_target,second_task,second_sid,_,second_s=start('')
+  g['wait'](rf'\[date.notice.ui.owner\] task={first_task} owns=1',first_s,30)
+  g['wait'](rf'\[date.notice.ui.owner\] task={second_task} owns=0',second_s,30)
+  g['wait'](r'\[date.alarm.fired\] kind=timer title=two windows notified=1',s,45)
+  time.sleep(2)
+  assert len(re.findall(r'\[date.alarm.fired\] kind=timer title=two windows notified=1',t()[s:]))==1,'two Date windows posted duplicate Bell notices'
+  q.cmd('screendump',{'filename':str(a.out/'date-two-windows.ppm')})
+  assert (a.out/'date-two-windows.ppm').read_bytes().startswith(b'P6\n')
+  g['focus'](first_sid);close(first_target,first_task)
+  g['focus'](second_sid);time.sleep(.5);s=len(t());q.key('c');time.sleep(.3);q.key('r');time.sleep(.3);keys('2s new owner');q.key('ret')
+  g['wait'](rf'\[date.notice.ui.owner\] task={second_task} owns=1',s,30)
+  g['wait'](r'\[date.alarm.fired\] kind=timer title=new owner notified=1',s,30)
+  time.sleep(2)
+  assert len(re.findall(r'\[date.alarm.fired\] kind=timer title=new owner notified=1',t()[s:]))==1,'handoff posted duplicate Bell notices'
+  close(second_target,second_task)
   # A clock alarm becomes due while Date has no window. The hidden Date worker
   # must ring Bell before another visible Date run starts.
   target,task,sid,_,s=start('')

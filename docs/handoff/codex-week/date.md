@@ -27,8 +27,10 @@ Remaining gaps:
   at the due time. An exclusive Files claim prevents duplicate hidden workers;
   reopening Date leaves a handoff marker until the worker exits. A dead worker
   is not automatically restarted while Date stays closed; the durable cursor
-  catches up when Date opens again. Multiple simultaneous visible Date windows
-  still need a shared owner protocol. A power cut after Bell posts but before
+  catches up when Date opens again. Simultaneous visible Date windows now keep
+  short Files leases and elect one Bell owner; the owner rereads saved clock,
+  events and cursor before delivery. Closing one window leaves the other in
+  charge; a hidden worker waits until the final window closes. A power cut after Bell posts but before
   the cursor save can replay a notice, so exactly-once delivery is not claimed.
 - Ctrl+Z/Ctrl+Y undo and redo local event additions and removals, with each
   result saved immediately. A CalDAV sync clears the event history so undo cannot roll

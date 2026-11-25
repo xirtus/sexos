@@ -49,6 +49,7 @@ const FILE: &[u8] = b"events.txt";
 const CLOCK: &[u8] = b"clock.txt";
 const NOTICE_CURSOR: &[u8] = b"notice.cursor";
 const NOTICE_UI: &[u8] = b"notice.ui-open";
+const NOTICE_UI_PREFIX: &[u8] = b"notice.ui-";
 const NOTICE_WORKER_ACTIVE: &[u8] = b"notice.worker-active";
 const NOTICE_WORKER_ARG: &[u8] = b"--notice-worker";
 const ACCOUNT: &[u8] = b"dav.txt";
@@ -127,9 +128,40 @@ fn quick_event(day: Date, typed: &str) -> Entry {
 
 fn now_ms() -> u64 { sex_pdx::civil_time_ms().unwrap_or(0) }
 
-/// The hidden Date run owns notices while the window is closed. The marker is
-/// deliberately left in place for the whole visible run: a worker launched
-/// late must see it before it can post anything.
+/// Each visible run keeps its own lease. A dead run's file stops participating
+/// after ten seconds; the smallest live task owns Bell delivery.
+fn notice_ui_owner(my_task: u32, now: u64) -> bool {
+    let entries = match files::direct::list(b"") { Ok(entries) => entries, Err(_) => return false };
+    let mut first: Option<u32> = None;
+    for entry in entries {
+        let Some(suffix) = entry.name.strip_prefix(NOTICE_UI_PREFIX) else { continue };
+        let Ok(name) = core::str::from_utf8(suffix) else { continue };
+        let Ok(task) = name.parse::<u32>() else { continue };
+        let mut stamp = [0u8; 8];
+        if files::direct::read_at(&entry.name, 0, &mut stamp) != Ok(8) { continue; }
+        let seen = u64::from_le_bytes(stamp);
+        if seen <= now && now - seen <= 10_000 { first = Some(first.map_or(task, |current| current.min(task))); }
+    }
+    first == Some(my_task)
+}
+
+fn notice_ui_name(task: u32) -> String { format!("notice.ui-{task}") }
+
+fn notice_ui_live(now: u64) -> bool {
+    let Ok(entries) = files::direct::list(b"") else { return true };
+    for entry in entries {
+        if !entry.name.starts_with(NOTICE_UI_PREFIX) { continue; }
+        let mut stamp = [0u8; 8];
+        if files::direct::read_at(&entry.name, 0, &mut stamp) == Ok(8) {
+            let seen = u64::from_le_bytes(stamp);
+            if seen <= now && now - seen <= 10_000 { return true; }
+        }
+    }
+    false
+}
+
+/// The opening marker hands ownership back to a visible run. An already live
+/// visible lease pauses a worker until the final Date window closes.
 fn notice_worker() -> ! {
     use files::direct as fs;
     if fs::create(NOTICE_WORKER_ACTIVE).is_err() { sex_app::launch::exit(0); }
@@ -139,6 +171,7 @@ fn notice_worker() -> ! {
     // them, so keep one snapshot instead of rereading a megabyte twice a second.
     let now = loop {
         if fs::stat(NOTICE_UI).is_ok() { let _ = fs::remove(NOTICE_WORKER_ACTIVE); sex_app::launch::exit(0); }
+        if notice_ui_live(now_ms()) { let _ = sex_pdx::sys_wait_self_ticks(500); continue; }
         let now = now_ms();
         if now != 0 { break now; }
         let _ = sex_pdx::sys_wait_self_ticks(500);
@@ -161,6 +194,7 @@ fn notice_worker() -> ! {
             let _ = fs::remove(NOTICE_WORKER_ACTIVE);
             sex_app::launch::exit(0);
         }
+        if notice_ui_live(now_ms()) { let _ = sex_pdx::sys_wait_self_ticks(500); continue; }
         let now = now_ms();
         if now != 0 {
             let minute = NoticeCursor::current(now).minute;
@@ -841,6 +875,10 @@ pub extern "C" fn _start() -> ! {
     }
     let mut window = Window::open();
     window.title(b"Date");
+    let ui_name = notice_ui_name(window.task);
+    let _ = files::direct::create(ui_name.as_bytes());
+    let _ = files::direct::write_at(ui_name.as_bytes(), 0, &now_ms().to_le_bytes());
+    let _ = files::direct::remove(NOTICE_UI);
     let mut faces = views::Faces { small: Face::new(10, 20), tiny: Face::new(8, 16), big: Face::new(16, 30) };
     let now = now_ms();
     let store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
@@ -884,8 +922,16 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[calendar.ready] target={} task={} today={} month={:04}-{:02}", window.target, window.task, today, today.year, today.month);
     let mut shown_second = now / 1000;
     let mut theme_next = sex_pdx::get_ticks().saturating_add(1000);
+    let mut lease_next = sex_pdx::get_ticks().saturating_add(500);
+    let mut notice_owner = None;
+    let mut seen_events = String::new();
+    let mut seen_clock = String::new();
     loop {
         let ticks = sex_pdx::get_ticks();
+        if ticks >= lease_next {
+            lease_next = ticks.saturating_add(500);
+            let _ = files::direct::write_at(ui_name.as_bytes(), 0, &now_ms().to_le_bytes());
+        }
         if ticks >= theme_next {
             theme_next = ticks.saturating_add(1000);
             if let Ok(generation) = settings::generation() {
@@ -899,7 +945,31 @@ pub extern "C" fn _start() -> ! {
             }
         }
         let Some(event) = window.next_within(500) else {
-            let rang = app.tick(&mut window);
+            let now = now_ms();
+            let owns = notice_ui_owner(window.task, now);
+            if notice_owner != Some(owns) {
+                sex_pdx::serial_record!("[date.notice.ui.owner] task={} owns={}", window.task, owns as u8);
+                notice_owner = Some(owns);
+            }
+            let rang = if owns {
+                // Another window may have saved a new alarm or event while this
+                // window was idle. Read the shared state before deciding what is due.
+                if let Ok(n) = files::read(&mut window, FILE, store) {
+                    let saved = String::from_utf8_lossy(&store[..n]);
+                    if saved != seen_events { app.cal = Calendar::parse(&saved); seen_events = saved.into_owned(); }
+                }
+                if let Ok(n) = files::read(&mut window, CLOCK, store) {
+                    let saved = String::from_utf8_lossy(&store[..n]);
+                    // Keep a timer removed in memory when its save failed; the
+                    // unchanged disk copy must not ring again every half second.
+                    if saved != seen_clock { app.clock = Clock::parse(&saved); seen_clock = saved.into_owned(); }
+                }
+                if let Ok(n) = files::read(&mut window, NOTICE_CURSOR, store) {
+                    let cursor = NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now);
+                    app.last_minute = app.last_minute.max(cursor.minute);
+                }
+                app.tick(&mut window)
+            } else { false };
             let second = app.now_ms / 1000;
             if rang || (app.view == View::Clock && second != shown_second) {
                 shown_second = second;
@@ -910,7 +980,7 @@ pub extern "C" fn _start() -> ! {
         match event {
             Event::Close => {
                 sex_pdx::serial_record!("[calendar.closed] target={} task={}", window.target, window.task);
-                let _ = files::remove(&mut window, NOTICE_UI);
+                let _ = files::direct::remove(ui_name.as_bytes());
                 if let Err(e) = sex_app::launch::run_hidden(b"date", NOTICE_WORKER_ARG, 0) {
                     sex_pdx::serial_record!("[date.notice.worker.launch.failed] {:?}", e);
                 }
