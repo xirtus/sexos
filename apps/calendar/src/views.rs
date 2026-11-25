@@ -55,6 +55,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("Clock: N / R", "New alarm / new timer"),
     ("Clock: Z / H", "Add zone / choose local zone"),
     ("Clock: Space/Delete", "Toggle alarm / remove chosen item"),
+    ("Notice: Shift+S", "Snooze the shown reminder or alarm for five minutes"),
     ("Calendars: N", "Add a local calendar"),
     ("Calendars: Space", "Show or hide selected calendar"),
 ];

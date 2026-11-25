@@ -66,6 +66,17 @@ def main():
   shot=(a.out/'date-shortcuts.ppm').read_bytes();assert shot.startswith(b'P6\n') and len(shot)>100000
   s=len(t());q.key('down');g['wait'](r'\[date.help\] open=1 offset=1',s,30)
   s=len(t());q.key('esc');g['wait'](r'\[date.help\] open=0 offset=0',s,30)
+  # A Bell notice can be snoozed from its banner. The replacement timer is
+  # committed before the success status is drawn and survives a Date restart.
+  q.key('c');time.sleep(.3);s=len(t());q.key('r');time.sleep(.3);keys('2s snooze me');q.key('ret')
+  g['wait'](r'\[date.timer.started\] seconds=2 label=snooze me',s,30)
+  g['wait'](r'\[date.alarm.fired\] kind=timer title=snooze me notified=1',s,45)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'s'}],'hold-time':80})
+  g['wait'](r'\[date.notice.snoozed\] seconds=300 saved=1',s,30)
+  g['wait'](r'\[date.save.committed\] file=clock.txt bytes=\d+',s,30)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'date-notice-snoozed.ppm')});time.sleep(.5)
+  notice=(a.out/'date-notice-snoozed.ppm').read_bytes();assert notice.startswith(b'P6\n') and len(notice)>100000
+  q.key('m');time.sleep(.3)
   # Today is the machine's clock (QEMU's RTC follows this host, in UTC).
   host=datetime.datetime.now(datetime.timezone.utc).date()
   assert abs((today-host).days)<=1,(today,host)
