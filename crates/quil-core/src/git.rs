@@ -154,7 +154,13 @@ pub fn stage_new(index: &[u8], path: &[u8], bytes: &[u8]) -> Result<(Vec<u8>, [u
         || path.split(|b| *b == b'/').any(|part| part.is_empty() || part == b"." || part == b".." || part == b".git")
         || path.contains(&0) { return Err(StageError::Path); }
     let entries = parse_index(index).map_err(StageError::Index)?;
-    if entries.iter().any(|entry| entry.path == path) { return Err(StageError::Conflict); }
+    // A deleted tracked file can become a directory of new candidates. Do
+    // not put both the file and a path beneath it in one index.
+    if entries.iter().any(|entry| entry.path == path
+        || entry.path.starts_with(path) && entry.path.get(path.len()) == Some(&b'/')
+        || path.starts_with(&entry.path) && path.get(entry.path.len()) == Some(&b'/')) {
+        return Err(StageError::Conflict);
+    }
     if entries.windows(2).any(|pair| pair[0].path > pair[1].path
         || pair[0].path == pair[1].path && pair[0].stage >= pair[1].stage) { return Err(StageError::Conflict); }
     let body = index.len() - CHECKSUM;
@@ -368,9 +374,14 @@ mod tests {
             assert!(parse_index(&inserted).unwrap().windows(2).all(|pair| pair[0].path < pair[1].path));
         }
         assert_eq!(stage_new(&updated, b"notes/new.txt", text), Err(StageError::Conflict));
+        assert_eq!(stage_new(INDEX, b"demo.rs/child.txt", text), Err(StageError::Conflict));
+        assert_eq!(stage_new(&updated, b"notes", text), Err(StageError::Conflict));
         assert_eq!(stage_new(INDEX, b".git/config", text), Err(StageError::Path));
         assert_eq!(stage_new(INDEX, b"a/../b", text), Err(StageError::Path));
+        assert_eq!(stage_new(INDEX, b"a//b", text), Err(StageError::Path));
+        assert_eq!(stage_new(INDEX, b"./a", text), Err(StageError::Path));
         assert_eq!(stage_new(INDEX, b"new.bin", b"a\0b"), Err(StageError::Limit));
+        assert_eq!(stage_new(INDEX, b"new.txt", b"\xff"), Err(StageError::Limit));
         let mut extended = INDEX[..INDEX.len() - CHECKSUM].to_vec();
         extended.extend_from_slice(b"TREE\0\0\0\0");
         let checksum: [u8; 20] = Sha1::digest(&extended).into();
