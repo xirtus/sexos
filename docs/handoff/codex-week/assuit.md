@@ -9,7 +9,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Print workflow:** PDF export and a selected-page range are now available.
   Letter, Legal and A4 paper with portrait/landscape orientation are now available.
   Margin presets and custom top/bottom/left/right inches are now available.
-  A separate print preview remains; the editor already shows the paginated paper.
+  Ctrl+Alt+P now opens a separate read-only, whole-page print preview with page
+  navigation and PDF export. It uses WordCraft's page renderer, the same page
+  layout shown by the editor. Printer device output remains outside SexOS's
+  PDF-only print path.
 - **Polish:** the app now follows Settings' light, dark and high-contrast
   appearance for its page desk, status bar and style picker. A keyboard shortcut
   reference is available in the app and `docs/apps/assuit-shortcuts.md`. Verified

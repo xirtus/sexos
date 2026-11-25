@@ -93,6 +93,14 @@ def main():
   for _ in range(50):q.key('ret');time.sleep(.08)
   g['wait'](r'\[assuit\.page\] page=2 pages=2 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,300)
   g['chord']('ctrl','v',r'\[assuit\.command\] edit\.paste\n')
+  # Preview uses WordCraft's rendered paper but does not move the editing caret.
+  s=len(t());press('ctrl','alt','p')
+  g['wait'](r'\[assuit\.preview\] page=2 pages=2 width=\d+ height=\d+',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-print-preview-page2.ppm')})
+  assert (a.out/'assuit-print-preview-page2.ppm').stat().st_size>10000
+  s=len(t());q.key('left')
+  g['wait'](r'\[assuit\.preview\] page=1 pages=2 width=\d+ height=\d+',s,120)
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.preview\.closed\]',s,60)
   # Replace all, then a paragraph style.
   q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'h'}],'hold-time':80});time.sleep(.5)
   s=len(t());type_line('assuit');q.key('ret');type_line('assuit writer');q.key('ret')
