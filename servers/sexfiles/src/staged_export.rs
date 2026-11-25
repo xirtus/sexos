@@ -11,8 +11,22 @@ const ROOT: &[u8] = b"/.__sexfiles_staged";
 const MARK: &[u8] = b"/.__sexfiles_staged/.owner";
 const MAGIC: &[u8] = b"SexOS Files staged export v1";
 static mut NEXT: u64 = 0;
-static mut ACTIVE: Option<Stage> = None;
-static mut CLEAN: bool = false;
+static mut ACTIVE: [Option<Stage>; 2] = [const { None }; 2];
+static mut CLEAN: [bool; 2] = [false; 2];
+
+#[derive(Clone, Copy)]
+pub enum Volume {
+    Primary,
+    Home,
+}
+impl Volume {
+    const fn index(self) -> usize {
+        match self {
+            Self::Primary => 0,
+            Self::Home => 1,
+        }
+    }
+}
 
 struct Stage {
     row: usize,
@@ -29,8 +43,11 @@ struct Stage {
 }
 
 pub fn reserved(path: &[u8]) -> bool {
-    path.split(|b| *b == b'/').find(|part| !part.is_empty())
-        == Some(b".__sexfiles_staged".as_slice())
+    let mut parts = path.split(|b| *b == b'/').filter(|part| !part.is_empty());
+    let first = parts.next();
+    first == Some(b".__sexfiles_staged".as_slice())
+        || first == Some(b"home".as_slice())
+            && parts.next() == Some(b".__sexfiles_staged".as_slice())
 }
 pub fn sealed_image_alias(path: &[u8]) -> bool {
     let mut parts = path.split(|b| *b == b'/').filter(|p| !p.is_empty());
@@ -72,16 +89,17 @@ fn named(ticket: u64) -> Vec<u8> {
 /// At mount, discard only our own incomplete files, before a new ticket is issued.
 /// If the marker is missing or cleanup fails, staged saves stay disabled while
 /// ordinary files remain usable. The namespace remains inaccessible to callers.
-pub fn recover<D: Device>(fs: &mut Fs<'static, D>) {
+pub fn recover<D: Device>(fs: &mut Fs<'static, D>, volume: Volume) {
+    let slot = volume.index();
     unsafe {
-        CLEAN = false;
-        ACTIVE = None;
+        CLEAN[slot] = false;
+        ACTIVE[slot] = None;
     }
     let root = match fs.open(ROOT) {
         Ok(s) => s,
         Err(Error::NotFound) => {
             unsafe {
-                CLEAN = true;
+                CLEAN[slot] = true;
             }
             return;
         }
@@ -149,10 +167,17 @@ pub fn recover<D: Device>(fs: &mut Fs<'static, D>) {
         }
     }
     unsafe {
-        CLEAN = true;
+        CLEAN[slot] = true;
     }
 }
 
+pub fn invalidate(volume: Volume) {
+    let slot = volume.index();
+    unsafe {
+        CLEAN[slot] = false;
+        ACTIVE[slot] = None;
+    }
+}
 fn ensure_root<D: Device>(fs: &mut Fs<'static, D>) -> Result<(), u8> {
     if fs.open(ROOT).is_ok() {
         return Ok(());
@@ -174,12 +199,13 @@ fn ensure_root<D: Device>(fs: &mut Fs<'static, D>) -> Result<(), u8> {
     Ok(())
 }
 fn ticket_stage(
+    volume: Volume,
     row: usize,
     task: u32,
     token: u64,
     destination: &[u8],
 ) -> Result<&'static mut Stage, u8> {
-    let stage = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE) };
+    let stage = unsafe { &mut (*core::ptr::addr_of_mut!(ACTIVE))[volume.index()] };
     let s = stage.as_mut().ok_or(w::STALE)?;
     if s.row != row || s.task != task || s.ticket != token || s.destination != destination {
         return Err(w::STALE);
@@ -189,6 +215,7 @@ fn ticket_stage(
 
 pub fn request<D: Device>(
     fs: &mut Fs<'static, D>,
+    volume: Volume,
     row: usize,
     target: u32,
     task: u32,
@@ -196,7 +223,8 @@ pub fn request<D: Device>(
     destination: &[u8],
     data: &mut [u8],
 ) -> Result<u32, u8> {
-    if !unsafe { CLEAN } {
+    let slot = volume.index();
+    if !unsafe { CLEAN[slot] } {
         return Err(w::UNAVAILABLE);
     }
     if reserved(destination) || destination.is_empty() || destination == b"/" {
@@ -207,7 +235,7 @@ pub fn request<D: Device>(
             if r.length != 32 || r.offset > (4 << 20) {
                 return Err(w::INVALID);
             }
-            if let Some(s) = unsafe { &*core::ptr::addr_of!(ACTIVE) } {
+            if let Some(s) = unsafe { &(*core::ptr::addr_of!(ACTIVE))[slot] } {
                 if fs_service::live_run(s.target, s.task) {
                     return Err(w::PENDING);
                 }
@@ -216,7 +244,7 @@ pub fn request<D: Device>(
                     .and_then(|_| fs.commit())
                     .map_err(code)?;
                 unsafe {
-                    ACTIVE = None;
+                    ACTIVE[slot] = None;
                 }
             }
             match fs.open(destination) {
@@ -239,7 +267,7 @@ pub fn request<D: Device>(
                 .map_err(code)?;
             let expected_hash: [u8; 32] = data[..32].try_into().unwrap();
             unsafe {
-                ACTIVE = Some(Stage {
+                ACTIVE[slot] = Some(Stage {
                     row,
                     target,
                     task,
@@ -262,7 +290,7 @@ pub fn request<D: Device>(
                 return Err(w::INVALID);
             }
             let token = u64::from_le_bytes(data[..8].try_into().unwrap());
-            let s = ticket_stage(row, task, token, destination)?;
+            let s = ticket_stage(volume, row, task, token, destination)?;
             let bytes = fs_service::staged_private_chunk(&data[8..n]).ok_or(w::INVALID)?;
             if r.offset != s.written
                 || s.written
@@ -287,7 +315,7 @@ pub fn request<D: Device>(
             if r.length != 0 {
                 return Err(w::INVALID);
             }
-            let s = ticket_stage(row, task, r.offset, destination)?;
+            let s = ticket_stage(volume, row, task, r.offset, destination)?;
             let computed: [u8; 32] = s.hash.clone().finalize().into();
             if s.written != s.expected_size || computed != s.expected_hash {
                 return Err(w::INVALID);
@@ -303,7 +331,7 @@ pub fn request<D: Device>(
                 return Err(code(e));
             }
             unsafe {
-                ACTIVE = None;
+                ACTIVE[slot] = None;
             }
             Ok(0)
         }
@@ -311,12 +339,12 @@ pub fn request<D: Device>(
             if r.length != 0 {
                 return Err(w::INVALID);
             }
-            let s = ticket_stage(row, task, r.offset, destination)?;
+            let s = ticket_stage(volume, row, task, r.offset, destination)?;
             fs.remove_path_if_id(&s.source, s.id)
                 .and_then(|_| fs.commit())
                 .map_err(code)?;
             unsafe {
-                ACTIVE = None;
+                ACTIVE[slot] = None;
             }
             Ok(0)
         }
@@ -329,7 +357,8 @@ mod tests {
     extern crate std;
     use super::*;
     use sexfs::{Device, Memory, Slot, BLOCK};
-    use std::{boxed::Box, cell::RefCell, rc::Rc, vec, vec::Vec};
+    use std::{boxed::Box, cell::RefCell, rc::Rc, sync::Mutex, vec, vec::Vec};
+    static LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Clone)]
     struct Disk(Rc<RefCell<Vec<[u8; BLOCK]>>>);
@@ -367,9 +396,24 @@ mod tests {
             length,
         }
     }
+    fn recover(fs: &mut Fs<'static, Disk>) {
+        super::recover(fs, Volume::Primary);
+    }
+    fn request(
+        fs: &mut Fs<'static, Disk>,
+        row: usize,
+        target: u32,
+        task: u32,
+        r: w::Request,
+        destination: &[u8],
+        data: &mut [u8],
+    ) -> Result<u32, u8> {
+        super::request(fs, Volume::Primary, row, target, task, r, destination, data)
+    }
 
     #[test]
     fn ticket_checks_and_mount_scavenging() {
+        let _lock = LOCK.lock().unwrap();
         let disk = Disk(Rc::new(RefCell::new(vec![[0; BLOCK]; 1024])));
         let mut fs = Fs::format(disk.clone(), memory()).unwrap();
         recover(&mut fs);
@@ -493,7 +537,13 @@ mod tests {
             ),
             Ok(8)
         );
-        let abandoned = unsafe { ACTIVE.as_ref().unwrap().source.clone() };
+        let abandoned = unsafe {
+            (*core::ptr::addr_of!(ACTIVE))[0]
+                .as_ref()
+                .unwrap()
+                .source
+                .clone()
+        };
         assert!(fs.open(&abandoned).is_ok());
         drop(fs);
         let mut remounted = Fs::mount(disk, memory()).unwrap();
@@ -501,6 +551,57 @@ mod tests {
         assert_eq!(remounted.open(b"/later"), Err(Error::NotFound));
         assert_eq!(remounted.open(&abandoned), Err(Error::NotFound));
         assert_eq!(remounted.open(b"/chosen").unwrap().id, chosen.id);
+    }
+
+    #[test]
+    fn home_lock_invalidates_ticket_until_unlock_recovery() {
+        let _lock = LOCK.lock().unwrap();
+        let disk = Disk(Rc::new(RefCell::new(vec![[0; BLOCK]; 1024])));
+        let mut fs = Fs::format(disk, memory()).unwrap();
+        super::recover(&mut fs, Volume::Home);
+        let mut data = [0u8; 64];
+        let hash: [u8; 32] = Sha256::digest(b"complete").into();
+        data[..32].copy_from_slice(&hash);
+        assert_eq!(
+            super::request(
+                &mut fs,
+                Volume::Home,
+                2,
+                41,
+                9,
+                req(w::STAGE_BEGIN, 8, 32),
+                b"/chosen",
+                &mut data
+            ),
+            Ok(8)
+        );
+        let ticket = u64::from_le_bytes(data[..8].try_into().unwrap());
+        let abandoned = unsafe {
+            (*core::ptr::addr_of!(ACTIVE))[1]
+                .as_ref()
+                .unwrap()
+                .source
+                .clone()
+        };
+        invalidate(Volume::Home);
+        data[..8].copy_from_slice(&ticket.to_le_bytes());
+        data[8..16].copy_from_slice(b"complete");
+        assert_eq!(
+            super::request(
+                &mut fs,
+                Volume::Home,
+                2,
+                41,
+                9,
+                req(w::STAGE_CHUNK, 0, 16),
+                b"/chosen",
+                &mut data
+            ),
+            Err(w::UNAVAILABLE)
+        );
+        super::recover(&mut fs, Volume::Home);
+        assert_eq!(fs.open(&abandoned), Err(Error::NotFound));
+        assert_eq!(fs.open(b"/chosen"), Err(Error::NotFound));
     }
 
     #[test]
