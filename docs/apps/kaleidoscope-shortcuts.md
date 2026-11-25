@@ -18,6 +18,8 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | Keyboard reference | Ctrl+Shift+/ |
 
 The reader view shortcut returns to the source page when used in reader view.
+The downloads panel lists completed files and failed transfers. **Try again**
+opens the failed address again; completed files open from the same panel.
 The Chastity request requires a visible, unambiguous same-origin login form.
 Saving additionally requires current username and password values. Chastity must
 approve and store the proposal before Kaleidoscope reports a saved password.

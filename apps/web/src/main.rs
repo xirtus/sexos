@@ -273,6 +273,8 @@ struct Browser {
     sockets: Vec<websocket::Conn>,
     /// This window's finished downloads, and the one running (for the bar).
     downloads: Vec<download::Done>,
+    /// Failed transfers shown in the downloads panel with a retry link.
+    download_failures: Vec<download::Failure>,
     /// Web font files loaded, by address, with their font number (None: unreadable).
     web_fonts: Vec<(String, Option<u8>)>,
     download_status: Option<String>,
@@ -2198,7 +2200,7 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[web.theme] mode={:?} generation={}", theme.mode, theme_generation);
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, password_save: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, chrome_palette, theme_generation, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
-        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_failures: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);

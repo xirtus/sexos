@@ -4,6 +4,11 @@ Compared with Firefox and Safari, Kaleidoscope already has persistent tabs, hist
 bookmarks, cookies, downloads with a panel, reader view, private and container tabs,
 and Shields. The remaining gaps are:
 
+- The Ctrl+J downloads panel now shows failed transfers with an exact URL retry
+  link. A failed stream clears the progress bar and removes its hidden partial
+  file, so retry can take the original name. Pause/resume, cancellation while a
+  synchronous transfer is active, and lasting source history remain open.
+
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an
   unambiguous same-origin POST login pair. This slice wires explicit Ctrl+Shift+K
