@@ -6,7 +6,7 @@
 //! vellum-edit works in PDF user space: points from the bottom left of the unrotated
 //! page. These convert between the two, merge a found word's character boxes into one
 //! rectangle per line, order form fields as the eye reads them, and date annotations.
-use vellum_edit::{FieldInfo, FieldKind, PageInfo, PdfDate};
+use vellum_edit::{AnnotInfo, FieldInfo, FieldKind, FieldValue, PageInfo, PdfDate};
 
 /// A shown point in user space.
 pub fn to_user(p: &PageInfo, (x, y): (f64, f64)) -> (f64, f64) {
@@ -44,6 +44,28 @@ pub fn rect_to_shown(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)]
 }
 
+/// Topmost visible annotation under a shown page point. Text markup uses its
+/// individual quads, so a click between highlighted lines is not a hit.
+pub fn annotation_hit(annots: &[AnnotInfo], page: &PageInfo, point: (f64, f64)) -> Option<usize> {
+    let contains = |r: [f64; 4]| point.0 >= r[0] && point.0 <= r[2] && point.1 >= r[1] && point.1 <= r[3];
+    annots.iter().enumerate().rev().find_map(|(index, annot)| {
+        if annot.hidden { return None; }
+        let quads = &annot.quad_points;
+        let hit = if quads.len() >= 8 && quads.len() % 8 == 0 {
+            quads.chunks_exact(8).any(|quad| {
+                let shown = [to_shown(page, (quad[0], quad[1])), to_shown(page, (quad[2], quad[3])),
+                    to_shown(page, (quad[4], quad[5])), to_shown(page, (quad[6], quad[7]))];
+                let r = [shown.iter().map(|p| p.0).fold(f64::INFINITY, f64::min),
+                    shown.iter().map(|p| p.1).fold(f64::INFINITY, f64::min),
+                    shown.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max),
+                    shown.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)];
+                contains(r)
+            })
+        } else { contains(rect_to_shown(page, annot.rect)) };
+        hit.then_some(index)
+    })
+}
+
 /// Character boxes (shown, `[left, top, right, bottom]`) merged into one rectangle per
 /// line: a box whose middle lies outside the line so far starts a new one.
 pub fn line_rects(boxes: &[[f64; 4]]) -> Vec<[f64; 4]> {
@@ -60,11 +82,13 @@ pub fn line_rects(boxes: &[[f64; 4]]) -> Vec<[f64; 4]> {
     lines
 }
 
-/// Fields the keyboard can fill: text fields and checkboxes that are not read-only and
-/// have a widget, in reading order (page, then top to bottom, then left to right).
+/// Fields the keyboard can fill: text, buttons, and bounded single-choice widgets
+/// that are not read-only and have a widget, in reading order.
 pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
     let mut out: Vec<(FieldInfo, usize, [f64; 4])> = fields.iter()
-        .filter(|f| !f.read_only && matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox))
+        .filter(|f| !f.read_only && (matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox | FieldKind::ComboBox { editable: true })
+            || f.kind == FieldKind::Radio && !f.states.is_empty()
+            || (!f.options.is_empty() && matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { .. }))))
         .filter_map(|f| f.widgets.iter().find_map(|(_, page, rect)| page.map(|p| (f.clone(), p, *rect))))
         .collect();
     // Rows within a few points of each other read left to right.
@@ -72,6 +96,81 @@ pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
         .then(((b.2[3] / 4.0).round() as i64).cmp(&((a.2[3] / 4.0).round() as i64)))
         .then(a.2[0].total_cmp(&b.2[0])));
     out
+}
+
+/// Return the editable widget under a shown-page point, after crop/rotation conversion.
+pub fn field_at_shown(fields: &[(FieldInfo, usize, [f64; 4])], page: usize, info: &PageInfo, point: (f64, f64)) -> Option<usize> {
+    widget_at_shown(fields, page, info, point).map(|(field, _)| field)
+}
+
+/// Return the field and its exact widget. Radio fields need the widget's own on-state.
+pub fn widget_at_shown(fields: &[(FieldInfo, usize, [f64; 4])], page: usize, info: &PageInfo, point: (f64, f64)) -> Option<(usize, usize)> {
+    fields.iter().enumerate().rev().find_map(|(index, (field, _, _))| {
+        field.widgets.iter().enumerate().find_map(|(widget, (_, widget_page, rect))| {
+            if *widget_page != Some(page) { return None; }
+            let [left, top, right, bottom] = rect_to_shown(info, *rect);
+            (point.0 >= left && point.0 <= right && point.1 >= top && point.1 <= bottom).then_some(widget)
+        }).map(|widget| (index, widget))
+    })
+}
+
+pub fn radio_state_at(field: &FieldInfo, widget: usize) -> Option<&str> {
+    (field.kind == FieldKind::Radio).then(|| field.widget_states.get(widget))??.first().map(String::as_str)
+}
+
+/// The keyboard's radio selection follows the field's current PDF state.
+pub fn radio_choice(field: &FieldInfo) -> Option<usize> {
+    if field.kind != FieldKind::Radio { return None; }
+    let selected = match &field.value { vellum_edit::FieldValue::State(s) => Some(s.as_str()), _ => None };
+    selected.and_then(|s| field.states.iter().position(|option| option == s))
+        .or_else(|| (!field.states.is_empty()).then_some(0))
+}
+
+/// The selected option's export value, or no selection yet.
+pub fn choice_index(f: &FieldInfo) -> Option<usize> {
+    let value = match &f.value {
+        vellum_edit::FieldValue::Text(s) | vellum_edit::FieldValue::State(s) => s.as_str(),
+        vellum_edit::FieldValue::Choices(v) if v.len() == 1 => &v[0],
+        _ => return None,
+    };
+    f.options.iter().position(|(export, display)| export == value || display == value)
+}
+
+/// The option rows selected by a list box, matched by PDF export value.
+pub fn choice_indices(f: &FieldInfo) -> Vec<usize> {
+    let values: Vec<&str> = match &f.value {
+        vellum_edit::FieldValue::Choices(v) => v.iter().map(String::as_str).collect(),
+        vellum_edit::FieldValue::Text(s) | vellum_edit::FieldValue::State(s) => vec![s],
+        vellum_edit::FieldValue::Empty => Vec::new(),
+    };
+    f.options.iter().enumerate().filter_map(|(i, (export, display))|
+        values.iter().any(|v| *v == export || *v == display).then_some(i)).collect()
+}
+
+/// Toggle one multi-list row and return its export values in document order.
+pub fn toggle_choice(f: &FieldInfo, index: usize) -> Option<Vec<String>> {
+    if index >= f.options.len() { return None; }
+    let mut selected = choice_indices(f);
+    if let Some(at) = selected.iter().position(|&n| n == index) { selected.remove(at); }
+    else { selected.push(index); selected.sort_unstable(); }
+    Some(selected.iter().map(|&n| f.options[n].0.clone()).collect())
+}
+
+/// A pointer row uses the PDF export value, never its display label.
+pub fn clicked_choice(f: &FieldInfo, index: usize) -> Option<FieldValue> {
+    match &f.kind {
+        FieldKind::ComboBox { .. } | FieldKind::ListBox { multi_select: false } =>
+            f.options.get(index).map(|(export, _)| FieldValue::Text(export.clone())),
+        FieldKind::ListBox { multi_select: true } => toggle_choice(f, index).map(FieldValue::Choices),
+        _ => None,
+    }
+}
+
+/// Up/Down through a finite choice list. An empty field starts at the first/last item.
+pub fn step_choice(count: usize, current: Option<usize>, backward: bool) -> Option<usize> {
+    if count == 0 { return None; }
+    Some(match current { Some(i) => (i + if backward { count - 1 } else { 1 }) % count,
+        None if backward => count - 1, None => 0 })
 }
 
 /// The state a checkbox moves to: on (its own on-state, else `Yes`) from off, and back.
@@ -100,7 +199,7 @@ pub fn date(unix: u64) -> PdfDate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vellum_edit::{Editor, FieldValue};
+    use vellum_edit::{AnnotKind, AnnotStyle, Editor, FieldValue, NewAnnot};
 
     fn page(rotate: i32) -> PageInfo {
         PageInfo { media_box: [0.0, 0.0, 612.0, 792.0], crop_box: [10.0, 20.0, 610.0, 780.0], rotate }
@@ -128,6 +227,24 @@ mod tests {
         let boxes = [[10.0, 100.0, 16.0, 114.0], [16.0, 101.0, 22.0, 114.0], [22.0, 100.0, 30.0, 115.0], [5.0, 120.0, 11.0, 134.0], [11.0, 120.0, 17.0, 134.0]];
         assert_eq!(line_rects(&boxes), vec![[10.0, 100.0, 30.0, 115.0], [5.0, 120.0, 17.0, 134.0]]);
         assert!(line_rects(&[]).is_empty());
+    }
+
+    #[test]
+    fn annotation_hit_uses_highlight_quads_and_topmost_order() {
+        const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        let page = editor.page_info(0).unwrap();
+        let first = [40.0, 40.0, 100.0, 54.0];
+        let second = [40.0, 100.0, 100.0, 114.0];
+        let rects = vec![rect_to_user(&page, first), rect_to_user(&page, second)];
+        editor.add_annotation(0, &NewAnnot { kind: AnnotKind::Highlight { rects }, style: AnnotStyle::default() }).unwrap();
+        let annots: Vec<_> = editor.annotations(0).unwrap().into_iter().filter(|a| a.subtype == "Highlight").collect();
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 47.0)), Some(0));
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 107.0)), Some(0));
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 80.0)), None, "gap between highlighted lines");
+        editor.add_annotation(0, &NewAnnot { kind: AnnotKind::Highlight { rects: vec![rect_to_user(&page, first)] }, style: AnnotStyle::default() }).unwrap();
+        let annots: Vec<_> = editor.annotations(0).unwrap().into_iter().filter(|a| a.subtype == "Highlight").collect();
+        assert_eq!(annotation_hit(&annots, &page, (70.0, 47.0)), Some(1), "later annotation is on top");
     }
 
     #[test]
@@ -214,6 +331,141 @@ mod tests {
             .filter(|(x, y)| { let p = &d[(y * w + x) * 4..(y * w + x) * 4 + 3]; p[0] > 200 && p[1] > 180 && p[2] < 100 }).count();
         let area = (r[2] - r[0]) * (r[3] - r[1]);
         assert!(yellow * 3 > area, "{yellow} yellow of {area}");
+    }
+
+    #[test]
+    fn visual_signature_survives_as_markup_without_a_digital_signature() {
+        const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
+        let mut ed = Editor::open(FORM.to_vec()).unwrap();
+        let info = ed.page_info(0).unwrap();
+        let rect = rect_to_user(&info, [100.0, 600.0, 350.0, 650.0]);
+        ed.add_annotation(0, &vellum_edit::NewAnnot {
+            kind: vellum_edit::AnnotKind::FreeText { rect, text: "Ada Lovelace".into(), font_size: 20.0 },
+            style: vellum_edit::AnnotStyle { contents: Some("Visual signature: Ada Lovelace".into()), ..Default::default() },
+        }).unwrap();
+        let again = Editor::open(ed.save_incremental().unwrap()).unwrap();
+        let marks = again.annotations(0).unwrap();
+        assert!(marks.iter().any(|a| a.subtype == "FreeText" && a.contents.as_deref() == Some("Visual signature: Ada Lovelace")));
+        assert!(again.signatures().unwrap().is_empty(), "visual markup must not claim a digital signature");
+    }
+
+    #[test]
+    fn combo_and_single_list_options_round_trip_in_real_pdf() {
+        const CHOICE: &[u8] = include_bytes!("../../../tests/fixtures/pdf/choice.pdf");
+        let mut ed = Editor::open(CHOICE.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(fields.iter().map(|f| f.0.name.as_str()).collect::<Vec<_>>(), ["size", "team"]);
+        assert_eq!(fields[0].0.kind, FieldKind::ComboBox { editable: false });
+        assert_eq!(fields[1].0.kind, FieldKind::ListBox { multi_select: false });
+        assert_eq!(choice_index(&fields[0].0), Some(0));
+        assert_eq!(step_choice(fields[0].0.options.len(), Some(0), false), Some(1));
+        assert_eq!(step_choice(fields[1].0.options.len(), None, true), Some(2));
+        ed.set_field("size", vellum_edit::FieldValue::Text(fields[0].0.options[1].0.clone())).unwrap();
+        ed.set_field("team", vellum_edit::FieldValue::Text(fields[1].0.options[1].0.clone())).unwrap();
+        let saved = ed.save_incremental().unwrap();
+        assert!(saved.starts_with(CHOICE));
+        let again = Editor::open(saved.clone()).unwrap();
+        let after = fillable(&again.fields().unwrap());
+        assert_eq!(after[0].0.value, vellum_edit::FieldValue::Text("M".into()));
+        assert_eq!(after[1].0.value, vellum_edit::FieldValue::Text("E".into()));
+        assert!(hayro::hayro_syntax::Pdf::new(saved).is_ok());
+    }
+
+    #[test]
+    fn editable_combo_and_multi_list_are_keyboard_fillable() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+        let mut ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(fields.iter().map(|f| f.0.name.as_str()).collect::<Vec<_>>(), ["project", "teams"]);
+        assert_eq!(fields[0].0.kind, FieldKind::ComboBox { editable: true });
+        assert_eq!(choice_index(&fields[0].0), None);
+        assert_eq!(fields[1].0.kind, FieldKind::ListBox { multi_select: true });
+        assert_eq!(choice_indices(&fields[1].0), [0, 2]);
+        let first = toggle_choice(&fields[1].0, 1).unwrap();
+        assert_eq!(first, ["A", "E", "D"]);
+        ed.set_field("teams", FieldValue::Choices(first)).unwrap();
+        let fresh = fillable(&ed.fields().unwrap());
+        let second = toggle_choice(&fresh[1].0, 0).unwrap();
+        assert_eq!(second, ["E", "D"]);
+        assert_eq!(toggle_choice(&fresh[1].0, 3), None);
+        ed.set_field("project", FieldValue::Text("Orbit".into())).unwrap();
+        ed.set_field("teams", FieldValue::Choices(second)).unwrap();
+        let saved = ed.save_incremental().unwrap();
+        let after = fillable(&Editor::open(saved.clone()).unwrap().fields().unwrap());
+        assert_eq!(after[0].0.value, FieldValue::Text("Orbit".into()));
+        assert_eq!(choice_indices(&after[1].0), [1, 2]);
+        assert!(hayro::hayro_syntax::Pdf::new(saved).is_ok());
+    }
+
+    #[test]
+    fn pointer_rows_commit_export_values_and_toggle_multi_list() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/advanced-choice.pdf");
+        let mut ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(clicked_choice(&fields[0].0, 1), Some(FieldValue::Text("M".into())));
+        assert_eq!(clicked_choice(&fields[1].0, 1), Some(FieldValue::Choices(vec!["A".into(), "E".into(), "D".into()])));
+        assert_eq!(clicked_choice(&fields[0].0, 3), None);
+        ed.set_field("project", clicked_choice(&fields[0].0, 1).unwrap()).unwrap();
+        ed.set_field("teams", clicked_choice(&fields[1].0, 1).unwrap()).unwrap();
+        let again = Editor::open(ed.save_incremental().unwrap()).unwrap();
+        let after = fillable(&again.fields().unwrap());
+        assert_eq!(after[0].0.value, FieldValue::Text("M".into()));
+        assert_eq!(after[1].0.value, FieldValue::Choices(vec!["A".into(), "E".into(), "D".into()]));
+    }
+
+    #[test]
+    fn widget_hit_uses_shown_rotation_and_only_fillable_fields() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/choice.pdf");
+        let ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        let mut info = ed.page_info(0).unwrap();
+        for rotate in [0, 90, 180, 270] {
+            info.rotate = rotate;
+            for (index, (_, page, rect)) in fields.iter().enumerate() {
+                let shown = rect_to_shown(&info, *rect);
+                let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
+                assert_eq!(field_at_shown(&fields, *page, &info, center), Some(index));
+                assert_eq!(field_at_shown(&fields, *page + 1, &info, center), None);
+            }
+        }
+        assert_eq!(field_at_shown(&fields, 0, &info, (-10.0, -10.0)), None);
+        let mut locked = ed.fields().unwrap();
+        locked[0].read_only = true;
+        assert_eq!(fillable(&locked).len(), fields.len() - 1);
+        let mut repeated = fields.clone();
+        let mut another = repeated[0].0.widgets[0].clone();
+        another.1 = Some(1);
+        another.2 = [400.0, 655.0, 500.0, 681.0];
+        repeated[0].0.widgets.push(another);
+        info.rotate = 0;
+        let shown = rect_to_shown(&info, [400.0, 655.0, 500.0, 681.0]);
+        let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
+        assert_eq!(field_at_shown(&repeated, 1, &info, center), Some(0));
+    }
+
+    #[test]
+    fn radio_widgets_expose_distinct_on_states_and_save_choice() {
+        const PDF: &[u8] = include_bytes!("../../../tests/fixtures/pdf/radio.pdf");
+        let mut ed = Editor::open(PDF.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0.kind, FieldKind::Radio);
+        assert_eq!(radio_choice(&fields[0].0), Some(0));
+        let info = ed.page_info(0).unwrap();
+        for (widget, (_, _, rect)) in fields[0].0.widgets.iter().enumerate() {
+            let shown = rect_to_shown(&info, *rect);
+            let center = ((shown[0] + shown[2]) / 2.0, (shown[1] + shown[3]) / 2.0);
+            assert_eq!(widget_at_shown(&fields, 0, &info, center), Some((0, widget)));
+            assert_eq!(radio_state_at(&fields[0].0, widget), Some(if widget == 0 { "Red" } else { "Blue" }));
+        }
+        ed.set_field("color", FieldValue::State("Blue".into())).unwrap();
+        let reopened = Editor::open(ed.save_incremental().unwrap()).unwrap();
+        let blue = &fillable(&reopened.fields().unwrap())[0].0;
+        assert_eq!(blue.value, FieldValue::State("Blue".into()));
+        assert_eq!(radio_choice(blue), Some(1));
+        let mut reopened = reopened;
+        reopened.set_field("color", FieldValue::State("Red".into())).unwrap();
+        assert_eq!(radio_choice(&fillable(&reopened.fields().unwrap())[0].0), Some(0));
     }
 
     #[test]

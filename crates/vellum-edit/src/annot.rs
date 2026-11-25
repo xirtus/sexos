@@ -89,6 +89,8 @@ pub struct AnnotInfo {
     pub contents: Option<String>,
     pub author: Option<String>,
     pub color: Option<[f32; 3]>,
+    /// `/CA`; absent means fully opaque.
+    pub opacity: Option<f32>,
     /// `/M`, raw.
     pub modified: Option<String>,
     /// `/CreationDate`, raw.
@@ -104,10 +106,29 @@ pub struct AnnotInfo {
     pub hidden: bool,
 }
 
+/// Exact page-array entry retained for undo of an existing annotation deletion.
+/// Its object and appearance remain in the PDF; only the page references change.
+#[derive(Clone, Debug)]
+pub struct RemovedAnnot {
+    page: usize,
+    index: usize,
+    entry: Object,
+    popup: Option<(usize, Object)>,
+}
+
 const MARKUP_FLAGS: i64 = 4; // Print
 const NOTE_FLAGS: i64 = 4 | 8 | 16; // Print, NoZoom, NoRotate
 
 impl Editor {
+    /// Annotation permissions in signed revisions require DocMDP/FieldMDP evaluation.
+    /// Until that policy is implemented, do not silently invalidate a signature.
+    fn require_unsigned_annotations(&self) -> Result<(), Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot edit annotations in a signed PDF".into()));
+        }
+        Ok(())
+    }
+
     /// Lists every annotation on the page, in `/Annots` order (including links, popups, widgets).
     pub fn annotations(&self, page: usize) -> Result<Vec<AnnotInfo>, Error> {
         let pid = self.page_id(page)?;
@@ -138,6 +159,7 @@ impl Editor {
                 contents: s(b"Contents"),
                 author: s(b"T"),
                 color,
+                opacity: self.lookup(&d, b"CA").and_then(|o| o.as_f64()).map(|v| v as f32),
                 modified: s(b"M"),
                 created: s(b"CreationDate"),
                 name: s(b"NM"),
@@ -152,6 +174,7 @@ impl Editor {
 
     /// Adds an annotation with its appearance stream; returns the new annotation's object id.
     pub fn add_annotation(&mut self, page: usize, a: &NewAnnot) -> Result<ObjId, Error> {
+        self.require_unsigned_annotations()?;
         let pid = self.page_id(page)?;
         let st = &a.style;
         let [r, g, b] = st.color.map(|c| c.clamp(0.0, 1.0) as f64);
@@ -306,9 +329,42 @@ impl Editor {
         Ok(id)
     }
 
+    /// Change a highlight comment or sticky note text without replacing geometry or appearance.
+    /// Empty text removes `/Contents`. Returns the previous text for undo.
+    pub fn set_annotation_text(&mut self, page: usize, index: usize, text: &str) -> Result<Option<String>, Error> {
+        self.require_unsigned_annotations()?;
+        let pid = self.page_id(page)?;
+        let (mut arr, holder) = self.annots_array(pid);
+        let entry = arr.get(index).cloned().ok_or(Error::NoSuchAnnotation(index))?;
+        let mut dict = self.dict_of(&entry).ok_or(Error::NoSuchAnnotation(index))?;
+        let subtype = dict.get(b"Subtype").and_then(Object::as_name);
+        if subtype != Some(b"Highlight") && subtype != Some(b"Text") {
+            return Err(Error::Unsupported("editing text on this annotation"));
+        }
+        let before = self.lookup(&dict, b"Contents").and_then(|v| v.as_str().map(decode_text));
+        let after = (!text.is_empty()).then(|| text.to_string());
+        if before == after { return Ok(before); }
+        match after {
+            Some(value) => dict.set(b"Contents", Object::Str(encode_text(&value))),
+            None => { dict.remove(b"Contents"); },
+        }
+        if let Some(id) = entry.as_ref() { self.set_dict(id, dict); }
+        else {
+            arr[index] = Object::Dict(dict);
+            self.store_annots(pid, holder, arr);
+        }
+        Ok(before)
+    }
+
     /// Removes the annotation at `index` of the page's `/Annots` (and its popup).
     /// Form widgets are refused: change them through fields.
     pub fn delete_annotation(&mut self, page: usize, index: usize) -> Result<(), Error> {
+        self.remove_annotation(page, index).map(|_| ())
+    }
+
+    /// Remove an annotation and retain its exact page entry for undo.
+    pub fn remove_annotation(&mut self, page: usize, index: usize) -> Result<RemovedAnnot, Error> {
+        self.require_unsigned_annotations()?;
         let pid = self.page_id(page)?;
         let (mut arr, holder) = self.annots_array(pid);
         let entry = arr.get(index).cloned().ok_or(Error::NoSuchAnnotation(index))?;
@@ -318,11 +374,34 @@ impl Editor {
         }
         let popup = d.get(b"Popup").and_then(Object::as_ref);
         arr.remove(index);
-        if let Some(p) = popup {
-            arr.retain(|o| o.as_ref().map(|r| r.0) != Some(p.0));
+        let popup = popup.and_then(|p| arr.iter().position(|o| o.as_ref() == Some(p))
+            .map(|at| (if at >= index { at + 1 } else { at }, arr.remove(at))));
+        self.store_annots(pid, holder, arr);
+        Ok(RemovedAnnot { page, index, entry, popup })
+    }
+
+    /// Restore the original annotation and popup references without recreating their appearance.
+    pub fn restore_annotation(&mut self, removed: &RemovedAnnot) -> Result<(), Error> {
+        self.require_unsigned_annotations()?;
+        let pid = self.page_id(removed.page)?;
+        let (mut arr, holder) = self.annots_array(pid);
+        if arr.contains(&removed.entry) || removed.popup.as_ref().is_some_and(|(_, popup)| arr.contains(popup)) {
+            return Err(Error::BadValue("annotation is already on the page".into()));
         }
+        arr.insert(removed.index.min(arr.len()), removed.entry.clone());
+        if let Some((at, popup)) = &removed.popup { arr.insert((*at).min(arr.len()), popup.clone()); }
         self.store_annots(pid, holder, arr);
         Ok(())
+    }
+
+    /// Remove the exact restored annotation; refuse an ambiguous direct-object match.
+    pub fn remove_restored_annotation(&mut self, removed: &RemovedAnnot) -> Result<(), Error> {
+        let pid = self.page_id(removed.page)?;
+        let (arr, _) = self.annots_array(pid);
+        let mut matches = arr.iter().enumerate().filter(|(_, entry)| *entry == &removed.entry);
+        let index = matches.next().map(|(at, _)| at).ok_or(Error::NoSuchAnnotation(removed.index))?;
+        if matches.next().is_some() { return Err(Error::BadValue("ambiguous annotation identity".into())); }
+        self.remove_annotation(removed.page, index).map(|_| ())
     }
 
     /// The page's annotation array and, if it is an indirect object, its id.
@@ -366,4 +445,29 @@ fn bbox(rects: &[[f64; 4]], pad: f64) -> [f64; 4] {
         b[3] = b[3].max(r[3]);
     }
     [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    #[test]
+    fn removed_annotation_restores_its_popup_entry() {
+        let mut editor = Editor::open(include_bytes!("../../../tests/fixtures/pdf/form1.pdf").to_vec()).unwrap();
+        let annot = NewAnnot { kind: AnnotKind::Note { at: (60.0, 80.0), icon: NoteIcon::Comment }, style: AnnotStyle::default() };
+        let id = editor.add_annotation(0, &annot).unwrap();
+        let popup = editor.add(Dict::new().with(b"Type", Object::name("Annot"))
+            .with(b"Subtype", Object::name("Popup")).with(b"Parent", id));
+        let mut d = editor.get_dict(id).unwrap();
+        d.set(b"Popup", popup);
+        editor.set(id, d);
+        let page = editor.page_id(0).unwrap();
+        editor.push_annot(page, Object::Ref(popup));
+        let original = editor.annots_array(page).0;
+        let index = original.iter().position(|entry| entry.as_ref() == Some(id)).unwrap();
+        let removed = editor.remove_annotation(0, index).unwrap();
+        assert_eq!(editor.annots_array(page).0.len(), original.len() - 2);
+        editor.restore_annotation(&removed).unwrap();
+        assert_eq!(editor.annots_array(page).0, original);
+    }
 }

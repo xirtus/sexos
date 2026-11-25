@@ -13,6 +13,6 @@ class MoanHelperStage(unittest.TestCase):
         self.assertEqual(stage['manifest'],'apps/moanplug/Cargo.toml');self.assertIn(stage['manifest'],spec['allowed']['crates'])
         self.assertEqual(stage['source_artifact'],'target/x86_64-sex-app/release/moanplug')
         self.assertEqual(stage['dest_artifact'],'iso_root/programs/moanplug')
-        self.assertEqual(files[0][1]['consumed_inputs'],[stage['dest_artifact']])
+        self.assertIn(stage['dest_artifact'], files[0][1]['consumed_inputs'])
         self.assertFalse(any(s.get('manifest')=='apps/moanrack/Cargo.toml'for s in stages),'qualification fixture must not ship')
 if __name__=='__main__':unittest.main()

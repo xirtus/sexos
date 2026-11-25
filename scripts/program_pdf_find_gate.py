@@ -53,10 +53,21 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
   s=len(t());line('run vellum @find10.pdf')
   o=g['wait'](rf'\[pdf\.open\] target=(\d+) task=(\d+) name=find10\.pdf pages={PAGES}\n',s,600)
+  g['wait'](r'\[pdf\.theme\] mode=Light accent=d6336c',s,60)
   g['wait'](rf'\[pdf\.page\] page=1 pages={PAGES} width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
   launch=re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])
   sid=int(launch[-1]) if launch else SURFACE[int(o[1])]
   time.sleep(1);g['focus'](sid);time.sleep(.5)
+  q.cmd('screendump',{'filename':str(a.out/'pdf-theme.ppm')});time.sleep(.5)
+  shot=(a.out/'pdf-theme.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>1000,'Vellum did not paint the Light theme desk'
+  # The shortcut reference is Vellum's own overlay over the current page.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':k}for k in ('ctrl','shift','slash')],'hold-time':80})
+  g['wait'](r'\[pdf\.shortcuts\] shown=1 rows=14\n',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-shortcuts.ppm')})
+  help_shot=(a.out/'pdf-shortcuts.ppm').read_bytes()
+  assert help_shot.startswith(b'P6\n') and help_shot!=shot,'Vellum shortcut overlay did not repaint'
+  s=len(t());q.key('esc');g['wait'](r'\[pdf\.shortcuts\] shown=0 top=0\n',s,60)
   # Find: Ctrl+F, the word in lower case (search ignores case), Enter.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.5)
   keys(UNIQUE.lower());q.key('ret')
@@ -65,6 +76,21 @@ def main():
   hit=g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
   g['wait'](rf'\[pdf\.page\] page={UNIQUE_PAGE} pages={PAGES} width=\d+ height=\d+ ink=(\d+) ms=\d+\n',s,900)
   time.sleep(1.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find.ppm')})
+  # Match Case keeps the same query but excludes the uppercase-only word.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'m'}],'hold-time':80})
+  g['wait'](r'\[pdf\.find\.case\] match=1\n',s,60)
+  g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} hits=0\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-match-case.ppm')})
+  case_shot=(a.out/'pdf-find-match-case.ppm').read_bytes()
+  assert case_shot.startswith(b'P6\n') and case_shot!=(a.out/'pdf-find.ppm').read_bytes()
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'m'}],'hold-time':80})
+  g['wait'](r'\[pdf\.find\.case\] match=0\n',s,60)
+  g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  # The first page was retired when search jumped to page 7. Revisit it at
+  # the same zoom; pixels must come from the bounded cache.
+  s=len(t());q.key('home')
+  g['wait'](r'\[pdf\.page\.cache\] hit=1 page=1 bytes=\d+',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-revisit.ppm')})
   # Ctrl+G (Shell keeps F3): the only hit again, after going round.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'g'}],'hold-time':80})
   g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
@@ -74,6 +100,52 @@ def main():
   keys('lantern');q.key('ret')
   g['wait'](rf'\[pdf\.find\] term=lantern page={UNIQUE_PAGE} hits={PAGES} index={UNIQUE_PAGE}\n',s,300)
   press('ret',rf'\[pdf\.find\] term=lantern page={UNIQUE_PAGE+1} hits={PAGES} index={UNIQUE_PAGE+1}\n')
+  # One typed space finds the words across the page's extracted line break.
+  phrase=f'Page {UNIQUE_PAGE+1} of {PAGES} The quick'
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in 'lantern':q.key('backspace');time.sleep(.04)
+  keys(phrase);q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term={re.escape(phrase)} page={UNIQUE_PAGE+1} hits=1 index=1\n',s,300)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-find-across-lines.ppm')})
+  cross=(a.out/'pdf-find-across-lines.ppm').read_bytes()
+  assert cross.startswith(b'P6\n') and cross!=(a.out/'pdf-find.ppm').read_bytes()
+  # Shell's German dead acute commits é through the same layout-aware text
+  # event used by every app. Find must keep it and reach the accented PDF word.
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':k} for k in ('meta_l','ctrl','spc')],'hold-time':80})
+  g['wait'](r'\[shell.keyboard.layout\] label=DE title=German',s,30)
+  g['focus'](sid);time.sleep(.3)
+  for _ in phrase:q.key('backspace');time.sleep(.04)
+  s=len(t());keys('caf');q.key('equal');q.key('e');q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term=café page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-unicode.ppm')})
+  accented=(a.out/'pdf-find-unicode.ppm').read_bytes()
+  assert accented.startswith(b'P6\n') and accented!=cross
+  for _ in 'café':q.key('backspace');time.sleep(.04)
+  for _ in range(6):
+   q.cmd('send-key',{'keys':[{'type':'qcode','data':k} for k in ('meta_l','ctrl','spc')],'hold-time':80});time.sleep(.15)
+  g['wait'](r'\[shell.keyboard.layout\] label=US title=English \(US\)',s,30)
+  # The same visibly split word is found both as one word and with its printed hyphen.
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in phrase:q.key('backspace');time.sleep(.04)
+  keys('international');q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term=international page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-hyphen-joined.ppm')})
+  joined=(a.out/'pdf-find-hyphen-joined.ppm').read_bytes()
+  assert joined.startswith(b'P6\n') and joined!=cross
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in 'international':q.key('backspace');time.sleep(.04)
+  keys('inter-national');q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term=inter-national page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-hyphen-literal.ppm')})
+  assert (a.out/'pdf-find-hyphen-literal.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in 'inter-national':q.key('backspace');time.sleep(.04)
+  keys('cooperate');q.key('ret')
+  g['wait'](r'\[pdf\.find\] term=cooperate hits=0\n',s,300)
   s=len(t());q.key('esc');time.sleep(.3)
   # The outline: four entries; Up to the first, Enter turns to page 1.
   press('o',r'\[pdf\.outline\] shown=1 entries=4\n')
@@ -83,7 +155,7 @@ def main():
   g['wait'](rf'\[pdf\.page\] page=1 pages={PAGES} ',s,600)
   q.key('o');time.sleep(.3)
   # Thumbnails: the strip renders the pages that fit it.
-  thumbs=press('t',r'\[pdf\.thumbs\] rendered=(\d+) cached=(\d+) first=1\n',600)
+  thumbs=press('t',r'\[pdf\.thumbs\] rendered=(\d+) cached=(\d+) first=1 ms=(\d+)\n',600)
   assert int(thumbs[1])>=2,thumbs[0]
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-thumbs.ppm')})
   q.key('t');time.sleep(.3)
@@ -94,6 +166,6 @@ def main():
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
   assert 'KERNEL PANIC' not in t() and '[std.abort]' not in t() and 'panicked' not in t()
-  print({'ok':True,'chars':int(text[1]),'text_ms':int(text[2]),'thumbs':int(thumbs[1]),'fit_pct':int(fit[1]),'zoom_pct':int(zoomed[1])})
+  print({'ok':True,'chars':int(text[1]),'text_ms':int(text[2]),'thumbs':int(thumbs[1]),'thumb_ms':int(thumbs[3]),'fit_pct':int(fit[1]),'zoom_pct':int(zoomed[1])})
  finally:g['stop']()
 if __name__=='__main__':main()

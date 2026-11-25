@@ -74,6 +74,12 @@ pub const ORGANIZE_RULE: u8 = 50;
 /// The post-commit event log: files that arrived in organized folders since sequence
 /// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
 pub const ORGANIZE_LOG: u8 = 51;
+/// Replace one saved file with a durable staged file only if the destination's
+/// complete current bytes still have the supplied SHA-256 digest. `source\0destination`
+/// is scoped on both halves, and the 32-byte digest occupies the data region.
+/// Files checks and promotes within one request. Removable volumes refuse this
+/// operation until their replacement transactions can preserve the old file.
+pub const REPLACE_IF_SHA256: u8 = 52;
 /// Remove a path only while it still names the object ID in `offset`.
 pub const REMOVE_IF_ID: u8 = 54;
 /// Create a new file with the complete bytes in the data region and commit it

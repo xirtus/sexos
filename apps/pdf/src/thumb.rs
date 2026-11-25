@@ -117,30 +117,145 @@ pub fn encode(image: &Image) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Writes `bytes` to `path` whole, or leaves no file: a write that fails part way
-/// removes what it wrote.
+/// Stages complete bytes beside `path`, then replaces it through Files' rename.
+/// A failed write leaves any previous PDF or thumbnail untouched.
 pub fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
-    match std::fs::write(path, bytes) {
-        Ok(()) => match std::fs::metadata(path) {
-            Ok(m) if m.len() == bytes.len() as u64 => Ok(()),
-            Ok(_) => {
-                let _ = std::fs::remove_file(path);
-                Err(std::io::Error::other("short write"))
-            }
-            Err(e) => Err(e),
-        },
-        Err(e) => {
-            let _ = std::fs::remove_file(path);
-            Err(e)
+    write_whole_matching(path, bytes, None)
+}
+
+/// Refuse to replace a PDF if its saved source changed while Vellum was open.
+/// On SexOS, Files compares the full digest and promotes in one request.
+pub fn write_whole_if_unchanged(path: &str, bytes: &[u8], original: &[u8]) -> std::io::Result<()> {
+    write_whole_matching(path, bytes, Some(original))
+}
+
+fn write_whole_matching(path: &str, bytes: &[u8], original: Option<&[u8]>) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut staged = None;
+    for _ in 0..16 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        // An `@/file.pdf` grant may name only that file, not a sibling. Stage in
+        // Vellum's own folder and rename to the exact granted destination.
+        let name = if path.starts_with("@/") { format!("vellum-{n}.tmp") }
+            else { format!("{path}.vellum-{n}.tmp") };
+        match OpenOptions::new().write(true).create_new(true).open(&name) {
+            Ok(file) => { staged = Some((name, file)); break; }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
         }
     }
+    let (name, mut file) = staged.ok_or_else(|| Error::new(ErrorKind::AlreadyExists, "no free Vellum staging name"))?;
+    let write_result = (|| {
+        file.write_all(bytes)?;
+        file.flush()?;
+        sync_staged(&file)
+    })();
+    drop(file);
+    let result = write_result.and_then(|()| match original {
+        Some(original) => promote_if_unchanged(&name, path, original),
+        None => rename_staged(&name, path),
+    });
+    // A Files-owned copy into encrypted home leaves the app-folder stage behind;
+    // a primary-filesystem promotion has already moved it away.
+    if result.is_err() || original.is_some() { let _ = std::fs::remove_file(&name); }
+    result
 }
+
+#[cfg(target_os = "hermit")]
+fn promote_if_unchanged(from: &str, to: &str, original: &[u8]) -> std::io::Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Error, ErrorKind};
+    use sex_std::{sex_app::files::direct, sex_pdx::fs as w};
+    let digest: [u8; 32] = Sha256::digest(original).into();
+    direct::replace_if_sha256(from.as_bytes(), to.as_bytes(), &digest).map_err(|status| {
+        match status {
+            w::STALE => Error::new(ErrorKind::Other, "PDF changed on disk; reopen before saving"),
+            w::UNSUPPORTED => Error::new(ErrorKind::Unsupported, "signed replacement on removable storage is not yet supported"),
+            _ => Error::new(ErrorKind::Other, format!("Files could not conditionally replace PDF (status {status})")),
+        }
+    })
+}
+
+#[cfg(not(target_os = "hermit"))]
+fn promote_if_unchanged(from: &str, to: &str, original: &[u8]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    if std::fs::read(to)? != original {
+        return Err(Error::new(ErrorKind::Other, "PDF changed on disk; reopen before saving"));
+    }
+    rename_staged(from, to)
+}
+
+/// Save a complete PDF and require Files to confirm the promoted name before
+/// the viewer may clear its edit history or recovery copy.
+pub fn write_confirmed<E: core::fmt::Debug>(
+    path: &str, bytes: &[u8], sync: impl FnOnce() -> Result<(), E>,
+) -> Result<(), String> {
+    write_whole(path, bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+    sync().map_err(|e| format!("Files could not confirm the PDF save: {e:?}"))
+}
+
+#[cfg(target_os = "hermit")]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> {
+    use sex_std::fs::FileExt;
+    file.fsync()
+}
+
+#[cfg(not(target_os = "hermit"))]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> { file.sync_all() }
+
+#[cfg(target_os = "hermit")]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { sex_std::fs::rename(from, to) }
+
+#[cfg(not(target_os = "hermit"))]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn signing_save_refuses_changed_source_and_keeps_its_bytes() {
+        let path = std::env::temp_dir().join(format!("vellum-sign-source-{}.pdf", std::process::id()));
+        let path = path.to_str().unwrap();
+        std::fs::write(path, b"opened PDF").unwrap();
+        std::fs::write(path, b"newer PDF from another run").unwrap();
+        let error = write_whole_if_unchanged(path, b"signed opened PDF", b"opened PDF").unwrap_err();
+        assert!(error.to_string().contains("changed on disk"));
+        assert_eq!(std::fs::read(path).unwrap(), b"newer PDF from another run");
+        write_whole_if_unchanged(path, b"signed newer PDF", b"newer PDF from another run").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"signed newer PDF");
+        std::fs::remove_file(path).unwrap();
+    }
+
     fn words(s: &str) -> Vec<String> { s.split(' ').map(String::from).collect() }
+
+    #[test]
+    fn failed_sync_keeps_filled_form_and_recovery_for_retry() {
+        use vellum_edit::{Editor, FieldValue};
+        const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
+        let path = std::env::temp_dir().join(format!("vellum-confirmed-{}.pdf", std::process::id()));
+        let path = path.to_str().unwrap();
+        let recovery = format!("{path}.vellum-recovered.pdf");
+        std::fs::write(path, FORM).unwrap();
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        editor.set_field("name", FieldValue::Text("Ada Lovelace".into())).unwrap();
+        let bytes = editor.save_incremental().unwrap();
+        std::fs::write(&recovery, &bytes).unwrap();
+        let failed = write_confirmed(path, &bytes, || Err("sync failed"));
+        assert!(failed.unwrap_err().contains("sync failed"));
+        assert!(editor.is_modified(), "unconfirmed form edit must remain dirty");
+        assert_eq!(std::fs::read(&recovery).unwrap(), bytes, "recovery copy remains available");
+        assert!(write_confirmed(path, &bytes, || Ok::<(), &str>(())).is_ok());
+        let reopened = Editor::open(std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(reopened.fields().unwrap().into_iter().find(|f| f.name == "name").unwrap().value,
+            FieldValue::Text("Ada Lovelace".into()));
+        std::fs::remove_file(recovery).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn requests() {
@@ -208,5 +323,20 @@ mod tests {
         assert!(write_whole(missing.to_str().unwrap(), &bytes).is_err());
         assert!(!missing.exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replacement_preserves_stale_staging_and_previous_output_until_ready() {
+        let dir = std::env::temp_dir().join(format!("vellum-replace-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("preview.thumb");
+        let path = path.to_str().unwrap();
+        std::fs::write(path, b"prior thumbnail").unwrap();
+        let stale = format!("{path}.vellum-0.tmp");
+        std::fs::write(&stale, b"stale bytes").unwrap();
+        write_whole(path, b"complete new thumbnail").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"complete new thumbnail");
+        assert_eq!(std::fs::read(&stale).unwrap(), b"stale bytes");
+        std::fs::remove_file(stale).unwrap();
     }
 }

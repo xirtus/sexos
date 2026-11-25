@@ -995,7 +995,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 unsafe { PREPARING_FOR = Some(relay_pipe(id, word)); }
             }
             n
-        } else if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
+        } else if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::REPLACE_IF_SHA256) {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
             let mut second = [0u8; w::PATH_BYTES];
             let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };
@@ -1014,9 +1014,16 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     spelled[..spelled_len].copy_from_slice(&region[..spelled_len]);
     let (head, cache) = region.split_at_mut(w::CACHE_AT);
     let data = &mut head[w::PATH_BYTES..];
+    let expected = if r.kind == w::REPLACE_IF_SHA256 {
+        if r.offset != 0 || r.length != 32 { return w::reply(r.seq, w::INVALID, 0); }
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&data[..32]);
+        Some(digest)
+    } else { None };
     let Some(fs) = fs else {
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
+        if r.kind == w::REPLACE_IF_SHA256 { return w::reply(r.seq, w::UNSUPPORTED, 0); }
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
         if r.kind == w::REMOVE_IF_ID { return w::reply(r.seq, w::UNSUPPORTED, 0); }
         if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
@@ -1044,7 +1051,19 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
-    let rename_halves = matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    let rename_halves = matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::REPLACE_IF_SHA256).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    if r.kind == w::REPLACE_IF_SHA256 {
+        let Some((from, to)) = rename_halves else { return w::reply(r.seq, w::NAME, 0) };
+        // The removable backends cannot replace an occupied name in one durable
+        // transaction. Refuse the whole request before reading or changing either.
+        if crate::volumes::owns(from) || crate::volumes::owns(to) { return w::reply(r.seq, w::UNSUPPORTED, 0); }
+        if crate::home::owns(from) && !crate::home::owns(to) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+        if crate::home::owns(to) && !crate::home::owns(from) {
+            let result = crate::home::replace_from_main_if_sha256(fs, from, to, &expected.unwrap());
+            forget_stats(None);
+            return match result { Ok(value) => w::reply(r.seq, w::OK, value), Err(st) => w::reply(r.seq, st, 0) };
+        }
+    }
     // Checked (organizer) moves stay inside the SexOS filesystem: never into, out of or
     // within another volume or the encrypted home, whose files have other identities.
     if matches!(r.kind, w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
@@ -1071,9 +1090,9 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     }
     // The encrypted home: its own filesystem, reached only once unlocked.
     let home = match (r.kind, rename_halves) {
-        (w::RENAME | w::MOVE_IF_ID, Some((a, b))) if crate::home::crosses(a, b) => Some(Err(w::OTHER_DISK)),
-        (w::RENAME | w::MOVE_IF_ID, Some((a, _))) if crate::home::owns(a) => Some(crate::home::run(&mut *fs, r, path, data)),
-        (w::RENAME | w::MOVE_IF_ID, _) => None,
+        (w::RENAME | w::MOVE_IF_ID | w::REPLACE_IF_SHA256, Some((a, b))) if crate::home::crosses(a, b) => Some(Err(w::OTHER_DISK)),
+        (w::RENAME | w::MOVE_IF_ID | w::REPLACE_IF_SHA256, Some((a, _))) if crate::home::owns(a) => Some(crate::home::run(&mut *fs, r, path, data)),
+        (w::RENAME | w::MOVE_IF_ID | w::REPLACE_IF_SHA256, _) => None,
         (w::PREPARE | w::MOUNT | w::UNMOUNT, _) if crate::home::owns(path) => Some(Err(w::UNSUPPORTED)),
         _ if crate::home::owns(path) => Some(crate::home::run(&mut *fs, r, path, data)),
         _ => None,
@@ -1301,6 +1320,15 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             if r.length != 0 { return Err(Error::Name); }
             let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
             fs.move_file_if_id(&path[..split], &path[split + 1..], r.offset)?;
+            fs.commit()?;
+            Ok(0)
+        }
+        w::REPLACE_IF_SHA256 => {
+            if r.offset != 0 || r.length != 32 { return Err(Error::Name); }
+            let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
+            let mut expected = [0u8; 32];
+            expected.copy_from_slice(&data[..32]);
+            fs.rename_if_sha256(&path[..split], &path[split + 1..], &expected)?;
             fs.commit()?;
             Ok(0)
         }

@@ -1,0 +1,6 @@
+# Vellum detached signature slot
+
+- Added an incremental PDF writer path for an existing empty signature field. It patches a fixed-width `/ByteRange` around a reserved hex `/Contents` value, passes the exact two covered byte slices to a callback, and embeds the returned detached CMS bytes without changing the editor on failure. The private key is never accepted by this API.
+- Focused tests check the byte ranges against the callback input, parse the resulting PDF independently, detect a tampered covered byte, and reject invalid requests and oversized containers. The callback in these tests returns dummy bytes; it does **not** prove a valid CMS signature.
+- This is not user-visible digital signing or verification. A follow-on needs a Shibari-backed key operation, certificate import and trust handling, CMS SignedData encoding and verification, PDF permission/lock checks, and an interoperable fixture verified by an independent PDF validator before enabling a Sign control.
+- Validation: focused host tests locally; the full image build and QEMU PDF gate run only in GitHub CI. The PDF gate captures `pdf-signature-inspection.ppm` showing the current unverified status. No local disk image or target directory is retained.

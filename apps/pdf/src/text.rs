@@ -113,6 +113,21 @@ mod tests {
         let all = crate::search::hits(&pages, "zanzibar");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].page, 6);
+        let across = crate::search::hits(&pages, "Page 7 of 10 The quick");
+        assert_eq!(across.len(), 1, "a typed space should find the two visible lines");
+        assert_eq!(across[0].page, 6);
+        assert_eq!(texts[6].chars[across[0].at..across[0].at + across[0].len]
+            .iter().collect::<String>(), "Page 7 of 10\nThe quick");
+        let hyphenated: String = texts[6].chars.iter().collect();
+        assert!(hyphenated.contains("inter-\nnational"), "{hyphenated:?}");
+        for term in ["international", "inter-national"] {
+            let found = crate::search::hits(&pages, term);
+            assert_eq!(found.len(), 1, "{term}");
+            let hit = found[0];
+            assert_eq!(hit.page, 6);
+            assert_eq!(texts[6].chars[hit.at..hit.at + hit.len].iter().collect::<String>(), "inter-\nnational");
+        }
+        assert!(crate::search::hits(&pages, "cooperate").is_empty(), "same-line hyphens are literal");
         // The hit's box is where the line was drawn: 72 pt from the left, and below the
         // first lines (Td 72 720 with 20 pt leading: the sixth line, y = 620 from the
         // bottom, so 172 from the top on a 792 pt page).

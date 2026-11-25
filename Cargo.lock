@@ -5940,6 +5940,9 @@ dependencies = [
  "sex-font",
  "sex-image",
  "sex-std",
+ "sex-theme",
+ "sha2 0.10.9",
+ "unicode-segmentation",
  "vellum-edit",
 ]
 
@@ -8101,6 +8104,9 @@ dependencies = [
 [[package]]
 name = "sexfs"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "sexgpu-nv"
@@ -8246,6 +8252,18 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 name = "shibari"
 version = "0.1.0"
 dependencies = [
+ "p256",
+ "zeroize",
+]
+
+[[package]]
+name = "shibari-sign"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+ "sha2 0.10.9",
+ "shibari",
+ "vellum-edit",
  "zeroize",
 ]
 
@@ -10456,6 +10474,9 @@ dependencies = [
  "hayro",
  "lopdf",
  "miniz_oxide 0.9.1",
+ "p256",
+ "sha2 0.10.9",
+ "shibari",
 ]
 
 [[package]]

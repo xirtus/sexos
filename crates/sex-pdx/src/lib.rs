@@ -11,6 +11,7 @@ pub mod ipc_recv;
 pub mod sched;
 pub mod pagefault;
 pub mod app_catalog;
+pub mod pdf_sign;
 pub mod browser_sources;
 pub mod uiir;
 pub mod display_ready;

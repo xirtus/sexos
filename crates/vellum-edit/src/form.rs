@@ -3,7 +3,14 @@
 
 use crate::cos::{fmt_num as n, Dict, ObjId, Object, Stream};
 use crate::text::{content_string, decode_text, encode_text, text_width, wrap};
-use crate::{rect_of, Editor, Error};
+use crate::{rect_obj, rect_of, Editor, Error};
+
+fn find_once(data: &[u8], needle: &[u8]) -> Result<usize, Error> {
+    let mut found = data.windows(needle.len()).enumerate().filter(|(_, window)| *window == needle);
+    let at = found.next().map(|(at, _)| at).ok_or(Error::Malformed("signature placeholder missing"))?;
+    if found.next().is_some() { return Err(Error::Malformed("signature placeholder is ambiguous")); }
+    Ok(at)
+}
 
 /// The kind of a terminal field.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +54,8 @@ pub struct FieldInfo {
     pub required: bool,
     /// Widget annotations: (object, page index if known, rectangle).
     pub widgets: Vec<(ObjId, Option<usize>, [f64; 4])>,
+    /// On-state names for each widget, parallel to `widgets` (radio choices may differ).
+    pub widget_states: Vec<Vec<String>>,
 }
 
 /// A signature field, as stored. **Nothing here is cryptographically verified**: `signed` only
@@ -64,6 +73,9 @@ pub struct SignatureInfo {
     pub sub_filter: Option<String>,
     /// `/ByteRange` pairs (offset, length).
     pub byte_range: Vec<(u64, u64)>,
+    /// The stored range has exactly two non-overlapping, in-bounds spans starting at byte zero.
+    /// This checks PDF structure only; it does not verify `/Contents` or the signer's identity.
+    pub byte_range_well_formed: bool,
     /// Whether the byte range ends exactly at the end of the original file we opened, i.e. the
     /// signature covered the whole file as it was before this session's edits.
     pub covers_whole_file: bool,
@@ -71,6 +83,11 @@ pub struct SignatureInfo {
     /// 3 = also annotations), when the signature is a certification signature.
     pub mdp_permissions: Option<i64>,
 }
+
+/// Whether the PDF bytes covered by a supported detached CMS still match its
+/// cryptographic signature. Even `Intact` says nothing about certificate trust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentIntegrity { Intact, Changed, Unsupported }
 
 #[derive(Clone, Default)]
 struct Inherit {
@@ -102,6 +119,144 @@ const FF_MULTISELECT: i64 = 1 << 21;
 const FF_COMB: i64 = 1 << 24;
 
 impl Editor {
+    /// A signed field or catalog certification reference needs DocMDP/FieldMDP
+    /// evaluation before ordinary form or annotation changes are permitted.
+    /// Malformed permissions fail closed.
+    pub fn signed_edit_restricted(&self) -> Result<bool, Error> {
+        let (_, catalog) = self.catalog()?;
+        let has_permission_signature = match catalog.get(b"Perms") {
+            Some(perms) => self.dict_of(perms)
+                .ok_or(Error::Malformed("bad catalog /Perms"))?
+                .0.iter().any(|(key, _)| matches!(key.as_slice(), b"DocMDP" | b"UR" | b"UR3")),
+            None => false,
+        };
+        if has_permission_signature { return Ok(true); }
+        // `field_nodes` is intentionally tolerant for display, and skips broken
+        // or overly deep branches. A mutation guard must inspect the *whole*
+        // field tree or refuse to decide: a hidden signed child is still signed.
+        let Some(form_obj) = catalog.get(b"AcroForm") else { return Ok(false); };
+        let form = self.dict_of(form_obj).ok_or(Error::Malformed("bad AcroForm"))?;
+        let fields = self.lookup(&form, b"Fields")
+            .and_then(|o| o.as_array().cloned()).ok_or(Error::Malformed("bad AcroForm fields"))?;
+        let mut pending = Vec::new();
+        for field in fields {
+            pending.push((field.as_ref().ok_or(Error::Malformed("bad AcroForm field reference"))?, 0usize, false));
+        }
+        let mut seen = std::collections::HashSet::new();
+        while let Some((id, depth, inherited_sig)) = pending.pop() {
+            if depth > 32 || seen.len() >= 4096 {
+                return Err(Error::Unsupported("AcroForm field tree exceeds inspection limit"));
+            }
+            if !seen.insert(id.0) { return Err(Error::Malformed("cyclic or duplicate AcroForm field")); }
+            let field = self.get_dict(id).ok_or(Error::Malformed("bad AcroForm field"))?;
+            let is_sig = field.get(b"FT")
+                .map(|ft| self.resolve(ft).as_name() == Some(b"Sig"))
+                .unwrap_or(inherited_sig);
+            if is_sig && field.get(b"V").is_some_and(|v| *v != Object::Null) { return Ok(true); }
+            if let Some(kids) = field.get(b"Kids") {
+                let kids = self.resolve(kids).as_array().cloned()
+                    .ok_or(Error::Malformed("bad AcroForm Kids"))?;
+                for kid in kids {
+                    pending.push((kid.as_ref().ok_or(Error::Malformed("bad AcroForm kid reference"))?, depth + 1, is_sig));
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Add a visible, empty signature widget on a page. This creates no signature
+    /// value or key material; a signer can later fill the field via
+    /// `embed_detached_signature_with` after the document has been saved.
+    pub fn add_signature_field(&mut self, page: usize, name: &str, rect: [f64; 4]) -> Result<ObjId, Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot add a field to a signed PDF".into()));
+        }
+        let pid = self.page_id(page)?;
+        if name.trim() != name || name.is_empty() || name.len() > 80
+            || name.contains('.') || name.chars().any(char::is_control) {
+            return Err(Error::BadValue("invalid signature field name".into()));
+        }
+        if self.fields()?.iter().any(|f| f.name == name) {
+            return Err(Error::BadValue("signature field name already exists".into()));
+        }
+        // Adding a widget to a signed revision requires DocMDP/FieldMDP policy
+        // evaluation. Do not risk invalidating an existing signature here.
+        let crop = self.page_info(page)?.crop_box;
+        if rect.iter().any(|v| !v.is_finite()) || rect[2] - rect[0] < 12.0
+            || rect[3] - rect[1] < 12.0 || rect[0] < crop[0] || rect[1] < crop[1]
+            || rect[2] > crop[2] || rect[3] > crop[3] {
+            return Err(Error::BadValue("signature field rectangle must fit on the page".into()));
+        }
+        let (catalog_id, mut catalog) = self.catalog()?;
+        let form_ref = catalog.get(b"AcroForm").and_then(Object::as_ref);
+        let mut form = catalog.get(b"AcroForm").and_then(|o| self.dict_of(o)).unwrap_or_default();
+        let fields_ref = form.get(b"Fields").and_then(Object::as_ref);
+        let mut fields = match form.get(b"Fields") {
+            Some(o) => self.resolve(o).as_array().cloned().ok_or(Error::Malformed("bad AcroForm fields"))?,
+            None => Vec::new(),
+        };
+        let width = rect[2] - rect[0];
+        let height = rect[3] - rect[1];
+        let appearance = Stream {
+            dict: Dict::new().with(b"Type", Object::name("XObject"))
+                .with(b"Subtype", Object::name("Form"))
+                .with(b"BBox", rect_obj([0.0, 0.0, width, height])),
+            data: format!("0.8 0.45 0.5 RG 1 w 0.5 0.5 {} {} re S\n", n(width - 1.0), n(height - 1.0)).into_bytes(),
+        };
+        let ap_id = self.add(appearance);
+        let widget = Dict::new().with(b"Type", Object::name("Annot"))
+            .with(b"Subtype", Object::name("Widget"))
+            .with(b"FT", Object::name("Sig"))
+            .with(b"T", Object::Str(encode_text(name)))
+            .with(b"Rect", rect_obj(rect)).with(b"P", pid).with(b"F", 4i64)
+            .with(b"AP", Dict::new().with(b"N", ap_id));
+        let id = self.add(widget);
+        fields.push(Object::Ref(id));
+        match fields_ref { Some(r) => self.set(r, Object::Array(fields)), None => form.set(b"Fields", Object::Array(fields)) }
+        form.set(b"SigFlags", 3i64);
+        match form_ref { Some(r) => self.set(r, form), None => { catalog.set(b"AcroForm", form); self.set(catalog_id, catalog); } }
+        self.push_annot(pid, Object::Ref(id));
+        Ok(id)
+    }
+
+    /// Verify a stored P-256/SHA-256 detached CMS against its exact PDF byte
+    /// ranges. Other algorithms/layouts stay unsupported; none are called valid.
+    pub fn signature_content_integrity(&self, field_name: &str) -> Result<ContentIntegrity, Error> {
+        let mut found = self.signatures()?.into_iter().filter(|s| s.field_name == field_name);
+        let info = found.next().ok_or_else(|| Error::NoSuchField(field_name.into()))?;
+        if found.next().is_some() { return Err(Error::BadValue("ambiguous signature field".into())); }
+        if !info.signed || !info.byte_range_well_formed
+            || info.sub_filter.as_deref() != Some("adbe.pkcs7.detached") {
+            return Ok(ContentIntegrity::Unsupported);
+        }
+        let mut nodes = self.field_nodes().into_iter().filter(|n| n.name == field_name);
+        let node = nodes.next().ok_or_else(|| Error::NoSuchField(field_name.into()))?;
+        if nodes.next().is_some() { return Err(Error::BadValue("ambiguous signature field".into())); }
+        let Some(value) = node.inh.v.as_ref().and_then(|v| self.dict_of(v)) else { return Ok(ContentIntegrity::Unsupported) };
+        let Some(contents) = self.lookup(&value, b"Contents").and_then(|o| o.as_str().map(<[u8]>::to_vec))
+            else { return Ok(ContentIntegrity::Unsupported) };
+        let [(first, first_len), (second, second_len)] = info.byte_range.as_slice() else { return Ok(ContentIntegrity::Unsupported) };
+        if *first != 0 { return Ok(ContentIntegrity::Unsupported); }
+        let bytes = self.original();
+        let (first_end, second_start, second_end) = (*first_len as usize, *second as usize, (*second + *second_len) as usize);
+        if second_end != bytes.len() { return Ok(ContentIntegrity::Unsupported); }
+        let (Some(prefix), Some(gap), Some(suffix)) = (bytes.get(..first_end), bytes.get(first_end..second_start), bytes.get(second_start..second_end))
+            else { return Ok(ContentIntegrity::Unsupported) };
+        if gap.len() != contents.len().saturating_mul(2).saturating_add(2)
+            || gap.first() != Some(&b'<') || gap.last() != Some(&b'>') {
+            return Ok(ContentIntegrity::Unsupported);
+        }
+        let hex = |b: u8| match b { b'0'..=b'9' => Some(b - b'0'), b'A'..=b'F' => Some(b - b'A' + 10), b'a'..=b'f' => Some(b - b'a' + 10), _ => None };
+        if gap[1..gap.len() - 1].chunks_exact(2).zip(contents.iter()).any(|(pair, byte)| {
+            hex(pair[0]).zip(hex(pair[1])).is_none_or(|(hi, lo)| (hi << 4 | lo) != *byte)
+        }) { return Ok(ContentIntegrity::Unsupported); }
+        Ok(match crate::cms::verify_detached_p256_sha256(prefix, suffix, &contents) {
+            Ok(()) => ContentIntegrity::Intact,
+            Err(crate::cms::CmsError::BadSignature) => ContentIntegrity::Changed,
+            Err(_) => ContentIntegrity::Unsupported,
+        })
+    }
+
     /// Every terminal field of the AcroForm, in tree order.
     pub fn fields(&self) -> Result<Vec<FieldInfo>, Error> {
         Ok(self.field_nodes().iter().map(|n| self.field_info(n)).collect())
@@ -114,10 +269,17 @@ impl Editor {
             if node.inh.ft.as_deref() != Some(b"Sig") { continue; }
             let v = node.inh.v.as_ref().and_then(|v| self.dict_of(v));
             let s = |k: &[u8]| v.as_ref().and_then(|d| self.lookup(d, k)).and_then(|o| o.as_str().map(decode_text));
-            let byte_range: Vec<(u64, u64)> = v.as_ref().and_then(|d| self.lookup(d, b"ByteRange")).and_then(|o| o.as_array().cloned())
-                .map(|a| a.iter().filter_map(Object::as_int).collect::<Vec<_>>().chunks_exact(2).map(|p| (p[0].max(0) as u64, p[1].max(0) as u64)).collect())
+            let parts = v.as_ref().and_then(|d| self.lookup(d, b"ByteRange")).and_then(|o| o.as_array().cloned())
+                .and_then(|a| a.iter().map(Object::as_int).collect::<Option<Vec<_>>>());
+            let byte_range: Vec<(u64, u64)> = parts.as_ref().filter(|a| a.len() == 4 && a.iter().all(|n| *n >= 0))
+                .map(|a| vec![(a[0] as u64, a[1] as u64), (a[2] as u64, a[3] as u64)])
                 .unwrap_or_default();
-            let end = byte_range.last().map(|(o, l)| o + l);
+            let byte_range_well_formed = if let [(first, len), (second, tail)] = byte_range.as_slice() {
+                *first == 0 && *len > 0 && second.checked_add(*tail).is_some_and(|end| {
+                    *second > *len && *tail > 0 && end <= self.original().len() as u64
+                })
+            } else { false };
+            let end = byte_range.last().and_then(|(o, l)| o.checked_add(*l));
             let mdp = v.as_ref().and_then(|d| self.lookup(d, b"Reference")).and_then(|r| r.as_array().cloned()).and_then(|refs| {
                 refs.iter().filter_map(|r| self.dict_of(r)).find_map(|r| {
                     if self.lookup(&r, b"TransformMethod")?.as_name()? != b"DocMDP" { return None; }
@@ -132,11 +294,82 @@ impl Editor {
                 reason: s(b"Reason"),
                 location: s(b"Location"),
                 sub_filter: v.as_ref().and_then(|d| self.lookup(d, b"SubFilter")).and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
-                covers_whole_file: end == Some(self.original().len() as u64)
-                    || end.is_some_and(|e| self.original().get(e as usize..).is_some_and(|rest| rest.iter().all(|b| crate::parse::is_white(*b)))),
+                covers_whole_file: byte_range_well_formed && (end == Some(self.original().len() as u64)
+                    || end.is_some_and(|e| self.original().get(e as usize..).is_some_and(|rest| rest.iter().all(|b| crate::parse::is_white(*b))))),
                 byte_range,
+                byte_range_well_formed,
                 mdp_permissions: mdp,
             });
+        }
+        Ok(out)
+    }
+
+    /// Embeds a detached CMS signature in an existing, empty signature field.
+    /// The callback receives exactly the two PDF byte slices covered by `/ByteRange`
+    /// and must produce CMS SignedData with detached content. It can call Shibari
+    /// to use a private key; Vellum never needs to see that key. This method only
+    /// places the returned container. It does not validate the certificate or CMS.
+    ///
+    /// A failed callback or oversized container leaves this editor unchanged.
+    pub fn embed_detached_signature_with(
+        &self,
+        field_name: &str,
+        reserve_bytes: usize,
+        sign: impl FnOnce(&[u8], &[u8]) -> Result<Vec<u8>, Error>,
+    ) -> Result<Vec<u8>, Error> {
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot add a signature to a signed PDF".into()));
+        }
+        const MARKER: &[u8] = b"/ByteRange [0 9999999991 9999999992 9999999993]";
+        if !(1024..=65536).contains(&reserve_bytes) {
+            return Err(Error::BadValue("signature reservation must be 1–64 KiB".into()));
+        }
+        let mut nodes = self.field_nodes().into_iter().filter(|n| n.name == field_name);
+        let node = nodes.next().ok_or_else(|| Error::NoSuchField(field_name.into()))?;
+        if nodes.next().is_some() { return Err(Error::BadValue("ambiguous signature field".into())); }
+        if node.inh.ft.as_deref() != Some(b"Sig") || node.inh.ff & FF_READONLY != 0
+            || node.inh.v.as_ref().is_some_and(|v| self.resolve(v) != Object::Null) {
+            return Err(Error::ReadOnly(field_name.into()));
+        }
+        let mut changes = self.changes.clone();
+        let sig_id = ObjId(self.next_num, 0);
+        let signature = Dict::new()
+            .with(b"Type", Object::name("Sig"))
+            .with(b"Filter", Object::name("Adobe.PPKLite"))
+            .with(b"SubFilter", Object::name("adbe.pkcs7.detached"))
+            .with(b"ByteRange", Object::Array(vec![0i64.into(), 9999999991i64.into(),
+                9999999992i64.into(), 9999999993i64.into()]))
+            .with(b"Contents", Object::Str(vec![0xA5; reserve_bytes]));
+        changes.insert(sig_id.0, (0, Object::Dict(signature)));
+        let mut field = self.get_dict(node.id).ok_or(Error::Malformed("signature field vanished"))?;
+        field.set(b"V", sig_id);
+        let generation = changes.get(&node.id.0).map(|(generation, _)| *generation)
+            .unwrap_or_else(|| self.doc.generation(node.id.0));
+        changes.insert(node.id.0, (generation, Object::Dict(field)));
+        let mut out = crate::write::incremental(&self.doc, &changes, self.next_num + 1)?;
+        let appended = self.original().len();
+        let range_at = find_once(&out[appended..], MARKER)? + appended;
+        let contents_marker = format!("/Contents <{}>", "A5".repeat(reserve_bytes));
+        let contents_at = find_once(&out[appended..], contents_marker.as_bytes())? + appended;
+        let gap_start = contents_at + b"/Contents ".len();
+        let gap_end = contents_at + contents_marker.len();
+        let values = [gap_start, gap_end, out.len() - gap_end];
+        let mut slot = range_at + b"/ByteRange [0 ".len();
+        for value in values {
+            let fixed = format!("{value:010}");
+            if fixed.len() != 10 { return Err(Error::BadValue("PDF exceeds 10-digit byte range".into())); }
+            out[slot..slot + 10].copy_from_slice(fixed.as_bytes());
+            slot += 11;
+        }
+        let cms = sign(&out[..gap_start], &out[gap_end..])?;
+        if cms.is_empty() || cms.len() > reserve_bytes {
+            return Err(Error::BadValue("CMS container is empty or exceeds reserved space".into()));
+        }
+        let hex = b"0123456789ABCDEF";
+        for (at, byte) in cms.iter().copied().chain(std::iter::repeat(0).take(reserve_bytes - cms.len())).enumerate() {
+            let offset = gap_start + 1 + at * 2;
+            out[offset] = hex[(byte >> 4) as usize];
+            out[offset + 1] = hex[(byte & 0x0F) as usize];
         }
         Ok(out)
     }
@@ -148,6 +381,9 @@ impl Editor {
         let info = self.field_info(node);
         if info.read_only || info.kind == FieldKind::Signature {
             return Err(Error::ReadOnly(name.into()));
+        }
+        if self.signed_edit_restricted()? {
+            return Err(Error::BadValue("cannot fill fields in a signed PDF".into()));
         }
         let mut field = self.get_dict(node.id).ok_or(Error::Malformed("field vanished"))?;
         let helv = self.form_font();
@@ -322,9 +558,12 @@ impl Editor {
         }).collect();
         let mut states = Vec::new();
         let mut widgets = Vec::new();
+        let mut widget_states = Vec::new();
         for w in &node.widgets {
             let wd = self.get_dict(*w).unwrap_or_default();
-            for s in self.widget_states(&wd) { if !states.contains(&s) { states.push(s); } }
+            let on = self.widget_states(&wd);
+            for s in &on { if !states.contains(s) { states.push(s.clone()); } }
+            widget_states.push(on);
             let page = wd.get(b"P").and_then(Object::as_ref).and_then(|p| self.page_index(p))
                 .or_else(|| (0..self.page_count()).find(|&i| self.annotations(i).map(|a| a.iter().any(|x| x.id.map(|i| i.0) == Some(w.0))).unwrap_or(false)));
             widgets.push((*w, page, self.lookup(&wd, b"Rect").and_then(|r| rect_of(&r)).unwrap_or_default()));
@@ -348,6 +587,7 @@ impl Editor {
             read_only: ff & FF_READONLY != 0,
             required: ff & FF_REQUIRED != 0,
             widgets,
+            widget_states,
         }
     }
 

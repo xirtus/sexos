@@ -998,6 +998,30 @@ impl<'a, D: Device> Fs<'a, D> {
             f.add_entry(dst_dir, dst_name, id, kind)
         })
     }
+    /// Replace `to` only while its complete saved bytes still match `expected`.
+    /// The comparison and namespace change use one exclusive filesystem turn;
+    /// the caller commits on success or rolls back on error.
+    pub fn rename_if_sha256(&mut self, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        self.guarded(|f| {
+            if from == to { return Err(Error::Name); }
+            if f.open(from)?.kind != Kind::File { return Err(Error::IsDir); }
+            let dest = f.open(to)?;
+            if dest.kind != Kind::File { return Err(Error::IsDir); }
+            let mut hash = Sha256::new();
+            let mut block = [0u8; BLOCK];
+            let mut at = 0u64;
+            while at < dest.size {
+                let n = f.read(dest.id, at, &mut block[..((dest.size - at) as usize).min(BLOCK)])?;
+                if n == 0 { return Err(Error::Corrupt); }
+                hash.update(&block[..n]);
+                at += n as u64;
+            }
+            let actual: [u8; 32] = hash.finalize().into();
+            if &actual != expected { return Err(Error::Stale); }
+            f.rename(from, to)
+        })
+    }
     /// Move one file only if `from` still names the object the caller inspected.
     /// Unlike `rename`, this never replaces a destination. The caller must commit
     /// on success or roll back on any error before issuing another operation.

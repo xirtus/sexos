@@ -8,11 +8,14 @@
 //! tokens here, Chastity will store vault keys here, Quil's assistant its API key.
 #![no_std]
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use zeroize::Zeroizing;
+use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 
 /// Which protection domain owns a secret. On SexOS this is the caller's PDX domain id,
 /// filled in by the service from the call, never by the caller.
@@ -29,6 +32,10 @@ pub enum Refused {
     Unknown,
     /// The keeper is full.
     Full,
+    /// This knot does not contain a valid P-256 signing key.
+    BadKey,
+    /// A signing request exceeded the bounded input size.
+    TooLarge,
 }
 
 struct Entry {
@@ -85,6 +92,25 @@ impl Keeper {
         }
     }
 
+    /// Sign bounded CMS signed-attribute bytes with ECDSA P-256 and SHA-256.
+    /// Only the DER signature leaves the keeper; the private scalar stays inside it.
+    /// The caller must independently check that its X.509 certificate names this key.
+    pub fn sign_p256_sha256(&self, owner: Owner, knot: Knot, signed_attrs: &[u8]) -> Result<Vec<u8>, Refused> {
+        if signed_attrs.is_empty() || signed_attrs.len() > 8192 { return Err(Refused::TooLarge); }
+        let secret = self.entries.get(&knot).filter(|entry| entry.owner == owner).ok_or(Refused::Unknown)?;
+        let key = SigningKey::from_slice(&secret.bytes).map_err(|_| Refused::BadKey)?;
+        let signature: Signature = key.sign(signed_attrs);
+        Ok(signature.to_der().as_bytes().to_vec())
+    }
+
+    /// The uncompressed SEC1 public point for comparing with a certificate's key.
+    /// It contains no private key material.
+    pub fn p256_public_key(&self, owner: Owner, knot: Knot) -> Result<Vec<u8>, Refused> {
+        let secret = self.entries.get(&knot).filter(|entry| entry.owner == owner).ok_or(Refused::Unknown)?;
+        let key = SigningKey::from_slice(&secret.bytes).map_err(|_| Refused::BadKey)?;
+        Ok(key.verifying_key().to_encoded_point(false).as_bytes().to_vec())
+    }
+
     /// Wipe and forget a secret.
     pub fn untie(&mut self, owner: Owner, knot: Knot) -> Result<(), Refused> {
         self.entry_mut(owner, knot)?;
@@ -110,6 +136,7 @@ impl Keeper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{format, vec};
 
     #[test]
     fn owner_uses_secret_in_place_and_others_are_refused() {
@@ -144,5 +171,44 @@ mod tests {
         let a = k.tie(Owner(1), "a", b"a").unwrap();
         let b = k.tie(Owner(1), "b", b"b").unwrap();
         assert!(a.0 > 1 << 32 && b.0 > 1 << 32 && b.0 != a.0 + 1);
+    }
+
+    #[test]
+    fn p256_signature_verifies_with_openssl_and_tampering_fails() {
+        use std::process::Command;
+        let mut keeper = Keeper::new(0x51a7, 2);
+        let owner = Owner(17);
+        let knot = keeper.tie(owner, "PDF signing key", &[7u8; 32]).unwrap();
+        let message = b"DER CMS signed attributes for a PDF";
+        assert_eq!(keeper.sign_p256_sha256(Owner(18), knot, message), Err(Refused::Unknown));
+        assert_eq!(keeper.p256_public_key(Owner(18), knot), Err(Refused::Unknown));
+        assert_eq!(keeper.sign_p256_sha256(owner, knot, &[]), Err(Refused::TooLarge));
+        assert_eq!(keeper.sign_p256_sha256(owner, knot, &[0; 8193]), Err(Refused::TooLarge));
+        let invalid = keeper.tie(owner, "invalid signing key", b"not a scalar").unwrap();
+        assert_eq!(keeper.sign_p256_sha256(owner, invalid, message), Err(Refused::BadKey));
+        let signature = keeper.sign_p256_sha256(owner, knot, message).unwrap();
+        let point = keeper.p256_public_key(owner, knot).unwrap();
+        assert_eq!(point.len(), 65);
+        // SubjectPublicKeyInfo: id-ecPublicKey + prime256v1 + uncompressed point.
+        let mut spki = vec![0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86,
+            0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48,
+            0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00];
+        spki.extend_from_slice(&point);
+        let dir = std::env::temp_dir().join(format!("shibari-sign-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("public.der");
+        let sig_path = dir.join("signature.der");
+        let message_path = dir.join("message.bin");
+        std::fs::write(&key_path, spki).unwrap();
+        std::fs::write(&sig_path, signature).unwrap();
+        std::fs::write(&message_path, message).unwrap();
+        let verify = || Command::new("openssl").args(["dgst", "-sha256", "-keyform", "DER", "-verify",
+            key_path.to_str().unwrap(), "-signature", sig_path.to_str().unwrap(), message_path.to_str().unwrap()])
+            .output().expect("OpenSSL is required for independent signature verification");
+        let good = verify();
+        assert!(good.status.success(), "{}", String::from_utf8_lossy(&good.stderr));
+        std::fs::write(&message_path, b"tampered signed attributes").unwrap();
+        assert!(!verify().status.success());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
