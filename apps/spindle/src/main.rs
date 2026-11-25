@@ -677,19 +677,33 @@ unsafe fn render_scrollback(fb: &mut WindowBuffer, sb: &Scrollback) {
 
 // ── Command tokenizer ──────────────────────────────────────────────────────
 
-/// Only fixed command words may appear in a receipt. An unknown token can be
-/// a pasted address or other private text.
+/// Only fixed built-in command words may appear in a receipt. An unknown token
+/// can be a pasted address or other private text, so it is recorded as "other".
+const RECEIPT_NAMES: &[&str] = &[
+    "about", "app-info", "app-state", "app-status", "append", "apps", "atlas",
+    "authority-status", "beep", "bell", "bell-launch-events", "bell-status", "bell-test",
+    "blockers", "browser", "browser-localdoc", "browser-localdoc-status", "browser-roadmap",
+    "browser-status", "browser-surface", "calc", "capture", "capture-cancel", "cat", "catdoc",
+    "catdocx", "cd", "clear", "close", "collar", "collar-grants", "collar-status", "crash",
+    "crashes", "daily", "df", "disk", "disk-stat", "echo", "edit", "edit-help", "edit-status",
+    "editor", "events", "faults", "fetch", "files", "files-status", "filldoc", "filldocx",
+    "focus-help", "frame-chrome", "frame-lights", "frame-lights-keys", "frame-rim", "help",
+    "history", "history-cancel", "history-retry", "history-status", "hw", "input", "install",
+    "kaleidoscope", "keys", "launch", "launch-outcomes", "lifecycle", "linen", "linen-list",
+    "linen-open", "linen-search", "linen-status", "load", "loom", "ls", "mesh", "mesh-graph",
+    "mesh-graph-status", "mkdir", "mkdoc", "mount", "mv", "mvdoc", "net-cancel", "net-probe",
+    "net-retry", "net-status", "notify", "object-new", "object-search", "object-tag",
+    "organize", "pd", "pkg", "probe-cancel", "probe-help", "probe-retry", "probe-status",
+    "project-scene-link", "project-scene-status", "proof", "pwd", "quil", "record",
+    "record-stop", "records", "rm", "rmdoc", "route", "run", "save", "scene-keys",
+    "scene-lifecycle", "scene-lifecycle-status", "scene-status", "scene-switch-status",
+    "search", "servers", "service-state", "session", "sexshop", "sextime", "silk", "spawn",
+    "spindle", "status", "stopall", "store", "sum", "tether", "touch", "truncdoc", "unmount",
+    "update", "url", "url-status", "volume", "web", "webstub", "wifi", "window-keys",
+    "windows", "winreset", "write",
+];
 fn command_receipt_name(word: &[u8]) -> &'static str {
-    match word {
-        b"echo" => "echo", b"run" => "run", b"kaleidoscope" => "kaleidoscope",
-        b"web" => "web", b"browser" => "browser", b"filldocx" => "filldocx",
-        b"net-probe" => "net-probe", b"ls" => "ls", b"status" => "status",
-        b"help" => "help", b"history" => "history", b"fetch" => "fetch",
-        b"save" => "save", b"load" => "load", b"files" => "files",
-        b"daily" => "daily", b"calc" => "calc", b"pkg" => "pkg",
-        b"wifi" => "wifi", b"spindle" => "spindle", b"clear" => "clear",
-        _ => "other",
-    }
+    RECEIPT_NAMES.iter().copied().find(|n| n.as_bytes() == word).unwrap_or("other")
 }
 
 /// Split a command line into (command_name, args_rest).
