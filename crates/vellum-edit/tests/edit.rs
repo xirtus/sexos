@@ -305,6 +305,27 @@ fn check_form(style: Style) {
 }
 
 #[test]
+fn real_combo_and_list_pdf_keep_export_values_after_incremental_save() {
+    const CHOICE: &[u8] = include_bytes!("../../../tests/fixtures/pdf/choice.pdf");
+    let mut ed = Editor::open(CHOICE.to_vec()).unwrap();
+    let fields = ed.fields().unwrap();
+    let size = fields.iter().find(|f| f.name == "size").unwrap();
+    let team = fields.iter().find(|f| f.name == "team").unwrap();
+    assert_eq!(size.kind, FieldKind::ComboBox { editable: false });
+    assert_eq!(team.kind, FieldKind::ListBox { multi_select: false });
+    assert_eq!(size.options[1], ("M".into(), "Medium".into()));
+    assert_eq!(team.options[1], ("E".into(), "Engineering".into()));
+    ed.set_field("size", FieldValue::Text("M".into())).unwrap();
+    ed.set_field("team", FieldValue::Text("E".into())).unwrap();
+    let saved = ed.save_incremental().unwrap();
+    assert!(saved.starts_with(CHOICE));
+    let reopened = Editor::open(saved).unwrap();
+    let after = reopened.fields().unwrap();
+    assert_eq!(after.iter().find(|f| f.name == "size").unwrap().value, FieldValue::Text("M".into()));
+    assert_eq!(after.iter().find(|f| f.name == "team").unwrap().value, FieldValue::Text("E".into()));
+}
+
+#[test]
 fn form_fill_table() { check_form(Style::Table); }
 
 #[test]

@@ -16,10 +16,11 @@ and the thumbnail's header, size and white paper are right."""
 import argparse,http.server,io,os,re,shutil,subprocess,threading,time
 from pathlib import Path
 from install_program import install
-from make_pdf_fixture import form_document,FORM_WORD
+from make_pdf_fixture import form_document,choice_document,FORM_WORD
 ROOT=Path(__file__).resolve().parents[1]
 FORM=form_document()
-FILES={'/form.pdf':FORM}
+CHOICE=choice_document()
+FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE}
 FILES['/certificate.der']=(ROOT/'crates/vellum-edit/tests/fixtures/cms-test-cert.der').read_bytes()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
@@ -147,6 +148,39 @@ def main():
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
   step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,FreeText\n')
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # A real AcroForm combo and list keep their export values through native
+  # keyboard selection, incremental save, and a fresh guest reopen.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/choice.pdf choice.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @choice.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=choice\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  step(lambda:chord('ctrl','e'),r'\[pdf\.form\] fields=2 first=size\n')
+  step(lambda:q.key('down'),r'\[pdf\.choice\] name=size selected=2 count=3 display=Medium\n')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[pdf\.field\] name=size kind=choice value=Medium\n',s,120)
+  g['wait'](r'\[pdf\.choice\.focus\] name=team selected=1 count=3\n',s,120)
+  step(lambda:q.key('down'),r'\[pdf\.choice\] name=team selected=2 count=3 display=Engineering\n')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[pdf\.field\] name=team kind=choice value=Engineering\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-choice-fields.ppm')})
+  assert (a.out/'pdf-choice-fields.ppm').stat().st_size>10000
+  step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
+  s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.save\.synced\] path=@/choice\.pdf bytes=\d+\n',s,300)
+  g['wait'](r'\[pdf\.saved\] path=@/choice\.pdf bytes=\d+ original=\d+ prefix=1 same=1 annots=0 filled=2 ms=\d+\n',s,300)
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  s=len(t());line('run vellum @choice.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=choice\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid)
+  s=len(t());chord('ctrl','e')
+  g['wait'](r'\[pdf\.choice\.focus\] name=size selected=2 count=3\n',s,120)
+  step(lambda:chord('ctrl','down'),r'\[pdf\.choice\.focus\] name=team selected=2 count=3\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-choice-reopened.ppm')})
+  assert (a.out/'pdf-choice-reopened.ppm').stat().st_size>10000
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # This fixture was signed by vellum-edit::cms in the host test above. The
   # guest opens those exact bytes and shows its deliberately unverified status.

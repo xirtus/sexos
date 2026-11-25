@@ -83,7 +83,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+H highlight a found word or selected region",
     "Ctrl+N note; Ctrl+L annotations; Delete removes selected",
     "Forms: Ctrl+E; Ctrl+Down / Ctrl+Up change field",
-    "Type in text fields; Space toggles checkbox; Escape ends",
+    "Type text; Space checkbox; Up/Down choice, Enter selects",
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
@@ -103,7 +103,7 @@ const NUDGE: f64 = 12.0;
 enum Panel { None, Thumbs, Outline, Annots }
 
 /// Form filling: the fields the keyboard reaches, which one, and its text so far.
-struct Form { fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String }
+struct Form { fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String, choice: Option<usize> }
 
 struct SigningChoice { signer: pdf_sign::Signer, field: String, certificate_hash: [u8; 32] }
 
@@ -470,6 +470,9 @@ impl Viewer {
             form.fields.get(form.at).map(|(f, _, _)| {
                 let value = match f.kind {
                     FieldKind::Checkbox => if marks::toggled(f) == "Off" { "[x]  Space unticks".into() } else { "[ ]  Space ticks".into() },
+                    FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false } =>
+                        form.choice.and_then(|i| f.options.get(i)).map(|(_, shown)| format!("{shown}  (Up/Down choose, Enter saves)"))
+                            .unwrap_or_else(|| "Up/Down choose, Enter saves".into()),
                     _ => format!("{}_", form.text),
                 };
                 (format!("{}:", f.name), value, format!("field {} of {}, Tab next, Escape ends", form.at + 1, form.fields.len()))
@@ -1218,7 +1221,7 @@ impl Viewer {
             return;
         }
         sex_std::record(&format!("[pdf.form] fields={} first={}", fields.len(), fields[0].0.name));
-        self.form = Some(Form { fields, at: 0, text: String::new() });
+        self.form = Some(Form { fields, at: 0, text: String::new(), choice: None });
         self.focus(0);
     }
 
@@ -1228,15 +1231,27 @@ impl Viewer {
         form.at = at;
         let Some((f, page, rect)) = form.fields.get(at).cloned() else { return };
         form.text = match &f.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
+        form.choice = marks::choice_index(&f);
+        let choice = form.choice;
         self.go(page);
         if let Some(info) = self.page_info(page) { self.reveal = Some(marks::rect_to_shown(&info, rect)[1] as f32); }
         sex_std::record(&format!("[pdf.field.focus] name={} index={} page={}", f.name, at + 1, page + 1));
+        if matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false }) {
+            sex_std::record(&format!("[pdf.choice.focus] name={} selected={} count={}", f.name, choice.map_or(0, |i| i + 1), f.options.len()));
+        }
     }
 
     /// Sets the focused field to what was typed, if that changed it.
     fn commit_field(&mut self) {
         let Some(form) = self.form.as_ref() else { return };
         let Some((f, _, _)) = form.fields.get(form.at) else { return };
+        if matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false }) {
+            let Some((export, shown)) = form.choice.and_then(|i| f.options.get(i)).cloned() else { return };
+            if marks::choice_index(f) == form.choice { return; }
+            let name = f.name.clone();
+            self.set_field(&name, FieldValue::Text(export), "choice", &shown);
+            return;
+        }
         if !matches!(f.kind, FieldKind::Text { .. }) { return; }
         let now = match &f.value { FieldValue::Text(s) => s.as_str(), _ => "" };
         if now == form.text { return; }
@@ -1275,6 +1290,7 @@ impl Viewer {
                     form.fields = fields;
                     if let Some((field, _, _)) = form.fields.get(form.at) {
                         form.text = match &field.value { FieldValue::Text(s) => s.clone(), _ => String::new() };
+                        form.choice = marks::choice_index(field);
                     }
                 }
                 self.refresh();
@@ -1314,6 +1330,22 @@ impl Viewer {
         let Some(form) = self.form.as_mut() else { return false };
         let n = form.fields.len().max(1);
         let checkbox = form.fields.get(form.at).is_some_and(|f| f.0.kind == FieldKind::Checkbox);
+        let choices = form.fields.get(form.at).and_then(|f| matches!(f.0.kind,
+            FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false })
+            .then_some(f.0.options.len()));
+        if let Some(count) = choices {
+            if !key.control {
+                if let Some(backward) = match sex_app::nav(key) { Some(Nav::Up) => Some(true), Some(Nav::Down) => Some(false), _ => None } {
+                    form.choice = marks::step_choice(count, form.choice, backward);
+                    if let Some((f, _, _)) = form.fields.get(form.at) {
+                        if let Some((_, shown)) = form.choice.and_then(|i| f.options.get(i)) {
+                            sex_std::record(&format!("[pdf.choice] name={} selected={} count={} display={}", f.name, form.choice.unwrap_or(0) + 1, count, shown));
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
         let step = match (sex_app::nav(key), key.code) {
             (_, TAB) => Some(if key.shift { n - 1 } else { 1 }),
             (Some(Nav::Down), _) if key.control => Some(1),
@@ -1329,7 +1361,8 @@ impl Viewer {
         }
         match key.code {
             ESCAPE => { self.end_form(); return true; }
-            BACKSPACE if !checkbox => { form.text.pop(); return true; }
+            BACKSPACE if !checkbox && choices.is_none() => { form.text.pop(); return true; }
+            BACKSPACE if choices.is_some() => return true,
             _ => {}
         }
         let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) else { return false };
@@ -1339,6 +1372,8 @@ impl Viewer {
                 let to = marks::toggled(&f);
                 self.set_field(&f.name, FieldValue::State(to.clone()), "checkbox", &to);
             }
+        } else if choices.is_some() {
+            return true;
         } else if form.text.chars().count() < 200 {
             form.text.push(c);
         }

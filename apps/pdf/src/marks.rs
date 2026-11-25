@@ -60,11 +60,12 @@ pub fn line_rects(boxes: &[[f64; 4]]) -> Vec<[f64; 4]> {
     lines
 }
 
-/// Fields the keyboard can fill: text fields and checkboxes that are not read-only and
-/// have a widget, in reading order (page, then top to bottom, then left to right).
+/// Fields the keyboard can fill: text, checkboxes, and bounded single-choice widgets
+/// that are not read-only and have a widget, in reading order.
 pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
     let mut out: Vec<(FieldInfo, usize, [f64; 4])> = fields.iter()
-        .filter(|f| !f.read_only && matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox))
+        .filter(|f| !f.read_only && (matches!(f.kind, FieldKind::Text { password: false, .. } | FieldKind::Checkbox)
+            || (!f.options.is_empty() && matches!(f.kind, FieldKind::ComboBox { editable: false } | FieldKind::ListBox { multi_select: false }))))
         .filter_map(|f| f.widgets.iter().find_map(|(_, page, rect)| page.map(|p| (f.clone(), p, *rect))))
         .collect();
     // Rows within a few points of each other read left to right.
@@ -72,6 +73,23 @@ pub fn fillable(fields: &[FieldInfo]) -> Vec<(FieldInfo, usize, [f64; 4])> {
         .then(((b.2[3] / 4.0).round() as i64).cmp(&((a.2[3] / 4.0).round() as i64)))
         .then(a.2[0].total_cmp(&b.2[0])));
     out
+}
+
+/// The selected option's export value, or no selection yet.
+pub fn choice_index(f: &FieldInfo) -> Option<usize> {
+    let value = match &f.value {
+        vellum_edit::FieldValue::Text(s) | vellum_edit::FieldValue::State(s) => s.as_str(),
+        vellum_edit::FieldValue::Choices(v) if v.len() == 1 => &v[0],
+        _ => return None,
+    };
+    f.options.iter().position(|(export, display)| export == value || display == value)
+}
+
+/// Up/Down through a finite choice list. An empty field starts at the first/last item.
+pub fn step_choice(count: usize, current: Option<usize>, backward: bool) -> Option<usize> {
+    if count == 0 { return None; }
+    Some(match current { Some(i) => (i + if backward { count - 1 } else { 1 }) % count,
+        None if backward => count - 1, None => 0 })
 }
 
 /// The state a checkbox moves to: on (its own on-state, else `Yes`) from off, and back.
@@ -230,6 +248,28 @@ mod tests {
         let marks = again.annotations(0).unwrap();
         assert!(marks.iter().any(|a| a.subtype == "FreeText" && a.contents.as_deref() == Some("Visual signature: Ada Lovelace")));
         assert!(again.signatures().unwrap().is_empty(), "visual markup must not claim a digital signature");
+    }
+
+    #[test]
+    fn combo_and_single_list_options_round_trip_in_real_pdf() {
+        const CHOICE: &[u8] = include_bytes!("../../../tests/fixtures/pdf/choice.pdf");
+        let mut ed = Editor::open(CHOICE.to_vec()).unwrap();
+        let fields = fillable(&ed.fields().unwrap());
+        assert_eq!(fields.iter().map(|f| f.0.name.as_str()).collect::<Vec<_>>(), ["size", "team"]);
+        assert_eq!(fields[0].0.kind, FieldKind::ComboBox { editable: false });
+        assert_eq!(fields[1].0.kind, FieldKind::ListBox { multi_select: false });
+        assert_eq!(choice_index(&fields[0].0), Some(0));
+        assert_eq!(step_choice(fields[0].0.options.len(), Some(0), false), Some(1));
+        assert_eq!(step_choice(fields[1].0.options.len(), None, true), Some(2));
+        ed.set_field("size", vellum_edit::FieldValue::Text(fields[0].0.options[1].0.clone())).unwrap();
+        ed.set_field("team", vellum_edit::FieldValue::Text(fields[1].0.options[1].0.clone())).unwrap();
+        let saved = ed.save_incremental().unwrap();
+        assert!(saved.starts_with(CHOICE));
+        let again = Editor::open(saved.clone()).unwrap();
+        let after = fillable(&again.fields().unwrap());
+        assert_eq!(after[0].0.value, vellum_edit::FieldValue::Text("M".into()));
+        assert_eq!(after[1].0.value, vellum_edit::FieldValue::Text("E".into()));
+        assert!(hayro::hayro_syntax::Pdf::new(saved).is_ok());
     }
 
     #[test]
