@@ -604,7 +604,7 @@ fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
         sync_staged(&file)
     })();
     drop(file);
-    let result = write_result.and_then(|()| rename_staged(&name, path));
+    let result = write_result.and_then(|()| rename_staged(&name, path, bytes));
     if result.is_err() { let _ = std::fs::remove_file(&name); }
     result
 }
@@ -619,10 +619,18 @@ fn sync_staged(file: &std::fs::File) -> std::io::Result<()> {
 fn sync_staged(file: &std::fs::File) -> std::io::Result<()> { file.sync_all() }
 
 #[cfg(target_os = "hermit")]
-fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { sex_std::fs::rename(from, to) }
+fn rename_staged(from: &str, to: &str, bytes: &[u8]) -> std::io::Result<()> {
+    // Emitted after the complete staged file was synced, immediately before
+    // asking Files to promote it. CI cuts guest power on this receipt.
+    let hash = bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x0100_0000_01b3));
+    sex_std::record(&format!("[assuit.promote.begin] from={from} to={to} bytes={} fnv={hash:016x}", bytes.len()));
+    let result = sex_std::fs::rename(from, to);
+    if result.is_ok() { sex_std::record(&format!("[assuit.promote.done] to={to}")); }
+    result
+}
 
 #[cfg(not(target_os = "hermit"))]
-fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { std::fs::rename(from, to) }
+fn rename_staged(from: &str, to: &str, _bytes: &[u8]) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 #[cfg(test)]
 mod tests {
