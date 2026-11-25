@@ -129,6 +129,14 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-staged.ppm')})
   s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=1\n',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-unstaged.ppm')})
+  # N chooses an explicit file outside the index; S writes a loose blob and
+  # sorted index entry. Undo restores the earlier index without removing text.
+  s=len(t());q.key('n');q.key('s')
+  staged=g['wait'](r'\[quil.code.git.staged\] path=([^\s]+) tracked_changes=1\n',s,60)
+  assert staged[1] not in ('demo.rs','other.rs'),staged[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-new-staged.ppm')})
+  assert (a.out/'quil-git-new-staged.ppm').stat().st_size>100000
+  s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=1\n',s,60)
   # Vim mode from the command palette; dd deletes the first line, :w saves.
   s=len(t());q.key('esc');send('ctrl','shift','p');time.sleep(.3);keys('vim mode');q.key('ret');g['wait'](r'\[quil.code.keymap\] vim',s,30)
   s=len(t());keys('gg');keys('dd');keys(':w');q.key('ret')
