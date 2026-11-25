@@ -31,12 +31,10 @@ const DIR: &[u8] = b"thumbs";
 /// Pictures larger than this are not read for a thumbnail.
 const FILE_MAX: u64 = 48 * 1024 * 1024;
 
-// The grid is drawn in the dark theme's tokens (`sex_theme`) whatever the theme, as
-// picture grids are, so pictures read true; the accent follows Settings.
-const BG: u32 = 0x1C1A20; // Dark window
-const TILE: u32 = 0x26232B; // Dark surface
-const TEXT: u32 = 0xF1EEF4; // Dark text
-const DIM: u32 = 0xB3ADB9; // Dark text_dim
+// Transparent pictures are cached as RGB blended onto this photo well. Keep it
+// stable across themes so an old cache never gains a wrong-coloured halo.
+const PHOTO_WELL: u32 = 0x26232B;
+const PHOTO_TEXT: u32 = 0xF1EEF4;
 /// Side of a file or folder icon in a tile.
 const ICON: usize = 80;
 
@@ -79,8 +77,6 @@ pub struct Thumbs {
     cover: Vec<u8>,
     /// File icons drawn so far, by icon name: `ICON` square `0xAARRGGBB` pixels.
     icons: BTreeMap<&'static str, Vec<u32>>,
-    /// The picked tile: Settings' accent in the dark theme, read when a folder is listed.
-    picked: u32,
 }
 
 pub fn kind(name: &[u8], dir: bool) -> Option<&'static str> {
@@ -108,13 +104,11 @@ impl Thumbs {
     pub const fn new() -> Self {
         Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), documents: VecDeque::new(), helping: None, missing: Vec::new(), own: None,
                  tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0, documents: 0, drawn: 0, from_cache: 0, pictures_done: 0 }, folder: Vec::new(),
-                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new(), icons: BTreeMap::new(), picked: 0xDB4B7E }
+                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new(), icons: BTreeMap::new() }
     }
     pub fn busy(&self) -> bool { self.on && (!self.queue.is_empty() || !self.documents.is_empty() || self.helping.is_some()) }
     /// Queues the pictures of a freshly listed folder that have no thumbnail yet.
     pub fn folder(&mut self, cwd: &[u8], entries: &[Entry]) {
-        let accent = sex_app::settings::appearance().map_or(sex_theme::DEFAULT_ACCENT, |(_, a)| a as u32);
-        self.picked = sex_theme::tokens(sex_theme::Mode::Dark, accent).accent & 0xFF_FFFF;
         self.queue.clear();
         self.documents.clear();
         // A helper still drawing for the folder left behind is ended.
@@ -278,23 +272,31 @@ impl Thumbs {
 
     /// Draws the grid into the window's pixels; `top` is moved to keep the cursor seen.
     pub fn draw(&mut self, window: &mut Window, head: &str, foot: &str, cwd: &[u8], entries: &[Entry], cursor: usize, top: &mut usize) {
+        let theme = sex_app::settings::theme();
+        let rgb = |c: u32| c & 0xFF_FFFF;
+        let (bg, tile, text, dim, picked, on_picked) =
+            (rgb(theme.window), rgb(theme.surface), rgb(theme.text), rgb(theme.text_dim), rgb(theme.accent), rgb(theme.on_accent));
         let (width, height) = window.size();
         let (width, height) = (width.max(CELL_W + 8), height.max(HEAD + FOOT + CELL_H));
         let px = window.pixels();
         let px = &mut px[..width * height];
-        px.fill(BG);
+        px.fill(bg);
         let cols = Self::columns(width);
         let rows = Self::rows(height);
         let row = cursor / cols;
         if row < *top { *top = row; }
         if row >= *top + rows { *top = row + 1 - rows; }
-        self.text(px, width, 10, 8, width - 20, head, TEXT);
+        self.text(px, width, 10, 8, width - 20, head, text);
         let first = *top * cols;
         for (i, e) in entries.iter().enumerate().skip(first).take(rows * cols) {
             let (c, r) = ((i - first) % cols, (i - first) / cols);
             let (x0, y0) = (8 + c * CELL_W, HEAD + r * CELL_H);
             let box_w = CELL_W - 8;
-            fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { self.picked } else { TILE });
+            let picture = matches!(self.made.get(&join(cwd, &e.name)), Some(Thumb::Picture { .. }));
+            let selected = i == cursor;
+            let ground = if picture { PHOTO_WELL } else if selected { picked } else { tile };
+            fill(px, width, x0, y0, box_w, CELL_H - 6, if selected && picture { picked } else { ground });
+            if selected && picture { fill(px, width, x0 + 2, y0 + 2, box_w - 4, CELL_H - 10, PHOTO_WELL); }
             let inner = (x0 + (box_w - SIDE) / 2, y0 + 4);
             match (kind(&e.name, e.dir), self.made.get(&join(cwd, &e.name))) {
                 (_, Some(Thumb::Picture { w, h, px: t })) => {
@@ -302,7 +304,6 @@ impl Thumbs {
                     for y in 0..*h { px[(oy + y) * width + ox..(oy + y) * width + ox + w].copy_from_slice(&t[y * w..y * w + w]); }
                 }
                 (_, made) => {
-                    let tile = if i == cursor { self.picked } else { TILE };
                     // A picture that would not decode says so under its icon.
                     let failed = match made { Some(Thumb::Kind(k)) if k.ends_with('?') => Some(*k), _ => None };
                     let icon = self.icon(sex_icons::file_for(&e.name, e.dir));
@@ -310,19 +311,20 @@ impl Thumbs {
                     for y in 0..ICON {
                         for x in 0..ICON {
                             let p = icon[y * ICON + x];
-                            if p >> 24 != 0 { px[(oy + y) * width + ox + x] = blend(tile, p, p >> 24); }
+                            if p >> 24 != 0 { px[(oy + y) * width + ox + x] = blend(ground, p, p >> 24); }
                         }
                     }
-                    if let Some(k) = failed { self.text(px, width, inner.0 + 8, inner.1 + SIDE - 18, SIDE - 16, k, DIM); }
+                    if let Some(k) = failed { self.text(px, width, inner.0 + 8, inner.1 + SIDE - 18, SIDE - 16, k, if selected { on_picked } else { dim }); }
                 }
             }
             let mut name = String::from(crate::shown(&e.name));
             if e.dir { name.push('/'); }
-            self.text(px, width, x0 + 4, y0 + SIDE + 6, box_w - 8, &name, TEXT);
+            self.text(px, width, x0 + 4, y0 + SIDE + 6, box_w - 8, &name,
+                if picture { PHOTO_TEXT } else if selected { on_picked } else { text });
         }
         let more = entries.len().saturating_sub(first + rows * cols);
         let foot = if more > 0 { alloc::format!("{} more below.  {}", more, foot) } else { String::from(foot) };
-        self.text(px, width, 10, height - FOOT + 12, width - 20, &foot, DIM);
+        self.text(px, width, 10, height - FOOT + 12, width - 20, &foot, dim);
         window.show_pixels(width, height);
     }
 
@@ -399,7 +401,7 @@ fn picture(window: &mut Window, path: &[u8], size: u64) -> Option<(usize, usize,
     let small = image.fit_within(SIDE, SIDE).ok()?;
     let px = small.pixels.iter().map(|p| {
         let a = p >> 24;
-        blend(TILE, p & 0xFF_FFFF, a)
+        blend(PHOTO_WELL, p & 0xFF_FFFF, a)
     }).collect();
     Some((small.width, small.height, px))
 }

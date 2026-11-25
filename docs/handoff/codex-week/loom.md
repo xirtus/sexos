@@ -15,3 +15,6 @@ Remaining gaps:
   root, with a recoverable previous copy. An encrypted-home unlock and missing
   removable-volume restore policy still need a full session audit.
 - Clearer file version history.
+- The thumbnail grid and disk usage map now follow Tatami's light, dark and high
+  contrast tokens. Pictures retain a dark photo well because their RGB cache
+  already contains that well; this avoids stale transparency halos across themes.
