@@ -33,12 +33,17 @@ impl Browser {
         let origin = parsed.origin();
         let shield = if self.shields.up(&url) { "On" } else { "Off" };
         let box_name = self.jarbox.name().unwrap_or("Main");
-        sex_pdx::serial_record!("[web.site.settings] origin={} shields={} box={}", origin, shield, box_name);
+        let cookies = self.jar.borrow().count_site(&parsed.host);
+        let storage = self.storage.borrow();
+        let stored = storage.len(&origin);
+        let bytes = storage.area(&origin).map_or(0, |area| area.bytes());
+        sex_pdx::serial_record!("[web.site.settings] origin={} shields={} box={} cookies={} storage={} bytes={}", origin, shield, box_name, cookies, stored, bytes);
         alloc::format!("<title>Site settings</title><body style='margin:32px;font-size:16px;background:#fbf8f1;color:#25232b'>\
             <h1>Site settings</h1><p><strong>{}</strong></p><p>Container: {}</p>\
             <p>Shields: <strong>{}</strong> — Ctrl+Shift+S to change</p>\
+            <h2>Stored data</h2><p>{} cookies · {} local storage items ({} bytes)</p>\
             <p>Ctrl+Shift+Backspace clears this site's cookies, storage and saved code.</p>\
             <p><a href='{}'>Back to site</a></p></body>",
-            escape(&origin), escape(box_name), shield, escape(&url))
+            escape(&origin), escape(box_name), shield, cookies, stored, bytes, escape(&url))
     }
 }

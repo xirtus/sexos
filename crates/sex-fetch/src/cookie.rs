@@ -55,6 +55,10 @@ impl Jar {
     pub fn len(&self) -> usize { self.cookies.len() }
     pub fn is_empty(&self) -> bool { self.cookies.is_empty() }
     pub fn iter(&self) -> impl Iterator<Item = &Cookie> { self.cookies.iter() }
+    /// Cookies cleared for this host, including parent-domain cookies.
+    pub fn count_site(&self, host: &str) -> usize {
+        self.cookies.iter().filter(|c| domain_match(host, &c.domain)).count()
+    }
 
     /// Takes one `Set-Cookie` header from a reply for `url`.
     pub fn store(&mut self, url: &Url, header: &str, now: u64) { self.set(url, header, now, true) }
