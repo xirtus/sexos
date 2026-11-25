@@ -2,7 +2,8 @@
 //! Valentine: a local mail viewer. It reads `.eml` files within its Files grant;
 //! account-linked IMAP/SMTP flows will be supplied by Multipass in a later slice.
 //! Enter opens a message, typing filters sender/subject/preview, Esc clears search,
-//! Ctrl+R reloads the folder, Up/Down chooses a message and wheel scrolls its body.
+//! Ctrl+R reloads the folder, Ctrl+G cycles local folders, Up/Down chooses a message
+//! and wheel scrolls its body.
 //! Ctrl+N starts a draft, Ctrl+E edits an unsent draft, Tab moves fields and
 //! Ctrl+S saves it. A quiet draft autosaves after three seconds.
 //! Ctrl+Shift+/ opens the offline keyboard reference; Escape closes it.
@@ -13,10 +14,12 @@ mod draw;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use draw::{clip, Canvas, Face};
 use sex_app::{files, settings, Event, Window};
 use sex_mail::inbox::Summary;
+use sex_mail::local_folders as folders;
 use sex_mail::draft::LocalDraft;
 use sex_mail::message::{self, Message};
 use sex_pdx::app_pointer::Kind;
@@ -31,6 +34,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Type", "Filter sender, subject and preview"),
     ("Escape", "Clear search or leave a draft, saving changes"),
     ("Ctrl+R", "Reload local mail"),
+    ("Ctrl+G", "Next local folder"),
     ("Ctrl+N", "Start an unsent local draft"),
     ("Ctrl+E", "Edit an opened unsent draft"),
     ("Tab / Enter", "Move between draft fields / insert a body line"),
@@ -67,6 +71,7 @@ impl Compose {
 }
 struct App {
     items: Vec<Item>, shown: Vec<usize>, picked: usize, opened: Option<usize>,
+    folders: Vec<Vec<u8>>, folder: usize,
     mail: Option<Message>, query: String, status: String, scroll: usize,
     palette: Palette, generation: u64,
     compose: Option<Compose>, next_draft: u32, help: bool,
@@ -77,6 +82,7 @@ impl App {
         let palette = Palette::from_tokens(theme);
         sex_pdx::serial_record!("[valentine.theme] mode={:?}", theme.mode);
         Self { items: Vec::new(), shown: Vec::new(), picked: 0, opened: None, mail: None,
+            folders: vec![Vec::new()], folder: 0,
             query: String::new(), status: String::new(), scroll: 0, palette,
             generation: settings::generation().unwrap_or(0), compose: None, next_draft: 0, help: false }
     }
@@ -86,17 +92,27 @@ impl App {
         sex_pdx::serial_record!("[valentine.search] query={} matches={}", self.query, self.shown.len());
     }
     fn reload(&mut self, window: &mut Window) {
+        let selected = self.folders.get(self.folder).cloned().unwrap_or_default();
         let previous = self.opened.and_then(|i| self.items.get(i)).map(|item| item.name.clone());
         self.items.clear(); self.opened = None; self.mail = None;
-        let entries = match files::list(window, b"") {
+        if let Ok(root) = files::list(window, b"") {
+            self.folders = core::iter::once(Vec::new()).chain(root.into_iter()
+                .filter(|e| e.dir && folders::valid_name(&e.name))
+                .take(31).map(|e| e.name)).collect();
+            self.folders[1..].sort();
+            self.folder = self.folders.iter().position(|name| *name == selected).unwrap_or(0);
+        }
+        let folder = self.folders.get(self.folder).cloned().unwrap_or_default();
+        let entries = match files::list(window, &folder) {
             Ok(entries) => entries,
             Err(_) => { self.status = "Could not list this mail folder.".into(); return; }
         };
         let store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
         for entry in entries.into_iter().filter(|e| !e.dir && e.name.to_ascii_lowercase().ends_with(b".eml")).take(MAX_LIST) {
             if entry.size > MAX_MAIL { continue; }
-            if let Ok(n) = files::read(window, &entry.name, &mut store[..entry.size as usize]) {
-                self.items.push(Item { name: entry.name, summary: Summary::from_raw(&store[..n]) });
+            let Some(path) = folders::file(&folder, &entry.name) else { continue };
+            if let Ok(n) = files::read(window, &path, &mut store[..entry.size as usize]) {
+                self.items.push(Item { name: path, summary: Summary::from_raw(&store[..n]) });
             }
         }
         self.items.sort_by(|a, b| a.name.cmp(&b.name));
@@ -107,7 +123,7 @@ impl App {
             }
         }
         if self.opened.is_none() && !self.shown.is_empty() { self.open(self.shown[0], window); }
-        sex_pdx::serial_record!("[valentine.loaded] messages={}", self.items.len());
+        sex_pdx::serial_record!("[valentine.loaded] messages={} folder={}", self.items.len(), String::from_utf8_lossy(&folder));
     }
     fn open(&mut self, i: usize, window: &mut Window) {
         let Some(item) = self.items.get(i) else { return };
@@ -127,7 +143,8 @@ impl App {
         let stamp = sex_pdx::civil_time_ms().unwrap_or(sex_pdx::get_ticks());
         let path = loop {
             self.next_draft = self.next_draft.wrapping_add(1);
-            let path = format!("draft-{}-{}-{}.eml", stamp, window.task, self.next_draft).into_bytes();
+            let name = format!("draft-{}-{}-{}.eml", stamp, window.task, self.next_draft).into_bytes();
+            let path = folders::file(self.folders.get(self.folder).map(Vec::as_slice).unwrap_or(b""), &name).unwrap();
             if files::size(window, &path).is_err() { break path; }
         };
         self.compose = Some(Compose { draft: LocalDraft::default(), path, field: 0, dirty: true, changed_at: sex_pdx::get_ticks() });
@@ -217,6 +234,16 @@ impl App {
             (true, 0x31) => { self.new_draft(window); return; } // Ctrl+N
             (true, 0x12) => { self.edit_draft(); return; } // Ctrl+E
             (true, 0x13) => { self.reload(window); return; } // Ctrl+R
+            (true, 0x22) => { // Ctrl+G: next immediate child folder, wrapping through root.
+                if self.folders.len() > 1 {
+                    self.folder = (self.folder + 1) % self.folders.len();
+                    self.query.clear(); self.picked = 0;
+                    self.reload(window);
+                    let folder = self.folders.get(self.folder).map(Vec::as_slice).unwrap_or(b"");
+                    sex_pdx::serial_record!("[valentine.folder] name={} messages={}", String::from_utf8_lossy(folder), self.items.len());
+                }
+                return;
+            }
             (_, 0x48 | 0x67) => self.picked = self.picked.saturating_sub(1),
             (_, 0x50 | 0x6c) => self.picked = (self.picked + 1).min(self.shown.len().saturating_sub(1)),
             (_, 0x1c) => { if let Some(&i) = self.shown.get(self.picked) { self.open(i, window); } },
@@ -249,7 +276,9 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
     c.fill(0, 0, w, 42, p.panel);
     c.fill(0, 41, w, 1, p.border);
     c.text(title, 16, 6, "Valentine", p.accent, list_w - 24);
-    c.text(tiny, list_w + 16, 12, "Local mail | No account linked", p.dim, w - list_w - 24);
+    let folder = app.folders.get(app.folder).map(Vec::as_slice).unwrap_or(b"");
+    let folder_name = if folder.is_empty() { String::from("Home") } else { String::from_utf8_lossy(folder).into_owned() };
+    c.text(tiny, list_w + 16, 12, &format!("Local mail: {folder_name} | No account linked"), p.dim, w - list_w - 24);
     if app.help {
         c.text(title, 24, 58, "Valentine shortcuts", p.text, w - 48);
         c.text(tiny, 24, 93, "Local mail and drafts. No message is sent by these controls.", p.dim, w - 48);
@@ -320,7 +349,7 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
     }
     c.fill(0, h - 28, w, 28, p.panel);
     c.fill(0, h - 28, w, 1, p.border);
-    let status = if app.status.is_empty() { "Ctrl+N new draft  Ctrl+E edit draft  Ctrl+M account status  Enter open  Ctrl+R reload" } else { &app.status };
+    let status = if app.status.is_empty() { "Ctrl+G folder  Ctrl+N draft  Ctrl+E edit  Ctrl+M account  Enter open  Ctrl+R reload" } else { &app.status };
     c.text(tiny, 12, h - 22, status, p.dim, w - 24);
     window.show_pixels(w as usize, h as usize);
 }

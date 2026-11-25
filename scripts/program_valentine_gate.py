@@ -48,7 +48,10 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(1)
   target,task,s=launch();g['wait'](r'\[valentine.loaded\] messages=0',s,60);close(target,task)
+  shell('mkdir /data/valentine/Travel',r'\[spindle.fs.result\] kind=3 status=0')
   m=shell(f'fetch http://10.0.2.2:{PORT}/inbox.eml /data/valentine/inbox.eml',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
+  assert m[1].startswith('Saved'),m[1]
+  m=shell(f'fetch http://10.0.2.2:{PORT}/inbox.eml /data/valentine/Travel/trip.eml',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240)
   assert m[1].startswith('Saved'),m[1]
   target,task,s=launch()
   g['wait'](r'\[valentine.opened\] file=inbox.eml bytes=\d+ subject=Dinner on Friday',s,60)
@@ -77,6 +80,10 @@ def main():
   s=len(t());ctrl('e');time.sleep(.4);shot('valentine-draft-reopened');q.key('esc')
   s=len(t());ctrl('m');g['wait'](r'\[valentine.account.unavailable\] reason=multipass-service-not-booted',s,60)
   shot('valentine-account-status')
+  s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name=Travel messages=1',s,60)
+  g['wait'](r'\[valentine.opened\] file=Travel/trip.eml bytes=\d+ subject=Dinner on Friday',s,60)
+  shot('valentine-folder')
+  s=len(t());ctrl('g');g['wait'](r'\[valentine.folder\] name= messages=2',s,60)
   close(target,task)
   assert '[valentine.fatal]' not in t() and 'KERNEL PANIC' not in t()
  finally:g['stop']();server.shutdown()
