@@ -586,7 +586,7 @@ impl Ui {
                 Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("remove 2, data A1:B4, switch, type/title, hole, angle")),
                 Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("above/below average, top 2, bottom 50%, = or <> text")),
-                Ask::ValidationList { range, text } => format!("Choices for {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("comma-separated; blank clears")),
+                Ask::ValidationList { range, text } => format!("Choices for {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("comma list or =D2:D20; blank clears")),
             }
         } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
@@ -859,7 +859,7 @@ impl Ui {
                 let done = self.book.list_validation(range, &typed);
                 if done.is_ok() { self.ask = None; }
                 let changed = self.command("data.validation", done, format!("Choices for {} {}", range.a1(), if typed.is_empty() { "cleared" } else { "set" }));
-                if changed { sex_std::record(&format!("[spreadeagle.validation.list] range={} choices={}", range.a1(), typed.split(',').count())); }
+                if changed { sex_std::record(&format!("[spreadeagle.validation.list] range={} choices={}", range.a1(), if typed.starts_with('=') { "range".to_string() } else { typed.split(',').count().to_string() })); }
                 changed
             }
             Ask::SaveAs(text) | Ask::GoTo(text) => {

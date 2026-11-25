@@ -228,12 +228,26 @@ impl Book {
         }
         self.run("cell.set", json!({ "cell": cell, "input": input })).map(|_| ())
     }
-    /// Restrict a selected range to a literal, comma-separated choice list.
+    /// Restrict a selected range to a comma-separated list or a current-sheet
+    /// source range (`=D2:D20`). The source is fixed for every selected cell.
     /// An empty entry clears validation from that range.
     pub fn list_validation(&mut self, range: Range, input: &str) -> Result<(), String> {
         let input = input.trim();
         if input.is_empty() {
             return self.run("data.validation", json!({ "range": range.a1(), "clear": true })).map(|_| ());
+        }
+        if let Some(source) = input.strip_prefix('=') {
+            let source = gridcraft_engine::core::RangeRef::parse(source.trim())
+                .filter(|r| r.count() >= 2 && r.count() <= 1000 && (r.height() == 1 || r.width() == 1))
+                .ok_or("Enter a current-sheet row or column of 2–1,000 cells, such as =D2:D20.")?;
+            let fixed = |cell: CellRef| {
+                let a1 = cell.a1();
+                let split = a1.find(|c: char| c.is_ascii_digit()).unwrap();
+                format!("${}${}", &a1[..split], &a1[split..])
+            };
+            let formula = format!("={}:{}", fixed(source.start), fixed(source.end));
+            return self.run("data.validation", json!({ "range": range.a1(), "type": "list", "formula1": formula,
+                "errorStyle": "stop", "errorTitle": "Choose a listed value" })).map(|_| ());
         }
         let values: Vec<_> = input.split(',').map(str::trim).collect();
         if values.len() < 2 || values.len() > 30 || values.iter().any(|v| v.is_empty()) || input.chars().count() > 255 {
@@ -1343,6 +1357,33 @@ mod tests {
         reopened.list_validation(Range::cell(1, 1), "").unwrap();
         reopened.set(1, 1, "Other").unwrap();
         assert!(reopened.set(2, 1, "Other").is_err(), "clearing B2 must keep B3's rule");
+    }
+
+    #[test]
+    fn range_list_validation_tracks_source_and_round_trips() {
+        let mut book = Book::blank(&temp("validation-range.xlsx"));
+        for (row, value) in [(1, "Food"), (2, "Fun"), (3, "Rent")] {
+            book.set(row, 3, value).unwrap();
+        }
+        let area = Range { r0: 1, c0: 1, r1: 2, c1: 1 };
+        for bad in ["=D2", "=D2:C4", "=D2:E4", "=D1:D1002", "=missing"] {
+            assert!(book.list_validation(area, bad).is_err(), "{bad}");
+        }
+        book.list_validation(area, "=D2:D4").unwrap();
+        assert_eq!(book.session.doc().unwrap().wb.active().unwrap().validations[0].f1, "$D$2:$D$4");
+        book.set(1, 1, "Food").unwrap();
+        book.set(2, 1, "Rent").unwrap();
+        assert!(book.set(1, 1, "Other").is_err());
+        book.set(1, 3, "Meals").unwrap();
+        assert!(book.set(1, 1, "Food").is_err(), "source edits must update choices");
+        book.set(1, 1, "Meals").unwrap();
+        book.set(2, 1, "Fun").unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        let mut reopened = Book::open(&path).unwrap().0;
+        assert_eq!(reopened.input(1, 1), "Meals");
+        assert!(reopened.set(2, 1, "Food").is_err());
+        reopened.set(2, 1, "Meals").unwrap();
     }
 
     #[test]

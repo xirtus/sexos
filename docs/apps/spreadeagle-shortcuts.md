@@ -55,7 +55,10 @@ return no rows; All rows restores them.
 When import reports lost or unsupported features, a warning panel opens over the
 workbook. Up and Down review the warnings; Enter or Esc closes the panel. The
 shortcut reopens it during the current session.
-Ctrl+Alt+L adds a literal choice list to the selected range, such as
-`Food,Fun,Rent`; typing a value outside a stop-style list leaves the cell
-unchanged. The rule survives XLSX save and reopen. The native choice dropdown,
-range-backed lists, and paste validation remain open gaps.
+Ctrl+Alt+L adds a choice list to the selected range. Enter comma-separated
+choices such as `Food,Fun,Rent`, or enter a current-sheet row or column such as
+`=D2:D20` to use those cells as live choices (2–1,000 source cells). Blank
+source cells are skipped. Editing the source updates allowed values. Typing a
+value outside a stop-style list leaves the cell unchanged. The rule survives
+XLSX save and reopen. The native choice dropdown and paste validation remain
+open gaps.
