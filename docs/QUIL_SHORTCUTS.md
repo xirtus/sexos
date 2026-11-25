@@ -74,9 +74,10 @@ Quil writes a checked recovery draft every two seconds for edited tabs up to
 the tab bar. Reopening a named file restores its draft. Save a recovered tab
 to give it a file name. Confirming Close Tab or Quit discards its draft.
 
-Ctrl+Shift+V reads `.git/index` inside the opened project's Files grant and
+Ctrl+Shift+V reads `.git/index` and `.git/HEAD` inside the opened project's Files grant and
 compares tracked files with the index. The panel marks modified, deleted,
-conflicted, or too-large-to-check files. Right opens a read-only line diff for a
+conflicted, or too-large-to-check files and shows the current branch or detached
+HEAD when valid. Right opens a read-only line diff for a
 modified or deleted UTF-8 file whose indexed blob is loose; Up/Down scroll it.
 The diff is bounded to 64 KiB and 300 lines per side. Enter opens an existing file.
 In the tracked-changes panel, S stages one modified tracked UTF-8 file up to 64 KiB.

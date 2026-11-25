@@ -14,6 +14,27 @@ pub const MAX_FILE: u64 = 8 << 20;
 pub const MAX_DIFF_BYTES: usize = 64 << 10;
 pub const MAX_DIFF_LINES: usize = 300;
 
+/// A display-only label from `.git/HEAD`; reject unexpected paths and control
+/// bytes before the native panel displays a repository-provided name.
+pub fn head_label(bytes: &[u8]) -> Option<String> {
+    if bytes.len() > 256 { return None; }
+    let line = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if let Some(name) = line.strip_prefix(b"ref: refs/heads/") {
+        if name.is_empty() || name.len() > 120 || name[0] == b'/' || name[name.len() - 1] == b'/'
+            || name[0] == b'.' || name[name.len() - 1] == b'.'
+            || name.windows(2).any(|pair| pair == b".." || pair == b"//")
+            || !name.iter().all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'/' | b'_' | b'-' | b'.')) {
+            return None;
+        }
+        return core::str::from_utf8(name).ok().map(ToString::to_string);
+    }
+    if line.len() == 40 && line.iter().all(|b| b.is_ascii_hexdigit()) {
+        return Some(format!("detached {}", core::str::from_utf8(&line[..7]).ok()?));
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffError { Blob, Limit, Binary }
 
@@ -219,5 +240,15 @@ mod tests {
         let digest: [u8; 20] = Sha1::digest(&extended).into();
         extended.extend_from_slice(&digest);
         assert_eq!(stage_tracked(&extended, b"demo.rs", replacement), Err(StageError::Extension));
+    }
+
+    #[test]
+    fn head_label_accepts_branch_and_detached_id_without_controls() {
+        assert_eq!(head_label(b"ref: refs/heads/feature/editor\n").as_deref(), Some("feature/editor"));
+        assert_eq!(head_label(b"0123456789abcdef0123456789abcdef01234567\n").as_deref(), Some("detached 0123456"));
+        for bytes in [b"ref: refs/heads/../secret\n".as_slice(), b"ref: refs/heads/main\nextra",
+            b"ref: refs/tags/v1\n", b"ref: refs/heads/main\x1b[31m\n"] {
+            assert_eq!(head_label(bytes), None);
+        }
     }
 }
