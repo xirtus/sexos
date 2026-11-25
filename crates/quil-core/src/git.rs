@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Read-only Git index facts for a project inside Quil's Files grant.
+//! Checked Git index facts and bounded staging within Quil's Files grant.
 //! Version 2/3 SHA-1 indexes are understood; unsupported formats are reported.
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
@@ -142,6 +142,54 @@ pub fn stage_tracked(index: &[u8], path: &[u8], bytes: &[u8]) -> Result<(Vec<u8>
     updated[target..target + 24].fill(0);
     let checksum: [u8; 20] = Sha1::digest(&updated[..body]).into();
     updated[body..].copy_from_slice(&checksum);
+    Ok((updated, id, compressed))
+}
+
+/// Add one explicitly chosen new UTF-8 file to a checked v2/v3 index. Quil
+/// treats files outside the index as candidates because it does not evaluate
+/// ignore rules; the person must select the row and press S to stage it.
+pub fn stage_new(index: &[u8], path: &[u8], bytes: &[u8]) -> Result<(Vec<u8>, [u8; 20], Vec<u8>), StageError> {
+    if bytes.len() > MAX_DIFF_BYTES || bytes.contains(&0) || core::str::from_utf8(bytes).is_err() { return Err(StageError::Limit); }
+    if path.is_empty() || path.len() > 0x0fff || path[0] == b'/'
+        || path.split(|b| *b == b'/').any(|part| part.is_empty() || part == b"." || part == b".." || part == b".git")
+        || path.contains(&0) { return Err(StageError::Path); }
+    let entries = parse_index(index).map_err(StageError::Index)?;
+    if entries.iter().any(|entry| entry.path == path) { return Err(StageError::Conflict); }
+    if entries.windows(2).any(|pair| pair[0].path > pair[1].path
+        || pair[0].path == pair[1].path && pair[0].stage >= pair[1].stage) { return Err(StageError::Conflict); }
+    let body = index.len() - CHECKSUM;
+    let mut at = HEADER;
+    let mut insertion = body;
+    for entry in &entries {
+        if insertion == body && entry.path.as_slice() > path { insertion = at; }
+        let flags = u16::from_be_bytes(index[at + 60..at + ENTRY].try_into().unwrap());
+        let name_at = at + ENTRY + if flags & 0x4000 != 0 { 2 } else { 0 };
+        let nul = index[name_at..body].iter().position(|b| *b == 0).unwrap() + name_at;
+        at += (nul + 1 - at + 7) & !7;
+    }
+    if at != body { return Err(StageError::Extension); }
+    let id = blob_id(bytes);
+    let mut raw = format!("blob {}\0", bytes.len()).into_bytes();
+    raw.extend_from_slice(bytes);
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+    let mut entry = vec![0u8; ENTRY];
+    entry[24..28].copy_from_slice(&0o100644u32.to_be_bytes());
+    entry[36..40].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+    entry[40..60].copy_from_slice(&id);
+    entry[60..62].copy_from_slice(&(path.len() as u16).to_be_bytes());
+    entry.extend_from_slice(path);
+    entry.push(0);
+    entry.resize((entry.len() + 7) & !7, 0);
+    let mut updated = Vec::with_capacity(index.len() + entry.len());
+    updated.extend_from_slice(&index[..insertion]);
+    updated.extend_from_slice(&entry);
+    updated.extend_from_slice(&index[insertion..body]);
+    let count = u32::from_be_bytes(index[8..12].try_into().unwrap());
+    let count = count.checked_add(1).filter(|n| *n <= 100_000).ok_or(StageError::Limit)?;
+    updated[8..12].copy_from_slice(&count.to_be_bytes());
+    if updated.len() + CHECKSUM > MAX_INDEX { return Err(StageError::Limit); }
+    let checksum: [u8; 20] = Sha1::digest(&updated).into();
+    updated.extend_from_slice(&checksum);
     Ok((updated, id, compressed))
 }
 
@@ -302,6 +350,32 @@ mod tests {
         let checksum: [u8; 20] = Sha1::digest(&extended).into();
         extended.extend_from_slice(&checksum);
         assert_eq!(stage_deleted(&extended, b"other.rs"), Err(StageError::Extension));
+    }
+
+    #[test]
+    fn stages_explicit_new_text_in_sorted_index_and_rejects_unsafe_candidates() {
+        let before = parse_index(INDEX).unwrap();
+        let text = b"new note\n";
+        let (updated, id, compressed) = stage_new(INDEX, b"notes/new.txt", text).unwrap();
+        assert_eq!(id, blob_id(text));
+        assert_eq!(loose_blob(&compressed, &id).unwrap(), text);
+        let after = parse_index(&updated).unwrap();
+        assert_eq!(after.len(), before.len() + 1);
+        assert!(after.windows(2).all(|pair| pair[0].path < pair[1].path));
+        assert_eq!(after.iter().find(|entry| entry.path == b"notes/new.txt").unwrap().id, id);
+        for name in [b"a.txt".as_slice(), b"z.txt".as_slice()] {
+            let (inserted, _, _) = stage_new(INDEX, name, text).unwrap();
+            assert!(parse_index(&inserted).unwrap().windows(2).all(|pair| pair[0].path < pair[1].path));
+        }
+        assert_eq!(stage_new(&updated, b"notes/new.txt", text), Err(StageError::Conflict));
+        assert_eq!(stage_new(INDEX, b".git/config", text), Err(StageError::Path));
+        assert_eq!(stage_new(INDEX, b"a/../b", text), Err(StageError::Path));
+        assert_eq!(stage_new(INDEX, b"new.bin", b"a\0b"), Err(StageError::Limit));
+        let mut extended = INDEX[..INDEX.len() - CHECKSUM].to_vec();
+        extended.extend_from_slice(b"TREE\0\0\0\0");
+        let checksum: [u8; 20] = Sha1::digest(&extended).into();
+        extended.extend_from_slice(&checksum);
+        assert_eq!(stage_new(&extended, b"notes/new.txt", text), Err(StageError::Extension));
     }
 
     #[test]

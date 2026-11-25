@@ -260,10 +260,13 @@ fn git_replace_index(root: &[u8], expected: &[u8], updated: &[u8]) -> Result<(),
 }
 
 fn git_stage(root: &[u8], change: &GitChange) -> Result<(Vec<u8>, Vec<u8>), String> {
-    if !matches!(change.code, 'M' | 'D') { return Err(String::from("Stage supports modified or deleted tracked files only.")); }
+    if !matches!(change.code, 'M' | 'D' | 'N') { return Err(String::from("Stage supports changed tracked files or a selected new text candidate.")); }
     let index = project::join(root, b".git/index");
     let before = git_read(&index, git::MAX_INDEX).ok_or_else(|| String::from("Git index is unavailable."))?;
-    if git::parse_index(&before).ok().and_then(|entries| entries.into_iter().find(|e| e.path == change.path)).map(|e| e.id) != Some(change.id) {
+    let entries = git::parse_index(&before).map_err(|e| format!("Git index is damaged or unsupported: {e:?}"))?;
+    let current_entry = entries.iter().find(|entry| entry.path == change.path);
+    if (change.code == 'N' && current_entry.is_some())
+        || (change.code != 'N' && current_entry.map(|entry| entry.id) != Some(change.id)) {
         return Err(String::from("Git panel is stale; reopen tracked changes."));
     }
     if change.code == 'D' {
@@ -277,8 +280,11 @@ fn git_stage(root: &[u8], change: &GitChange) -> Result<(Vec<u8>, Vec<u8>), Stri
     }
     let current = git_read(&project::join(root, &change.path), git::MAX_DIFF_BYTES)
         .ok_or_else(|| String::from("Changed text file exceeds 64 KiB or is unavailable."))?;
-    let (after, id, packed) = git::stage_tracked(&before, &change.path, &current)
-        .map_err(|e| format!("Cannot stage this Git index entry: {e:?}"))?;
+    let (after, id, packed) = if change.code == 'N' {
+        git::stage_new(&before, &change.path, &current)
+    } else {
+        git::stage_tracked(&before, &change.path, &current)
+    }.map_err(|e| format!("Cannot stage this Git index entry: {e:?}"))?;
     let hex = b"0123456789abcdef";
     let mut dir = b".git/objects/".to_vec();
     for byte in id[..1].iter() { dir.push(hex[(byte >> 4) as usize]); dir.push(hex[(byte & 15) as usize]); }
@@ -1083,7 +1089,12 @@ impl App {
                 };
             }
             Overlay::Git { changes, sel, note, head: _ } => {
-                if matches!(typed, Some('u' | 'U')) {
+                if matches!(typed, Some('n' | 'N')) {
+                    if changes.is_empty() { *note = String::from("No new-file candidates in this view."); }
+                    else if let Some(next) = ((*sel + 1)..changes.len()).chain(0..=*sel)
+                        .find(|&i| changes[i].code == 'N') { *sel = next; }
+                    else { *note = String::from("No new-file candidates in this view."); }
+                } else if matches!(typed, Some('u' | 'U')) {
                     let result = self.git_stage_undo.as_ref().ok_or_else(|| String::from("No Quil stage to undo."))
                         .and_then(|(before, after)| git_replace_index(&self.root, after, before));
                     match result {
@@ -1479,7 +1490,7 @@ impl App {
             }
             Overlay::Help { scroll } => {
                 let mut all = keymap::shortcut_rows(self.keymap);
-                all.insert(0, String::from("Ctrl+Shift+V  tracked Git changes; Right shows diff"));
+                all.insert(0, String::from("Ctrl+Shift+V  Git changes; N next new-file candidate"));
                 all.insert(0, String::from("Language diagnostics  Ctrl+Shift+J"));
                 all.insert(0, String::from("Language completion  Ctrl+Shift+Space"));
                 all.insert(0, String::from("Document symbols  Ctrl+Shift+M"));
@@ -1499,7 +1510,7 @@ impl App {
                 for (i, change) in changes.iter().enumerate().skip(first).take(10) {
                     lines.push((format!("{}  {}", change.code, lossy(&change.path)), i == *sel));
                 }
-                ("Quil tracked changes  ", String::from("S stage modified or deleted; U undo last stage; Right diff; Enter opens"))
+                ("Quil Git changes  ", String::from("S stage text/change; N next new file; U undo last stage; Right diff; Enter opens"))
             }
             Overlay::GitDiff { path, lines: diff, scroll, note } => {
                 if !note.is_empty() { lines.push((note.clone(), false)); }

@@ -61,6 +61,10 @@ Remaining gaps:
   without `.gitignore` or excludes evaluation. Packed blobs, definitive
   untracked/ignored status, extended indexes,
   broad unstaging, commit and branch switching still need native controls.
+  N in the panel now jumps between candidate rows. S stages the explicitly
+  selected new UTF-8 candidate (up to 64 KiB) by writing a checked loose blob
+  and inserting a sorted v2/v3 index entry; U undoes that one index edit.
+  This is an explicit action, not a claim that ignore rules were evaluated.
 - Tree-sitter style structural editing, debugging and extensions.
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the
