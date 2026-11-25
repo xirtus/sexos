@@ -229,6 +229,12 @@ jobs:
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Valentine attachment identity-bound writes
       run: cargo test --locked --release -p sexfs --features repair --test identity_write
+    - name: SexFS staged publish survives power cuts and refuses existing names
+      run: cargo test --locked --release -p sexfs --features repair --test staged_publish
+    - name: Files staged ticket and shared-region regressions
+      run: |
+        cargo test --locked -p sex-pdx --test staged_chunk_snapshot
+        cargo test --locked -p sexfiles --lib staged_export::tests
     - name: Corset disks, GPT editor, FAT32/exFAT/SexFS formatters, SMART and BDSM encryption on the host
       run: bash scripts/corset_host_gate.sh
     - name: Corset plans (step sentences, typed-name confirmation, re-read before apply, write order) on the host

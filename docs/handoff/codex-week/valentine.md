@@ -36,6 +36,12 @@ Remaining gaps:
   A failed close-time save leaves the composer open. A two-boot QEMU gate checks idle draft autosave after killing the
   guest with the composer open. Account-backed send and sync remain.
 
+Files now has a primary SexFS staging ticket with a private namespace,
+sequential checked chunks, a complete-size/digest gate, no-clobber publish,
+and mount cleanup. Valentine does not use it yet. The encrypted-home route
+needs the same durability and unlock cleanup before Valentine can safely
+switch, so atomic attachment export remains a gap.
+
 The native window and `docs/apps/valentine-shortcuts.md` now provide an offline
 keyboard reference for the controls that currently work.
 
