@@ -75,6 +75,8 @@ pub struct Ui {
     grid: (i32, i32),
     /// The cells last copied or cut, outlined until pasted over or Esc.
     copied: Option<(Range, bool)>,
+    /// Text last copied here, to distinguish a later paste from another app.
+    copied_text: Option<String>,
     /// The Ctrl+F or Ctrl+H prompt, while it is open.
     find: Option<Prompt>,
     /// A column whose right edge is being dragged: (column, pointer x at the start, width then,
@@ -168,7 +170,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"), ("Ctrl+Shift+S", "Save as / choose format"),
     ("Ctrl+P", "Export PDF"), ("Ctrl+G", "Go to cell or range"),
     ("F2", "Edit selected cell"), ("Ctrl+Z / Y", "Undo / redo"),
-    ("Ctrl+C / X / V", "Copy / cut / paste"),
+    ("Ctrl+C / X / V", "Copy / cut / paste across apps"),
+    ("Ctrl+Shift+V", "Paste clipboard as plain cells"),
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
     ("Ctrl+Shift+A / D", "Sort ascending / descending"),
@@ -263,7 +266,7 @@ impl Ui {
         Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
-            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None, resizing_row: None,
+            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, copied_text: None, find: None, resizing: None, resizing_row: None,
             ask: None, filter_menu: None, validation_menu: None, function_picker: None, help: false,
             import_warnings: Vec::new(), warning_open: false, warning_index: 0, recovered: false, unkept: None,
         }
@@ -1172,7 +1175,7 @@ impl Ui {
     }
 
     /// One key. Returns whether the cells (or the sheet) changed: worth a record of the column.
-    fn key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+    fn key(&mut self, key: sex_std::sex_pdx::app_key::Key, window: &mut sex_app::Window) -> bool {
         if key.control && key.shift && key.code == code::W && !self.import_warnings.is_empty() {
             self.warning_open = true;
             self.warning_index = 0;
@@ -1285,7 +1288,7 @@ impl Ui {
                 return self.format_key(key.code);
             }
             if self.edit.is_none() && matches!(key.code, code::C | code::X | code::V | code::D | code::R | code::B | code::I | code::U | code::F | code::H | code::T) {
-                return self.edit_key(key.code, key.shift);
+                return self.edit_key(key.code, key.shift, window);
             }
             match key.code {
                 code::S => { self.commit(); self.save(); return false; }
@@ -1374,7 +1377,7 @@ impl Ui {
 
     /// Ctrl shortcuts on the cells: clipboard, fill, styles, AutoSum and find, on GridCraft's
     /// keys (Excel's). Returns whether cells changed.
-    fn edit_key(&mut self, code: u8, shift: bool) -> bool {
+    fn edit_key(&mut self, code: u8, shift: bool, window: &mut sex_app::Window) -> bool {
         let sel = self.selection();
         match code {
             code::C | code::X => {
@@ -1382,12 +1385,21 @@ impl Ui {
                 let id = if cut { "edit.cut" } else { "edit.copy" };
                 let done = self.book.copy(sel, cut);
                 let n = done.as_ref().map_or(0, |t| t.lines().count());
-                if done.is_ok() { self.copied = Some((sel, cut)); }
+                if let Ok(text) = &done {
+                    self.copied = Some((sel, cut));
+                    self.copied_text = Some(text.clone());
+                    let shared = sex_app::clipboard::copy(window, text).is_ok();
+                    sex_std::record(&format!("[spreadeagle.clip.copy] bytes={} shared={}", text.len(), shared as u8));
+                }
                 self.command(id, done.map(|_| ()), format!("{} {} ({n} rows). Ctrl+V pastes at the cursor", if cut { "Cut" } else { "Copied" }, sel.a1()));
                 false
             }
             code::V => {
-                let done = self.book.paste(self.row, self.col);
+                let shared = sex_app::clipboard::paste(window);
+                let external = if shift { shared.ok().or(self.copied_text.as_deref()) }
+                    else { shared.ok().filter(|text| self.copied_text.as_deref() != Some(*text)) };
+                let done = if let Some(text) = external { self.book.paste_text(self.row, self.col, text) } else { self.book.paste(self.row, self.col) };
+                sex_std::record(&format!("[spreadeagle.clip.paste] external={} bytes={}", external.is_some() as u8, external.map_or(0, str::len)));
                 let to = done.clone().unwrap_or_default();
                 if done.is_ok() && self.copied.is_some_and(|(_, cut)| cut) { self.copied = None; }
                 if let Ok(at) = &done { sex_std::record(&format!("[spreadeagle.paste] at={at}")); }
@@ -1669,7 +1681,7 @@ impl Ui {
                 Event::Resize { .. } => self.draw(window),
                 Event::Key(key) => {
                     let col = self.col;
-                    let changed = self.key(key);
+                    let changed = self.key(key, window);
                     if changed && self.book.dirty() {
                         self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks());
                         // An edit makes the brought-back changes the user's own: Esc no longer throws them away.

@@ -64,3 +64,6 @@ to open the native menu. Use Up/Down and Enter to choose, or Esc to close. Typin
 value outside a stop-style list leaves the cell unchanged. The rule survives
 XLSX save and reopen. Ctrl+V and Ctrl+D/R preview changes against existing
 stop-style rules and reject the whole edit if any destination value is invalid.
+Ctrl+C/X shares tab-separated cells with other SexOS apps. Ctrl+V accepts text
+copied from another app; Ctrl+Shift+V pastes the clipboard as plain cells. Both
+text paste paths reject a whole block when any stop-style destination fails.
