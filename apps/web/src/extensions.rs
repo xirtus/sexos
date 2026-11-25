@@ -17,7 +17,7 @@
 //! `about:extensions` lists them, turns each off or on, removes them, and installs
 //! one from an address (`about:extensions?install=URL`).
 
-use super::{clock, sex_html, text_of, wall, Browser, Doc, PageScript};
+use super::{clock, sex_html, state_file, text_of, wall, Browser, Doc, PageScript};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -38,7 +38,8 @@ const ROUNDS: usize = 64;
 
 const DIR: &str = "Web/extensions";
 /// Extensions turned off, one id a line.
-const OFF: &[u8] = b"Web/extensions-off.tsv";
+const OFF: &str = "Web/extensions-off.tsv";
+const OFF_MAX: u64 = 64 << 10;
 /// Largest package downloaded, and largest file of one read back.
 const PACKAGE_MAX: usize = 64 << 20;
 const FILE_MAX: usize = 16 << 20;
@@ -174,7 +175,7 @@ impl Ext {
         if manifest.locale_file().is_some() { manifest.localize(&messages); }
         let mut ext = Ext { id: String::from(id), manifest, enabled: !off.iter().any(|o| o == id), rules: None, rule_count: 0, skipped: 0, cache: Vec::new(),
             raw, messages, rulesets_on: None, dynamic: Vec::new(), session: Vec::new(), registered: Vec::new(), fresh: false };
-        if let Some(Value::Object(st)) = read(window, &alloc::format!("{}/{}.json", STATE, id)).and_then(|t| serde_json::from_str(&t).ok()) {
+        if let Some(Value::Object(st)) = state_file::read(window, &alloc::format!("{}/{}.json", STATE, id), FILE_MAX as u64).and_then(|t| serde_json::from_str(&t).ok()) {
             ext.rulesets_on = st.get("rulesets").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect());
             if let Some(Value::Array(a)) = st.get("dynamic") { ext.dynamic = a.clone(); }
             if let Some(Value::Array(a)) = st.get("scripts") { ext.registered = a.clone(); }
@@ -219,7 +220,9 @@ impl Ext {
         let st = json!({ "rulesets": self.rulesets_on, "dynamic": self.dynamic, "scripts": self.registered });
         let _ = files::mkdir(window, b"Web");
         let _ = files::mkdir(window, STATE.as_bytes());
-        let _ = files::write(window, alloc::format!("{}/{}.json", STATE, self.id).as_bytes(), st.to_string().as_bytes());
+        if !state_file::replace(window, &alloc::format!("{}/{}.json", STATE, self.id), st.to_string().as_bytes()) {
+            sex_pdx::serial_record!("[web.extension.state.save.failed] id={}", self.id);
+        }
     }
 
     /// The code that gives a script of this extension its `chrome` and `browser`.
@@ -261,7 +264,7 @@ impl Ext {
 
 impl Extensions {
     pub fn load(window: &mut Window) -> Extensions {
-        let off: Vec<String> = read(window, core::str::from_utf8(OFF).unwrap_or("")).map(|t| t.lines().map(|l| String::from(l.trim())).filter(|l| !l.is_empty()).collect()).unwrap_or_default();
+        let off: Vec<String> = state_file::read(window, OFF, OFF_MAX).map(|t| t.lines().map(|l| String::from(l.trim())).filter(|l| !l.is_empty()).collect()).unwrap_or_default();
         let mut list = Vec::new();
         if let Ok(entries) = files::list(window, DIR.as_bytes()) {
             for e in entries.into_iter().filter(|e| e.dir) {
@@ -330,11 +333,11 @@ impl Extensions {
         (css, early, late)
     }
 
-    fn save_off(&self, window: &mut Window) {
+    fn save_off(&self, window: &mut Window) -> bool {
         let mut t = String::new();
         for e in self.list.iter().filter(|e| !e.enabled) { t.push_str(&e.id); t.push('\n'); }
         let _ = files::mkdir(window, b"Web");
-        let _ = files::write(window, OFF, t.as_bytes());
+        state_file::replace(window, OFF, t.as_bytes())
     }
 }
 
@@ -391,8 +394,17 @@ impl Browser {
                     Err(why) => { sex_pdx::serial_record!("[web.extension.install_failed] why={} url={}", why, v); note = alloc::format!("<p style='color:#b3261e'>Could not install: {}</p>", esc(&why)) }
                 },
                 "toggle" => {
-                    if let Some(e) = self.extensions.list.iter_mut().find(|e| e.id == v) { e.enabled = !e.enabled; sex_pdx::serial_record!("[web.extension.toggle] id={} enabled={}", e.id, e.enabled as u8); }
-                    self.extensions.save_off(&mut self.window);
+                    if let Some(i) = self.extensions.list.iter().position(|e| e.id == v) {
+                        self.extensions.list[i].enabled = !self.extensions.list[i].enabled;
+                        if self.extensions.save_off(&mut self.window) {
+                            let e = &self.extensions.list[i];
+                            sex_pdx::serial_record!("[web.extension.toggle] id={} enabled={}", e.id, e.enabled as u8);
+                        } else {
+                            self.extensions.list[i].enabled = !self.extensions.list[i].enabled;
+                            sex_pdx::serial_record!("[web.extension.toggle.save.failed] id={}", v);
+                            note = String::from("<p style='color:#b3261e'>Could not save extension choice.</p>");
+                        }
+                    }
                     self.start_backgrounds();
                 }
                 "remove" => {
@@ -400,7 +412,13 @@ impl Browser {
                         let e = self.extensions.list.remove(i);
                         // Files removes a folder once it is empty; the files go first.
                         remove_tree(&mut self.window, &alloc::format!("{}/{}", DIR, e.id));
-                        let _ = files::remove(&mut self.window, alloc::format!("{}/{}.json", STATE, e.id).as_bytes());
+                        let state = alloc::format!("{}/{}.json", STATE, e.id);
+                        let _ = files::remove(&mut self.window, state.as_bytes());
+                        let _ = files::remove(&mut self.window, alloc::format!("{state}.previous").as_bytes());
+                        let _ = files::remove(&mut self.window, alloc::format!("{state}.next").as_bytes());
+                        if !self.extensions.save_off(&mut self.window) {
+                            sex_pdx::serial_record!("[web.extension.off.save.failed] id={}", e.id);
+                        }
                         sex_pdx::serial_record!("[web.extension.removed] id={}", e.id);
                         self.start_backgrounds();
                     }
