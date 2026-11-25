@@ -241,6 +241,21 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'quil-draft-recovered.ppm')})
   assert (a.out/'quil-draft-recovered.ppm').stat().st_size>100000
   s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={relaunched[1]} task={relaunched[2]}',s,60)
+  g['wait'](rf'\[app.private.retired\] target={relaunched[1]} task={relaunched[2]} ',s,90)
+  # Stage an actual missing tracked path, then undo the index edit. The file
+  # is removed through Spindle's Files command after Quil has closed it.
+  expect('rm /data/quil/other.rs',r'\[spindle.fs.line\] ok',60)
+  s=len(t());line('run quil');deleted=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(deleted[3]));time.sleep(.5)
+  s=len(t());send('ctrl','shift','v')
+  g['wait'](r'\[quil.code.git\] tracked_changes=2 note=\n',s,60)
+  q.key('down');s=len(t());q.key('s')
+  g['wait'](r'\[quil.code.git.staged\] path=other.rs tracked_changes=1\n',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-deletion-staged.ppm')})
+  assert (a.out/'quil-git-deletion-staged.ppm').stat().st_size>100000
+  s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=2\n',s,60)
+  s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={deleted[1]} task={deleted[2]}',s,60)
+  g['wait'](rf'\[app.private.retired\] target={deleted[1]} task={deleted[2]} ',s,90)
   # A nameless tab has its own checked recovery identity. Cut power after the
   # draft receipt, then reboot the same disk and recover it without a file name.
   s=len(t());line('run quil')

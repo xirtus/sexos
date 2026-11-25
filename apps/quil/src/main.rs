@@ -260,16 +260,25 @@ fn git_replace_index(root: &[u8], expected: &[u8], updated: &[u8]) -> Result<(),
 }
 
 fn git_stage(root: &[u8], change: &GitChange) -> Result<(Vec<u8>, Vec<u8>), String> {
-    if change.code != 'M' { return Err(String::from("Stage supports modified tracked text files only.")); }
+    if !matches!(change.code, 'M' | 'D') { return Err(String::from("Stage supports modified or deleted tracked files only.")); }
     let index = project::join(root, b".git/index");
     let before = git_read(&index, git::MAX_INDEX).ok_or_else(|| String::from("Git index is unavailable."))?;
+    if git::parse_index(&before).ok().and_then(|entries| entries.into_iter().find(|e| e.path == change.path)).map(|e| e.id) != Some(change.id) {
+        return Err(String::from("Git panel is stale; reopen tracked changes."));
+    }
+    if change.code == 'D' {
+        if files::direct::stat(&project::join(root, &change.path)).is_ok() {
+            return Err(String::from("Deleted file reappeared; reopen tracked changes."));
+        }
+        let after = git::stage_deleted(&before, &change.path)
+            .map_err(|e| format!("Cannot stage this Git index deletion: {e:?}"))?;
+        git_replace_index(root, &before, &after)?;
+        return Ok((before, after));
+    }
     let current = git_read(&project::join(root, &change.path), git::MAX_DIFF_BYTES)
         .ok_or_else(|| String::from("Changed text file exceeds 64 KiB or is unavailable."))?;
     let (after, id, packed) = git::stage_tracked(&before, &change.path, &current)
         .map_err(|e| format!("Cannot stage this Git index entry: {e:?}"))?;
-    if git::parse_index(&before).ok().and_then(|entries| entries.into_iter().find(|e| e.path == change.path)).map(|e| e.id) != Some(change.id) {
-        return Err(String::from("Git panel is stale; reopen tracked changes."));
-    }
     let hex = b"0123456789abcdef";
     let mut dir = b".git/objects/".to_vec();
     for byte in id[..1].iter() { dir.push(hex[(byte >> 4) as usize]); dir.push(hex[(byte & 15) as usize]); }
@@ -1458,7 +1467,7 @@ impl App {
                 for (i, change) in changes.iter().enumerate().skip(first).take(10) {
                     lines.push((format!("{}  {}", change.code, lossy(&change.path)), i == *sel));
                 }
-                ("Quil tracked changes  ", String::from("S stage modified text; U undo last stage; Right diff; Enter opens"))
+                ("Quil tracked changes  ", String::from("S stage modified or deleted; U undo last stage; Right diff; Enter opens"))
             }
             Overlay::GitDiff { path, lines: diff, scroll, note } => {
                 if !note.is_empty() { lines.push((note.clone(), false)); }

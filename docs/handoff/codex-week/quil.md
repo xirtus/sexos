@@ -46,11 +46,12 @@ Remaining gaps:
   checked Git index in the project's Files grant. Right shows a bounded,
   read-only line diff against an authenticated loose Git blob for UTF-8 files.
   S stages a modified tracked UTF-8 file up to 64 KiB in a v2/v3 index with no
-  extensions; U undoes only Quil's last stage if the index is unchanged.
+  extensions, and now stages a deleted tracked path in the same checked index;
+  U undoes only Quil's last stage if the index is unchanged.
   The panel now displays a checked branch name or detached HEAD from `.git/HEAD`.
   It also lists up to 64 files outside the index as `N` candidates, explicitly
   without `.gitignore` or excludes evaluation. Packed blobs, definitive
-  untracked/ignored status, extended indexes, deleted-file staging,
+  untracked/ignored status, extended indexes,
   broad unstaging, commit and branch switching still need native controls.
 - Tree-sitter style structural editing, debugging and extensions.
 - A save can truncate the live small file, and the large-file path removes the

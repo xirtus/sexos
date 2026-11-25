@@ -145,6 +145,37 @@ pub fn stage_tracked(index: &[u8], path: &[u8], bytes: &[u8]) -> Result<(Vec<u8>
     Ok((updated, id, compressed))
 }
 
+/// Stage deletion by removing one unconflicted entry from a checked index.
+/// The caller must verify that the worktree file is still absent before
+/// replacing the index. Reject extensions that would be invalidated.
+pub fn stage_deleted(index: &[u8], path: &[u8]) -> Result<Vec<u8>, StageError> {
+    let entries = parse_index(index).map_err(StageError::Index)?;
+    let body = index.len() - CHECKSUM;
+    let mut at = HEADER;
+    let mut target = None;
+    for entry in entries {
+        let flags = u16::from_be_bytes(index[at + 60..at + ENTRY].try_into().unwrap());
+        let name_at = at + ENTRY + if flags & 0x4000 != 0 { 2 } else { 0 };
+        let nul = index[name_at..body].iter().position(|b| *b == 0).unwrap() + name_at;
+        let end = at + ((nul + 1 - at + 7) & !7);
+        if entry.path == path {
+            if entry.stage != 0 || target.is_some() { return Err(StageError::Conflict); }
+            target = Some((at, end));
+        }
+        at = end;
+    }
+    if at != body { return Err(StageError::Extension); }
+    let (start, end) = target.ok_or(StageError::Path)?;
+    let mut updated = Vec::with_capacity(index.len() - (end - start));
+    updated.extend_from_slice(&index[..start]);
+    updated.extend_from_slice(&index[end..body]);
+    let count = u32::from_be_bytes(index[8..12].try_into().unwrap());
+    updated[8..12].copy_from_slice(&(count - 1).to_be_bytes());
+    let checksum: [u8; 20] = Sha1::digest(&updated).into();
+    updated.extend_from_slice(&checksum);
+    Ok(updated)
+}
+
 pub fn parse_index(data: &[u8]) -> Result<Vec<Tracked>, Error> {
     if data.len() > MAX_INDEX { return Err(Error::Limit); }
     if data.len() < HEADER + CHECKSUM || &data[..4] != b"DIRC" { return Err(Error::Header); }
@@ -256,6 +287,21 @@ mod tests {
         let digest: [u8; 20] = Sha1::digest(&extended).into();
         extended.extend_from_slice(&digest);
         assert_eq!(stage_tracked(&extended, b"demo.rs", replacement), Err(StageError::Extension));
+    }
+
+    #[test]
+    fn stages_deleted_tracked_path_and_preserves_other_entry() {
+        let before = parse_index(INDEX).unwrap();
+        let updated = stage_deleted(INDEX, b"other.rs").unwrap();
+        let after = parse_index(&updated).unwrap();
+        assert_eq!(after, vec![before[0].clone()]);
+        assert_eq!(u32::from_be_bytes(updated[8..12].try_into().unwrap()), 1);
+        assert_eq!(stage_deleted(INDEX, b"absent.rs"), Err(StageError::Path));
+        let mut extended = INDEX[..INDEX.len() - CHECKSUM].to_vec();
+        extended.extend_from_slice(b"TREE\0\0\0\0");
+        let checksum: [u8; 20] = Sha1::digest(&extended).into();
+        extended.extend_from_slice(&checksum);
+        assert_eq!(stage_deleted(&extended, b"other.rs"), Err(StageError::Extension));
     }
 
     #[test]
