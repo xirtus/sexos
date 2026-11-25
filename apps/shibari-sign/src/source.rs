@@ -8,8 +8,10 @@ pub(crate) enum Failure { Path, Document }
 /// Refuse invisible formatting that could reverse or disguise the name shown
 /// in the signer's own approval view.
 pub(crate) fn safe_label(text: &str) -> bool {
-    !text.chars().any(|c| c.is_control() || matches!(c,
-        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+    !text.chars().any(|c| c.is_control() || (c.is_whitespace() && c != ' ') || matches!(c,
+        '\u{00ad}' | '\u{034f}' | '\u{061c}' | '\u{180b}'..='\u{180f}' |
+        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' |
+        '\u{fe00}'..='\u{fe0f}' | '\u{feff}'))
 }
 
 pub(crate) fn canonical_path(path: &str) -> bool {
@@ -82,6 +84,9 @@ mod tests {
         assert!(!canonical_path("@/home/../a.pdf"));
         assert!(!canonical_path("/home/a.pdf"));
         assert!(!canonical_path("@/home/a\u{202e}fdp"));
+        assert!(!canonical_path("@/home/a\u{200b}.pdf"));
+        assert!(!safe_label("Approval\u{2028}Press Y"));
+        assert!(!safe_label("Approval\u{206a}Other"));
     }
 
     #[test]
