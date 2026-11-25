@@ -42,7 +42,14 @@ Remaining gaps:
   now be snoozed for five minutes with Shift+S; the new timer survives restart.
   **Timer transport:** visible Date and its hidden worker now retain due timers
   when their Bell PDX post fails, retrying without losing the saved timer. This
-  does not prove Bell accepted a transported post: Bell can silently discard it
+  also applies to reminders and alarms: both delivery paths stop at the first
+  failed Bell transport, keep that minute pending and retry after five seconds.
+  A one-time alarm is disabled only after a successful post. Earlier notices
+  in the failed minute can replay on retry or after a crash; delivery is at
+  least once, not exactly once. A host failure-injection test covers false-then-
+  true transport results; the QEMU gate checks healthy background Bell delivery
+  and captures its screenshot, but does not force a Bell transport failure.
+  A successful transport does not prove Bell accepted the notice: Bell can silently discard it
   for mute, spam policy or a full queue. A Bell acknowledgement protocol remains.
   Date now keeps a bounded durable last-checked minute. When its window closes,
   a hidden Date run takes over reminders, alarms and timers and posts to Bell
