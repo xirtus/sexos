@@ -311,9 +311,17 @@ mod tests {
         assert!(matches!(history.step(&mut editor, false).unwrap(), Some(EditStep::Annotation(0))));
         assert!(editor.annotations(0).unwrap().is_empty());
         assert!(matches!(history.step(&mut editor, true).unwrap(), Some(EditStep::Annotation(0))));
+        assert_eq!(editor.annotations(0).unwrap()[0].id, Some(id));
         assert!(matches!(history.step(&mut editor, true).unwrap(), Some(EditStep::Field(n)) if n == "name"));
         assert_eq!(value(&editor, "name"), changed);
-        assert_eq!(Editor::open(editor.save_incremental().unwrap()).unwrap().annotations(0).unwrap().len(), 1);
+        let saved = editor.save_incremental().unwrap();
+        assert!(saved.starts_with(FORM), "incremental save preserves the original PDF bytes");
+        let reopened = Editor::open(saved).unwrap();
+        assert_eq!(value(&reopened, "name"), changed);
+        let annotations = reopened.annotations(0).unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].id, Some(id));
+        assert_eq!(annotations[0].contents.as_deref(), Some("note"));
         history.step(&mut editor, false).unwrap();
         let branch = FieldValue::Text("Grace".into());
         editor.set_field("name", branch.clone()).unwrap();

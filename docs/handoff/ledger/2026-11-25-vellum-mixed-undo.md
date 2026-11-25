@@ -7,7 +7,8 @@
   order; a new edit clears redo for both kinds. Save and signing still reset
   the timeline, as before.
 - Verification: `field_and_markup_share_one_undo_order_and_branch` uses a real
-  PDF and checks saved field and annotation state. The PDF edit QEMU gate now
-  undoes a form change and the preceding note edit, captures
+  PDF, reopens its incremental save, and checks the field value, annotation
+  object ID and note text, and preservation of the original byte prefix. The
+  PDF edit QEMU gate now undoes a form change and the preceding note edit, captures
   `pdf-mixed-undo.ppm`, then redoes both. Full build and QEMU run on GitHub CI.
 - Scope: app/editor history only; no kernel, Wi-Fi driver, or tether changes.
