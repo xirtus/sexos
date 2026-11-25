@@ -91,6 +91,10 @@ pub fn parse_missed_beacons(p: &Packet<'_>) -> Option<u32> {
     p.data.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
 }
 
+/// Frames of the block-ack session dropped in a row before reordering is given up
+/// on (Linux sends a DELBA after `IWL_MVM_AMPDU_CONSEC_DROPS_DELBA`, 10).
+const BA_GIVE_UP_DROPS: u32 = 16;
+
 /// The firmware saw this frame before (`IWX_RX_MPDU_RES_STATUS_DUPLICATE`).
 const STATUS_DUPLICATE: u32 = 1 << 22;
 /// How long a block-ack window may sit with holes before they are given up.
@@ -143,7 +147,7 @@ impl Intake<'_> {
     }
     fn take_slot(&mut self, slots: &ba::Slots, i: usize, tid: usize, deliver: &mut impl FnMut(&[u8])) {
         let n = slots.len[i] as usize;
-        self.take(&slots.data[i][..n], tid, slots.pn[i], (0, 0), deliver);
+        self.take(&slots.data[i][..n], tid, slots.pn[i], slots.sub[i], deliver);
     }
 }
 
@@ -187,6 +191,8 @@ pub struct Link {
     /// Field tests: hand frames up without block-ack reordering; skip the replay check.
     pub ba_bypass: bool,
     pub replay_check: bool,
+    /// Times reordering was given up on after `BA_GIVE_UP_DROPS` drops in a row.
+    pub ba_gave_up: u32,
     pub down: Option<Down>,
     rekey: Option<Rekey>,
     /// Key messages answered after the handshake, keys installed since, and the
@@ -304,7 +310,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, dup_flagged: 0, last_unicast: None, ba_bypass: false, replay_check: true, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, dup_flagged: 0, last_unicast: None, ba_bypass: false, replay_check: true, ba_gave_up: 0, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0,
             ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
@@ -398,6 +404,7 @@ impl Link {
         let (mut malformed, mut malformed_count) = (None, 0u64);
         let (mut dup_flagged, mut last_status) = (0u64, None);
         let ba_bypass = self.ba_bypass;
+        let mut ba_gave_up = false;
         let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check };
         let result = b.receive(r, dma, |p: &Packet<'_>| {
             if cmdq.on_packet(p) {
@@ -462,7 +469,16 @@ impl Link {
                             // there dropped good frames for no reason.
                             let flagged = rx.status & STATUS_DUPLICATE != 0;
                             if flagged { dup_flagged += 1; }
-                            s.frame(rx.reorder, tid as u8, flagged && f[1] & 0x08 != 0, false)
+                            let amsdu = match parts {
+                                Some(_) => Some((part as u8, part + 1 == count)),
+                                None => rx.subframe.map(|i| (i, rx.last_subframe)),
+                            };
+                            let v = s.frame(rx.reorder, tid as u8, flagged && f[1] & 0x08 != 0, false, amsdu);
+                            // A firmware window out of step with the AP: every frame comes
+                            // marked old and is dropped (`iwl_mvm_oldsn_workaround`). Hand
+                            // frames up unordered from now on rather than lose them all.
+                            if s.consecutive_drops >= BA_GIVE_UP_DROPS { ba_gave_up = true; s.consecutive_drops = 0; }
+                            v
                         }
                         _ => ba::Verdict::Outside,
                     };
@@ -474,6 +490,7 @@ impl Link {
                             sl.data[i][..n].copy_from_slice(&eth[..n]);
                             sl.len[i] = n as u16;
                             sl.pn[i] = number;
+                            sl.sub[i] = subframe;
                             s.release(ba::Session::nssn(rx.reorder), |i| intake.take_slot(sl, i, tid, &mut deliver));
                             moved = true;
                         }
@@ -495,6 +512,7 @@ impl Link {
             }
             }
         });
+        if ba_gave_up && !self.ba_bypass { self.ba_bypass = true; self.ba_gave_up += 1; }
         self.dup_flagged += dup_flagged;
         if last_status.is_some() { self.last_unicast = last_status; }
         if malformed.is_some() { self.malformed = malformed; }
@@ -625,7 +643,7 @@ impl Link {
                     let tid = s.tid as usize;
                     let (mut key_frame, mut key_len) = ([0u8; eapol::MAX_FRAME], 0);
                     let mut pn = self.pn;
-                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: true };
+                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check };
                     s.flush(|i| intake.take_slot(sl, i, tid, deliver));
                     self.received += intake.received;
                     self.pn = pn;

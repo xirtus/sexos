@@ -745,13 +745,13 @@ impl Wifi {
         let (ssn, last) = t.last.map_or((0, 0), |s| (s.ssn, s.status));
         sex_pdx::serial_record!("[wifi.link.now] up={} ready={} sent={} ok={} failed={} queued={} cur={} hw={} tail_hw={} ssn={} last={:#x} skew={} full={}",
             l.up() as u8, l.ready() as u8, l.sent, l.tx_ok, l.tx_failed, t.queued, t.cur, t.hw, t.tail_hw(), ssn, last, t.ssn_skew, q.tx_full);
-        if l.ba_bypass || !l.replay_check { sex_pdx::serial_record!("[wifi.link.now5] tests: ba={} replay={}", if l.ba_bypass { "off" } else { "on" }, if l.replay_check { "on" } else { "off" }); }
+        if l.ba_bypass || !l.replay_check { sex_pdx::serial_record!("[wifi.link.now5] tests: ba={} replay={} ba_gave_up={}", if l.ba_bypass { "off" } else { "on" }, if l.replay_check { "on" } else { "off" }, l.ba_gave_up); }
         sex_pdx::serial_record!("[wifi.link.now2] rx={} dropped={} last_drop={:?} overflow={} queued_in={} v4_out={} v4_in={} arp={}/{} missed_beacons={} ba={} flushes={}",
             l.received, l.dropped, l.last_drop, q.overflow, q.count, q.tx_v4, q.rx_v4, q.tx_arp, q.rx_arp, l.missed_beacons, l.ba.is_some() as u8, l.ba_flushes);
         let (status, reorder) = l.last_unicast.unwrap_or((0, 0));
         match l.ba.as_ref() {
-            Some(b) => sex_pdx::serial_record!("[wifi.link.now4] ba tid={} window={} head={} stored={} passed={} released={} dropped={} dup_flagged={} last_status={:#x} reorder={:#x}",
-                b.tid, b.window, b.head(), b.stored, b.passed, b.released, b.dropped, l.dup_flagged, status, reorder),
+            Some(b) => sex_pdx::serial_record!("[wifi.link.now4] ba tid={} window={} head={} stored={} passed={} released={} dropped={} in_a_row={} dup_flagged={} last_status={:#x} reorder={:#x}",
+                b.tid, b.window, b.head(), b.stored, b.passed, b.released, b.dropped, b.consecutive_drops, l.dup_flagged, status, reorder),
             None => sex_pdx::serial_record!("[wifi.link.now4] ba=none dup_flagged={} last_status={:#x} reorder={:#x}", l.dup_flagged, status, reorder),
         }
         if let Some(m) = l.malformed {
