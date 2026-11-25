@@ -1596,6 +1596,11 @@ pub mod net {
         release(flow);
     }
     fn call(window: &mut Window, kind: u8, value: u64) -> Result<(u8, u32), Error> { call_on(window, Flow(0), kind, value) }
+    /// Ask the account broker on this run's Shell-approved network route.
+    /// No account credential or message body is supplied by the app.
+    pub fn mail_status(window: &mut Window) -> Result<u8, Error> {
+        call(window, w::MAIL_STATUS, 0).map(|(status, _)| status)
+    }
     fn call_on(window: &mut Window, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
         let _turn = Turn::take();
         call_held(Some(window), flow, kind, value)

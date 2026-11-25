@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Valentine: a local mail viewer. It reads `.eml` files within its Files grant;
-//! account-linked IMAP/SMTP flows will be supplied by Multipass in a later slice.
+//! account-linked IMAP/SMTP will use SexNet's broker after trusted setup lands.
 //! Enter opens a message, typing filters sender/subject/preview, Esc clears search,
 //! Ctrl+R reloads the folder, Ctrl+G cycles bounded local folders, Up/Down chooses a message
 //! and wheel scrolls its body.
@@ -352,9 +352,16 @@ impl App {
         if k.control && k.alt && k.code == 0x1e { self.choose_attachment(); return; } // Ctrl+Alt+A
         if k.control && k.alt && k.code == 0x1f { self.save_attachment(window); return; } // Ctrl+Alt+S
         match (k.control, k.code) {
-            (true, 0x32) => { // Ctrl+M: account linking needs the boot-routed Multipass service.
-                self.status = "Mail accounts are unavailable in this build; local mail and drafts remain available.".into();
-                sex_pdx::serial_record!("[valentine.account.unavailable] reason=multipass-service-not-booted");
+            (true, 0x32) => { // Ctrl+M: ask the credential-free broker status route.
+                let answer = sex_app::net::mail_status(window);
+                let broker = answer.is_ok() as u8;
+                let status = answer.as_ref().map_or(255, |s| *s);
+                self.status = match answer {
+                    Ok(sex_pdx::web::NO_MAIL_ACCOUNT) => "No mail account is linked yet; local mail and drafts remain available.".into(),
+                    Ok(sex_pdx::web::DENIED) | Err(_) => "This run has no mail network grant; use run +net valentine.".into(),
+                    Ok(_) => "Mail account status is unavailable; local mail and drafts remain available.".into(),
+                };
+                sex_pdx::serial_record!("[valentine.account.status] broker={} status={}", broker, status);
                 return;
             }
             (true, 0x31) => { self.new_draft(window); return; } // Ctrl+N

@@ -50,3 +50,13 @@ The local `.eml` viewer does not claim live mail sync or sending.
 It can now list nested folders within its granted local directory, bounded to
 four levels and 64 folders, and drafts created there stay there. Account-backed
 folders still require the Multipass service route.
+
+The existing Shell-bound Program-to-SexNet route now reserves mail broker
+operations for account status, inbox, fetch, and submit. SexNet checks the
+kernel-stamped live caller and the exact current Shell binding; unbound,
+retired, forged-task, browser, and Spindle callers are denied. With no
+configured account or verified mail dialer, all authorized mail operations
+return `NO_MAIL_ACCOUNT`, including submit. Ctrl+M now queries SexNet on a
+`run +net valentine` grant and reports that state. This is the first transport gate,
+not live mail: account setup in Shell, Shibari custody, TLS dialing inside
+SexNet, broker-owned IMAP/SMTP operations, and a Valentine client remain.
