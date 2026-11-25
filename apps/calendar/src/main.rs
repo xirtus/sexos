@@ -69,7 +69,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub enum View { Month, Week, Day, Clock, Calendars }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Ask { Event, Alarm, Timer, Zone, Home, NewCalendar }
+pub enum Ask { Event, CopyDate, MoveDate, Alarm, Timer, Zone, Home, NewCalendar }
 
 pub struct App {
     pub cal: Calendar,
@@ -339,18 +339,38 @@ impl App {
         if month_changed { sex_pdx::serial_record!("[calendar.month] month={:04}-{:02}", day.year, day.month); }
     }
     fn copy_tomorrow(&mut self, window: &mut Window) {
+        self.copy_to(window, self.selected.add_days(1));
+    }
+    fn copy_to(&mut self, window: &mut Window, day: Date) {
         let Some(source) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
         let from = self.selected;
-        let tomorrow = from.add_days(1);
         let linked = !self.cal.info(source.calendar).url.is_empty();
-        let copy = source.copy_occurrence_to(tomorrow, self.new_uid(), linked);
+        let copy = source.copy_occurrence_to(day, self.new_uid(), linked);
         let index = self.cal.events.len();
         self.cal.events.push(copy.clone());
         self.event_history.push(EventEdit { index, before: None, after: Some(copy.clone()) });
-        self.select(tomorrow);
-        self.picked = self.cal.on_day(tomorrow).iter().position(|e| e.uid == copy.uid).unwrap_or(0);
-        self.status = format!("Copied \"{}\" to {}.", copy.title, tomorrow);
-        sex_pdx::serial_record!("[date.event.copied] from={} to={} title={} linked={}", from, tomorrow, copy.title, linked as u8);
+        self.select(day);
+        self.picked = self.cal.on_day(day).iter().position(|e| e.uid == copy.uid).unwrap_or(0);
+        self.status = format!("Copied \"{}\" to {}.", copy.title, day);
+        sex_pdx::serial_record!("[date.event.copied] from={} to={} title={} linked={}", from, day, copy.title, linked as u8);
+        self.save(window);
+    }
+    fn move_to(&mut self, window: &mut Window, day: Date) {
+        let Some(source) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
+        let Some(index) = self.cal.events.iter().position(|e| *e == source) else { return };
+        if day == source.start { self.status = String::from("This event is already on that date."); return; }
+        let linked = !self.cal.info(source.calendar).url.is_empty();
+        let moved = match source.moved_personal_to(day, linked) {
+            Ok(event) => event,
+            Err(why) => { self.status = String::from(why); return; }
+        };
+        self.cal.events[index] = moved.clone();
+        self.event_history.push(EventEdit { index, before: Some(source.clone()), after: Some(moved.clone()) });
+        let from = self.selected;
+        self.select(day);
+        self.picked = self.cal.on_day(day).iter().position(|e| **e == moved).unwrap_or(0);
+        self.status = format!("Moved \"{}\" to {}.", moved.title, day);
+        sex_pdx::serial_record!("[date.event.moved] from={} to={} title={} linked={}", from, day, moved.title, linked as u8);
         self.save(window);
     }
     fn set_view(&mut self, view: View) {
@@ -652,6 +672,11 @@ impl App {
                 self.event_history.push(EventEdit { index, before: None, after: Some(e) });
                 self.save(window);
             }
+            Ask::CopyDate | Ask::MoveDate => match Date::parse(&text) {
+                Some(day) if ask == Ask::CopyDate => self.copy_to(window, day),
+                Some(day) => self.move_to(window, day),
+                None => self.status = String::from("Enter a date as YYYY-MM-DD."),
+            },
             Ask::Alarm => {
                 let (time, label) = text.split_once(' ').unwrap_or((&text, ""));
                 match clock::parse_time(time) {
@@ -803,6 +828,8 @@ impl App {
                 (_, Some(Nav::Up), _) => self.picked = self.picked.saturating_sub(1),
                 (_, Some(Nav::Down), _) => self.picked = (self.picked + 1).min(self.cal.on_day(self.selected).len().saturating_sub(1)),
                 (_, _, Some(b'd')) => self.copy_tomorrow(window),
+                (_, _, Some(b'D')) => { self.ask = Some(Ask::CopyDate); self.input.clear(); },
+                (_, _, Some(b'm')) => { self.ask = Some(Ask::MoveDate); self.input.clear(); },
                 (_, Some(Nav::Delete), _) | (0x6F, _, _) => {
                     let Some(gone) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
                     let Some(index) = self.cal.events.iter().position(|e| *e == gone) else { return };
