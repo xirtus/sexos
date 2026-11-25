@@ -99,7 +99,7 @@ enum Ask {
     PictureCrop(String),
     /// Ctrl+Shift+W: picture text flow in both DOCX and ODT.
     PictureWrap(String),
-    /// Ctrl+Shift+P: a 1-based PDF page range such as `1-3,5`.
+    /// Ctrl+Shift+P: a page range or current/selection/odd/even PDF pages.
     PrintRange(String),
     /// Ctrl+Shift+L: paper size and orientation, for example `A4 landscape`.
     Paper(String),
@@ -154,7 +154,7 @@ const GAP: i32 = 12;
 const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S", "Save"), ("Ctrl+Shift+E", "Save as / choose format"),
     ("Ctrl+Shift+Q", "Discard after a failed close-time recovery write"),
-    ("Ctrl+P", "Export PDF"), ("Ctrl+Shift+P", "Print selected pages"),
+    ("Ctrl+P", "Export PDF"), ("Ctrl+Shift+P", "Choose PDF pages"),
     ("Ctrl+Alt+P", "Preview pages before printing"),
     ("Ctrl+Shift+L", "Paper size and orientation"),
     ("Ctrl+Shift+M", "Page margins"),
@@ -445,7 +445,7 @@ impl Ui {
                 Ask::PictureWidth(width) => format!("Picture width: {width}_   {}", said("Inches, 0.1 to 20; proportions stay the same")),
                 Ask::PictureCrop(crop) => format!("Picture crop: {crop}_   {}", said("Left top right bottom, whole percentages; 0 0 0 0 resets")),
                 Ask::PictureWrap(wrap) => format!("Picture text flow: {wrap}_   {}", said("inline, square, or top-and-bottom")),
-                Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
+                Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("1-3,5 or current / selection / odd / even; Enter exports PDF")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
                 Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("place, remove, start N, continue, format TYPE, first/even on/off")),
@@ -529,7 +529,7 @@ impl Ui {
         canvas.fill(0, view_h, w, STATUS_H, self.palette.bar_bg);
         canvas.fill(0, view_h, w, 1, self.palette.line);
         let status = if let Some(Ask::PrintRange(typed)) = &self.ask {
-            format!("Print pages: {typed}_   Enter exports range, Esc cancels")
+            format!("Print pages: {typed}_   1-3,5 or current / selection / odd / even; Enter exports, Esc cancels")
         } else if !self.message.is_empty() {
             self.message.clone()
         } else {

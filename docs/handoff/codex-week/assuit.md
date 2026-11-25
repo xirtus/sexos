@@ -78,6 +78,8 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   and DOCX/ODT persistence. Custom list definitions remain.
 - **Writing aids:** Ctrl+Shift+Y selects the next issue and offers corrections. A adds the selected issue to Assuit's app-owned persistent dictionary. Ctrl+Shift+D lists that dictionary and adds or removes words with a durable save. Ctrl+Shift+K sets the document default and selected text's en-US, en-GB, en-AU or en-CA proofing language; DOCX also accepts `none` for text that should not be proofed. English dialect tags round-trip in DOCX and ODT; ODT refuses `none` because WordCraft cannot preserve it there. Ctrl+Shift+U shows or hides WordCraft's actual continuous spelling marks on the editable page without changing the document or undo history. The display choice persists across app restarts. Assuit now accepts non-English tags when a matching, readable Hunspell `.aff`/`.dic` pair is in its app-owned `assuit-dictionaries` folder; a host test verifies actual German spelling and DOCX/ODT persistence. Automatic language-pack download and bundled non-English dictionaries remain gaps.
 - **Print workflow:** PDF export and a selected-page range are now available.
+  The native print prompt now exports just the current page, pages touched by
+  selected text, or odd/even pages as separate PDFs, alongside custom ranges.
   Letter, Legal and A4 paper with portrait/landscape orientation are now available.
   Margin presets and custom top/bottom/left/right inches are now available.
   Ctrl+Alt+P now opens a separate read-only, whole-page print preview with page
