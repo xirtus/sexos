@@ -20,8 +20,10 @@ keeps the help key as ordinary text until that entry is finished.
 | Month, week, day | N | Add an event to the chosen day; start with `HH:MM` for a timed event |
 | Open agenda | Up, Down | Choose an event |
 | Open agenda | Delete | Remove the chosen event |
-| Open agenda | A, X | Accept or decline an invitation |
-| Open agenda | Escape or Enter | Return to the calendar |
+| Open agenda | A, X | Prepare accepting or declining an invitation and open a reply preview |
+| Reply preview | Enter | Queue the local reply file and update the invitation |
+| Reply preview | Escape or Ctrl+Z, then Ctrl+Y | Cancel the choice, then restore it before queueing |
+| Open agenda, outside a reply preview | Escape or Enter | Return to the calendar |
 | Week, day | Left, Right | Move one day |
 | Week, day | Up, Down | Scroll through hours |
 | Week, day | Page Up, Page Down | Previous or next week |

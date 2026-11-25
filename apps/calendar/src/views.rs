@@ -43,7 +43,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("M W D C L", "Month, week, day, clock, calendars"),
     ("S / E", "Sync CalDAV / export shown events to .ics"),
     ("V", "Review retained local CalDAV conflicts"),
-    ("Ctrl+Z / Ctrl+Y", "Undo / redo local events; world zones in Clock"),
+    ("Ctrl+Z / Ctrl+Y", "Undo / redo local events, reply choice, or Clock zones"),
     ("Month: arrows", "Move one day or one week"),
     ("Month: PgUp/PgDn", "Previous or next month"),
     ("T / Home", "Return to today"),
@@ -51,7 +51,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("N", "New event on the selected day"),
     ("Agenda: Up/Down", "Choose an event"),
     ("Agenda: Delete", "Remove the selected event"),
-    ("Agenda: A / X", "Accept or decline an invitation"),
+    ("Agenda: A / X", "Prepare accept / decline; Enter queues, Esc cancels"),
     ("Week/Day: Left/Right", "Move one day"),
     ("Week/Day: Up/Down", "Scroll through hours"),
     ("Week/Day: PgUp/PgDn", "Previous or next week"),
@@ -170,7 +170,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
             format!("{what}: {}_", app.input)
         }
         None if !app.status.is_empty() => app.status.clone(),
-        None if app.agenda => String::from("Up/Down pick, Delete removes, a accepts, x declines, Esc back"),
+        None if app.agenda => String::from("Up/Down pick, Delete removes, a/x prepares reply, Enter queues it, Esc cancels"),
         None => String::from(match app.view {
             View::Month => "Enter opens a day, n adds, v conflicts, s syncs, ? shortcuts",
             View::Week | View::Day => "Arrows move, Up/Down hours, n adds, Enter opens the day, ? shortcuts",
@@ -181,7 +181,23 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
     c.text(&mut f.small, 12, l.h - 26, &bottom, if app.ask.is_some() { palette.text } else { palette.dim }, l.side_x - 20);
     if app.help { help(&mut c, app, &l, f); }
     if let Some((index, position, total)) = app.review { conflict_review(&mut c, app, &l, f, index, position, total); }
+    if let Some(draft) = app.reply_history.pending() { reply_preview(&mut c, app, &l, f, draft); }
     window.show_pixels(w, h);
+}
+
+fn reply_preview(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces, draft: &sex_calendar::history::ReplyDraft) {
+    let p = app.palette;
+    let width = (l.w - 48).min(660);
+    let x = (l.w - width) / 2;
+    let y = ((l.h - 190) / 2).max(8);
+    c.fill(x, y, width, 190, p.panel);
+    c.outline(x, y, width, 190, 2, p.accent);
+    c.text(&mut f.big, x + 18, y + 14, "Review invitation reply", p.text, width - 36);
+    c.text(&mut f.small, x + 18, y + 62, &draft.event.title, p.accent, width - 36);
+    c.text(&mut f.small, x + 18, y + 94,
+        if draft.answer == PartStat::Accepted { "Accept" } else { "Decline" }, p.text, width - 36);
+    c.text(&mut f.tiny, x + 18, y + 128, "Enter queues a local reply file. No message is sent yet.", p.text, width - 36);
+    c.text(&mut f.tiny, x + 18, y + 156, "Esc or Ctrl+Z cancels; Ctrl+Y restores the choice.", p.dim, width - 36);
 }
 
 fn help(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
@@ -422,7 +438,7 @@ fn side(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
         if app.agenda {
             let mut detail = e.location.clone();
             if let Some(me) = e.my_attendee(&[]).map(|i| e.attendees[i].partstat) {
-                let state = match me { PartStat::NeedsAction => "invitation: a accepts, x declines", PartStat::Accepted => "accepted", PartStat::Declined => "declined", PartStat::Tentative => "maybe" };
+                let state = match me { PartStat::NeedsAction => "invitation: a prepares accept, x decline", PartStat::Accepted => "accepted", PartStat::Declined => "declined", PartStat::Tentative => "maybe" };
                 if !detail.is_empty() { detail.push_str(" - "); }
                 detail.push_str(state);
             }

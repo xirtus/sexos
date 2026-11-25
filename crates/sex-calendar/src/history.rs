@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded, in-session undo for Date's local event additions and deletions.
+//! In-session undo for Date's local event, reply-choice, and world-zone edits.
 //! Server sync changes the event list outside this history, so Date clears it then.
 use alloc::vec::Vec;
-use crate::{clock::Clock, Event};
+use crate::{clock::Clock, Event, PartStat};
 
 const LIMIT: usize = 32;
 
@@ -48,6 +48,39 @@ fn apply(events: &mut Vec<Event>, edit: &EventEdit, backward: bool) -> bool {
     true
 }
 
+/// A reply choice is reversible until Enter queues its local `.ics` file.
+/// The committed reply is intentionally outside this history: a delivered
+/// message cannot be recalled by undoing local calendar state.
+#[derive(Clone)]
+pub struct ReplyDraft { pub event: Event, pub answer: PartStat }
+
+#[derive(Default)]
+pub struct ReplyDraftHistory { current: Option<ReplyDraft>, redo: Option<ReplyDraft> }
+
+impl ReplyDraftHistory {
+    pub fn pending(&self) -> Option<&ReplyDraft> { self.current.as_ref() }
+    pub fn has_redo(&self) -> bool { self.redo.is_some() }
+    pub fn choose(&mut self, event: Event, answer: PartStat) {
+        self.current = Some(ReplyDraft { event, answer });
+        self.redo = None;
+    }
+    pub fn cancel(&mut self) -> bool {
+        let Some(draft) = self.current.take() else { return false };
+        self.redo = Some(draft);
+        true
+    }
+    pub fn redo(&mut self) -> bool {
+        let Some(draft) = self.redo.take() else { return false };
+        self.current = Some(draft);
+        true
+    }
+    pub fn take(&mut self) -> Option<ReplyDraft> {
+        self.redo = None;
+        self.current.take()
+    }
+    pub fn clear(&mut self) { self.current = None; self.redo = None; }
+}
+
 /// Only the world-zone list and home zone participate. Alarms and timers can
 /// fire between keystrokes, so a whole-clock snapshot would resurrect them.
 #[derive(Clone, PartialEq, Eq)]
@@ -91,6 +124,24 @@ mod tests {
     use crate::{Date, SyncState};
 
     fn event(title: &str) -> Event { Event::all_day(Date::new(2026, 3, 16).unwrap(), title) }
+
+    #[test]
+    fn reply_choice_is_reversible_only_before_commit() {
+        let mut history = ReplyDraftHistory::default();
+        let invite = event("review");
+        history.choose(invite.clone(), PartStat::Accepted);
+        assert_eq!(history.pending().unwrap().event, invite);
+        assert_eq!(history.pending().unwrap().answer, PartStat::Accepted);
+        assert!(history.cancel());
+        assert!(history.pending().is_none());
+        assert!(history.redo());
+        assert_eq!(history.take().unwrap().answer, PartStat::Accepted);
+        assert!(!history.redo(), "a queued choice cannot be redone");
+        history.choose(invite, PartStat::Declined);
+        history.cancel();
+        history.choose(event("other"), PartStat::Accepted);
+        assert!(!history.redo(), "a new choice replaces the old redo");
+    }
 
     #[test]
     fn addition_deletion_and_redo_chain() {
