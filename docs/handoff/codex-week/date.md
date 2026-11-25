@@ -56,13 +56,18 @@ Remaining gaps:
   true transport results; the QEMU gate checks healthy background Bell delivery
   and captures its screenshot, but does not force a Bell transport failure.
   Date now posts due reminders, alarms and timers with a Bell receipt. Bell
-  answers after deciding what to do with the complete text. A user mute settles
+  answers after Shell has assembled the exact Bell event and queued its panel
+  notice/history, or after a user mute settles
   that due instance without a banner or later backlog; spam rate limits and a
-  full queue leave the minute pending for retry. An accepted notice advances
-  the cursor only after Bell has kept it. Other apps keep Bell's
-  one-way notification call. A lost receipt can replay an accepted notice, and
-  Bell acceptance does not prove the Shell displayed it; delivery is still at
-  least once. The guest gate checks a healthy Bell receipt and screenshot; it
+  full queue leave the minute pending for retry. A Shell route or panel failure
+  also retries. Bell binds Shell's handled ACK to its full event ID, Date ticket,
+  sender and kernel live Bell task; stale ACKs across Bell restart cannot settle
+  a new notice. Other apps keep Bell's one-way notification call. A lost ACK or
+  receipt can replay an event. Shell panel enqueue is not durable pixel display;
+  Bell and Shell histories are volatile, so the handoff is at least once, not
+  durable display or exactly-once delivery.
+  Stable semantic IDs and cross-restart dedupe remain open. The guest gate checks
+  a healthy Shell-handled receipt and screenshot; it
   does not inject a queue-full or muted Bell state. Host receipt tests check
   muted versus transient refusal cursor policy.
   Date now keeps a bounded durable last-checked minute. When its window closes,

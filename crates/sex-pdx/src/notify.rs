@@ -11,8 +11,8 @@
 /// Program -> Bell: one chunk of a notification.
 /// arg0 = `Chunk::word()`, arg1/arg2 = 16 text bytes, little-endian.
 pub const OP_BELL_POST: u64 = 0xCC;
-/// A Date due notice. Bell replies after its last chunk with a receipt that
-/// says whether Bell actually kept the event. Ordinary posts remain one-way.
+/// A Date due notice. Bell replies after policy denial or after Shell handles
+/// its last forwarded chunk. Ordinary posts remain one-way.
 pub const OP_BELL_POST_CONFIRMED: u64 = 0xCF;
 /// Bell's BOOT domain. Check the reply's kernel-stamped sender, not its text.
 pub const BELL_PD: u32 = 10;
@@ -22,6 +22,12 @@ pub const OP_NOTIFICATION: u64 = 0x2D8;
 /// Shell -> Display: one chunk of the panel notice (same chunk form).
 /// A notice with no text clears it.
 pub const OP_PANEL_NOTICE: u64 = 0x2D9;
+/// Bell -> Shell: full event identity before confirmed text chunks.
+/// arg0 = Bell event ID, arg1 = Date ticket, arg2 = original sender PD.
+pub const OP_NOTIFICATION_BEGIN: u64 = 0x2DB;
+/// Shell -> Bell: handling of that exact Bell run's event.
+/// Arguments are `Presentation::ack_words`.
+pub const OP_NOTIFICATION_HANDLED: u64 = 0x2DC;
 
 /// Most text bytes in a notification: eight chunks.
 pub const TEXT_MAX: usize = 128;
@@ -33,8 +39,8 @@ pub const URGENCY_NORMAL: u8 = 1;
 pub const URGENCY_CRITICAL: u8 = 2;
 
 const RECEIPT_MARK: u64 = 0xB311;
-/// Bell accepted the event, intentionally suppressed it by the person's mute
-/// policy, or could not retain it yet. Date retries only the last case.
+/// Shell queued the panel/history event, a person hid or muted it, or the
+/// attempt cannot be confirmed yet. Date retries only the last case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Disposition { Retry = 0, Accepted = 1, Muted = 2 }
@@ -42,6 +48,48 @@ impl Disposition {
     /// User mute settles one due notice without showing it. A transient Bell
     /// refusal leaves that due minute pending.
     pub fn settles_due(self) -> bool { self != Self::Retry }
+}
+
+/// One confirmed notice in flight. Shell echoes the kernel-stamped Bell task,
+/// so an ACK queued across Bell restart cannot settle a new run's event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Presentation {
+    pub event_id: u64,
+    pub ticket: u32,
+    pub sender: u32,
+    pub bell_task: u32,
+}
+impl Presentation {
+    pub fn new(event_id: u64, ticket: u32, sender: u32, bell_task: u32) -> Option<Self> {
+        (event_id != 0 && sender != 0 && sender <= u16::MAX as u32 && bell_task != 0)
+            .then_some(Self { event_id, ticket, sender, bell_task })
+    }
+    pub fn matches_text(self, text: &Text, bell_task: u32) -> bool {
+        self.bell_task == bell_task && self.event_id as u16 == text.id && self.sender as u16 == text.sender
+    }
+    pub fn ack_words(self, disposition: Disposition) -> (u64, u64, u64) {
+        (self.event_id, (self.bell_task as u64) << 32 | self.ticket as u64,
+            (self.sender as u64) << 8 | disposition as u64)
+    }
+    pub fn decode_ack(a: u64, b: u64, c: u64) -> Option<(Self, Disposition)> {
+        if c >> 40 != 0 { return None; }
+        let disposition = match c as u8 { 0 => Disposition::Retry, 1 => Disposition::Accepted,
+            2 => Disposition::Muted, _ => return None };
+        let sender = (c >> 8) as u32;
+        let p = Self::new(a, b as u32, sender, (b >> 32) as u32)?;
+        Some((p, disposition))
+    }
+    pub fn accepts_ack(self, a: u64, b: u64, c: u64) -> Option<Disposition> {
+        Self::decode_ack(a, b, c).and_then(|(identity, disposition)|
+            (identity == self).then_some(disposition))
+    }
+    /// Bell must also keep the original sender run alive before replying to
+    /// its PD: a new Date task can reuse both that PD and its first ticket.
+    pub fn accepts_ack_for_live_tasks(self, a: u64, b: u64, c: u64,
+        sender_task: u32, live_bell_task: u32, live_sender_task: u32) -> Option<Disposition> {
+        (sender_task != 0 && self.bell_task == live_bell_task
+            && sender_task == live_sender_task).then(|| self.accepts_ack(a, b, c)).flatten()
+    }
 }
 
 pub fn receipt(ticket: u32, disposition: Disposition) -> u64 {
@@ -176,5 +224,25 @@ mod receipt_tests {
         assert_eq!(assembler.push(first.0, first.1, first.2), None);
         assert_eq!(assembler.push(last.0 ^ (1 << 48), last.1, last.2), None);
         assert!(!assembler.pending());
+    }
+
+    #[test]
+    fn presentation_ack_rejects_stale_bell_task_and_changed_event() {
+        let p = Presentation::new(0x1_0002, 0x1234_5678, 44, 901).unwrap();
+        let (a, b, c) = p.ack_words(Disposition::Accepted);
+        assert_eq!(Presentation::decode_ack(a, b, c), Some((p, Disposition::Accepted)));
+        assert_eq!(p.accepts_ack(a, b, c), Some(Disposition::Accepted));
+        assert_eq!(p.accepts_ack_for_live_tasks(a, b, c, 801, 901, 801), Some(Disposition::Accepted));
+        assert_eq!(p.accepts_ack_for_live_tasks(a, b, c, 801, 902, 801), None);
+        assert_eq!(p.accepts_ack_for_live_tasks(a, b, c, 801, 901, 802), None);
+        assert_eq!(Presentation::new(a, p.ticket, p.sender, 902).unwrap().accepts_ack(a, b, c), None);
+        assert_eq!(Presentation::new(a + 1, p.ticket, p.sender, p.bell_task).unwrap().accepts_ack(a, b, c), None);
+        assert_eq!(Presentation::new(a, p.ticket + 1, p.sender, p.bell_task).unwrap().accepts_ack(a, b, c), None);
+        assert_eq!(Presentation::decode_ack(a, b, c | (1 << 40)), None);
+        assert_eq!(Presentation::decode_ack(a, b, c | 3), None);
+        let text = Text { id: 2, sender: 44, ..Text::EMPTY };
+        assert!(p.matches_text(&text, 901));
+        assert!(!p.matches_text(&text, 902));
+        assert!(!p.matches_text(&Text { id: 3, ..text }, 901));
     }
 }
