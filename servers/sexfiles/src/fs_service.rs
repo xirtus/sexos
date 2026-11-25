@@ -1019,7 +1019,10 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
-        if matches!(r.kind, w::CREATE_WITH_ID | w::WRITE_IF_ID | w::REMOVE_IF_ID) { return w::reply(r.seq, w::UNSUPPORTED, 0); }
+        if matches!(r.kind, w::CREATE_WITH_ID | w::WRITE_IF_ID | w::REMOVE_IF_ID
+            | w::STAGE_BEGIN | w::STAGE_CHUNK | w::STAGE_PUBLISH | w::STAGE_ABORT) {
+            return w::reply(r.seq, w::UNSUPPORTED, 0);
+        }
         if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
