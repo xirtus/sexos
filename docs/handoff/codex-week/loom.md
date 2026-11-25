@@ -51,5 +51,6 @@ Remaining gaps:
   contrast tokens. Pictures retain a dark photo well because their RGB cache
   already contains that well; this avoids stale transparency halos across themes.
 - The in-app controls have a standalone reference in `docs/apps/loom-shortcuts.md`.
-  The GitHub CI gate now cuts VM power after a completed two-tab session save,
+  Folder navigation now saves the active tab's new path after startup recovery.
+  The GitHub CI gate cuts VM power after a completed two-tab session save,
   reattaches the same USB disk and captures the restored tabs. Redo remains open.
