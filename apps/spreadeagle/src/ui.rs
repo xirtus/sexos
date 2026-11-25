@@ -80,6 +80,8 @@ pub struct Ui {
     resizing: Option<(u32, i32, i32, i32)>,
     /// The Save As, Go To or insert/delete prompt, while it is open.
     ask: Option<Ask>,
+    /// An in-app shortcut reference, opened with Ctrl+Shift+/.
+    help: bool,
     /// The workbook came back with last time's unsaved changes: Esc throws them away until
     /// the next edit.
     recovered: bool,
@@ -100,6 +102,19 @@ enum Ask {
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
 const KEEP_AFTER_MS: u64 = 15_000;
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("Ctrl+S", "Save"), ("Ctrl+Shift+S", "Save as / choose format"),
+    ("Ctrl+P", "Export PDF"), ("Ctrl+G", "Go to cell or range"),
+    ("F2", "Edit selected cell"), ("Ctrl+Z / Y", "Undo / redo"),
+    ("Ctrl+C / X / V", "Copy / cut / paste"),
+    ("Ctrl+F / H", "Find / replace"),
+    ("Ctrl+Shift+= / -", "Insert / delete rows or columns"),
+    ("Ctrl+Shift+A / D", "Sort ascending / descending"),
+    ("Ctrl+Shift+L / E", "Filter / filter by cell"),
+    ("Ctrl+Shift+F / C", "Freeze panes / insert chart"),
+    ("Ctrl+PageUp / Down", "Previous / next sheet"),
+    ("Ctrl+Shift+/", "Show or hide this reference"),
+];
 
 /// Ctrl+F asks what to find; Ctrl+H also asks what to put in its place.
 struct Prompt {
@@ -139,6 +154,7 @@ mod code {
     pub const I: u8 = 0x17;
     pub const U: u8 = 0x16;
     pub const F2: u8 = 0x3C;
+    pub const SLASH: u8 = 0x35;
     pub const H: u8 = 0x23;
     pub const G: u8 = 0x22;
     pub const P: u8 = 0x19;
@@ -169,7 +185,7 @@ impl Ui {
             palette, theme_generation,
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
-            ask: None, recovered: false, unkept: None,
+            ask: None, help: false, recovered: false, unkept: None,
         }
     }
 
@@ -489,6 +505,25 @@ impl Ui {
         let sw = self.pen.measure(&status);
         let sx = (w - sw - 10).max(tx + 16);
         self.pen.text(&mut canvas, sx, ty0 + (TABS_H - self.pen.line_height()) / 2, &status, palette.dim, Some((sx, w - sx)));
+        if self.help {
+            let row = self.pen.line_height() + 6;
+            let bw = (w - 2 * PAD).min(540).max(0);
+            let bh = (row * (SHORTCUTS.len() as i32 + 2)).min(h - 2 * PAD);
+            if bw > 0 && bh > 0 {
+                let bx = (w - bw) / 2;
+                let by = ((h - bh) / 2).max(0);
+                canvas.fill(bx + 3, by + 3, bw, bh, palette.grid);
+                canvas.fill(bx, by, bw, bh, palette.bar_bg);
+                canvas.frame(bx, by, bw, bh, palette.grid);
+                self.pen.text(&mut canvas, bx + 12, by + 8, "Spreadeagle keyboard shortcuts (Esc closes)", palette.ink, Some((bx, bw - 16)));
+                for (i, (shortcut, action)) in SHORTCUTS.iter().enumerate() {
+                    let y = by + row * (i as i32 + 1) + 8;
+                    if y + row > by + bh { break; }
+                    self.pen.text(&mut canvas, bx + 12, y, shortcut, palette.accent, Some((bx, 190)));
+                    self.pen.text(&mut canvas, bx + 200, y, action, palette.ink, Some((bx + 200, (bw - 212).max(0))));
+                }
+            }
+        }
 
         self.rows = rows;
         self.cols = cols;
@@ -661,6 +696,15 @@ impl Ui {
 
     /// One key. Returns whether the cells (or the sheet) changed: worth a record of the column.
     fn key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        if key.control && key.shift && key.code == code::SLASH {
+            self.help = !self.help;
+            sex_std::record(&format!("[spreadeagle.shortcuts] shown={}", self.help as u8));
+            return false;
+        }
+        if self.help {
+            if key.code == code::ESC { self.help = false; }
+            return false;
+        }
         let (row, col) = (self.row as i64, self.col as i64);
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }

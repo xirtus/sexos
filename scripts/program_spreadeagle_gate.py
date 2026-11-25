@@ -70,6 +70,10 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-opened.ppm')})
   shot=(a.out/'spreadeagle-opened.ppm').read_bytes()
   assert shot.startswith(b'P6\n') and shot.count(b'\xff\xff\xff')>10000,'Light theme cell background missing'
+  ctrl_shift('slash',r'\[spreadeagle\.shortcuts\] shown=1')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-shortcuts.ppm')})
+  assert (a.out/'spreadeagle-shortcuts.ppm').stat().st_size>10000
+  ctrl_shift('slash',r'\[spreadeagle\.shortcuts\] shown=0')
   s=len(t());q.key('down');type_line('40');q.key('ret')
   g['wait'](r'\[spreadeagle\.set\] cell=B2 input=40\n',s,120)
   column('B',r'Cost\|40\|300\|150\|490\|5880\|\|',s)

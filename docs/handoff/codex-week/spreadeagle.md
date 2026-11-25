@@ -7,7 +7,7 @@ Baseline: a daily spreadsheet such as LibreOffice Calc or Excel. Checked against
 - **Save safety:** normal save, Save As, PDF export, and recovery copies write directly to the destination. First slice: stage, sync, and replace through Files' rename.
 - **Workbook UX:** the native grid needs a full formula picker, chart type/edit controls, multi-column sort, filter menus, and clear warnings when import loses unsupported workbook features.
 - **Polish:** the grid now follows Settings' light, dark and high-contrast colors
-  and accent changes. A complete shortcut reference and crash-interrupted save
-  gate remain.
+  and accent changes. A shortcut reference is in the app and
+  `docs/apps/spreadeagle-shortcuts.md`. A crash-interrupted save gate remains.
 
 Claim each remaining feature after a focused host test and CI guest evidence.
