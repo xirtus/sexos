@@ -12,6 +12,61 @@ pub const NOTICE_LEASE_MS: u64 = 10_000;
 pub const NOTICE_POLL_MS: u64 = 500;
 pub const NOTICE_RETRY_MS: u64 = 5_000;
 const HEADER: &str = "# date-notices 1";
+const RECEIPT_HEADER: &str = "# date-receipts 1";
+pub const RECEIPT_LIMIT: usize = 256;
+
+/// Date-owned durable receipts for UID-backed reminder keys. This bounds
+/// same-minute replay after a cursor save fails, including after a restart.
+/// The oldest entry is evicted at the limit; it is not an exactly-once store.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReceiptJournal { entries: Vec<(i64, u128)> }
+impl ReceiptJournal {
+    pub fn len(&self) -> usize { self.entries.len() }
+    /// A missing file starts an empty journal. An existing but unreadable or
+    /// malformed file must never be treated as empty by a reminder owner.
+    pub fn open(raw: Option<&str>) -> Option<Self> {
+        raw.map_or_else(|| Some(Self::default()), Self::parse)
+    }
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut lines = text.lines();
+        if lines.next() != Some(RECEIPT_HEADER) { return None; }
+        let mut entries = Vec::new();
+        for line in lines {
+            if entries.len() == RECEIPT_LIMIT { return None; }
+            let (minute, digest) = line.split_once(' ')?;
+            if digest.len() != 32 { return None; }
+            let minute = minute.parse::<i64>().ok()?;
+            let digest = u128::from_str_radix(digest, 16).ok()?;
+            if minute < 0 || entries.iter().any(|&(m, k)| m == minute && k == digest) { return None; }
+            entries.push((minute, digest));
+        }
+        Some(Self { entries })
+    }
+    pub fn serialize(&self) -> String {
+        let mut text = String::from(RECEIPT_HEADER);
+        text.push('\n');
+        for &(minute, digest) in &self.entries {
+            text.push_str(&format!("{minute} {digest:032x}\n"));
+        }
+        text
+    }
+    pub fn contains(&self, minute: i64, digest: u128) -> bool {
+        self.entries.contains(&(minute, digest))
+    }
+    /// Persist only after Shell's handled receipt. A failed file commit leaves
+    /// the in-memory journal unchanged and Date retries the due minute.
+    pub fn record_after_ack(&mut self, minute: i64, digest: u128,
+        mut save: impl FnMut(&str) -> bool) -> bool {
+        if self.contains(minute, digest) { return true; }
+        let mut next = self.clone();
+        next.entries.retain(|&(at, _)| at >= minute.saturating_sub(MAX_CATCHUP_MINUTES));
+        if next.entries.len() == RECEIPT_LIMIT { next.entries.remove(0); }
+        next.entries.push((minute, digest));
+        if !save(&next.serialize()) { return false; }
+        *self = next;
+        true
+    }
+}
 
 /// Poll independently of the window's input stream. A stream of pointer or
 /// keyboard events must not postpone a due Bell notice indefinitely.
@@ -265,5 +320,40 @@ mod tests {
         let delivery = deliver_due(&cal, &mut clock, reopened.minute, 20_002, 0, |_| true);
         assert_eq!(delivery.delivered.len(), 1, "the failed first notice remains in catch-up");
         assert!(!clock.alarms[0].enabled);
+    }
+
+    #[test]
+    fn receipt_commit_suppresses_replay_after_restart() {
+        let mut journal = ReceiptJournal::default();
+        assert!(!journal.record_after_ack(100, 42, |_| false));
+        assert!(!journal.contains(100, 42));
+        let mut saved = String::new();
+        assert!(journal.record_after_ack(100, 42, |text| { saved = text.into(); true }));
+        let mut reopened = ReceiptJournal::parse(&saved).unwrap();
+        assert!(reopened.contains(100, 42));
+        assert!(reopened.record_after_ack(100, 42, |_| panic!("duplicate must not write")));
+        assert!(!reopened.contains(101, 42));
+        assert!(!reopened.contains(100, 43));
+        assert!(ReceiptJournal::parse("# date-receipts 1\n100 bad\n").is_none());
+    }
+
+    #[test]
+    fn existing_damaged_receipts_do_not_open_as_empty() {
+        assert_eq!(ReceiptJournal::open(None), Some(ReceiptJournal::default()));
+        assert!(ReceiptJournal::open(Some("# date-receipts 1\n100 bad\n")).is_none());
+        let saved = "# date-receipts 1\n100 0000000000000000000000000000002a\n";
+        assert!(ReceiptJournal::open(Some(saved)).unwrap().contains(100, 42));
+    }
+
+    #[test]
+    fn receipt_journal_is_bounded_and_rejects_partial_file() {
+        let mut journal = ReceiptJournal::default();
+        for key in 0..RECEIPT_LIMIT + 1 {
+            assert!(journal.record_after_ack(100, key as u128, |_| true));
+        }
+        assert!(!journal.contains(100, 0));
+        assert!(journal.contains(100, RECEIPT_LIMIT as u128));
+        assert_eq!(ReceiptJournal::parse(&journal.serialize()), Some(journal));
+        assert!(ReceiptJournal::parse("# date-receipts 1\n100 0000000000000000000000000000002a\n101 ").is_none());
     }
 }
