@@ -25,8 +25,9 @@ SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, t
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  elf=(ROOT/'iso_root/programs/assuit').read_bytes();assert elf[:4]==b'\x7fELF'
+ jot=(ROOT/'iso_root/programs/jot').read_bytes();assert jot[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('assuit',elf)])
+ install(disk,[('assuit',elf),('jot',jot)])
  g=boot(a.iso,disk,a.out,'assuit',a.resolution);t=g['text'];q=g['q']
  def type_line(line):
   for k in line:
@@ -89,10 +90,24 @@ def main():
   q.key('esc');time.sleep(.3)
   g['wait'](r'\[assuit\.selection\] rects=1 pages=1\n',s,60)
   g['chord']('ctrl','c',r'\[assuit\.command\] edit\.copy\n')
+  copied=g['wait'](r'\[assuit\.clipboard\.copy\] bytes=(\d+) cut=0 ok=1\n',s,60)
+  assert int(copied[1])==len('Assuit'),copied[0]
+  # Another native app pastes the exact text Assuit published through Shell.
+  s=len(t());g['focus'](153);time.sleep(.5);type_line('run jot');q.key('ret')
+  jot_ready=g['wait'](r'\[jot\.ready\] target=(\d+) task=(\d+)',s,120)
+  jot_launch=g['wait'](rf'\[shell\.program\.launch\] target={jot_ready[1]} task={jot_ready[2]} surface=(\d+)',s,60)
+  g['focus'](int(jot_launch[1]));time.sleep(.8)
+  s=len(t());press('ctrl','v')
+  g['wait'](r'\[jot\.clip\.paste\] bytes=6 system=1 err=None',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-clipboard-in-jot.ppm')})
+  assert (a.out/'assuit-clipboard-in-jot.ppm').stat().st_size>10000
+  s=len(t());q.key('f11');g['wait'](r'\[jot\.closed\]',s,60)
+  g['focus'](SURFACE[int(o[1])]);time.sleep(.5)
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'end'}],'hold-time':80});time.sleep(.5)
   for _ in range(50):q.key('ret');time.sleep(.08)
   g['wait'](r'\[assuit\.page\] page=2 pages=2 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,300)
   g['chord']('ctrl','v',r'\[assuit\.command\] edit\.paste\n')
+  g['wait'](r'\[assuit\.clipboard\.paste\] bytes=6 ok=1\n',s,60)
   # Preview uses WordCraft's rendered paper but does not move the editing caret.
   s=len(t());press('ctrl','alt','p')
   g['wait'](r'\[assuit\.preview\] page=2 pages=2 width=\d+ height=\d+',s,120)

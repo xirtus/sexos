@@ -137,6 +137,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+S", "Apply paragraph style"),
     ("Ctrl+B / I / U", "Bold / italic / underline"),
     ("Ctrl+Z / Y", "Undo / redo"), ("Ctrl+A", "Select all"),
+    ("Ctrl+C / X / V", "Shared clipboard copy / cut / paste"),
     ("Ctrl+F / H", "Find / replace"),
     ("Ctrl+G", "Go to page"), ("Ctrl+Shift+Y", "Spelling suggestions"),
     ("Ctrl+Shift+K", "Proofing language"),
@@ -162,6 +163,8 @@ mod code {
     pub const R: u8 = 0x13;
     pub const O: u8 = 0x18;
     pub const C: u8 = 0x2E;
+    pub const X: u8 = 0x2D;
+    pub const V: u8 = 0x2F;
     pub const Y: u8 = 0x15;
     pub const L: u8 = 0x26;
     pub const M: u8 = 0x32;
@@ -815,6 +818,61 @@ impl Ui {
         }
     }
 
+    /// A key-originated transfer through Shell's focused-window clipboard.
+    /// Prompts keep their own text editing and never publish document text.
+    fn clipboard_key(&mut self, key: Key, window: &mut sex_app::Window) -> bool {
+        if !key.control || key.shift || key.alt
+            || self.preview_page.is_some() || self.help || self.dictionary.is_some()
+            || self.ask.is_some() || self.find.is_some() || self.picker.is_some()
+            || self.table_gallery.is_some() || self.proof.is_some() { return false; }
+        match key.code {
+            code::C | code::X => {
+                let cut = key.code == code::X;
+                let text = match self.book.copy_text() {
+                    Ok(text) if !text.is_empty() => text,
+                    Ok(_) => { self.message = "Select text before copying".into(); return true; }
+                    Err(e) => { self.message = format!("Could not copy: {e}"); return true; }
+                };
+                let result = sex_app::clipboard::copy(window, &text);
+                sex_std::record(&format!("[assuit.clipboard.copy] bytes={} cut={} ok={}", text.len(), cut as u8, result.is_ok() as u8));
+                match result {
+                    Ok(()) => {
+                        sex_std::record("[assuit.command] edit.copy");
+                        if cut {
+                            match self.book.run("edit.cut", serde_json::json!({})) {
+                                Ok(_) => { self.invalidate(); sex_std::record("[assuit.command] edit.cut"); },
+                                Err(e) => { self.message = format!("Copied, but could not cut: {e}"); return true; },
+                            }
+                        }
+                        self.message = if cut { "Cut to shared clipboard" } else { "Copied to shared clipboard" }.into();
+                    }
+                    Err(e) => self.message = format!("Shared clipboard unavailable: {e:?}"),
+                }
+                true
+            }
+            code::V => {
+                let text = match sex_app::clipboard::paste(window) {
+                    Ok(text) => text.to_string(),
+                    Err(sex_app::clipboard::Error::Empty) => {
+                        self.message = "Shared clipboard is empty".into(); return true;
+                    }
+                    Err(e) => { self.message = format!("Shared clipboard unavailable: {e:?}"); return true; }
+                };
+                match self.book.paste_text(&text) {
+                    Ok(()) => {
+                        self.invalidate();
+                        sex_std::record(&format!("[assuit.clipboard.paste] bytes={} ok=1", text.len()));
+                        sex_std::record("[assuit.command] edit.paste");
+                        self.message = "Pasted from shared clipboard".into();
+                    }
+                    Err(e) => self.message = format!("Could not paste: {e}"),
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn check_spelling(&mut self) {
         match self.book.next_spelling_issue() {
             Ok(Some((word, suggestions))) => {
@@ -1061,7 +1119,7 @@ impl Ui {
                 Event::Key(key) => {
                     let dirty = self.book.dirty();
                     let edits = self.book.edits;
-                    self.key(key);
+                    if !self.clipboard_key(key, window) { self.key(key); }
                     // An edit (typing, formatting, a style, undo): keep it soon, and the
                     // brought-back changes become the user's own.
                     if self.book.edits != edits && self.book.dirty() {

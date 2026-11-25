@@ -22,6 +22,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+A | Select all |
+| Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, and paste text through SexOS's shared clipboard; a same-document paste keeps formatting when the clipboard still matches |
 | Ctrl+F, Ctrl+H | Find, find and replace |
 | Ctrl+G | Go to page |
 | Ctrl+Shift+Y | Check spelling and choose a suggestion |
