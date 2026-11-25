@@ -134,14 +134,15 @@ fn quick_event(day: Date, typed: &str) -> Entry {
 
 fn now_ms() -> u64 { sex_pdx::civil_time_ms().unwrap_or(0) }
 
-/// A `false` here means PDX transport failed, so no Bell post is confirmed.
-/// Bell's own mute, spam and queue policy is not acknowledged by this API.
+/// User mute settles a due timer without showing it. Queue/rate-limit failures
+/// retry; a lost acceptance receipt may still replay a notice.
 fn post_timer(t: &Timer) -> bool {
     let title = if t.label.is_empty() { "Timer" } else { &t.label };
     let body = format!("{} timer done", clock::format_duration(t.seconds as u64));
-    let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
-    sex_pdx::serial_record!("[date.alarm.fired] kind=timer title={} notified={}", title, posted as u8);
-    posted
+    let disposition = sex_app::notify::post_confirmed(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+    sex_pdx::serial_record!("[date.alarm.fired] kind=timer title={} notified={} settled={}", title,
+        (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
+    disposition.settles_due()
 }
 
 fn due_text(cal: &Calendar, notice: &DueNotice, offset: i32) -> (&'static str, String, String) {
@@ -321,9 +322,10 @@ fn notice_worker() -> ! {
                 let offset = clock.home_zone().offset(minute);
                 let delivery = deliver_due(&cal, &mut clock, cursor.minute, minute, offset, |notice| {
                     let (kind, title, body) = due_text(&cal, notice, offset);
-                    let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
-                    sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={}", kind, title, posted as u8);
-                    posted
+                    let disposition = sex_app::notify::post_confirmed(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                    sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
+                        (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
+                    disposition.settles_due()
                 });
                 if delivery.failed { retry.failed(sex_pdx::get_ticks()); } else { retry.succeeded(); }
                 rang |= !delivery.delivered.is_empty();
@@ -761,10 +763,11 @@ impl App {
             let mut banner = None;
             let delivery = deliver_due(&self.cal, &mut self.clock, self.last_minute, minute, offset, |notice| {
                 let (kind, title, body) = due_text(&self.cal, notice, offset);
-                let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
-                sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={}", kind, title, posted as u8);
-                if posted { banner = Some(format!("{title}: {body}")); }
-                posted
+                let disposition = sex_app::notify::post_confirmed(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
+                sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={} settled={}", kind, title,
+                    (disposition == sex_pdx::notify::Disposition::Accepted) as u8, disposition.settles_due() as u8);
+                if disposition == sex_pdx::notify::Disposition::Accepted { banner = Some(format!("{title}: {body}")); }
+                disposition.settles_due()
             });
             if delivery.failed { self.notice_retry.failed(sex_pdx::get_ticks()); } else { self.notice_retry.succeeded(); }
             rang |= !delivery.delivered.is_empty();

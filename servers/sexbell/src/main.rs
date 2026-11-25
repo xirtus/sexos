@@ -1463,14 +1463,40 @@ pub extern "C" fn _start() -> ! {
                 sound::listen(msg.caller_pd as u32);
             }
 
-            sex_pdx::notify::OP_BELL_POST => {
+            sex_pdx::notify::OP_BELL_POST | sex_pdx::notify::OP_BELL_POST_CONFIRMED => {
                 // A notification with text, a chunk at a time, from the
                 // kernel-named caller. Policy runs once the text is whole.
                 let caller = msg.caller_pd;
-                let Some(text) = post_assembler(caller).push(msg.arg0, msg.arg1, msg.arg2) else { continue };
-                let allowed = !is_muted(caller) && !is_policy_muted(caller) && check_spam_budget(caller);
-                if !allowed {
-                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=muted_or_spam", caller);
+                let confirmed = msg.type_id == sex_pdx::notify::OP_BELL_POST_CONFIRMED;
+                let header = sex_pdx::notify::Chunk::decode(msg.arg0);
+                let Some(text) = post_assembler(caller).push(msg.arg0, msg.arg1, msg.arg2) else {
+                    // A malformed final chunk must not strand Date waiting for
+                    // an acknowledgement. Intermediate chunks have no answer.
+                    if confirmed {
+                        if let Some(c) = header.filter(|c| c.last) {
+                            let ticket = c.id as u32 | (c.sender as u32) << 16;
+                            pdx_reply(caller, sex_pdx::notify::receipt(ticket, sex_pdx::notify::Disposition::Retry));
+                        }
+                    }
+                    continue
+                };
+                let ticket = text.id as u32 | (text.sender as u32) << 16;
+                let acknowledge = |disposition: sex_pdx::notify::Disposition| {
+                    if confirmed {
+                        sex_pdx::serial_record!("[bell.post.receipt] caller_pd={} ticket={} accepted={} muted={}",
+                            caller, ticket, (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                            (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+                        pdx_reply(caller, sex_pdx::notify::receipt(ticket, disposition));
+                    }
+                };
+                if is_muted(caller) || is_policy_muted(caller) {
+                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=muted", caller);
+                    acknowledge(sex_pdx::notify::Disposition::Muted);
+                    continue;
+                }
+                if !check_spam_budget(caller) {
+                    sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=spam", caller);
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
                     continue;
                 }
                 let urgency = text.urgency;
@@ -1478,9 +1504,13 @@ pub extern "C" fn _start() -> ! {
                 let pushed = unsafe { BELL_QUEUE.push(caller, 0, urgency, lane, urgency, apply_policy_privacy(caller, 0), 0, 0, 0, 0, 0) };
                 let Ok((event_id, _)) = pushed else {
                     sex_pdx::serial_record!("[bell.post.reject] caller_pd={} reason=queue", caller);
+                    acknowledge(sex_pdx::notify::Disposition::Retry);
                     continue;
                 };
                 bump_generation();
+                // Accepted means Bell kept the event. Shell presentation may
+                // follow later; a lost receipt can still cause a retry.
+                acknowledge(sex_pdx::notify::Disposition::Accepted);
                 if lane == LANE_NOW && sound::chime() {
                     sex_pdx::serial_record!("[bell.sound.chime] event_id={}", event_id);
                 }

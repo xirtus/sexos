@@ -11,6 +11,11 @@
 /// Program -> Bell: one chunk of a notification.
 /// arg0 = `Chunk::word()`, arg1/arg2 = 16 text bytes, little-endian.
 pub const OP_BELL_POST: u64 = 0xCC;
+/// A Date due notice. Bell replies after its last chunk with a receipt that
+/// says whether Bell actually kept the event. Ordinary posts remain one-way.
+pub const OP_BELL_POST_CONFIRMED: u64 = 0xCF;
+/// Bell's BOOT domain. Check the reply's kernel-stamped sender, not its text.
+pub const BELL_PD: u32 = 10;
 /// Bell -> Shell: one chunk of an accepted notification.
 /// arg0 = `Chunk::word()` with `id` and `sender` set, arg1/arg2 as above.
 pub const OP_NOTIFICATION: u64 = 0x2D8;
@@ -26,6 +31,28 @@ pub const CHUNKS_MAX: usize = TEXT_MAX / CHUNK_BYTES;
 pub const URGENCY_LOW: u8 = 0;
 pub const URGENCY_NORMAL: u8 = 1;
 pub const URGENCY_CRITICAL: u8 = 2;
+
+const RECEIPT_MARK: u64 = 0xB311;
+/// Bell accepted the event, intentionally suppressed it by the person's mute
+/// policy, or could not retain it yet. Date retries only the last case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Disposition { Retry = 0, Accepted = 1, Muted = 2 }
+impl Disposition {
+    /// User mute settles one due notice without showing it. A transient Bell
+    /// refusal leaves that due minute pending.
+    pub fn settles_due(self) -> bool { self != Self::Retry }
+}
+
+pub fn receipt(ticket: u32, disposition: Disposition) -> u64 {
+    RECEIPT_MARK << 48 | (ticket as u64) << 2 | disposition as u64
+}
+pub fn decode_receipt(word: u64) -> Option<(u32, Disposition)> {
+    if word >> 48 != RECEIPT_MARK || word >> 34 & 0x3fff != 0 { return None; }
+    let disposition = match word & 3 { 0 => Disposition::Retry, 1 => Disposition::Accepted,
+        2 => Disposition::Muted, _ => return None };
+    Some(((word >> 2) as u32, disposition))
+}
 
 /// The header word of a chunk.
 /// bits 0..8 index, 8 last, 9..11 urgency, 16..32 total length,
@@ -87,7 +114,8 @@ impl Assembler {
     pub fn push(&mut self, word: u64, a: u64, b: u64) -> Option<Text> {
         let c = Chunk::decode(word)?;
         if c.index == 0 { self.next = 0; }
-        if c.index != self.next || (c.index != 0 && (c.len as u8 != self.text.len || c.id != self.text.id)) {
+        if c.index != self.next || (c.index != 0 && (c.len as u8 != self.text.len || c.id != self.text.id
+            || c.sender != self.text.sender || c.urgency != self.text.urgency)) {
             self.next = 0;
             return None;
         }
@@ -104,15 +132,49 @@ impl Assembler {
     }
 }
 
-/// Posts a notification to Bell. `summary` is one line; `body` may be empty.
-/// Fire and forget: a muted sender's notification is dropped by Bell.
-pub fn post(summary: &[u8], body: &[u8], urgency: u8) -> bool {
+/// Compose the same bounded text for one-way and confirmed Bell posts.
+pub fn compose(summary: &[u8], body: &[u8]) -> Option<([u8; TEXT_MAX], usize)> {
     let mut text = [0u8; TEXT_MAX];
     let mut n = 0;
     for &b in summary.iter().filter(|b| **b != b'\n') { if n < TEXT_MAX { text[n] = b; n += 1; } }
     if !body.is_empty() && n < TEXT_MAX { text[n] = b'\n'; n += 1; }
     for &b in body { if n < TEXT_MAX { text[n] = b; n += 1; } }
-    if n == 0 { return false; }
+    (n != 0).then_some((text, n))
+}
+
+/// Posts a notification to Bell. `summary` is one line; `body` may be empty.
+/// Fire and forget: a muted sender's notification is dropped by Bell.
+pub fn post(summary: &[u8], body: &[u8], urgency: u8) -> bool {
+    let Some((text, n)) = compose(summary, body) else { return false };
     let ok = chunks(&text[..n], urgency, 0, 0).all(|(w, a, b)| crate::pdx_call(crate::SLOT_BELL, OP_BELL_POST, w, a, b).0 == 0);
     ok
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    #[test]
+    fn receipt_is_bound_to_ticket_and_policy_result() {
+        for ticket in [1, 0x1234_5678, u32::MAX] {
+            for outcome in [Disposition::Accepted, Disposition::Muted, Disposition::Retry] {
+                assert_eq!(decode_receipt(receipt(ticket, outcome)), Some((ticket, outcome)));
+            }
+        }
+        assert_eq!(decode_receipt(0), None);
+        assert_eq!(decode_receipt(receipt(7, Disposition::Accepted) | (1 << 40)), None);
+        assert_eq!(decode_receipt(receipt(7, Disposition::Retry) | 3), None);
+        assert!(Disposition::Accepted.settles_due());
+        assert!(Disposition::Muted.settles_due());
+        assert!(!Disposition::Retry.settles_due());
+    }
+    #[test]
+    fn assembler_rejects_changed_ticket_between_chunks() {
+        let mut assembler = Assembler::new();
+        let mut calls = chunks(b"0123456789abcdefg", URGENCY_CRITICAL, 7, 9);
+        let first = calls.next().unwrap();
+        let last = calls.next().unwrap();
+        assert_eq!(assembler.push(first.0, first.1, first.2), None);
+        assert_eq!(assembler.push(last.0 ^ (1 << 48), last.1, last.2), None);
+        assert!(!assembler.pending());
+    }
 }

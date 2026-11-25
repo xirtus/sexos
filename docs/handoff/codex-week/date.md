@@ -55,8 +55,16 @@ Remaining gaps:
   least once, not exactly once. A host failure-injection test covers false-then-
   true transport results; the QEMU gate checks healthy background Bell delivery
   and captures its screenshot, but does not force a Bell transport failure.
-  A successful transport does not prove Bell accepted the notice: Bell can silently discard it
-  for mute, spam policy or a full queue. A Bell acknowledgement protocol remains.
+  Date now posts due reminders, alarms and timers with a Bell receipt. Bell
+  answers after deciding what to do with the complete text. A user mute settles
+  that due instance without a banner or later backlog; spam rate limits and a
+  full queue leave the minute pending for retry. An accepted notice advances
+  the cursor only after Bell has kept it. Other apps keep Bell's
+  one-way notification call. A lost receipt can replay an accepted notice, and
+  Bell acceptance does not prove the Shell displayed it; delivery is still at
+  least once. The guest gate checks a healthy Bell receipt and screenshot; it
+  does not inject a queue-full or muted Bell state. Host receipt tests check
+  muted versus transient refusal cursor policy.
   Date now keeps a bounded durable last-checked minute. When its window closes,
   a hidden Date run takes over reminders, alarms and timers and posts to Bell
   at the due time. An exclusive Files claim prevents duplicate hidden workers;

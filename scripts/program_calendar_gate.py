@@ -73,6 +73,7 @@ def main():
   q.key('c');time.sleep(.3);s=len(t());q.key('r');time.sleep(.3);keys('2s snooze me');q.key('ret')
   g['wait'](r'\[date.timer.started\] seconds=2 label=snooze me',s,30)
   g['wait'](r'\[date.alarm.fired\] kind=timer title=snooze me notified=1',s,45)
+  g['wait'](r'\[bell.post.receipt\] caller_pd=\d+ ticket=\d+ accepted=1',s,30)
   g['wait'](r'\[bell.post.ok\] caller_pd=\d+ event_id=\d+ lane=\d+ len=\d+ delivered=1',s,30)
   q.cmd('screendump',{'filename':str(a.out/'date-timer-delivered.ppm')})
   delivered=(a.out/'date-timer-delivered.ppm').read_bytes()
