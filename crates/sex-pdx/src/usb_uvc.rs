@@ -393,6 +393,255 @@ impl Shared {
     }
 }
 
+/// SexUVC write-capable slot for the live webcam frame bank.
+pub const FRAME_WRITER_SLOT: u64 = 1012;
+/// Program-row read-only slot for the live webcam frame bank (`< 1024` for `program_tenancy`).
+pub const FRAME_CLIENT_SLOT: u64 = 263;
+/// Region ID for the SexUVC -> Program live webcam frame bank.
+pub const FRAME_REGION_ID: u32 = 0x4408;
+/// Total live frame bank size (1 MiB, one physical allocation shared read-only across program rows).
+pub const FRAME_BYTES: u64 = 1024 * 1024;
+/// Frame bank header size (4 KiB).
+pub const FRAME_HEADER: usize = 4096;
+/// Number of ping-pong frame slots in the live frame bank.
+pub const FRAME_SLOTS: usize = 2;
+/// Maximum payload bytes per published frame (510 KiB; 4 KiB + 2 * 510 KiB == 1 MiB).
+pub const FRAME_SLOT_BYTES: usize = 510 * 1024;
+const _: () = assert!(FRAME_HEADER + FRAME_SLOTS * FRAME_SLOT_BYTES <= FRAME_BYTES as usize);
+
+const FB_MAGIC_VAL: u32 = 0x5556_4346; // "UVCF"
+const FB_MAGIC: usize = 0;
+const FB_ACTIVE: usize = 4;
+const FB_ACTIVE_SLOT: usize = 8;
+const FB_SEQ: usize = 12;
+const FB_WIDTH: usize = 16;
+const FB_HEIGHT: usize = 20;
+const FB_FORMAT: usize = 24;
+const FB_LEN: usize = 28;
+const FB_FPS: usize = 32;
+const FB_VENDOR_PRODUCT: usize = 36;
+const FB_DROPPED: usize = 40;
+
+const FB_SLOT_META_BASE: usize = 64;
+const FB_SLOT_META_STRIDE: usize = 16;
+
+/// Metadata for a live frame published by `sexuvc` into [`FrameBank`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LiveFrameMeta {
+    pub seq: u32,
+    pub width: u16,
+    pub height: u16,
+    pub format: u8,
+    pub fps: u16,
+    pub len: usize,
+    pub vendor: u16,
+    pub product: u16,
+    pub dropped: u32,
+}
+
+/// Lock-free double-buffered live frame bank: `sexuvc` writes into the inactive slot and
+/// flips `FB_ACTIVE_SLOT`/`FB_SEQ`; any program row maps the region read-only and performs
+/// tear-free reads verified against per-slot even/odd seqlock words.
+#[derive(Clone, Copy)]
+pub struct FrameBank {
+    base: *mut u8,
+}
+
+impl FrameBank {
+    /// # Safety
+    /// `base` must point to a valid, 4-byte-aligned mapping of at least [`FRAME_BYTES`] bytes.
+    pub unsafe fn at(base: *mut u8) -> Self {
+        Self { base }
+    }
+
+    /// SexUVC: open the writable view of the live frame bank.
+    #[cfg(target_os = "none")]
+    pub fn open_writer() -> Option<Self> {
+        crate::memory_region_full_view(
+            FRAME_WRITER_SLOT,
+            crate::memory_region::QUERY_VIEW
+                | crate::memory_region::READ
+                | crate::memory_region::WRITE,
+        )
+        .ok()
+        .filter(|v| v.length >= FRAME_BYTES && v.virtual_address != 0)
+        .map(|v| unsafe { Self::at(v.virtual_address as *mut u8) })
+    }
+
+    /// Program row (e.g. Flash): open the read-only view of the live frame bank.
+    #[cfg(target_os = "none")]
+    pub fn open_reader() -> Option<Self> {
+        crate::memory_region_full_view(
+            FRAME_CLIENT_SLOT,
+            crate::memory_region::QUERY_VIEW | crate::memory_region::READ,
+        )
+        .ok()
+        .filter(|v| v.length >= FRAME_BYTES && v.virtual_address != 0)
+        .map(|v| unsafe { Self::at(v.virtual_address as *mut u8) })
+    }
+
+    fn word(&self, at: usize) -> &AtomicU32 {
+        unsafe { &*(self.base.add(at) as *const AtomicU32) }
+    }
+    fn load(&self, at: usize) -> u32 {
+        self.word(at).load(Ordering::Acquire)
+    }
+    fn store(&self, at: usize, v: u32) {
+        self.word(at).store(v, Ordering::Release)
+    }
+    fn slot_meta(slot: usize) -> usize {
+        FB_SLOT_META_BASE + (slot & 1) * FB_SLOT_META_STRIDE
+    }
+    fn slot_ptr(&self, slot: usize) -> *mut u8 {
+        unsafe { self.base.add(FRAME_HEADER + (slot & 1) * FRAME_SLOT_BYTES) }
+    }
+
+    /// SexUVC: announce that a physical camera is attached and configured.
+    pub fn set_active(&self, vendor: u16, product: u16, width: u16, height: u16, format: u8, fps: u16) {
+        self.store(FB_VENDOR_PRODUCT, vendor as u32 | ((product as u32) << 16));
+        self.store(FB_WIDTH, width as u32);
+        self.store(FB_HEIGHT, height as u32);
+        self.store(FB_FORMAT, format as u32);
+        self.store(FB_FPS, fps as u32);
+        self.store(FB_MAGIC, FB_MAGIC_VAL);
+        self.store(FB_ACTIVE, 1);
+    }
+
+    /// SexUVC: mark the live camera inactive (e.g. on USB detach).
+    pub fn set_inactive(&self) {
+        self.store(FB_ACTIVE, 0);
+    }
+
+    /// Reader: true if a physical USB camera is currently active in `sexuvc`.
+    pub fn is_active(&self) -> bool {
+        self.load(FB_MAGIC) == FB_MAGIC_VAL && self.load(FB_ACTIVE) == 1
+    }
+
+    /// Reader: current monotonic published frame sequence (`0` before first frame).
+    pub fn seq(&self) -> u32 {
+        if !self.is_active() {
+            return 0;
+        }
+        self.load(FB_SEQ)
+    }
+
+    /// Reader: snapshot of current camera metadata if active.
+    pub fn info(&self) -> Option<LiveFrameMeta> {
+        if !self.is_active() {
+            return None;
+        }
+        let vp = self.load(FB_VENDOR_PRODUCT);
+        Some(LiveFrameMeta {
+            seq: self.load(FB_SEQ),
+            width: self.load(FB_WIDTH) as u16,
+            height: self.load(FB_HEIGHT) as u16,
+            format: self.load(FB_FORMAT) as u8,
+            fps: self.load(FB_FPS) as u16,
+            len: self.load(FB_LEN) as usize,
+            vendor: vp as u16,
+            product: (vp >> 16) as u16,
+            dropped: self.load(FB_DROPPED),
+        })
+    }
+
+    /// SexUVC: publish one complete frame into the inactive double-buffer slot.
+    pub fn publish(
+        &self,
+        width: u16,
+        height: u16,
+        format: u8,
+        fps: u16,
+        vendor: u16,
+        product: u16,
+        dropped: u32,
+        payload: &[u8],
+    ) -> Option<u32> {
+        if payload.is_empty() || payload.len() > FRAME_SLOT_BYTES {
+            return None;
+        }
+        let next_slot = ((self.load(FB_ACTIVE_SLOT) ^ 1) & 1) as usize;
+        let next_seq = self.load(FB_SEQ).wrapping_add(1).max(1);
+        let meta = Self::slot_meta(next_slot);
+        let odd_gen = next_seq.wrapping_mul(2).wrapping_sub(1);
+        let even_gen = next_seq.wrapping_mul(2);
+
+        self.store(meta, odd_gen);
+        core::sync::atomic::fence(Ordering::Release);
+        unsafe {
+            core::ptr::copy_nonoverlapping(payload.as_ptr(), self.slot_ptr(next_slot), payload.len());
+        }
+        self.store(meta + 4, payload.len() as u32);
+        self.store(meta + 8, width as u32 | ((height as u32) << 16));
+        self.store(meta + 12, format as u32 | ((fps as u32) << 8));
+        self.store(meta, even_gen);
+
+        self.store(FB_WIDTH, width as u32);
+        self.store(FB_HEIGHT, height as u32);
+        self.store(FB_FORMAT, format as u32);
+        self.store(FB_LEN, payload.len() as u32);
+        self.store(FB_FPS, fps as u32);
+        self.store(FB_VENDOR_PRODUCT, vendor as u32 | ((product as u32) << 16));
+        self.store(FB_DROPPED, dropped);
+        self.store(FB_ACTIVE_SLOT, next_slot as u32);
+        self.store(FB_MAGIC, FB_MAGIC_VAL);
+        self.store(FB_ACTIVE, 1);
+        self.store(FB_SEQ, next_seq);
+        Some(next_seq)
+    }
+
+    /// Reader: copy the latest frame into `out` if its sequence is newer than `last_seq`.
+    /// Returns `None` if inactive, no new frame is available, `out` is too small, or a
+    /// concurrent write invalidated all retry attempts.
+    pub fn read_frame(&self, last_seq: u32, out: &mut [u8]) -> Option<LiveFrameMeta> {
+        if !self.is_active() {
+            return None;
+        }
+        let seq = self.load(FB_SEQ);
+        if seq == 0 || seq == last_seq {
+            return None;
+        }
+        for _ in 0..4 {
+            let slot = (self.load(FB_ACTIVE_SLOT) & 1) as usize;
+            let meta = Self::slot_meta(slot);
+            let s0 = self.load(meta);
+            if s0 == 0 || (s0 & 1) != 0 {
+                continue;
+            }
+            let len = self.load(meta + 4) as usize;
+            let dims = self.load(meta + 8);
+            let fmt_fps = self.load(meta + 12);
+            let vp = self.load(FB_VENDOR_PRODUCT);
+            let dropped = self.load(FB_DROPPED);
+            if len == 0 || len > FRAME_SLOT_BYTES || len > out.len() {
+                return None;
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(self.slot_ptr(slot), out.as_mut_ptr(), len);
+            }
+            core::sync::atomic::fence(Ordering::Acquire);
+            let s1 = self.load(meta);
+            if s0 == s1 {
+                let frame_seq = s0 / 2;
+                if frame_seq == last_seq {
+                    return None;
+                }
+                return Some(LiveFrameMeta {
+                    seq: frame_seq,
+                    width: dims as u16,
+                    height: (dims >> 16) as u16,
+                    format: fmt_fps as u8,
+                    fps: (fmt_fps >> 8) as u16,
+                    len,
+                    vendor: vp as u16,
+                    product: (vp >> 16) as u16,
+                    dropped,
+                });
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,5 +703,39 @@ mod tests {
         assert!(s.camera().is_none());
         s.set_camera(Some(&info));
         assert_eq!(s.camera().unwrap().generation, 2);
+    }
+
+    #[test]
+    fn frame_bank_double_buffer_publish_and_read() {
+        let mut mem = vec![0u32; FRAME_BYTES as usize / 4];
+        let bank = unsafe { FrameBank::at(mem.as_mut_ptr() as *mut u8) };
+        assert!(!bank.is_active());
+        assert!(bank.info().is_none());
+
+        bank.set_active(0x0c45, 0x6d18, 1280, 720, FMT_MJPEG, 30);
+        assert!(bank.is_active());
+        let mut out = vec![0u8; 64];
+        assert!(bank.read_frame(0, &mut out).is_none());
+
+        let f1 = [0xFFu8, 0xD8, 0xFF, 0xE0, 0x01, 0x02, 0xFF, 0xD9];
+        assert_eq!(bank.publish(1280, 720, FMT_MJPEG, 30, 0x0c45, 0x6d18, 0, &f1), Some(1));
+        let m1 = bank.read_frame(0, &mut out).expect("frame 1");
+        assert_eq!((m1.seq, m1.width, m1.height, m1.format, m1.fps, m1.len), (1, 1280, 720, FMT_MJPEG, 30, f1.len()));
+        assert_eq!((m1.vendor, m1.product, m1.dropped), (0x0c45, 0x6d18, 0));
+        assert_eq!(&out[..m1.len], &f1);
+        // Same seq returns None
+        assert!(bank.read_frame(m1.seq, &mut out).is_none());
+
+        // Second frame flips to the other slot
+        let f2 = [0xFFu8, 0xD8, 0xFF, 0xDB, 0xAA, 0xBB, 0xCC, 0xFF, 0xD9];
+        assert_eq!(bank.publish(1280, 720, FMT_MJPEG, 30, 0x0c45, 0x6d18, 2, &f2), Some(2));
+        let m2 = bank.read_frame(m1.seq, &mut out).expect("frame 2");
+        assert_eq!((m2.seq, m2.len, m2.dropped), (2, f2.len(), 2));
+        assert_eq!(&out[..m2.len], &f2);
+
+        // Detach marks inactive
+        bank.set_inactive();
+        assert!(!bank.is_active());
+        assert!(bank.read_frame(0, &mut out).is_none());
     }
 }
