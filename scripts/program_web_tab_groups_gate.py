@@ -72,7 +72,10 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
   wide,target,task,tile,pw,ph=launch()
   bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
-  label=(bx+12,by+BAR//2)
+  omni_left=100;shields_x=max(max(max(pw-34,omni_left)-30,omni_left)-52,omni_left)
+  ca=max(shields_x-8-omni_left,0)
+  omni_w=min(max(260,min(340,(pw*28)//100)),ca-120) if ca>=420 else (max(140,min(260,ca//2)) if ca>=220 else ca)
+  label=(bx+omni_left+omni_w+8+12,by+BAR//2)
   def shown(i,name):
    m=g['wait'](rf'\[web.tab.shown\] index={i} count=\d+ url=([^\n]*)',s,60);assert m[1].endswith(f'/p/{name}'),m[0]
   # A into a new group, named for its site.
