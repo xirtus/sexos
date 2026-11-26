@@ -126,6 +126,9 @@ def main():
    else:
     assert cached==N and made==0 and ms<result['first']['ms'],m[0]
     assert drawn==0 and from_cache==helpers,(m[0],drawn_pdf,drawn_raw)
+   # Loom's session keeps each folder's cursor, and the first run ended on End:
+   # go back to the first tiles before looking for them.
+   s=len(t());q.key('home')
    g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w=\d+ h=\d+',s,30)
    time.sleep(2);shot=a.out/f'thumbs-{run}.ppm';q.cmd('screendump',{'filename':str(shot)})
    found=seen(shot,colours);result[run]['colours_on_screen']=sorted(colours[c] for c in found)
