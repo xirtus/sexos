@@ -24,7 +24,10 @@ class QMP:
             if response.get('id')==self.seq:
                 if 'error'in response:raise RuntimeError(str(response))
                 return response.get('return')
-    def key(self,key):self.cmd('send-key',{'keys':[{'type':'qcode','data':key}],'hold-time':80})
+    def key(self,key):
+        # QEMU qcodes are lower case: a single capital letter is Shift plus that key.
+        names=['shift',key.lower()] if len(key)==1 and key.isupper() else [key]
+        self.cmd('send-key',{'keys':[{'type':'qcode','data':n} for n in names],'hold-time':80})
     def key_sequence(self,keys):
         # QMP send-key serializes its hold-time before the next key. Submit
         # ordered hardware events together to measure guest service overlap.
