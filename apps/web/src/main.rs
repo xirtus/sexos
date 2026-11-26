@@ -28,6 +28,7 @@ mod session;
 mod viewport;
 mod websocket;
 mod code_store;
+mod selftest;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -294,6 +295,8 @@ struct Browser {
     /// Hosts the person let load over plain HTTP this run, after HTTPS-only mode found
     /// no secure version of them.
     http_ok: Vec<String>,
+    /// Failure count from the most recent `about:selftest` / `--selftest` run.
+    last_selftest_failed: Option<usize>,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -925,6 +928,10 @@ impl Browser {
         if self.in_frame.is_none() { self.blocked = 0; }
         let (html, base) = if url == "about:downloads" {
             (self.downloads_page(), String::from(url))
+        } else if url == "about:selftest" || url == "about:selftest-net" {
+            let (html, summary) = selftest::run(self, url == "about:selftest-net");
+            self.last_selftest_failed = Some(summary.failed);
+            (html, String::from(url))
         } else if url == "about:shields" || url == "about:shields?update" {
             (self.shields_page(url), String::from("about:shields"))
         } else if url == panel::BOOKMARKS {
@@ -2175,7 +2182,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
@@ -2192,11 +2199,23 @@ pub extern "C" fn _start() -> ! {
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
     sex_pdx::serial_record!("[web.cores] cores={}", cores);
-    // Started without an address, Kaleidoscope opens the tabs it had last time.
-    let address = given.split_ascii_whitespace().find(|a| !a.starts_with("--"));
-    if address.is_some() || !b.keep_session || b.jarbox == profile::Jarbox::Private || !b.restore_session() {
-        let first = address.unwrap_or(first_page()).to_string();
-        b.open(&first, false);
+    let selftest_net = given.split_ascii_whitespace().any(|a| a == "--selftest-net");
+    let selftest_offline = given.split_ascii_whitespace().any(|a| a == "--selftest");
+    let selftest_exit = given.split_ascii_whitespace().any(|a| a == "--selftest-exit");
+    if selftest_net || selftest_offline {
+        b.open(if selftest_net { "about:selftest-net" } else { "about:selftest" }, false);
+        if selftest_exit {
+            b.settle();
+            let code = if b.last_selftest_failed.unwrap_or(1) == 0 { 0 } else { 1 };
+            sex_pdx::task_finish(code);
+        }
+    } else {
+        // Started without an address, Kaleidoscope opens the tabs it had last time.
+        let address = given.split_ascii_whitespace().find(|a| !a.starts_with("--"));
+        if address.is_some() || !b.keep_session || b.jarbox == profile::Jarbox::Private || !b.restore_session() {
+            let first = address.unwrap_or(first_page()).to_string();
+            b.open(&first, false);
+        }
     }
     let registered = sex_app::search::register("kaleidoscope", &[sex_app::search::KIND_HISTORY, sex_app::search::KIND_BOOKMARK]);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
