@@ -54,6 +54,63 @@ impl Pacer {
     }
 }
 
+/// Lightweight ring-buffered frame-time meter for telemetry and optional HUD.
+const METER_KEEP: usize = 64;
+/// Frames taking longer than a 60 Hz budget (17 ms) count as slow.
+pub const SLOW_THRESHOLD_MS: u16 = 17;
+
+pub struct FrameMeter {
+    samples: [u16; METER_KEEP],
+    count: usize,
+    total_frames: u64,
+    slow_frames: u64,
+    last_ms: u16,
+    max_ms: u16,
+    hud: bool,
+}
+
+impl FrameMeter {
+    pub const fn new() -> Self {
+        Self { samples: [0; METER_KEEP], count: 0, total_frames: 0, slow_frames: 0, last_ms: 0, max_ms: 0, hud: false }
+    }
+    pub fn set_hud(&mut self, on: bool) -> bool {
+        let changed = self.hud != on;
+        self.hud = on;
+        changed
+    }
+    pub fn hud_enabled(&self) -> bool { self.hud }
+    pub fn record(&mut self, render_ms: u64) {
+        let ms = render_ms.min(u16::MAX as u64) as u16;
+        self.samples[self.count % METER_KEEP] = ms;
+        self.count = self.count.wrapping_add(1);
+        self.total_frames = self.total_frames.wrapping_add(1);
+        if ms >= SLOW_THRESHOLD_MS { self.slow_frames = self.slow_frames.wrapping_add(1); }
+        self.last_ms = ms;
+        if ms > self.max_ms { self.max_ms = ms; }
+    }
+    pub fn last_ms(&self) -> u16 { self.last_ms }
+    pub fn total_frames(&self) -> u64 { self.total_frames }
+    pub fn slow_frames(&self) -> u64 { self.slow_frames }
+    pub fn max_ms(&self) -> u16 { self.max_ms }
+    pub fn percentile(&self, pct: usize) -> u16 {
+        let n = self.count.min(METER_KEEP);
+        if n == 0 { return 0; }
+        let mut v = self.samples;
+        let v = &mut v[..n];
+        v.sort_unstable();
+        v[((n - 1) * pct.min(100)) / 100]
+    }
+    /// Copies up to `out.len()` most-recent frame times in chronological order.
+    pub fn recent(&self, out: &mut [u16]) -> usize {
+        let n = self.count.min(METER_KEEP).min(out.len());
+        let start = self.count.saturating_sub(n);
+        for i in 0..n {
+            out[i] = self.samples[(start + i) % METER_KEEP];
+        }
+        n
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +137,23 @@ mod tests {
         p.stop();
         assert!(p.due(118));
         assert_eq!(p.presented(118), None);
+    }
+    #[test]
+    fn frame_meter_percentiles_and_slow_count() {
+        let mut m = FrameMeter::new();
+        assert!(!m.hud_enabled());
+        assert!(m.set_hud(true));
+        assert!(!m.set_hud(true));
+        for ms in [4u64, 5, 6, 8, 10, 12, 14, 16, 18, 25] { m.record(ms); }
+        assert_eq!(m.total_frames(), 10);
+        assert_eq!(m.slow_frames(), 2);
+        assert_eq!(m.last_ms(), 25);
+        assert_eq!(m.max_ms(), 25);
+        assert_eq!(m.percentile(50), 10);
+        assert_eq!(m.percentile(95), 18);
+        assert_eq!(m.percentile(99), 18);
+        let mut buf = [0u16; 4];
+        assert_eq!(m.recent(&mut buf), 4);
+        assert_eq!(buf, [14, 16, 18, 25]);
     }
 }
