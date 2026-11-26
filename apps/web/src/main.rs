@@ -2237,7 +2237,7 @@ impl Browser {
         if hover_changed { self.relayout(); self.draw(); }
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
-            Kind::Down { button: 2 } if !kept && y >= 0 && self.in_frame.is_none() => {
+            Kind::Up { button: 2 } if !kept && y >= 0 && self.in_frame.is_none() => {
                 self.open_context_menu(wx, wy);
             }
             Kind::Up { button: 0 } if !kept && y >= 0 => {
