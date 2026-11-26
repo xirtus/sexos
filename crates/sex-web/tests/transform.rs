@@ -51,7 +51,7 @@ fn text_inside_a_rotated_box_turns_too() {
     let turned = shot("<body style='margin:0;background:#fff;color:#000'><div style='margin:100px 0 0 100px;width:200px;font-size:20px;transform:rotate(-90deg)'>HHHHHHHH</div>");
     let ink = |s: &(Vec<u32>, i32)| {
         let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-        for y in 0..270 { for x in 0..400 { if at(s, x, y) & 0xFF < 0x80 { x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); } } }
+        for y in 0..(300 - BAR) { for x in 0..400 { if at(s, x, y) & 0xFF < 0x80 { x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); } } }
         (x1 - x0, y1 - y0)
     };
     let (fw, fh) = ink(&flat);

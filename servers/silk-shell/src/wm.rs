@@ -44,6 +44,9 @@ pub mod code {
     pub const LEFT: u8 = 0x4B;
     pub const RIGHT: u8 = 0x4D;
     pub const DOWN: u8 = 0x50;
+    pub const GRAVE: u8 = 0x29;
+    pub const PAGE_UP: u8 = 0x49;
+    pub const PAGE_DOWN: u8 = 0x51;
     /// USB keyboards deliver Up and Down with these codes today.
     pub const UP_USB: u8 = 0x67;
     pub const DOWN_USB: u8 = 0x6C;
@@ -91,8 +94,10 @@ impl Layout {
 /// What a Super chord asks the desktop to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WmAction {
-    /// Super pressed and released alone, or Super+D: the launcher.
+    /// Super pressed and released alone, or Super+Shift+D: the legacy command palette.
     Launcher,
+    /// Super+Space or Super+D: the frosted Candy Lavender Spotlight app launcher.
+    Spotlight,
     /// Super+Enter: a terminal.
     Terminal,
     /// Super+1..9.
@@ -196,7 +201,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::TAB, false) => WmAction::NextWorkspace,
         (code::TAB, true) => WmAction::PrevWorkspace,
         (code::ENTER, _) => WmAction::Terminal,
-        (code::D, _) => WmAction::Launcher,
+        (code::D, false) => WmAction::Spotlight,
+        (code::D, true) => WmAction::Launcher,
         (code::Q, _) => WmAction::Close,
         (code::F, false) => WmAction::Fullscreen,
         (code::F, true) => WmAction::FrameMeter,
@@ -218,8 +224,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::ESC, _) => WmAction::Lock,
         (code::G, false) => WmAction::Group,
         (code::G, true) => WmAction::Ungroup,
-        (code::PERIOD, _) => WmAction::NextTab,
-        (code::COMMA, _) => WmAction::PrevTab,
+        (code::PERIOD, _) | (code::PAGE_DOWN, _) | (code::GRAVE, false) => WmAction::NextTab,
+        (code::COMMA, _) | (code::PAGE_UP, _) | (code::GRAVE, true) => WmAction::PrevTab,
         (code::T, false) => WmAction::ToggleDwindle,
         (code::T, true) => WmAction::ToggleThemeMode,
         (code::C, true) => WmAction::CycleWindowTint,

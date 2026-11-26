@@ -1087,6 +1087,15 @@ pub mod files {
             n
         })
     }
+    /// Disk partition list, dry-run install plan, or atomic install (`sex_pdx::fs::INSTALL`).
+    /// Files answers Spindle and the system's `tatami` Settings program alone.
+    pub fn install(window: &mut Window, path: &[u8], offset: u64, flags: u64, out: &mut [u8]) -> Result<usize, Error> {
+        exchange(Some(window), w::INSTALL, path, offset, flags, |_| {}, |n, data| {
+            let n = (n as usize).min(out.len()).min(data.len());
+            out[..n].copy_from_slice(&data[..n]);
+            n
+        })
+    }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
         direct::read_at_held(Some(window), path, offset, out)

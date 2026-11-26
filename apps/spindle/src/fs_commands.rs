@@ -263,9 +263,58 @@ impl Client {
             return true;
         }
         if cmd == b"install" {
-            // install [go] [GIB] [IMAGE]: plans, and with `go` installs. GIB sizes the
-            // SexOS store (default: all the free space); IMAGE is a boot image file
-            // (default: the running system).
+            // Omarchy-style fast installer:
+            //   install parts | install list       list GPT partitions (type, size, replaceable)
+            //   install replace <N> [go] [IMAGE]   safely replace ONLY partition #N
+            //   install [go] [GIB] [IMAGE]         install into free space (or whole blank disk)
+            if first == b"parts" || first == b"list" {
+                say!(sb, "Scanning GPT partitions...");
+                self.start(Cmd::Install, w::INSTALL, 0, 0, w::INSTALL_LIST);
+                return true;
+            }
+            if first == b"replace" {
+                let (part_word, mut more) = split(rest);
+                if part_word.is_empty() || !part_word.iter().all(u8::is_ascii_digit) {
+                    say!(sb, "Usage: install replace <N> [go] [IMAGE]  (run 'install parts' to list partitions)");
+                    return true;
+                }
+                let part_num = part_word
+                    .iter()
+                    .fold(0u64, |n, d| n.saturating_mul(10).saturating_add((d - b'0') as u64));
+                if part_num == 0 || part_num > 1024 {
+                    say!(sb, "Partition number must be 1..=1024. Run 'install parts' to see valid numbers.");
+                    return true;
+                }
+                let (mut go, mut image): (bool, &[u8]) = (false, b"");
+                while !more.is_empty() {
+                    let (word, tail) = split(more);
+                    if word == b"go" {
+                        go = true;
+                    } else if !word.is_empty() {
+                        image = word;
+                    }
+                    more = tail;
+                }
+                let mut path = [0u8; w::PATH_BYTES];
+                let n = if image.is_empty() {
+                    0
+                } else {
+                    let Some(n) = self.join(image, &mut path) else {
+                        sb.push(b"Path too long.");
+                        return true;
+                    };
+                    n
+                };
+                region[..n].copy_from_slice(&path[..n]);
+                if go {
+                    say!(sb, "Installing into partition #{}. Don't turn the machine off.", part_num);
+                } else {
+                    say!(sb, "Planning safe replacement of partition #{}...", part_num);
+                }
+                let flags = w::INSTALL_REPLACE | if go { w::INSTALL_GO } else { 0 };
+                self.start(Cmd::Install, w::INSTALL, n, part_num, flags);
+                return true;
+            }
             let (mut go, mut gib, mut image): (bool, u64, &[u8]) = (false, 0, b"");
             let mut rest = args;
             while !rest.is_empty() {

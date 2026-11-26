@@ -19,11 +19,22 @@ use sex_html::layout::{Bullet, FontKey, Host, Item, Page};
 pub use sex_html;
 
 pub mod canvas;
+pub mod chrome;
 pub mod svg;
 pub mod mse;
 pub mod reader;
 pub mod selftest;
 pub mod session;
+pub use chrome::{
+    bookmark_hit_at, bookmark_pills, build_context_menu, chrome_height, context_menu_contains,
+    context_menu_hit_at, context_menu_rect, default_bookmarks, encode_query, frame_with,
+    group_name, merge_bookmarks, resolve_omnibox_input, shields_pill_width, side_row_at,
+    strip_slots, suggestion_at, tab_chips, tab_close_rect, tab_hit_at, tab_strip_layout,
+    toolbar_hit_at, toolbar_layout, BookmarkItem, BookmarkStore, Chrome, ContextAction,
+    ContextMenu, ContextMenuItem, Slot, TabGroup, TabHit, TabStripState, ToolbarHit, ToolbarLayout,
+    BAR, BOOKMARKS_H, CONTEXT_MENU_ROW, CONTEXT_MENU_SEP, CONTEXT_MENU_W, GROUP_COLOURS, SIDE,
+    SIDE_ROW, SUGGESTION_ROW, TOP_BAR_H,
+};
 pub use sex_image::Image;
 
 /// Glyph bitmaps kept between paints.
@@ -484,12 +495,17 @@ pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], widt
     true
 }
 
-/// A target for window columns `x` .. `x + w` under the bar, `None` when that is empty.
+/// A target for window columns `x` .. `x + w` under the default bar, `None` when that is empty.
 pub fn column(pixels: &mut [u32], width: i32, height: i32, scroll: i32, x: i32, w: i32) -> Option<Target<'_>> {
+    column_below(pixels, width, height, scroll, x, w, BAR)
+}
+
+/// A target for window columns `x` .. `x + w` below `top` pixels of chrome, `None` when empty.
+pub fn column_below(pixels: &mut [u32], width: i32, height: i32, scroll: i32, x: i32, w: i32, top: i32) -> Option<Target<'_>> {
     let x = x.clamp(0, width);
     let w = w.clamp(0, width - x);
     if w == 0 { return None; }
-    Some(Target { pixels: &mut pixels[x as usize..], width: w, height, scroll, top: BAR, premul: false, clip: None, stride: width })
+    Some(Target { pixels: &mut pixels[x as usize..], width: w, height, scroll, top, premul: false, clip: None, stride: width })
 }
 
 fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32, src: &str, alt: &str) {
@@ -634,293 +650,27 @@ pub fn is_avif(bytes: &[u8]) -> bool {
 /// What a page's picture may be.
 const PICTURE_LIMITS: sex_image::Limits = sex_image::Limits { max_width: 4096, max_height: 4096, max_pixels: 2_000_000, max_input_bytes: 4 << 20 };
 
-/// Height of the bar above the page.
-pub const BAR: i32 = 30;
-
-/// The whole window: a bar showing `bar_text` (the address, or what is being typed,
+/// The whole window: modern chrome showing `bar_text` (the address, or what is being typed,
 /// with a caret when `editing`), then `page` scrolled by `scroll`.
 pub fn frame(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, bar_text: &str, editing: bool) {
-    let chrome = Chrome { text: bar_text, editing, ..Chrome::default() };
+    let (tab_label, omni_text) = if let Some((title, url)) = bar_text.split_once(" \u{2014} ") {
+        (String::from(title), url)
+    } else if !page.title.is_empty() {
+        (page.title.clone(), bar_text)
+    } else {
+        let lbl = if bar_text.is_empty() { "New tab" } else { bar_text.trim_start_matches("https://").trim_start_matches("http://") };
+        (String::from(lbl), bar_text)
+    };
+    let tabs = [tab_label];
+    let chrome = Chrome {
+        text: omni_text,
+        editing,
+        tabs: &tabs,
+        active: 0,
+        shields: Some((true, 0)),
+        ..Chrome::default()
+    };
     frame_with(page, fonts, pixels, width, height, scroll, focus, &chrome);
-}
-
-/// What the browser draws around the page: the bar (tabs and address), suggestions
-/// under the address while typing, find-in-page marks and the find bar.
-#[derive(Default)]
-pub struct Chrome<'a> {
-    /// The address, or what is being typed.
-    pub text: &'a str,
-    pub editing: bool,
-    /// Each tab's label; the strip shows only with two tabs or more.
-    pub tabs: &'a [String],
-    /// The line under each tab (its container's or private colour), 0 for none.
-    pub colours: &'a [u32],
-    pub active: usize,
-    /// Addresses offered under the bar while typing, and the chosen one.
-    pub suggestions: &'a [String],
-    pub chosen: Option<usize>,
-    /// Find in page: what is searched, the current match (from 0) and how many there are.
-    pub find: Option<(&'a str, usize, usize)>,
-    /// Page rectangles (x, y, w, h) of the find matches, with each one's match number.
-    pub marks: &'a [[i32; 5]],
-    /// The page zoom in percent, shown in the bar when not 100.
-    pub zoom: u32,
-    /// The shield badge: whether Shields are up for the site, and how many requests
-    /// they blocked on the page. `None` shows no badge (built-in pages, files).
-    pub shields: Option<(bool, u32)>,
-    /// Tabs in a strip down the left this wide instead of chips in the bar (0: chips).
-    pub side: i32,
-    /// The window columns (x, width) the page takes in a split view, where the other
-    /// half is painted apart; width 0 gives the page everything right of the strip.
-    pub pane: (i32, i32),
-    /// Each tab's group (an index into `groups`), if it is in one.
-    pub group_of: &'a [Option<usize>],
-    /// Tab groups, as in Chrome: a coloured label before their tabs, which folds them away.
-    pub groups: &'a [TabGroup],
-}
-
-/// A group of tabs that sit together in the strip under a coloured label.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TabGroup {
-    pub colour: u32,
-    pub name: String,
-    /// Folded: only the label shows, with how many tabs it holds.
-    pub folded: bool,
-}
-
-/// The colours new groups take in turn: Chrome's blue, red, yellow, green, pink,
-/// purple, cyan and grey.
-pub const GROUP_COLOURS: [u32; 8] = [0xFF1A_73E8, 0xFFD9_3025, 0xFFF9_AB00, 0xFF18_8038, 0xFFD0_1884, 0xFFA1_42F4, 0xFF00_7B83, 0xFF5F_6368];
-
-/// One place in the tab strip: a group's label, or a tab.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Slot { Group(usize), Tab(usize) }
-
-/// The strip's places, in order: each group's label before its first tab, and the
-/// tabs of a folded group left out. A group's tabs sit together.
-pub fn strip_slots(group_of: &[Option<usize>], groups: &[TabGroup]) -> Vec<Slot> {
-    let mut out = Vec::new();
-    let mut last = None;
-    for (i, g) in group_of.iter().enumerate() {
-        let g = g.filter(|g| *g < groups.len());
-        if g.is_some() && g != last { out.push(Slot::Group(g.unwrap())); }
-        last = g;
-        if !g.is_some_and(|g| groups[g].folded) { out.push(Slot::Tab(i)); }
-    }
-    out
-}
-
-/// How many tabs group `g` holds.
-fn group_count(group_of: &[Option<usize>], g: usize) -> usize { group_of.iter().filter(|x| **x == Some(g)).count() }
-
-/// A new group's name: its tab's site, without `www.` or the ending (`example` for
-/// news.example.com, `bbc` for bbc.co.uk); an address by number stays whole; nothing for built-in pages.
-pub fn group_name(url: &str) -> String {
-    let Some((_, rest)) = url.split_once("://") else { return String::new() };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
-    let host = if host.starts_with('[') { host } else { host.split(':').next().unwrap_or("") };
-    let host = host.strip_prefix("www.").unwrap_or(host);
-    if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') || host.starts_with('[') { return String::from(host); }
-    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
-    let n = labels.len();
-    // A two-part ending (co.uk, com.au) is skipped too.
-    let two = n >= 3 && labels[n - 1].len() == 2 && labels[n - 2].len() <= 3;
-    String::from(match n { 0 => "", 1 => labels[0], _ if two => labels[n - 3], _ => labels[n - 2] })
-}
-
-/// A group label's width in the bar.
-fn group_chip(groups: &[TabGroup], g: usize) -> i32 {
-    let Some(grp) = groups.get(g) else { return 24 };
-    let name = grp.name.chars().count().min(12) as i32;
-    let w = if name == 0 { 24 } else { 22 + name * 7 };
-    if grp.folded && name > 0 { w + 26 } else { w }
-}
-
-/// The vertical tab strip's width, as Edge and Brave draw it.
-pub const SIDE: i32 = 200;
-/// Height of one tab in the vertical strip.
-pub const SIDE_ROW: i32 = 30;
-
-/// The row in the vertical strip `side` wide under window point (`x`, `y`), of `n`
-/// rows (one for each of [`strip_slots`]).
-pub fn side_row_at(side: i32, n: usize, x: i32, y: i32) -> Option<usize> {
-    if side <= 0 || x < 0 || x >= side || y < BAR + 6 { return None; }
-    let i = ((y - BAR - 6) / SIDE_ROW) as usize;
-    (i < n).then_some(i)
-}
-
-/// Chips in the bar, one for each of `slots`: each chip's x and width, for `width`.
-/// The strip shows with two tabs or more, or any group.
-pub fn tab_chips(width: i32, slots: &[Slot], groups: &[TabGroup]) -> Vec<(i32, i32)> {
-    let tabs = slots.iter().filter(|s| matches!(s, Slot::Tab(_))).count() as i32;
-    let labels: i32 = slots.iter().map(|s| if let Slot::Group(g) = s { group_chip(groups, *g) + 2 } else { 0 }).sum();
-    if tabs + (labels > 0) as i32 * 2 < 2 { return Vec::new(); }
-    // Tabs take up to half the bar; the address keeps the rest.
-    let room = (width / 2 - 8 - labels).max(0);
-    let w = (room / tabs.max(1)).clamp(28, 140);
-    let mut x = 6;
-    slots.iter().map(|s| { let cw = if let Slot::Group(g) = s { group_chip(groups, *g) } else { w }; let at = x; x += cw + 2; (at, cw) })
-        .take_while(|(x, w)| x + w <= width - 60).collect()
-}
-
-/// Rows of suggestions under the bar.
-pub const SUGGESTION_ROW: i32 = 24;
-
-/// The suggestion row under (`x`, `y`) in window coordinates, if any.
-pub fn suggestion_at(width: i32, count: usize, x: i32, y: i32) -> Option<usize> {
-    if x < 6 || x >= width - 6 || y < BAR { return None; }
-    let i = ((y - BAR) / SUGGESTION_ROW) as usize;
-    (i < count).then_some(i)
-}
-
-/// The bar's own label for a tab: its title cut to fit `w`.
-fn fit(fonts: &mut Fonts, text: &str, font: FontKey, w: i32) -> String {
-    let mut shown = String::from(text);
-    if fonts.text_width(&shown, font) <= w { return shown; }
-    while !shown.is_empty() && fonts.text_width(&shown, font) + fonts.text_width("…", font) > w { shown.pop(); }
-    shown.push('…');
-    shown
-}
-
-/// Like [`frame`], with tabs, suggestions, find marks and zoom.
-pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, c: &Chrome) {
-    let side = c.side.clamp(0, width);
-    let (px, pw) = if c.pane.1 > 0 { c.pane } else { (side, width - side) };
-    // The page takes the columns right of the tab strip (or its half of a split).
-    if let Some(mut t) = column(pixels, width, height, scroll, px, pw) {
-        paint(page, fonts, &mut t, focus);
-        // Find matches: the current one strong, the others light, over the text.
-        for m in c.marks.iter() {
-            let current = c.find.is_some_and(|(_, at, _)| at as i32 == m[4]);
-            let color = if current { 0x80FF_8C00 } else { 0x70FF_EB3B };
-            t.fill(m[0], m[1], m[2], m[3], color, 2);
-        }
-    }
-    let mut bar = Target { pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
-    bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
-    let font = FontKey { size: 13, bold: false, italic: false, mono: false, face: 0 };
-    let small = FontKey { size: 12, ..font };
-    let slots = if c.group_of.len() == c.tabs.len() { strip_slots(c.group_of, c.groups) } else { (0..c.tabs.len()).map(Slot::Tab).collect() };
-    if side > 0 {
-        // Vertical tabs: one row each down the strip, the shown one lit, with its
-        // container's colour as a bar at the left edge.
-        let mut strip = Target { pixels: bar.pixels, width: side, height, scroll: 0, top: BAR, premul: false, clip: None, stride: width };
-        strip.fill(0, 0, side, height - BAR, 0xFF0D_1420, 0);
-        strip.fill(side - 1, 0, 1, height - BAR, 0xFF22_2C3A, 0);
-        for (row, slot) in slots.iter().enumerate() {
-            let y = 6 + row as i32 * SIDE_ROW;
-            if y + SIDE_ROW > height - BAR { break; }
-            match *slot {
-                // A group's row: its colour as a dot, its name, and its count when folded.
-                Slot::Group(g) => {
-                    let grp = &c.groups[g];
-                    strip.fill(10, y + 9, 9, 9, grp.colour, 4);
-                    let name = if grp.name.is_empty() { "Group" } else { grp.name.as_str() };
-                    let label = if grp.folded { alloc::format!("{name} ({})", group_count(c.group_of, g)) } else { String::from(name) };
-                    let shown = fit(fonts, &label, small, side - 40);
-                    text_run(&mut strip, fonts, 26, y + 17, small, 0xFFD7_E3F0, &shown);
-                }
-                Slot::Tab(i) => {
-                    let Some(label) = c.tabs.get(i) else { continue };
-                    // A grouped tab sits in from the edge, its group's colour beside it.
-                    let group = c.group_of.get(i).copied().flatten().and_then(|g| c.groups.get(g));
-                    let inset = if group.is_some() { 12 } else { 0 };
-                    if let Some(g) = group { strip.fill(13, y - 4, 3, SIDE_ROW, g.colour, 0); }
-                    let on = i == c.active;
-                    if on { strip.fill(6 + inset, y, side - 13 - inset, SIDE_ROW - 4, 0xFF3A_4A60, 6); }
-                    if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { strip.fill(6 + inset, y + 4, 3, SIDE_ROW - 12, c, 1); }
-                    let shown = fit(fonts, label, small, side - 32 - inset);
-                    text_run(&mut strip, fonts, 16 + inset, y + 17, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &shown);
-                }
-            }
-        }
-        bar = Target { pixels: strip.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
-    }
-    // In a split view, a line under the bar marks the half that has the keyboard.
-    if c.pane.1 > 0 { bar.fill(px, BAR - 2, pw, 2, 0xFF0B_57D0, 0); }
-    let chips = if side > 0 { Vec::new() } else { tab_chips(width, &slots, c.groups) };
-    for (slot, (x, w)) in slots.iter().zip(chips.iter()) {
-        let i = match *slot {
-            // A group's label: its colour, its name (or count when folded) on it.
-            Slot::Group(g) => {
-                let grp = &c.groups[g];
-                bar.fill(*x, 6, *w, BAR - 12, grp.colour, 8);
-                let n = group_count(c.group_of, g);
-                let label = match (grp.folded, grp.name.is_empty()) { (true, true) => alloc::format!("{n}"), (true, false) => alloc::format!("{} ({n})", grp.name), _ => grp.name.clone() };
-                let label = fit(fonts, &label, small, w - 10);
-                text_run(&mut bar, fonts, x + 6, 19, small, 0xFFFF_FFFF, &label);
-                continue;
-            }
-            Slot::Tab(i) => i,
-        };
-        let Some(text) = c.tabs.get(i) else { continue };
-        let on = i == c.active;
-        bar.fill(*x, 4, *w, BAR - 8, if on { 0xFF3A_4A60 } else { 0xFF18_2230 }, 6);
-        let label = fit(fonts, text, small, w - 12);
-        text_run(&mut bar, fonts, x + 6, 19, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &label);
-        if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { bar.fill(x + 4, BAR - 7, w - 8, 2, c, 0); }
-        // A grouped tab is underlined in its group's colour, joined to the next.
-        if let Some(g) = c.group_of.get(i).copied().flatten().and_then(|g| c.groups.get(g)) { bar.fill(*x, BAR - 3, w + 2, 2, g.colour, 0); }
-    }
-    let left = chips.last().map_or(6, |(x, w)| x + w + 6);
-    let zoom = if c.zoom != 0 && c.zoom != 100 { alloc::format!("{}%", c.zoom) } else { String::new() };
-    let mut zoom_w = if zoom.is_empty() { 0 } else { fonts.text_width(&zoom, small) + 10 };
-    // The shield badge, at the right end: orange with the count while up, grey when down.
-    if let Some((up, n)) = c.shields {
-        let label = if !up { String::from("off") } else if n > 999 { String::from("999+") } else { alloc::format!("{}", n) };
-        let w = fonts.text_width(&label, small) + 26;
-        let x = width - 6 - w;
-        bar.fill(x, 6, w, BAR - 12, if up { 0xFFFB_542B } else { 0xFF4A_5260 }, 9);
-        // A small shield: a square top and a pointed foot.
-        let (sx, sy) = (x + 6, 10);
-        bar.fill(sx, sy, 9, 6, 0xFFFF_FFFF, 1);
-        for row in 0..5 { bar.fill(sx + row, sy + 6 + row, 9 - 2 * row, 1, 0xFFFF_FFFF, 0); }
-        text_run(&mut bar, fonts, x + 20, 19, small, 0xFFFF_FFFF, &label);
-        zoom_w += w + 4;
-    }
-    bar.fill(left, 4, width - 6 - left - zoom_w, BAR - 8, if c.editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
-    if !zoom.is_empty() { text_run(&mut bar, fonts, width - zoom_w, 19, small, 0xFFD7_E3F0, &zoom); }
-    let color = if c.editing { 0xFF1F_1F1F } else { 0xFFD7_E3F0 };
-    // Keep the end of a long address in view while typing.
-    let room = width - left - 34 - zoom_w;
-    let mut shown = c.text;
-    while fonts.text_width(shown, font) > room && !shown.is_empty() {
-        let cut = shown.char_indices().nth(1).map_or(shown.len(), |(i, _)| i);
-        shown = if c.editing { &shown[cut..] } else { &shown[..shown.char_indices().last().map_or(0, |(i, _)| i)] };
-    }
-    text_run(&mut bar, fonts, left + 10, 19, font, color, shown);
-    if c.editing {
-        let x = left + 10 + fonts.text_width(shown, font) + 1;
-        bar.fill(x, 8, 1, BAR - 16, 0xFF0B_57D0, 0);
-    }
-    // Suggestions drop down over the page.
-    let all = Target { pixels: bar.pixels, width, height, scroll: 0, top: 0, premul: false, clip: None, stride: width };
-    let mut over = all;
-    if c.editing && !c.suggestions.is_empty() {
-        let h = c.suggestions.len() as i32 * SUGGESTION_ROW + 4;
-        over.fill(6, BAR, width - 12, h, 0xFFFF_FFFF, 0);
-        over.fill(6, BAR + h - 1, width - 12, 1, 0xFFC4_C7C5, 0);
-        for (i, s) in c.suggestions.iter().enumerate() {
-            let y = BAR + 2 + i as i32 * SUGGESTION_ROW;
-            if c.chosen == Some(i) { over.fill(6, y, width - 12, SUGGESTION_ROW, 0xFFD3_E3FD, 0); }
-            let label = fit(fonts, s, font, width - 32);
-            text_run(&mut over, fonts, 16, y + 17, font, 0xFF1F_1F1F, &label);
-        }
-    }
-    // The find bar sits at the bottom right.
-    if let Some((query, at, count)) = c.find {
-        let status = if count == 0 { String::from("no matches") } else { alloc::format!("{} of {}", at + 1, count) };
-        let w = (fonts.text_width(query, font) + fonts.text_width(&status, small) + 48).clamp(180, width - 12);
-        let (x, y) = (width - 6 - w, height - BAR);
-        over.fill(x, y, w, BAR - 4, 0xFF22_2C3A, 8);
-        over.fill(x + 6, y + 4, w - 20 - fonts.text_width(&status, small), BAR - 12, 0xFFFF_FFFF, 4);
-        let q = fit(fonts, query, font, w - 40 - fonts.text_width(&status, small));
-        text_run(&mut over, fonts, x + 10, y + 17, font, 0xFF1F_1F1F, &q);
-        let cx = x + 11 + fonts.text_width(&q, font);
-        over.fill(cx, y + 7, 1, BAR - 18, 0xFF0B_57D0, 0);
-        text_run(&mut over, fonts, x + w - 8 - fonts.text_width(&status, small), y + 17, small, if count == 0 { 0xFFFF_8A80 } else { 0xFFD7_E3F0 }, &status);
-    }
 }
 
 /// Find in page: the page rectangles (x, y, w, h) of each place `query` shows in the

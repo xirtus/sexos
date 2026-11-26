@@ -81,6 +81,51 @@ impl<'a> Canvas<'a> {
         }
         at
     }
+    /// Smooth anti-aliased rounded rectangle.
+    pub fn rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, color: u32) {
+        sex_theme::candy_ui::fill_rounded_rect(self.px, self.w, self.h, x, y, w, h, radius, color);
+    }
+    /// Frosted Candy Lavender gradient toolbar bar with specular highlight and orchid hairline.
+    pub fn candy_toolbar(&mut self, x: i32, y: i32, w: i32, h: i32, pal: &sex_theme::candy_ui::CandyPalette) {
+        sex_theme::candy_ui::draw_candy_toolbar(self.px, self.w, self.h, x, y, w, h, pal);
+    }
+    /// Smooth anti-aliased rounded Candy card/panel.
+    pub fn candy_panel(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, pal: &sex_theme::candy_ui::CandyPalette) {
+        sex_theme::candy_ui::draw_candy_panel(self.px, self.w, self.h, x, y, w, h, radius, pal);
+    }
+    /// Smooth anti-aliased rounded Candy button with hover/pressed visual states.
+    #[allow(clippy::too_many_arguments)]
+    pub fn candy_button(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        radius: i32,
+        style: sex_theme::candy_ui::ButtonStyle,
+        state: sex_theme::candy_ui::ButtonState,
+        pal: &sex_theme::candy_ui::CandyPalette,
+    ) {
+        sex_theme::candy_ui::draw_candy_button(self.px, self.w, self.h, x, y, w, h, radius, style, state, pal);
+    }
+    /// Smooth anti-aliased rounded Candy tab pill.
+    #[allow(clippy::too_many_arguments)]
+    pub fn candy_tab(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        active: bool,
+        state: sex_theme::candy_ui::ButtonState,
+        pal: &sex_theme::candy_ui::CandyPalette,
+    ) {
+        sex_theme::candy_ui::draw_candy_tab(self.px, self.w, self.h, x, y, w, h, active, state, pal);
+    }
+    /// Rounded Candy selection pill with left orchid indicator.
+    pub fn candy_selection_row(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32, pal: &sex_theme::candy_ui::CandyPalette) {
+        sex_theme::candy_ui::draw_candy_selection_row(self.px, self.w, self.h, x, y, w, h, radius, pal);
+    }
 }
 
 /// Geist Mono drawn once per character and kept. About 42 KiB: a program keeps it in

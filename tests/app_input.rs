@@ -145,6 +145,12 @@ mod shell {
     mod access_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
     // Program tray items and notification replies (tray_items.rs) have their own host test.
     mod tray_items_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
+    mod spotlight_glue{pub unsafe fn key(_:u8,_:u64)->bool{false} pub unsafe fn toggle(){}}
+    mod silkbar_menus_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
+    unsafe fn is_closeable_surface(_:u64)->bool{false}
+    unsafe fn close_surface_from_frame_light(_:u64)->bool{false}
+    unsafe fn selected_frame_id()->Option<usize>{None}
+    unsafe fn toggle_zoom_frame(_:usize)->bool{false}
     enum InteractionState{Idle,Dragging}
     static mut INTERACTION:InteractionState=InteractionState::Idle;
     static mut POINTER_BUTTONS:u8=0;

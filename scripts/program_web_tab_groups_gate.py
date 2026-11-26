@@ -72,7 +72,10 @@ def main():
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
   wide,target,task,tile,pw,ph=launch()
   bx,by,_,_=canvas_box(ROOT,tile,pw,ph)
-  label=(bx+12,by+BAR//2)
+  omni_left=100;shields_x=max(max(max(pw-34,omni_left)-30,omni_left)-52,omni_left)
+  ca=max(shields_x-8-omni_left,0)
+  omni_w=min(max(260,min(340,(pw*28)//100)),ca-120) if ca>=420 else (max(140,min(260,ca//2)) if ca>=220 else ca)
+  label=(bx+omni_left+omni_w+8+12,by+BAR//2)
   def shown(i,name):
    m=g['wait'](rf'\[web.tab.shown\] index={i} count=\d+ url=([^\n]*)',s,60);assert m[1].endswith(f'/p/{name}'),m[0]
   # A into a new group, named for its site.
@@ -87,8 +90,8 @@ def main():
   # A right-click on the label names it in the bar; Down steps to the next colour.
   s=len(t());click(*label,button='right');g['wait'](r'\[web.group.naming\] group=0\n',s,60)
   for _ in range(8):q.key('backspace');time.sleep(.06)
-  keys('work');s=len(t());q.key('down');g['wait'](r'\[web.group.colour\] group=0 colour=ffd93025\n',s,60)
-  s=len(t());q.key('ret');g['wait'](r'\[web.group.named\] group=0 name=work colour=ffd93025\n',s,60)
+  keys('work');s=len(t());q.key('down');g['wait'](r'\[web.group.colour\] group=0 colour=ffd6336c\n',s,60)
+  s=len(t());q.key('ret');g['wait'](r'\[web.group.named\] group=0 name=work colour=ffd6336c\n',s,60)
   # A click on the label folds A and C away; B stays shown.
   s=len(t());click(*label);g['wait'](r'\[web.group.folded\] group=0 on=1 tabs=2\n',s,60)
   assert '[web.tab.shown]' not in t()[s:]

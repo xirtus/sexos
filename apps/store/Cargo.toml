@@ -14,4 +14,5 @@ sex-app = { path = "../../crates/sex-app" }
 sex-pkg = { path = "../../crates/sex-pkg" }
 sex-image = { path = "../../crates/sex-image" }
 sex-font = { path = "../../crates/sex-font" }
+sex-theme = { path = "../../crates/sex-theme" }
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }

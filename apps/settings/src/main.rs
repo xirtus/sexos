@@ -9,15 +9,18 @@
 #![no_main]
 
 mod about;
+mod candy_gui;
 mod facts;
 mod grants;
 mod model;
 mod setup;
 
+use candy_gui::{Glyphs, GuiState, SidebarView, UiAction};
 use model::{Change, Model};
 use sex_app::settings;
 use sex_app::{Event, Nav, Window};
-use sex_config::{Config, KEYS};
+use sex_config::{id, Config, KEYS};
+use sex_pdx::app_pointer::Kind as PointerKind;
 use sex_pdx::package as pkg;
 
 const _: () = assert!(grants::GRANTS[0].0 == pkg::NETWORK && grants::GRANTS[1].0 == pkg::MICROPHONE && grants::MACHINE == pkg::MACHINE);
@@ -106,10 +109,91 @@ fn about_lines(text: &mut [u8]) -> usize {
     about::render(&k, env!("CARGO_PKG_VERSION"), text)
 }
 
-fn show(window: &mut Window, m: &Model) {
-    let mut text = [0u8; 8192];
-    let n = model::render(m, &mut text);
-    window.show(&text[..n]);
+/// Queries `sexfiles` for the raw GPT partition table (`INSTALL_LIST | INSTALL_LIST_RAW`).
+fn refresh_install_parts(window: &mut Window, gui: &mut GuiState, m: &mut Model) {
+    let mut raw = [0u8; 2048];
+    let flags = sex_pdx::fs::INSTALL_LIST | sex_pdx::fs::INSTALL_LIST_RAW;
+    match sex_app::files::install(window, b"", 0, flags, &mut raw) {
+        Ok(n) => {
+            gui.install.parse_raw(&raw[..n]);
+            sex_pdx::serial_record!("[settings.install.list] parts={} total_sectors={}", gui.install.part_count, gui.install.total_sectors);
+            m.say("Disk partition table refreshed.");
+        }
+        Err(e) => {
+            gui.install.loaded = true;
+            gui.install.set_report(b"Unable to read disk partitions from Files.");
+            sex_pdx::serial_record!("[settings.install.list] error={}", e);
+            m.say("Could not read disk partition table.");
+        }
+    }
+}
+
+/// Dispatches a dry-run (`go = false`) or atomic (`go = true`) install request to `sexfiles`.
+fn run_install_action(window: &mut Window, gui: &mut GuiState, m: &mut Model, go: bool) {
+    let Some(row) = gui.install.selected_row().copied() else {
+        m.say("Select a replaceable partition or Free Space first.");
+        return;
+    };
+    let (offset, mut flags) = if row.kind == candy_gui::DiskPartKind::FreeSpace {
+        (0u64, 0u64)
+    } else {
+        (row.part_num as u64, sex_pdx::fs::INSTALL_REPLACE)
+    };
+    if go {
+        flags |= sex_pdx::fs::INSTALL_GO;
+        m.say("Installing SexOS... Do not power off.");
+        show(window, m, gui);
+    }
+    let mut out = [0u8; 2048];
+    match sex_app::files::install(window, b"", offset, flags, &mut out) {
+        Ok(n) => {
+            gui.install.set_report(&out[..n]);
+            gui.install.plan_ready = !go;
+            sex_pdx::serial_record!("[settings.install.run] go={} part={} bytes={}", go as u8, offset, n);
+            m.say(if go { "Install completed. Restart to boot SexOS." } else { "Dry-run plan ready. Nothing written yet." });
+        }
+        Err(e) => {
+            gui.install.set_report(b"Installer request was refused by Files.");
+            sex_pdx::serial_record!("[settings.install.run] go={} part={} error={}", go as u8, offset, e);
+            m.say("Install request failed.");
+        }
+    }
+}
+
+static mut GUI: GuiState = GuiState::new();
+static mut GLYPHS: Glyphs = Glyphs::new();
+
+fn show(window: &mut Window, m: &Model, gui: &mut GuiState) {
+    let (w, h) = window.size();
+    let px = window.pixels();
+    let w = w.clamp(64, 4096);
+    let h = h.clamp(64, px.len() / w);
+    let g = unsafe { &mut *core::ptr::addr_of_mut!(GLYPHS) };
+    candy_gui::render_gui(&mut px[..w * h], w, h, g, gui, m);
+    window.show_pixels(w, h);
+}
+
+fn persist_setting(m: &mut Model, key_id: u16, value: i32, generation: &mut u64) -> bool {
+    let result = settings::set(key_id, value);
+    sex_pdx::serial_record!("[settings.set] key={} value={} status={}", key_id, value, result.err().unwrap_or(0));
+    let ok = match result {
+        Ok(()) => {
+            let _ = m.values.set(key_id, value);
+            m.say("Saved.");
+            true
+        }
+        Err(e) if e == sex_pdx::config::NOT_SAVED => {
+            let _ = m.values.set(key_id, value);
+            m.say("Applied live (disk read-only).");
+            true
+        }
+        Err(e) => {
+            m.say(settings::message(e));
+            false
+        }
+    };
+    *generation = settings::generation().unwrap_or(*generation);
+    ok
 }
 
 /// First-start setup: runs until its last step or until the window closes.
@@ -156,16 +240,17 @@ pub extern "C" fn _start() -> ! {
     if settings::get(sex_config::id::SETUP_DONE).is_ok_and(|done| done == 0) { first_start(&mut window); }
     let (values, mut generation) = load();
     let mut m = Model::new(values);
+    let gui = unsafe { &mut *core::ptr::addr_of_mut!(GUI) };
     let mut rows = [grants::Row::EMPTY; grants::ROWS_MAX];
     let mut hashing = false;
     sex_pdx::serial_record!("[settings.open] generation={}", generation);
-    show(&mut window, &m);
+    show(&mut window, &m, gui);
     loop {
         let Some(event) = window.next_within(if hashing { 100 } else { 1000 }) else {
             // About is open and Files has more of the boot image to hash.
             if let Some(info) = m.info_page().filter(|_| hashing) {
                 hashing = load_info(&mut window, &mut m, info);
-                show(&mut window, &m);
+                show(&mut window, &m, gui);
                 continue;
             }
             // Someone else changed a setting (a Shell key, say): show it.
@@ -173,70 +258,210 @@ pub extern "C" fn _start() -> ! {
                 let (values, g) = load();
                 m.values = values;
                 generation = g;
-                show(&mut window, &m);
+                show(&mut window, &m, gui);
             }
             continue;
         };
-        let key = match event {
+        match event {
             Event::Close => window.close(),
-            Event::Key(key) => key,
-            _ => continue,
-        };
-        sex_pdx::serial_record!("[settings.key] code={} page={} row={}", key.code, m.page, m.row);
-        // Ctrl+P: the Shell keeps F-keys and Tab for itself, so Settings uses keys a
-        // program receives.
-        const KEY_P: u8 = 0x19;
-        const PAGE_UP: u8 = 0x49;
-        const PAGE_DOWN: u8 = 0x51;
-        let page = m.page;
-        let program_row = m.extra_row().filter(|_| !m.entering());
-        let change = if let (Some(i), Some(nav)) = (program_row, sex_app::nav(key).filter(|n| matches!(n, Nav::Left | Nav::Right)).or((key.code == ENTER).then_some(Nav::Right))) {
-            let row = rows[i];
-            change_grant(&mut window, &mut m, &row, matches!(nav, Nav::Right));
-            load_grants(&mut window, &mut m, &mut rows);
-            Change::None
-        } else if m.entering() {
-            let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };
-            m.password_key(c)
-        } else if key.control && key.code == KEY_P {
-            m.start_password();
-            Change::None
-        } else { match (sex_app::nav(key), key.code) {
-            (Some(Nav::Up), _) => { m.move_row(false); Change::None }
-            (Some(Nav::Down), _) => { m.move_row(true); Change::None }
-            (Some(Nav::Left), _) => m.step(false, key.shift),
-            (Some(Nav::Right), _) | (_, ENTER) => m.step(true, key.shift),
-            (_, TAB) | (_, PAGE_DOWN) => { m.next_page(!(key.shift && key.code == TAB)); Change::None }
-            (_, PAGE_UP) => { m.next_page(false); Change::None }
-            (_, ESC) => { m.clear_search(); Change::None }
-            (_, BACKSPACE) => { m.backspace(); Change::None }
-            _ => {
-                if let Some(c) = sex_app::typed(key) { m.type_char(c); }
-                Change::None
+            Event::Resize { .. } => {
+                show(&mut window, &m, gui);
+                continue;
             }
-        } };
-        if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
-        if m.page != page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }
-        if let Change::Password(mut typed, n) = change {
-            let result = settings::password(sex_config::secret::SET, &typed[..n]);
-            for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
-            sex_pdx::serial_record!("[settings.password] status={}", match result { Ok(s) => s, Err(e) => e });
-            m.say(match result { Ok(sex_config::secret::OK) => "Lock password set.", Ok(_) | Err(_) => "The password could not be saved." });
-        }
-        if let Change::Set(id, value) = change {
-            let result = settings::set(id, value);
-            sex_pdx::serial_record!("[settings.set] key={} value={} status={}", id, value, result.err().unwrap_or(0));
-            match result {
-                Ok(()) => {
-                    let _ = m.values.set(id, value); m.say("Saved.");
-                    // A first-run default shows on the program rows too.
-                    if m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+            Event::Pointer(p) => {
+                let hit = gui.hit_at(p.x as i32, p.y as i32);
+                match p.kind {
+                    PointerKind::Move => {
+                        if gui.hovered != hit {
+                            gui.hovered = hit;
+                            show(&mut window, &m, gui);
+                        }
+                        continue;
+                    }
+                    PointerKind::Up { button: 0 } => {
+                        if gui.pressed.is_some() || gui.hovered != hit {
+                            gui.pressed = None;
+                            gui.hovered = hit;
+                            show(&mut window, &m, gui);
+                        }
+                        continue;
+                    }
+                    PointerKind::Down { button: 0 } => {
+                        gui.hovered = hit;
+                        gui.pressed = hit;
+                        let Some(act) = hit else { continue };
+                        let old_page = m.page;
+                        match act {
+                            UiAction::SelectView(v) => {
+                                gui.view = v;
+                                if let SidebarView::SystemPage(idx) = v {
+                                    m.page = idx;
+                                    m.row = 0;
+                                } else if v == SidebarView::Install && !gui.install.loaded {
+                                    refresh_install_parts(&mut window, gui, &mut m);
+                                }
+                            }
+                            UiAction::SetTheme(val) => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                persist_setting(&mut m, id::THEME, val, &mut generation);
+                            }
+                            UiAction::SetAccent(rgb) => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                persist_setting(&mut m, id::ACCENT, rgb, &mut generation);
+                            }
+                            UiAction::ToggleFrostedGlass => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                let next = if m.values.value(id::REDUCE_TRANSPARENCY) == 0 { 1 } else { 0 };
+                                persist_setting(&mut m, id::REDUCE_TRANSPARENCY, next, &mut generation);
+                            }
+                            UiAction::ToggleAnimations => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                let next = if m.values.value(id::ANIMATIONS) == 0 { 1 } else { 0 };
+                                persist_setting(&mut m, id::ANIMATIONS, next, &mut generation);
+                            }
+                            UiAction::SetCornerRadius(idx) => {
+                                gui.save_undo(&m.values);
+                                gui.corner_radius_idx = idx;
+                                gui.active_profile = None;
+                                m.say("Corner radius updated.");
+                            }
+                            UiAction::SetTabBar(style) => {
+                                gui.save_undo(&m.values);
+                                gui.tab_bar = style;
+                                gui.active_profile = None;
+                                m.say("Tab bar style updated.");
+                            }
+                            UiAction::SetTiling(tiling) => {
+                                gui.save_undo(&m.values);
+                                gui.tiling = tiling;
+                                gui.active_profile = None;
+                                m.say("Tiling default updated.");
+                            }
+                            UiAction::SetKeybinds(prof) => {
+                                gui.save_undo(&m.values);
+                                gui.keybinds = prof;
+                                gui.active_profile = None;
+                                m.say("Hotkey profile updated.");
+                            }
+                            UiAction::ApplyProfile(idx) => {
+                                let pairs = gui.apply_profile(idx, &m.values);
+                                for (k, v) in pairs {
+                                    persist_setting(&mut m, k, v, &mut generation);
+                                }
+                                m.say("Profile applied live.");
+                            }
+                            UiAction::Undo => {
+                                if let Some(pairs) = gui.take_undo() {
+                                    for (k, v) in pairs {
+                                        persist_setting(&mut m, k, v, &mut generation);
+                                    }
+                                    m.say("Reverted previous change.");
+                                }
+                            }
+                            UiAction::ResetDefaults => {
+                                let pairs = gui.reset_defaults(&m.values);
+                                for (k, v) in pairs {
+                                    persist_setting(&mut m, k, v, &mut generation);
+                                }
+                                m.say("Reset to Candy Lavender defaults.");
+                            }
+                            UiAction::SelectRow(idx) => {
+                                m.row = idx;
+                            }
+                            UiAction::StepRow(idx, forward) => {
+                                m.row = idx;
+                                if let Change::Set(k, v) = m.step(forward, false) {
+                                    persist_setting(&mut m, k, v, &mut generation);
+                                    if m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                                }
+                            }
+                            UiAction::SelectInstallPart(idx) => {
+                                if gui.install.select_part(idx) {
+                                    m.say("Install target selected.");
+                                } else {
+                                    m.say("That partition is protected and cannot be replaced.");
+                                }
+                            }
+                            UiAction::InstallRefresh => {
+                                refresh_install_parts(&mut window, gui, &mut m);
+                            }
+                            UiAction::InstallPlan => {
+                                run_install_action(&mut window, gui, &mut m, false);
+                            }
+                            UiAction::InstallExecute => {
+                                run_install_action(&mut window, gui, &mut m, true);
+                            }
+                        }
+                        if m.page != old_page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                        if m.page != old_page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }
+                        show(&mut window, &m, gui);
+                        continue;
+                    }
+                    _ => continue,
                 }
-                Err(e) if e == sex_pdx::config::NOT_SAVED => { let _ = m.values.set(id, value); m.say("Changed, but the disk could not be written."); }
-                Err(e) => m.say(settings::message(e)),
             }
-            generation = settings::generation().unwrap_or(generation);
+            Event::Key(key) => {
+                sex_pdx::serial_record!("[settings.key] code={} page={} row={}", key.code, m.page, m.row);
+                // Ctrl+P: the Shell keeps F-keys and Tab for itself, so Settings uses keys a
+                // program receives.
+                const KEY_P: u8 = 0x19;
+                const PAGE_UP: u8 = 0x49;
+                const PAGE_DOWN: u8 = 0x51;
+                let page = m.page;
+                let program_row = m.extra_row().filter(|_| !m.entering());
+                let change = if let (Some(i), Some(nav)) = (program_row, sex_app::nav(key).filter(|n| matches!(n, Nav::Left | Nav::Right)).or((key.code == ENTER).then_some(Nav::Right))) {
+                    let row = rows[i];
+                    change_grant(&mut window, &mut m, &row, matches!(nav, Nav::Right));
+                    load_grants(&mut window, &mut m, &mut rows);
+                    Change::None
+                } else if m.entering() {
+                    let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };
+                    m.password_key(c)
+                } else if key.control && key.code == KEY_P {
+                    m.start_password();
+                    Change::None
+                } else { match (sex_app::nav(key), key.code) {
+                    (Some(Nav::Up), _) => { m.move_row(false); Change::None }
+                    (Some(Nav::Down), _) => { m.move_row(true); Change::None }
+                    (Some(Nav::Left), _) => m.step(false, key.shift),
+                    (Some(Nav::Right), _) | (_, ENTER) => m.step(true, key.shift),
+                    (_, TAB) | (_, PAGE_DOWN) => { m.next_page(!(key.shift && key.code == TAB)); Change::None }
+                    (_, PAGE_UP) => { m.next_page(false); Change::None }
+                    (_, ESC) => { m.clear_search(); Change::None }
+                    (_, BACKSPACE) => { m.backspace(); Change::None }
+                    _ => {
+                        if let Some(c) = sex_app::typed(key) { m.type_char(c); }
+                        Change::None
+                    }
+                } };
+                if m.page != page {
+                    let (pages, _) = model::pages();
+                    gui.view = if pages[m.page] == "appearance" {
+                        SidebarView::Appearance
+                    } else {
+                        SidebarView::SystemPage(m.page)
+                    };
+                }
+                if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                if m.page != page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }
+                if let Change::Password(mut typed, n) = change {
+                    let result = settings::password(sex_config::secret::SET, &typed[..n]);
+                    for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
+                    sex_pdx::serial_record!("[settings.password] status={}", match result { Ok(s) => s, Err(e) => e });
+                    m.say(match result { Ok(sex_config::secret::OK) => "Lock password set.", Ok(_) | Err(_) => "The password could not be saved." });
+                }
+                if let Change::Set(key_id, value) = change {
+                    if persist_setting(&mut m, key_id, value, &mut generation) && m.on_privacy() {
+                        load_grants(&mut window, &mut m, &mut rows);
+                    }
+                }
+                show(&mut window, &m, gui);
+            }
+            _ => continue,
         }
-        show(&mut window, &m);
     }
 }

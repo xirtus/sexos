@@ -201,6 +201,24 @@ impl Browser {
         self.draw();
     }
 
+    /// Closes tab slot `index` (active or background) from the tab strip's `x` button.
+    pub(super) fn close_tab_at(&mut self, index: usize) {
+        if self.in_frame.is_some() || index >= self.strip_len() { return; }
+        if index == self.active { return self.close_tab(); }
+        if self.split.is_some_and(|(l, r)| l == index || r == index) { self.split = None; }
+        self.visit(index, |b| b.drop_shown_page());
+        self.tabs.remove(index);
+        if self.active > index { self.active -= 1; }
+        self.prune_groups();
+        self.repair_panel();
+        if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) {
+            self.profile.forget_private();
+        }
+        sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", index, self.tabs.len(), self.active);
+        self.save_session();
+        self.draw();
+    }
+
     /// The tab beside the shown one that is drawn too: the other half of a split view,
     /// or the side panel's page.
     pub(super) fn waiting_half(&self) -> Option<usize> {
@@ -242,29 +260,30 @@ impl Browser {
         let (other, (ox, ow)) = if self.active == l { (r, right) } else { (l, left) };
         let gap = left.0 + left.1;
         let (w, h) = (self.surface.w, self.surface.h);
+        let bar_h = self.bar_h();
         let t = &mut self.tabs[other];
         use core::mem::swap;
         swap(&mut self.fonts.images, &mut t.images); swap(&mut self.fonts.svgs, &mut t.svgs);
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
-        if let Some(mut target) = sex_web::column(pixels, w, h, t.scroll, ox, ow) { sex_web::paint(&t.page, &mut self.fonts, &mut target, None); }
+        if let Some(mut target) = sex_web::column_below(pixels, w, h, t.scroll, ox, ow, bar_h) { sex_web::paint(&t.page, &mut self.fonts, &mut target, None); }
         swap(&mut self.fonts.images, &mut t.images); swap(&mut self.fonts.svgs, &mut t.svgs);
-        for y in sex_web::BAR..h {
+        for y in bar_h..h {
             let row = (y * w) as usize;
-            for x in gap..(gap + super::SPLIT_GAP).min(w) { pixels[row + x as usize] = 0x0022_2C3A; }
+            for x in gap..(gap + super::SPLIT_GAP).min(w) { pixels[row + x as usize] = 0x0038_2E59; }
         }
     }
 
-    /// The chip under window point (`x`, `y`) in the bar, if any: a tab or a group's label.
-    pub(super) fn tab_at(&self, x: i32, y: i32) -> Option<Slot> {
-        if !(0..sex_web::BAR).contains(&y) || self.side() > 0 { return None; }
+    /// Detailed hit test for the inline tab zone (tab, close button, group, or `+` new tab button).
+    pub(super) fn tab_hit(&self, shields_w: i32, x: i32, y: i32) -> Option<sex_web::TabHit> {
+        if self.side() > 0 { return None; }
         let slots = self.slots();
-        sex_web::tab_chips(self.surface.w, &slots, &self.groups).iter().position(|(cx, w)| x >= *cx && x < cx + w).map(|i| slots[i])
+        sex_web::tab_hit_at(self.surface.w, shields_w, &slots, &self.groups, x, y)
     }
 
     /// The row under window point (`x`, `y`) in the vertical strip, if any.
     pub(super) fn side_at(&self, x: i32, y: i32) -> Option<Slot> {
         let slots = self.slots();
-        sex_web::side_row_at(self.side(), slots.len(), x, y).map(|i| slots[i])
+        sex_web::side_row_at(self.side(), self.bar_h(), slots.len(), x, y).map(|i| slots[i])
     }
 
     /// Each tab's group.

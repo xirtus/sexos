@@ -40,6 +40,8 @@ mod reader_glue;
 mod bt_panel;
 mod decorations;
 mod decorations_glue;
+mod silkbar_menus_glue;
+mod spotlight_glue;
 mod tray_items;
 mod tray_items_glue;
 mod layouts;
@@ -10709,6 +10711,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
     let before = (ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID);
     let done = match action {
         A::Launcher => toggle_command_palette(),
+        A::Spotlight => spotlight_glue::toggle(),
         A::Terminal => toggle_spindle(),
         A::Workspace(n) => { if n < WORKSPACE_COUNT { switch_scene(n); } n < WORKSPACE_COUNT }
         A::MoveToWorkspace(n) => match selected_frame_id() {
@@ -10809,6 +10812,8 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     if FOCUSED_SURFACE_ID==SURFACE_ID_BELL_PLACEHOLDER&&sound_panel_key(code,value){return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
+    if spotlight_glue::key(code,value) {return true;}
+    if silkbar_menus_glue::key(code,value) {return true;}
     if tray_key(code,value) {return true;}
     match DESKTOP_KEYS.event(code,value) {
         desktop_keys::Action::Pass=>{
@@ -10876,6 +10881,16 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
         desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
+        desktop_keys::Action::Close=>{
+            let sid=FOCUSED_SURFACE_ID;
+            if sid!=0 && is_closeable_surface(sid){let _=close_surface_from_frame_light(sid);}
+            true
+        }
+        desktop_keys::Action::ToggleMaximize=>{
+            if let Some(fid)=selected_frame_id(){let _=toggle_zoom_frame(fid);}
+            true
+        }
+        desktop_keys::Action::Spotlight=>{spotlight_glue::toggle();true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
             let sid=FOCUSED_SURFACE_ID;
@@ -11042,6 +11057,8 @@ unsafe fn screenshot_key(code: u8, value: u64) -> bool {
 unsafe fn screenshot_button(button: u8, pressed: bool) -> bool {
     // The window menu: a right click on a title bar opens it (slice S1).
     if decorations_glue::button(button, pressed) { return true; }
+    // Desktop right-click context menu & open SilkBar menu dismissal.
+    if silkbar_menus_glue::button(button, pressed) { return true; }
     if !SCREENSHOT.is_open() { return false; }
     if button == 1 {
         if pressed { SCREENSHOT.press(POINTER_X, POINTER_Y); screenshot_ui(true); }
@@ -25220,6 +25237,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
+    if spotlight_glue::press(px, py) { return (HitTarget::None, true); }
+    if silkbar_menus_glue::press(px, py) { return (HitTarget::None, true); }
     if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
     // Program tray items, their menus and notification cards (slice S2).
     if tray_items_glue::press(px, py) { return (HitTarget::None, true); }
@@ -25853,6 +25872,9 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     if unsafe{recording_stop_hit(px,py)}{return true;}
     if py < 0 || py >= desktop_bar_height() || px < 0 {
         return false;
+    }
+    if unsafe { silkbar_menus_glue::handle_top_bar_click(px, py) } {
+        return true;
     }
     let ux = px as usize;
     let uy = py as usize;
@@ -26556,7 +26578,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
+        unsafe { decorations_glue::poll(); silkbar_menus_glue::poll(); spotlight_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
         unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.

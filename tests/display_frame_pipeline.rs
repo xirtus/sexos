@@ -162,6 +162,8 @@ fn draw_frame_meter_hud(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapsh
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 mod bt_panel{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+mod silkbar_menus{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize,_:&crate::scene::SceneSnapshot){}}
+mod spotlight{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 // Frosted panels (S6b): no popup shows in this fixture, so no body is repainted under one.
 fn glass_body(_:*mut u32,_:usize,_:usize,_:&scene::SceneSnapshot,_:Plan){}
 mod program_tray{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}

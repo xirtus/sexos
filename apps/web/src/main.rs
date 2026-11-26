@@ -297,6 +297,10 @@ struct Browser {
     http_ok: Vec<String>,
     /// Failure count from the most recent `about:selftest` / `--selftest` run.
     last_selftest_failed: Option<usize>,
+    /// Open floating frosted lavender context / browser menu, if any.
+    context_menu: Option<sex_web::ContextMenu>,
+    /// Whether the optional clickable bookmarks bar is shown beneath the Helium top bar.
+    show_bookmarks_bar: bool,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -562,9 +566,10 @@ impl Browser {
     /// Paint child documents into bounded private scratch and clip them to the
     /// current physical window, leaving the toolbar and offscreen pixels alone.
     fn paint_frames(&mut self) {
+        let bar_h = self.bar_h();
         for i in 0..self.frames.len() {
             let Some(copy) = viewport::Frame::visible(self.surface, self.frames[i].rect,
-                self.scroll, BAR, self.pane(), self.window.room()) else { continue; };
+                self.scroll, bar_h, self.pane(), self.window.room()) else { continue; };
             let mut tmp = alloc::vec![0xFFFF_FFFFu32; copy.source.pixels];
             self.enter(i);
             sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp,
@@ -643,9 +648,14 @@ impl Browser {
         }
     }
 
+    /// Effective top chrome height (38px compact single-row Helium bar, +26px when bookmarks bar is shown).
+    fn bar_h(&self) -> i32 {
+        sex_web::chrome_height(self.show_bookmarks_bar)
+    }
+
     /// The page's own size: its pane less the bar.
     fn page_view(&self) -> (i32, i32) {
-        let (_, h) = self.surface.document(BAR);
+        let (_, h) = self.surface.document(self.bar_h());
         (self.pane().1, h)
     }
 
@@ -693,6 +703,94 @@ impl Browser {
         self.refit();
     }
 
+    fn bookmarks_bar_items(&self) -> Vec<sex_web::BookmarkItem> {
+        sex_web::merge_bookmarks(&sex_web::default_bookmarks(), &self.profile.bookmarks)
+    }
+
+    fn go_back(&mut self) {
+        if let Some(prev) = self.history.pop() {
+            let here = self.url.clone();
+            self.open(&prev, false);
+            self.forward.push(here);
+        }
+    }
+
+    fn go_forward(&mut self) {
+        if let Some(next) = self.forward.pop() {
+            let here = self.url.clone();
+            self.open(&next, false);
+            self.history.push(here);
+        }
+    }
+
+    fn reload_page(&mut self) {
+        let u = self.url.clone();
+        self.open(&u, false);
+    }
+
+    fn toggle_current_bookmark(&mut self) {
+        let title = self.page.title.clone();
+        let url = self.url.clone();
+        let on = self.profile.toggle_bookmark(&url, &title);
+        sex_pdx::serial_record!("[web.bookmark] on={} count={} url={}", on as u8, self.profile.bookmarks.len(), url);
+        self.draw();
+    }
+
+    fn toggle_current_shields(&mut self) {
+        let url = self.url.clone();
+        if url.starts_with("http") {
+            self.shields.toggle(&mut self.window, &url);
+            self.open(&url, false);
+        } else {
+            self.open("about:shields", true);
+        }
+    }
+
+    fn toggle_bookmarks_bar(&mut self) {
+        self.show_bookmarks_bar = !self.show_bookmarks_bar;
+        self.refit();
+    }
+
+    fn open_context_menu(&mut self, x: i32, y: i32) {
+        self.context_menu = Some(sex_web::build_context_menu(
+            x,
+            y,
+            self.surface.w,
+            self.surface.h,
+            !self.history.is_empty(),
+            !self.forward.is_empty(),
+            self.profile.bookmarked(&self.url),
+            self.show_bookmarks_bar,
+            self.shields.up(&self.url),
+        ));
+        self.draw();
+    }
+
+    fn run_context_action(&mut self, action: sex_web::ContextAction) {
+        match action {
+            sex_web::ContextAction::Back => self.go_back(),
+            sex_web::ContextAction::Forward => self.go_forward(),
+            sex_web::ContextAction::Reload => self.reload_page(),
+            sex_web::ContextAction::NewTab => {
+                let b = if self.jarbox == profile::Jarbox::Private { profile::Jarbox::Private } else { profile::Jarbox::Own };
+                self.new_tab(None, b);
+            }
+            sex_web::ContextAction::ToggleBookmark => self.toggle_current_bookmark(),
+            sex_web::ContextAction::ToggleBookmarksBar => self.toggle_bookmarks_bar(),
+            sex_web::ContextAction::CopyUrl => {
+                let url = self.url.clone();
+                let _ = sex_app::clipboard::copy(&mut self.window, &url);
+            }
+            sex_web::ContextAction::SelectAll => {
+                self.editing = Some(self.url.clone());
+                self.suggestions.clear();
+                self.chosen = None;
+                self.draw();
+            }
+            sex_web::ContextAction::ToggleShields => self.toggle_current_shields(),
+        }
+    }
+
     fn draw(&mut self) {
         // A page in a frame is drawn as part of the page around it.
         if self.in_frame.is_some() { self.frame_dirty = true; return; }
@@ -700,38 +798,46 @@ impl Browser {
         // The waiting half of a split, visited for its timers: just its column.
         if self.visiting {
             let (x, w) = self.pane();
+            let bar_h = self.bar_h();
             let pixels = &mut self.window.pixels()[..self.surface.pixels];
-            if let Some(mut t) = sex_web::column(pixels, self.surface.w, self.surface.h, self.scroll, x, w) { sex_web::paint(&self.page, &mut self.fonts, &mut t, None); }
+            if let Some(mut t) = sex_web::column_below(pixels, self.surface.w, self.surface.h, self.scroll, x, w, bar_h) { sex_web::paint(&self.page, &mut self.fonts, &mut t, None); }
             self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
             return;
         }
         let start = sex_pdx::get_ticks();
         self.paint_split();
-        let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let bar = match (&self.editing, self.status) {
             (None, _) if self.download_status.is_some() => self.download_status.clone().unwrap_or_default(),
             (Some(t), _) if self.naming.is_some() => alloc::format!("Group name: {t}"),
             (Some(t), _) => t.clone(),
             (None, Some(s)) => alloc::format!("{}  {}", s, self.url),
-            (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
+            (None, None) => if self.url.is_empty() { String::from("Search or enter address") } else { self.url.clone() },
         };
         let labels = self.tab_labels();
         let colours = self.tab_colours();
         let group_of = self.group_of();
-        let mark = if self.profile.bookmarked(&self.url) && self.editing.is_none() { "★ " } else { "" };
-        // A private or container tab says so in the bar.
+        let bookmarks_bar = if self.show_bookmarks_bar { self.bookmarks_bar_items() } else { Vec::new() };
+        let bookmarked = self.profile.bookmarked(&self.url);
+        // A private or container tab says so in the omnibox.
         let held = match self.jarbox.name() { Some(n) if self.editing.is_none() => alloc::format!("{n} · "), _ => String::new() };
-        let bar = alloc::format!("{held}{mark}{bar}");
+        let bar = alloc::format!("{held}{bar}");
+        let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let chrome = sex_web::Chrome {
             text: &bar, editing: self.editing.is_some(), tabs: &labels, colours: &colours, active: self.active,
             suggestions: &self.suggestions, chosen: self.chosen,
             find: self.find.as_deref().map(|q| (q, self.find_at, self.matches())), marks: &self.marks,
             zoom: sex_html::style::zoom(),
-            // The badge shows once Shields have blocked something on the page, or are down.
-            shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
+            shields: Some((self.shields.up(&self.url), self.blocked)),
             side: self.side(),
             pane: if self.split_pair().is_some() { self.pane() } else { (0, 0) },
             group_of: &group_of, groups: &self.groups,
+            can_back: !self.history.is_empty(),
+            can_forward: !self.forward.is_empty(),
+            loading: self.status.is_some(),
+            bookmarked,
+            show_bookmarks_bar: self.show_bookmarks_bar,
+            bookmarks: &bookmarks_bar,
+            context_menu: self.context_menu.as_ref(),
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -1931,23 +2037,75 @@ impl Browser {
     #[inline(never)]
     fn pointer(&mut self, p: sex_pdx::app_pointer::Pointer) {
         use sex_pdx::app_pointer::Kind;
-        // The vertical tab strip takes clicks on its tabs; the page starts right of it.
+        let (wx, wy) = (p.x as i32, p.y as i32);
+
+        // 1. Floating context / browser menu intercepts pointer events while open.
+        if self.in_frame.is_none() && self.context_menu.is_some() {
+            match p.kind {
+                Kind::Move => {
+                    let changed = if let Some(menu) = self.context_menu.as_mut() {
+                        let next = sex_web::context_menu_hit_at(menu, wx, wy);
+                        if menu.hovered != next {
+                            menu.hovered = next;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if changed { self.draw(); }
+                    return;
+                }
+                Kind::Down { button: 0 } => {
+                    let hit = self.context_menu.as_ref().and_then(|m| {
+                        sex_web::context_menu_hit_at(m, wx, wy).map(|i| m.items[i].action)
+                    });
+                    self.context_menu = None;
+                    self.draw();
+                    if let Some(action) = hit {
+                        self.run_context_action(action);
+                    }
+                    return;
+                }
+                Kind::Down { button: 2 } => {
+                    self.open_context_menu(wx, wy);
+                    return;
+                }
+                Kind::Wheel { .. } => {
+                    self.context_menu = None;
+                    self.draw();
+                }
+                Kind::Down { .. } => {
+                    self.context_menu = None;
+                    self.draw();
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        let bar_h = self.bar_h();
+
+        // 2. Vertical tab strip (when enabled via Ctrl+Shift+,).
         let side = self.side();
-        if side > 0 && (p.x as i32) < side && (p.y as i32) >= BAR {
+        if side > 0 && wx < side && wy >= bar_h {
             if let Kind::Down { button } = p.kind {
-                match (self.side_at(p.x as i32, p.y as i32), button) {
-                    (Some(sex_web::Slot::Tab(i)), 1) => { self.show_tab(i); self.close_tab(); }
+                match (self.side_at(wx, wy), button) {
+                    (Some(sex_web::Slot::Tab(i)), 1) => self.close_tab_at(i),
                     (Some(sex_web::Slot::Tab(i)), 0) => self.show_tab(i),
                     (Some(sex_web::Slot::Group(g)), 0) => self.fold_group(g),
                     (Some(sex_web::Slot::Group(g)), 2) => self.start_naming(g),
+                    (_, 2) => self.open_context_menu(wx, wy),
                     _ => {}
                 }
             }
             return;
         }
-        // In a split view a press on the other half gives it the keyboard.
+
+        // 3. In a split view a press on the other half gives it the keyboard.
         let (px0, pw) = if self.in_frame.is_some() { (0, i32::MAX) } else { self.pane() };
-        if self.in_frame.is_none() && (p.y as i32) >= BAR && ((p.x as i32) < px0 || (p.x as i32) >= px0.saturating_add(pw)) {
+        if self.in_frame.is_none() && wy >= bar_h && (wx < px0 || wx >= px0.saturating_add(pw)) {
             if let (Some((l, r)), Kind::Down { .. }) = (self.split_pair(), p.kind) {
                 let other = if self.active == l { r } else { l };
                 self.show_tab(other);
@@ -1955,33 +2113,90 @@ impl Browser {
             }
             return;
         }
-        let (x, y) = (p.x as i32 - px0, p.y as i32 - BAR);
-        if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 | 2 }) {
-            match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
-                (Some(sex_web::Slot::Group(g)), Kind::Down { button: 2 }) => self.start_naming(g),
-                (_, Kind::Down { button: 2 }) => {}
-                (Some(sex_web::Slot::Tab(i)), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
-                (Some(sex_web::Slot::Tab(i)), _) => self.show_tab(i),
-                (Some(sex_web::Slot::Group(g)), _) => self.fold_group(g),
-                (None, _) => { self.editing = Some(String::new()); self.suggestions.clear(); self.chosen = None; self.draw(); }
-            }
-            return;
-        }
-        // A suggestion under the bar takes the click while typing.
-        if self.editing.is_some() && matches!(p.kind, Kind::Down { button: 0 }) {
-            if let Some(i) = sex_web::suggestion_at(self.surface.w, self.suggestions.len(), p.x as i32, p.y as i32) {
+
+        // 4. Omnibox suggestions dropdown takes left clicks while editing.
+        if self.in_frame.is_none() && self.editing.is_some() && matches!(p.kind, Kind::Down { button: 0 }) {
+            if let Some(i) = sex_web::suggestion_at(self.surface.w, self.suggestions.len(), side > 0, wx, wy) {
                 let url = self.suggestions[i].clone();
                 self.editing = None;
                 self.suggestions.clear();
+                self.chosen = None;
                 return self.open(&url, true);
             }
         }
+
+        // 5. Top Chrome (Helium Single-Row Bar + Optional Toggleable Bookmarks Bar).
+        if self.in_frame.is_none() && wy >= 0 && wy < bar_h {
+            if matches!(p.kind, Kind::Down { button: 0 | 1 | 2 }) {
+                if wy < sex_web::TOP_BAR_H {
+                    let shields_w = sex_web::shields_pill_width(Some((self.shields.up(&self.url), self.blocked)));
+                    // Check inline tabs + '+' button first.
+                    if let Some(hit) = self.tab_hit(shields_w, wx, wy) {
+                        match (hit, p.kind) {
+                            (sex_web::TabHit::Group(g), Kind::Down { button: 2 }) => self.start_naming(g),
+                            (_, Kind::Down { button: 2 }) => self.open_context_menu(wx, wy),
+                            (sex_web::TabHit::Tab(i), Kind::Down { button: 1 }) => self.close_tab_at(i),
+                            (sex_web::TabHit::Close(i), Kind::Down { button: 0 }) => self.close_tab_at(i),
+                            (sex_web::TabHit::Tab(i), Kind::Down { button: 0 }) => self.show_tab(i),
+                            (sex_web::TabHit::Group(g), Kind::Down { button: 0 }) => self.fold_group(g),
+                            (sex_web::TabHit::NewTab, Kind::Down { button: 0 }) => {
+                                let b = if self.jarbox == profile::Jarbox::Private { profile::Jarbox::Private } else { profile::Jarbox::Own };
+                                self.new_tab(None, b);
+                            }
+                            _ => {}
+                        }
+                    } else if matches!(p.kind, Kind::Down { button: 2 }) {
+                        self.open_context_menu(wx, wy);
+                    } else if matches!(p.kind, Kind::Down { button: 0 }) {
+                        match sex_web::toolbar_hit_at(self.surface.w, shields_w, side > 0, wx, wy) {
+                            Some(sex_web::ToolbarHit::Back) => self.go_back(),
+                            Some(sex_web::ToolbarHit::Forward) => self.go_forward(),
+                            Some(sex_web::ToolbarHit::Reload) => self.reload_page(),
+                            Some(sex_web::ToolbarHit::Omnibox) => {
+                                self.editing = Some(self.url.clone());
+                                self.suggestions.clear();
+                                self.chosen = None;
+                                self.draw();
+                            }
+                            Some(sex_web::ToolbarHit::BookmarkStar) => self.toggle_current_bookmark(),
+                            Some(sex_web::ToolbarHit::Shields) => self.toggle_current_shields(),
+                            Some(sex_web::ToolbarHit::BookmarksToggle) => self.toggle_bookmarks_bar(),
+                            Some(sex_web::ToolbarHit::Menu) => {
+                                let l = sex_web::toolbar_layout(self.surface.w, shields_w, side > 0);
+                                self.open_context_menu(
+                                    l.menu[0] + l.menu[2] - sex_web::CONTEXT_MENU_W,
+                                    sex_web::TOP_BAR_H + 2,
+                                );
+                            }
+                            None => {}
+                        }
+                    }
+                } else if self.show_bookmarks_bar {
+                    // Optional Clickable Bookmarks Bar
+                    if matches!(p.kind, Kind::Down { button: 2 }) {
+                        self.open_context_menu(wx, wy);
+                    } else if matches!(p.kind, Kind::Down { button: 0 }) {
+                        let items = self.bookmarks_bar_items();
+                        if let Some(idx) = sex_web::bookmark_hit_at(self.surface.w, &items, wx, wy) {
+                            let url = items[idx].url.clone();
+                            self.editing = None;
+                            self.suggestions.clear();
+                            self.chosen = None;
+                            self.open(&url, true);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        let (x, y) = (wx - px0, wy - bar_h);
         let (px, py) = (x, y + self.scroll);
         // Over a frame: the frame's page has the pointer, in its own coordinates.
         if y >= 0 && self.in_frame.is_none() {
             if let Some(i) = self.frames.iter().position(|f| self.doc.get().accepts_pointer(f.node) && px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
                 let [fx, fy, _, _] = self.frames[i].rect;
-                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind, mods: p.mods };
+                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + bar_h) as i16, buttons: p.buttons, kind: p.kind, mods: p.mods };
                 self.enter(i);
                 self.pointer(q);
                 self.leave(i);
@@ -2026,6 +2241,9 @@ impl Browser {
         if hover_changed { self.relayout(); self.draw(); }
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
+            Kind::Up { button: 2 } if !kept && y >= 0 && self.in_frame.is_none() => {
+                self.open_context_menu(wx, wy);
+            }
             Kind::Up { button: 0 } if !kept && y >= 0 => {
                 let i = match (link, pressed) { (Some(n), Some(m)) if n == m => self.page.links.iter().position(|l| l.node == n), _ => None };
                 if let Some(i) = i {
@@ -2074,6 +2292,12 @@ impl Browser {
 
     fn key(&mut self, key: sex_pdx::app_key::Key) {
         let view = self.view.1.max(40);
+        // Escape dismisses an open context menu first.
+        if self.context_menu.is_some() && key.code == 0x01 {
+            self.context_menu = None;
+            self.draw();
+            return;
+        }
         // The browser's own shortcuts come before the page's.
         if key.control && self.in_frame.is_none() && self.shortcut(key) { return; }
         if self.finding { return self.find_key(key); }
@@ -2084,12 +2308,12 @@ impl Browser {
             match key.code {
                 0x01 => { self.editing = None; self.suggestions.clear(); self.chosen = None; self.draw(); return; }
                 0x1C => {
-                    let mut url = match self.chosen.and_then(|i| self.suggestions.get(i)) { Some(s) => s.clone(), None => self.editing.clone().unwrap() };
+                    let raw = match self.chosen.and_then(|i| self.suggestions.get(i)) { Some(s) => s.clone(), None => self.editing.clone().unwrap() };
                     self.editing = None;
                     self.suggestions.clear();
                     self.chosen = None;
-                    if !url.contains("://") && !url.starts_with('@') && !url.starts_with("about:") && !url.is_empty() { url.insert_str(0, "https://"); }
-                    self.open(&url, true);
+                    let url = sex_web::resolve_omnibox_input(&raw);
+                    if !url.is_empty() { self.open(&url, true); } else { self.draw(); }
                     return;
                 }
                 0x0E => { text.pop(); }
@@ -2110,8 +2334,8 @@ impl Browser {
         }
         match key.code {
             0x1C => return self.follow(),
-            0x0E if key.shift => { if let Some(next) = self.forward.pop() { let here = self.url.clone(); self.open(&next, false); self.history.push(here); } return; }
-            0x0E => { if let Some(prev) = self.history.pop() { let here = self.url.clone(); self.open(&prev, false); self.forward.push(here); } return; }
+            0x0E if key.shift => { self.go_forward(); return; }
+            0x0E => { self.go_back(); return; }
             0x39 => return self.scroll_by(if key.shift { -view + 40 } else { view - 40 }),
             0x49 => return self.scroll_by(-view + 40),
             0x51 => return self.scroll_by(view - 40),
@@ -2182,7 +2406,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();

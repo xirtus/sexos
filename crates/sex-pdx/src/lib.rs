@@ -1317,6 +1317,8 @@ pub mod desktop_widgets;
 pub mod access_view;
 pub mod window_switcher;
 pub mod window_menu;
+pub mod silkbar_menus;
+pub mod spotlight;
 pub mod screenshot;
 pub mod tray;
 pub mod program_tray;
