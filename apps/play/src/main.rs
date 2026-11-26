@@ -206,7 +206,8 @@ fn clock(out: &mut alloc::string::String, ms: u64) {
 fn present(window: &mut Window, player: &mut Player, ui: &mut Ui, at_ms: i64) {
     let (w, h) = player.size();
     if w == 0 || player.picture().len() < w * h { return; }
-    window.pixels()[..w * h].copy_from_slice(player.picture());
+    // Every pixel is the new picture: no need to carry the last frame over.
+    window.frame(w, h).copy_from_slice(player.picture());
     let showing = player.paused() || sex_pdx::get_ticks() < ui.controls_until;
     // Captions sit above the controls band while it shows, never under it.
     let reserve = match (ui.controls.as_ref(), showing) { (Some(c), true) => c.controls_band(h), _ => 0 };
@@ -475,7 +476,9 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
         }
         match player.step() {
             Step::Picture { n, at_ms } => {
-                present(window, &mut player, ui, at_ms);
+                // Display still reads the other page: drop this picture rather than
+                // hold up decoding and sound until it is done.
+                if window.ready() { present(window, &mut player, ui, at_ms); }
                 // A picture that turns bright in the middle is logged with the tick it
                 // was shown at: the A/V sync gate lines these up with its beeps.
                 let mid = player.picture().get((h / 2) * w + w / 2).copied().unwrap_or(0);

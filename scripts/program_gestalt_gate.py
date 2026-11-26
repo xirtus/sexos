@@ -26,6 +26,9 @@ def main():
  elf=(ROOT/'iso_root/programs/gestalt').read_bytes();assert elf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('gestalt',elf)])
+ # The PNG export (the engine hands it back as base64 JSON) peaks near 80 MB, and every
+ # program row now holds two screen pages (PR #499): 512 MB no longer leaves room.
+ os.environ.setdefault('SEXOS_GATE_MEMORY','1G')
  g=boot(a.iso,disk,a.out,'gestalt',a.resolution);t=g['text'];q=g['q']
  rw,rh=map(int,a.resolution.split('x'))
  def type_line(line):

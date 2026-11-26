@@ -108,7 +108,7 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                 }
             }
         }
-        let room = window.pixels().len();
+        let room = window.room();
         let (w, h) = (width.min(room / height.max(1)), height);
         // Painted aside and shown whole: Display reads the window whenever it composites,
         // and a frame takes ~45 ms (see `sex_app::Window::frame`).
