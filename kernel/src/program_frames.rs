@@ -16,10 +16,15 @@ static PEAK: AtomicU64 = AtomicU64::new(0);
 
 /// A zeroed frame for a program run, or None when memory is down to the floor.
 pub fn take() -> Option<u64> {
+    let frame = take_unzeroed()?;
+    crate::boot_memory::zero_frame(frame);
+    Some(frame)
+}
+/// An unzeroed frame for a caller that immediately overwrites all 4096 bytes.
+pub fn take_unzeroed() -> Option<u64> {
     pressure();
     if GLOBAL_ALLOCATOR.free_frames() <= FLOOR { return None; }
     let frame = GLOBAL_ALLOCATOR.alloc(0)?;
-    crate::boot_memory::zero_frame(frame);
     let lent = LENT.fetch_add(1, Ordering::Relaxed) + 1;
     PEAK.fetch_max(lent, Ordering::Relaxed);
     Some(frame)
