@@ -199,6 +199,7 @@ pub enum MenuAction {
     PowerProfileBalanced,
     PowerProfilePerformance,
     OpenCalendar,
+    OpenSpotlight,
 }
 
 impl MenuAction {
@@ -240,6 +241,7 @@ impl MenuAction {
             Self::PowerProfileBalanced => "profile_balanced",
             Self::PowerProfilePerformance => "profile_performance",
             Self::OpenCalendar => "open_calendar",
+            Self::OpenSpotlight => "open_spotlight",
         }
     }
 
@@ -338,7 +340,7 @@ impl MenuState {
     /// Number of rows in this menu/popover.
     pub const fn row_count(&self) -> usize {
         match self.kind {
-            MenuKind::System => 11,
+            MenuKind::System => 12,
             MenuKind::AppFile => 3,
             MenuKind::AppEdit => 3,
             MenuKind::AppView => 4,
@@ -360,16 +362,17 @@ impl MenuState {
         Some(match (self.kind, index) {
             // Left SexOS / System pill dropdown
             (MenuKind::System, 0) => RowSpec::item("About SexOS", MenuAction::AboutSexOs),
-            (MenuKind::System, 1) => RowSpec::item("Kaleidoscope Browser", MenuAction::LaunchBrowser).sep(),
-            (MenuKind::System, 2) => RowSpec::item("Spindle Terminal", MenuAction::LaunchTerminal).key("Super+Ret"),
-            (MenuKind::System, 3) => RowSpec::item("Tailor AI", MenuAction::LaunchTailor),
-            (MenuKind::System, 4) => RowSpec::item("Flash Webcam", MenuAction::LaunchFlash),
-            (MenuKind::System, 5) => RowSpec::item("PD Graph", MenuAction::LaunchPdGraph),
-            (MenuKind::System, 6) => RowSpec::item("Files", MenuAction::LaunchFiles),
-            (MenuKind::System, 7) => RowSpec::item("Settings", MenuAction::LaunchSettings),
-            (MenuKind::System, 8) => RowSpec::item("Refresh Desktop", MenuAction::RefreshDesktop).sep(),
-            (MenuKind::System, 9) => RowSpec::item("Reboot", MenuAction::Reboot).danger(),
-            (MenuKind::System, 10) => RowSpec::item("Shutdown", MenuAction::Shutdown).danger(),
+            (MenuKind::System, 1) => RowSpec::item("Spotlight Search", MenuAction::OpenSpotlight).key("Super+Spc").sep(),
+            (MenuKind::System, 2) => RowSpec::item("Kaleidoscope Browser", MenuAction::LaunchBrowser).sep(),
+            (MenuKind::System, 3) => RowSpec::item("Spindle Terminal", MenuAction::LaunchTerminal).key("Super+Ret"),
+            (MenuKind::System, 4) => RowSpec::item("Tailor AI", MenuAction::LaunchTailor),
+            (MenuKind::System, 5) => RowSpec::item("Flash Webcam", MenuAction::LaunchFlash),
+            (MenuKind::System, 6) => RowSpec::item("PD Graph", MenuAction::LaunchPdGraph),
+            (MenuKind::System, 7) => RowSpec::item("Files", MenuAction::LaunchFiles),
+            (MenuKind::System, 8) => RowSpec::item("Settings", MenuAction::LaunchSettings),
+            (MenuKind::System, 9) => RowSpec::item("Refresh Desktop", MenuAction::RefreshDesktop).sep(),
+            (MenuKind::System, 10) => RowSpec::item("Reboot", MenuAction::Reboot).danger(),
+            (MenuKind::System, 11) => RowSpec::item("Shutdown", MenuAction::Shutdown).danger(),
 
             // App contextual menus (with macOS Finder / KDE-style right-aligned shortcut hints)
             (MenuKind::AppFile, 0) => RowSpec::item("New Window", MenuAction::NewWindow).key("Super+Ret"),

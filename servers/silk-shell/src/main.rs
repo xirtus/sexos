@@ -41,6 +41,7 @@ mod bt_panel;
 mod decorations;
 mod decorations_glue;
 mod silkbar_menus_glue;
+mod spotlight_glue;
 mod tray_items;
 mod tray_items_glue;
 mod layouts;
@@ -10710,6 +10711,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
     let before = (ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID);
     let done = match action {
         A::Launcher => toggle_command_palette(),
+        A::Spotlight => spotlight_glue::toggle(),
         A::Terminal => toggle_spindle(),
         A::Workspace(n) => { if n < WORKSPACE_COUNT { switch_scene(n); } n < WORKSPACE_COUNT }
         A::MoveToWorkspace(n) => match selected_frame_id() {
@@ -10809,6 +10811,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     if FOCUSED_SURFACE_ID==SURFACE_ID_BELL_PLACEHOLDER&&sound_panel_key(code,value){return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
+    if spotlight_glue::key(code,value) {return true;}
     if silkbar_menus_glue::key(code,value) {return true;}
     if tray_key(code,value) {return true;}
     match DESKTOP_KEYS.event(code,value) {
@@ -10886,6 +10889,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
             if let Some(fid)=selected_frame_id(){let _=toggle_zoom_frame(fid);}
             true
         }
+        desktop_keys::Action::Spotlight=>{spotlight_glue::toggle();true}
         desktop_keys::Action::TextZoom(step)=>{
             // Display owns text layout; Shell only names the focused window and the step.
             let sid=FOCUSED_SURFACE_ID;
@@ -25220,6 +25224,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
+    if spotlight_glue::press(px, py) { return (HitTarget::None, true); }
     if silkbar_menus_glue::press(px, py) { return (HitTarget::None, true); }
     if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
     // Program tray items, their menus and notification cards (slice S2).
@@ -26560,7 +26565,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); silkbar_menus_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
+        unsafe { decorations_glue::poll(); silkbar_menus_glue::poll(); spotlight_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
         unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.

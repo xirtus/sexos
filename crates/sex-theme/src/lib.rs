@@ -176,6 +176,18 @@ pub mod candy_lavender {
     pub const LIGHT_MENU_DIVIDER: u32 = solid(0xD5_C2FA);
     pub const LIGHT_MENU_SUBTEXT: u32 = solid(0x52_4272);
     pub const LIGHT_MENU_DANGER: u32 = solid(0xC2_185B);
+
+    /// Frosted Candy Lavender Spotlight Launcher tokens (dark & light).
+    pub const DARK_SPOTLIGHT_INPUT: u32 = solid(0x14_0D22);
+    pub const DARK_SPOTLIGHT_TILE: u32 = solid(0x28_1C42);
+    pub const DARK_SPOTLIGHT_SELECTED: u32 = solid(0x45_2F74);
+    pub const DARK_SPOTLIGHT_PILL: u32 = solid(0x2B_1F45);
+    pub const LIGHT_SPOTLIGHT_INPUT: u32 = solid(0xFF_FDFF);
+    pub const LIGHT_SPOTLIGHT_TILE: u32 = solid(0xEC_E2FF);
+    pub const LIGHT_SPOTLIGHT_SELECTED: u32 = solid(0xDB_C5FF);
+    pub const LIGHT_SPOTLIGHT_PILL: u32 = solid(0xEB_E0FF);
+    pub const ORCHID_PILL_ACTIVE: u32 = solid(0x6D_45D6);
+    pub const ON_ORCHID_ACTIVE: u32 = solid(0xFF_FFFF);
 }
 
 #[cfg(test)]
@@ -214,5 +226,13 @@ mod tests {
         assert!(contrast(LIGHT_TEXT, LIGHT_MENU_HOVER) >= 7.0);
         assert!(contrast(LIGHT_MENU_SUBTEXT, LIGHT_MENU_BG) >= 7.0);
         assert!(contrast(LIGHT_MENU_DANGER, LIGHT_MENU_BG) >= 4.5);
+        // Spotlight search input, tiles, and active category pill meet WCAG AA/AAA.
+        assert!(contrast(DARK_TEXT, DARK_SPOTLIGHT_INPUT) >= 7.0);
+        assert!(contrast(DARK_TEXT, DARK_SPOTLIGHT_TILE) >= 7.0);
+        assert!(contrast(DARK_TEXT, DARK_SPOTLIGHT_SELECTED) >= 7.0);
+        assert!(contrast(LIGHT_TEXT, LIGHT_SPOTLIGHT_INPUT) >= 7.0);
+        assert!(contrast(LIGHT_TEXT, LIGHT_SPOTLIGHT_TILE) >= 7.0);
+        assert!(contrast(LIGHT_TEXT, LIGHT_SPOTLIGHT_SELECTED) >= 7.0);
+        assert!(contrast(ON_ORCHID_ACTIVE, ORCHID_PILL_ACTIVE) >= 4.5);
     }
 }

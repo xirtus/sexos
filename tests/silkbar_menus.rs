@@ -56,19 +56,21 @@ fn top_bar_menu_rects_preserve_virtio_gpu_gate_pixel_300_14() {
 #[test]
 fn system_and_app_menus_have_expected_items_and_shortcut_hints() {
     let sys = MenuState::new(MenuKind::System, 8, 32);
-    assert_eq!(sys.row_count(), 11);
+    assert_eq!(sys.row_count(), 12);
     assert_eq!(sys.row(0).unwrap().action, MenuAction::AboutSexOs);
-    assert_eq!(sys.row(1).unwrap().action, MenuAction::LaunchBrowser);
-    assert_eq!(sys.row(2).unwrap().action, MenuAction::LaunchTerminal);
-    assert_eq!(sys.row(2).unwrap().shortcut, "Super+Ret");
-    assert_eq!(sys.row(3).unwrap().action, MenuAction::LaunchTailor);
-    assert_eq!(sys.row(4).unwrap().action, MenuAction::LaunchFlash);
-    assert_eq!(sys.row(5).unwrap().action, MenuAction::LaunchPdGraph);
-    assert_eq!(sys.row(6).unwrap().action, MenuAction::LaunchFiles);
-    assert_eq!(sys.row(7).unwrap().action, MenuAction::LaunchSettings);
-    assert_eq!(sys.row(8).unwrap().action, MenuAction::RefreshDesktop);
-    assert_eq!(sys.row(9).unwrap().action, MenuAction::Reboot);
-    assert_eq!(sys.row(10).unwrap().action, MenuAction::Shutdown);
+    assert_eq!(sys.row(1).unwrap().action, MenuAction::OpenSpotlight);
+    assert_eq!(sys.row(1).unwrap().shortcut, "Super+Spc");
+    assert_eq!(sys.row(2).unwrap().action, MenuAction::LaunchBrowser);
+    assert_eq!(sys.row(3).unwrap().action, MenuAction::LaunchTerminal);
+    assert_eq!(sys.row(3).unwrap().shortcut, "Super+Ret");
+    assert_eq!(sys.row(4).unwrap().action, MenuAction::LaunchTailor);
+    assert_eq!(sys.row(5).unwrap().action, MenuAction::LaunchFlash);
+    assert_eq!(sys.row(6).unwrap().action, MenuAction::LaunchPdGraph);
+    assert_eq!(sys.row(7).unwrap().action, MenuAction::LaunchFiles);
+    assert_eq!(sys.row(8).unwrap().action, MenuAction::LaunchSettings);
+    assert_eq!(sys.row(9).unwrap().action, MenuAction::RefreshDesktop);
+    assert_eq!(sys.row(10).unwrap().action, MenuAction::Reboot);
+    assert_eq!(sys.row(11).unwrap().action, MenuAction::Shutdown);
 
     let win = MenuState::new(MenuKind::AppWindow, 220, 32);
     assert_eq!(win.row(1).unwrap().shortcut, "Super+F");

@@ -327,6 +327,10 @@ unsafe fn dispatch_action(action: MenuAction) {
             close("calendar");
             crate::tray_toggle(sex_pdx::tray::Menu::Calendar);
         }
+        MenuAction::OpenSpotlight => {
+            close("spotlight");
+            crate::spotlight_glue::open();
+        }
     }
 }
 

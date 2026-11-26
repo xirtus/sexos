@@ -35,7 +35,7 @@ fn chords_are_free_keys_and_do_not_move_existing_ones() {
     assert_eq!(binding(code::TAB, m), Some(WmAction::NextWorkspace));
     assert_eq!(binding(code::BRACKET_RIGHT, m), Some(WmAction::GrowMaster));
     assert_eq!(binding(code::BRACKET_LEFT, m), Some(WmAction::ShrinkMaster));
-    assert_eq!(binding(code::SPACE, m), Some(WmAction::CycleLayout));
+    assert_eq!(binding(code::SPACE, m), Some(WmAction::Spotlight));
     assert_eq!(binding(code::V, s), Some(WmAction::ToggleFloating));
     assert_eq!(binding(code::DIGIT_1, m), Some(WmAction::Workspace(0)));
     // Group chords do not repeat while held.

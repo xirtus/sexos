@@ -94,8 +94,10 @@ impl Layout {
 /// What a Super chord asks the desktop to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WmAction {
-    /// Super pressed and released alone, or Super+D: the launcher.
+    /// Super pressed and released alone, or Super+Shift+D: the legacy command palette.
     Launcher,
+    /// Super+Space or Super+D: the frosted Candy Lavender Spotlight app launcher.
+    Spotlight,
     /// Super+Enter: a terminal.
     Terminal,
     /// Super+1..9.
@@ -197,12 +199,13 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::TAB, false) => WmAction::NextWorkspace,
         (code::TAB, true) => WmAction::PrevWorkspace,
         (code::ENTER, _) => WmAction::Terminal,
-        (code::D, _) => WmAction::Launcher,
+        (code::D, false) => WmAction::Spotlight,
+        (code::D, true) => WmAction::Launcher,
         (code::Q, _) => WmAction::Close,
         (code::F, _) => WmAction::Fullscreen,
         (code::V, false) => WmAction::ClipboardHistory,
         (code::V, true) | (code::SPACE, true) => WmAction::ToggleFloating,
-        (code::SPACE, false) => WmAction::CycleLayout,
+        (code::SPACE, false) => WmAction::Spotlight,
         (code::M, _) => WmAction::ToggleMonocle,
         (code::BRACKET_RIGHT, _) => WmAction::GrowMaster,
         (code::BRACKET_LEFT, _) => WmAction::ShrinkMaster,

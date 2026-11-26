@@ -21,15 +21,18 @@ pub enum Action {
     Close,
     /// Alt+F10: maximize or restore the focused window (KDE / standard desktop).
     ToggleMaximize,
+    /// Alt+Space: open or close the frosted Candy Lavender Spotlight launcher.
+    Spotlight,
 }
 
 /// Media key codes, as `sex_pdx::app_key` names them (kept here so this file builds alone).
 pub const KEY_MUTE: u8 = 0x75;
 pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
-/// Set-1 codes for Alt+F4 and Alt+F10.
+/// Set-1 codes for Alt+F4, Alt+F10, and Alt+Space.
 pub const KEY_F4: u8 = 0x3E;
 pub const KEY_F10: u8 = 0x44;
+pub const KEY_SPACE: u8 = 0x39;
 
 /// One volume key press (or repeat) moves the master volume this far.
 pub const VOLUME_STEP: i8 = 5;
@@ -108,7 +111,7 @@ impl Keys {
             0x0B => Some(0),  // 0
             _ => None,
         };
-        let is_alt_wm = matches!(code, KEY_F4 | KEY_F10);
+        let is_alt_wm = matches!(code, KEY_F4 | KEY_F10 | KEY_SPACE);
         if code != 0x0F && zoom.is_none() && !is_alt_wm {
             return Action::Pass;
         }
@@ -117,7 +120,7 @@ impl Keys {
                 self.captured = None;
                 return Action::Consume;
             }
-            // Holding Alt+= keeps growing; Tab/F4/F10 repeats stay consumed.
+            // Holding Alt+= keeps growing; Tab/F4/F10/Space repeats stay consumed.
             // Scale steps are big; only text zoom repeats.
             return match zoom { Some(step) if step != 0 && self.alt && !self.ctrl => Action::TextZoom(step), _ => Action::Consume };
         }
@@ -130,6 +133,9 @@ impl Keys {
         }
         if code == KEY_F10 && !self.ctrl {
             return Action::ToggleMaximize;
+        }
+        if code == KEY_SPACE && !self.ctrl {
+            return Action::Spotlight;
         }
         match zoom {
             Some(step) if self.ctrl => Action::DisplayScale(step),

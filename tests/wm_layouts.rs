@@ -164,7 +164,7 @@ fn bindings_cover_the_hyprland_and_kde_basics() {
     assert_eq!(binding(code::V, m), Some(WmAction::ClipboardHistory));
     assert_eq!(binding(code::V, s), Some(WmAction::ToggleFloating));
     assert_eq!(binding(code::SPACE, s), Some(WmAction::ToggleFloating));
-    assert_eq!(binding(code::SPACE, m), Some(WmAction::CycleLayout));
+    assert_eq!(binding(code::SPACE, m), Some(WmAction::Spotlight));
     assert_eq!(binding(code::ENTER, m), Some(WmAction::Terminal));
     assert_eq!(binding(code::S, m), Some(WmAction::Scratchpad));
     assert_eq!(binding(code::S, s), Some(WmAction::ToScratchpad));

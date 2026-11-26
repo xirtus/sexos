@@ -148,6 +148,7 @@ mod lock_screen;
 mod bt_panel;
 mod window_menu;
 mod silkbar_menus;
+mod spotlight;
 mod program_tray;
 mod tray_icons;
 mod bitmap_binding;
@@ -2703,7 +2704,7 @@ fn gpu_present(first:usize,end:usize)->bool{
 /// with its whole rectangle, in drawing order.
 fn glass_panels(w:usize,h:usize,scene:&scene::SceneSnapshot)->frost::Shown{
     let (bar,scale)=(scene.metrics.bar()as usize,scene.metrics.scale());
-    let mut shown:frost::Shown=[None;8];
+    let mut shown:frost::Shown=[None;9];
     let mut n=0;
     let mut add=|p:frost::Panel,r:Option<glass::Rect>|{if let Some(r)=r.filter(|r|r.2!=0&&r.3!=0){if n<shown.len(){shown[n]=Some((p,r));n+=1;}}};
     // The launcher panel (0x92) is a compositor surface: its own fill is the
@@ -2716,6 +2717,7 @@ fn glass_panels(w:usize,h:usize,scene:&scene::SceneSnapshot)->frost::Shown{
     if state.visible()&&!state.grid{add(frost::Panel::Switcher,sex_pdx::window_switcher::Layout::new(w,h,state.count as usize,scale).map(|l|l.panel));}
     add(frost::Panel::WindowMenu,window_menu::glass_rect(w,h,scale));
     add(frost::Panel::SilkBarMenu,silkbar_menus::glass_rect(w,h,scale));
+    add(frost::Panel::Spotlight,spotlight::glass_rect(w,h,bar,scale));
     shown
 }
 
@@ -2759,6 +2761,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_window_switcher(fb,w,h,total,scene);
         window_menu::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         silkbar_menus::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize,scene);
+        spotlight::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
@@ -5290,6 +5293,8 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::desktop_widgets::OP_WEATHER => desktop_widgets::weather(msg.caller_pd, msg.arg0, msg.arg1),
                 sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::silkbar_menus::OP_SILKBAR_MENU => { if silkbar_menus::receive(msg.caller_pd, msg.arg0, msg.arg1) { needs_full_redraw = true; } }
+                sex_pdx::spotlight::OP_SPOTLIGHT_QUERY => { if spotlight::receive_query(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
+                sex_pdx::spotlight::OP_SPOTLIGHT => { if spotlight::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::program_tray::OP_TRAY_VIEW => { if program_tray::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {
                     // Only the Shell turns animations on or off and hints a workspace slide.
