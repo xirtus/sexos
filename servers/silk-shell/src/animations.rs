@@ -12,12 +12,19 @@ use sex_graphics::window_shape as shape;
 pub enum Look { Full, Still, Plain }
 
 static mut LOOK: Look = Look::Full;
+static mut FRAME_METER: bool = false;
 
 pub fn look() -> Look { unsafe { LOOK } }
 /// True while windows animate.
 pub fn motion() -> bool { look() == Look::Full }
-/// `OP_MOTION` arg2: bit 0 = plain look.
-pub fn motion_arg2() -> u64 { (look() == Look::Plain) as u64 }
+/// `OP_MOTION` arg2: bit 0 = plain look, bit 1 = frame-time meter HUD.
+pub fn motion_arg2() -> u64 { ((look() == Look::Plain) as u64) | ((unsafe { FRAME_METER } as u64) << 1) }
+
+/// Toggles the compositor frame-time meter HUD; returns the new state and notice.
+pub fn toggle_frame_meter() -> (bool, &'static [u8]) {
+    let on = unsafe { FRAME_METER = !FRAME_METER; FRAME_METER };
+    (on, if on { b"Frame-time meter on" } else { b"Frame-time meter off" })
+}
 
 /// Next look; returns it with the notice to show.
 pub fn cycle() -> (Look, &'static [u8]) {

@@ -331,8 +331,17 @@ pub const CLASS_NORMAL: usize = 1;
 /// sexdisplay, silk-shell, sexinput, sexusb, silkbar. Sound (sexbell) stays normal:
 /// its device ring covers a scheduling delay, and it needs a deadline class instead.
 const INTERACTIVE_DOMAINS: [u64; 5] = [1, 3, 4, 5, 6];
+/// Mechanism-only priority hint: one domain nominated by an interactive domain (e.g.
+/// silk-shell's focused window) receives interactive class, bounded by URGENT_STREAK.
+static PRIORITY_HINT_DOMAIN: AtomicU64 = AtomicU64::new(0);
 pub fn class_of(pd: u64) -> usize {
-    if INTERACTIVE_DOMAINS.contains(&pd) { CLASS_INTERACTIVE } else { CLASS_NORMAL }
+    if INTERACTIVE_DOMAINS.contains(&pd)
+        || (pd != 0 && pd == PRIORITY_HINT_DOMAIN.load(Ordering::Relaxed))
+    {
+        CLASS_INTERACTIVE
+    } else {
+        CLASS_NORMAL
+    }
 }
 /// Interactive tasks may run this many times in a row ahead of a waiting normal one.
 const URGENT_STREAK: u32 = 16;
@@ -1150,14 +1159,27 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
     }
 }
 
-/// Syscall 104 (`sex_pdx::sched`): op 1 puts the calling task in the deadline class with
-/// a period in microseconds (`rsi`, clamped), or takes it out with 0. Self-only: the
-/// class's share of each core bounds what any task can take with it.
-pub fn sched_syscall(op: u64, period_us: u64) -> u64 {
+/// Syscall 104 (`sex_pdx::sched`):
+/// - op 1: puts the calling task in the deadline class with a period in microseconds
+///   (`arg`, clamped), or takes it out with 0. Self-only.
+/// - op 2: sets `PRIORITY_HINT_DOMAIN` to `arg` (or 0 to clear). Mechanism-only hint;
+///   only interactive-class domains may set it.
+pub fn sched_syscall(op: u64, arg: u64) -> u64 {
     let task = SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize].current_task.load(Ordering::Acquire);
-    if op != 1 || task.is_null() { return u64::MAX; }
-    unsafe { (*task).deadline_us.store(deadline::clamp_period_us(period_us), Ordering::Relaxed) };
-    0
+    if task.is_null() { return u64::MAX; }
+    match op {
+        1 => {
+            unsafe { (*task).deadline_us.store(deadline::clamp_period_us(arg), Ordering::Relaxed) };
+            0
+        }
+        2 => {
+            let caller_pd = unsafe { (*task).context.pd_id };
+            if !INTERACTIVE_DOMAINS.contains(&caller_pd) { return u64::MAX; }
+            PRIORITY_HINT_DOMAIN.store(arg, Ordering::Relaxed);
+            0
+        }
+        _ => u64::MAX,
+    }
 }
 
 /// Cores spinning for a partner's answer (`poll_for_partner`): a wake needs no interrupt.
