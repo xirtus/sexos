@@ -81,15 +81,12 @@ fn grow(heap: &mut Heap, layout: Layout) -> bool {
 /// Growth ceiling set at BOOT (`prepare_growth`).
 pub fn limit() -> usize { LIMIT.load(Ordering::Acquire) }
 
-/// On large-RAM machines (>= 4 GiB), pre-map free heap headroom before sealing BOOT so
-/// early runtime allocations do not immediately stall on growth. No-op on < 4 GiB machines.
+/// Pre-map free heap headroom on >= 4 GiB machines before sealing BOOT.
 pub fn ensure_headroom(min_free: usize) {
     if !TABLES.load(Ordering::Acquire) || STEP_BYTES.load(Ordering::Acquire) <= STEP { return; }
     let mut heap = crate::ALLOCATOR.lock();
     let have = heap.free();
-    if have < min_free {
-        if let Ok(layout) = Layout::from_size_align(min_free - have, 4096) { let _ = grow(&mut heap, layout); }
-    }
+    if have < min_free { if let Ok(l) = Layout::from_size_align(min_free - have, 4096) { let _ = grow(&mut heap, l); } }
 }
 
 /// Page tables for the heap's whole address space, every leaf past BOOT's part clear.

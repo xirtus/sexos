@@ -539,27 +539,19 @@ pub fn init_boot() {
         .filter(|d| sex_hwdb::is_vmd(sex_hwdb::Id { vendor: d.vendor_id, device: d.device_id, class: d.class_id, subclass: d.subclass_id, prog_if: d.prog_if }))
         .map(|d| Bdf::new(d.bus, d.dev, d.func)).collect();
     let covers = |r: &Reserved, b: Bdf| r.first <= b.sid() && b.sid() <= r.last;
-    // Upper bound on 4 KiB page-table frames needed for every unit, leased service
-    // (root, DMA pools, RMRRs, 128 MiB lend window), firmware RMRR domain, and self-test.
+    // Upper bound on 4 KiB page-table frames for units, leased services, firmware RMRRs, and self-test.
     let range_tables = |start: u64, len: u64| -> u64 {
         if len == 0 { return 0; }
         let end = start.saturating_add(len);
-        let spans = |shift: u32| end.div_ceil(1u64 << shift).saturating_sub(start >> shift);
-        spans(21) + spans(30) + spans(39)
+        [21u32, 30, 39].into_iter().map(|s| end.div_ceil(1u64 << s).saturating_sub(start >> s)).sum()
     };
     let mut service_pds: Vec<u32> = leased.iter().map(|l| l.1).collect();
-    service_pds.sort();
-    service_pds.dedup();
+    service_pds.sort(); service_pds.dedup();
     let window_frames = range_tables(0, abi::WINDOW_BYTES) + 3;
     let mut need: u64 = 64 + units.len() as u64 + (leased.len() as u64) * 2;
     for &pd in &service_pds {
-        need += 1 + window_frames;
-        for &(_, base, len) in pools.iter().filter(|p| p.0 == pd) { need += range_tables(base, len); }
-        for r in &reserved {
-            if leased.iter().any(|&(lb, lp)| lp == pd && covers(r, lb)) {
-                need += range_tables(r.start, r.end.saturating_sub(r.start));
-            }
-        }
+        need += 1 + window_frames + pools.iter().filter(|p| p.0 == pd).map(|&(_, b, l)| range_tables(b, l)).sum::<u64>()
+            + reserved.iter().filter(|r| leased.iter().any(|&(lb, lp)| lp == pd && covers(r, lb))).map(|r| range_tables(r.start, r.end.saturating_sub(r.start))).sum::<u64>();
     }
     for r in &reserved {
         let targets = if r.first == r.last { 1 } else { present.iter().filter(|b| covers(r, **b)).count() as u64 };
