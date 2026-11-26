@@ -93,6 +93,46 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         let mid = r.1 + r.3.saturating_sub(line) / 2;
         text(fb, w, h, total, menu.label(item).as_bytes(), r.0 + inset, mid, ink, scale, r.2.saturating_sub(2 * inset));
     }
+    // Bottom candy swatch strip: quick per-window color switcher.
+    let strip = l.swatch_strip();
+    fill(fb, w, h, total, (strip.0, strip.1, strip.2, s), desk().menu_rim);
+    let dot_d = (14 * s).min(strip.3.saturating_sub(6 * s));
+    let ring_d = dot_d + 4 * s;
+    for i in 0..sex_pdx::window_menu::SWATCH_COUNT {
+        let cell = l.swatch_cell(i);
+        let swatch_id = (i + 1) as u8;
+        let swatch_col = sex_pdx::window_menu::CANDY_SWATCHES[i];
+        let active = menu.tint == swatch_id;
+        let hovered = menu.hover_swatch == Some(swatch_id);
+        let cx2 = (cell.0 * 2 + cell.2) as i32;
+        let cy2 = (cell.1 * 2 + cell.3) as i32;
+        let rad = dot_d as i32;
+        let r_out = ring_d as i32;
+        let x0 = cell.0.min(w);
+        let x1 = (cell.0 + cell.2).min(w);
+        let y0 = (cell.1 + s).min(h);
+        let y1 = (cell.1 + cell.3).min(h);
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let dx = (px * 2 + 1) as i32 - cx2;
+                let dy = (py * 2 + 1) as i32 - cy2;
+                let d2 = dx * dx + dy * dy;
+                if d2 < rad * rad {
+                    let at = py * w + px;
+                    if at < total {
+                        let col = if hovered { crate::chrome_candy::mix_u8(swatch_col, 0x00FF_FFFF, 40) } else { swatch_col };
+                        unsafe { core::ptr::write_volatile(fb.add(at), col); }
+                    }
+                } else if (active || hovered) && d2 < r_out * r_out {
+                    let at = py * w + px;
+                    if at < total {
+                        let ring = if active { desk().menu_title } else { desk().menu_soft };
+                        unsafe { core::ptr::write_volatile(fb.add(at), ring); }
+                    }
+                }
+            }
+        }
+    }
     static mut DRAW_BUDGET: u32 = 16;
     unsafe {
         if DRAW_BUDGET > 0 {

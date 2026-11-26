@@ -104,17 +104,33 @@ fn fresh_full(cursor:(i32,i32),menu:u32)->Vec<u32>{
  assert_eq!(output.visible,fresh_full((110,90),MENU_NEW));assert_eq!(output.store.generation(),3);reset();
 }
 #[test]fn clipped_edges_and_reserved_strip_are_safe_and_restore_exactly(){
- for cursor in [(127,111),(125,103),(0,49),(-3,45),(128,112)]{
+ for cursor in [(127,111),(125,103),(0,49),(-3,45),(128,112),(20,0),(60,10),(100,20)]{
   reset();let mut output=OutputBoundary::new();output.paint(Mode::Full,cursor,MENU_OLD);
   let(ox,oy)=(cursor.0.max(0)as usize,cursor.1.max(0)as usize);
-  for y in 0..H{for x in 0..W{if y<28||x<ox||x>=ox+8||y<oy||y>=oy+16{assert_eq!(output.visible[y*W+x],underlay(x,y,MENU_OLD),"{cursor:?} {x}/{y}");}}}
+  for y in 0..H{for x in 0..W{if x<ox||x>=ox+8||y<oy||y>=oy+16{assert_eq!(output.visible[y*W+x],underlay(x,y,MENU_OLD),"{cursor:?} {x}/{y}");}}}
   if cursor==(127,111){assert_eq!(output.visible[111*W+127],0x00ffffff);}
-  output.paint(Mode::Move,(60,80),MENU_OLD);assert_eq!(output.visible,fresh_full((60,80),MENU_OLD));output.padding_is_zero();
+  if cursor==(20,0){assert_eq!(output.visible[0*W+20],0x00ffffff,"cursor must draw on top of SilkBar at y=0");}
+  if cursor==(60,10){assert_eq!(output.visible[10*W+60],0x00ffffff,"cursor must draw on top of SilkBar at y=10");}
+  output.paint(Mode::Move,(60,80),MENU_OLD);
+  // Moving off SilkBar restores exact SilkBar pixels without leaving an arrow trail.
+  if oy<28{for y in oy..(oy+16).min(H){for x in ox..(ox+8).min(W){assert_eq!(output.visible[y*W+x],underlay(x,y,MENU_OLD),"trail at {x}/{y}");}}}
+  assert_eq!(output.visible,fresh_full((60,80),MENU_OLD));output.padding_is_zero();
  }reset();
+}
+#[test]fn cursor_draws_strictly_above_silkbar_after_strip_repaint(){
+ reset();let mut output=OutputBoundary::new();
+ output.paint(Mode::Full,(32,8),MENU_OLD);
+ assert_eq!(output.visible[8*W+32],0x00ffffff);
+ // SilkBar strip repaint keeps the cursor strictly on top of SilkBar.
+ output.paint(Mode::Strip,(32,8),MENU_NEW);
+ assert_eq!(output.visible[8*W+32],0x00ffffff);
+ output.paint(Mode::Move,(64,80),MENU_NEW);
+ for y in 8..24{for x in 32..40{assert_eq!(output.visible[y*W+x],underlay(x,y,MENU_NEW),"bar pixel {x}/{y}");}}
+ assert_eq!(output.visible,fresh_full((64,80),MENU_NEW));reset();
 }
 #[test]fn full_and_partial_sequences_are_byte_equal_at_every_completed_frame(){
  reset();let mut output=OutputBoundary::new();
- let steps=[(Mode::Full,(40,70),MENU_OLD),(Mode::Move,(60,85),MENU_OLD),(Mode::Strip,(60,85),MENU_NEW),(Mode::Move,(127,111),MENU_NEW),(Mode::Move,(0,49),MENU_NEW),(Mode::Full,(40,70),MENU_OLD)];
+ let steps=[(Mode::Full,(40,70),MENU_OLD),(Mode::Move,(60,85),MENU_OLD),(Mode::Strip,(60,85),MENU_NEW),(Mode::Move,(20,6),MENU_NEW),(Mode::Strip,(20,6),MENU_OLD),(Mode::Move,(127,111),MENU_OLD),(Mode::Move,(0,49),MENU_OLD),(Mode::Full,(40,70),MENU_OLD)];
  for(index,(mode,cursor,menu))in steps.into_iter().enumerate(){output.paint(mode,cursor,menu);assert_eq!(output.visible,fresh_full(cursor,menu),"step {index}");assert_eq!(output.store.generation(),index as u64+1);}
  reset();
 }

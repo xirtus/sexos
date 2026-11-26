@@ -117,14 +117,19 @@ fn menu_wire_round_trips_and_rejects_bad_words() {
     assert_eq!(Menu::decode(0), None);
     let good = Menu::new(5, 6, false, false, 4, 1).wire();
     assert!(Menu::decode(good).is_some());
-    // Unknown bits, too many workspaces, current past the count, hover past the rows.
-    assert_eq!(Menu::decode(good | 1 << 50), None);
+    // Unknown bits, too many workspaces, current past the count, hover past the rows, invalid swatch.
+    assert_eq!(Menu::decode(good | 1 << 58), None);
     assert_eq!(Menu::decode(good | 1 << 43), None);
+    assert_eq!(Menu::decode(good | 9 << 48), None);
+    assert_eq!(Menu::decode(good | 9 << 52), None);
     assert_eq!(Menu::decode(good | 1 << 42).map(|m| m.rows()), Some(7), "grouped adds Ungroup");
     assert_eq!(Menu::decode(good & !(0xF << 32) | 10 << 32), None);
     assert_eq!(Menu::decode(good & !(0xF << 36) | 4 << 36), None);
     assert_eq!(Menu::decode(good & !(0xF << 44) | 6 << 44), None);
     assert_eq!(Menu::decode(good & !(1 << 63)), None);
+    // Tint and hovered swatch round-trip cleanly.
+    let tinted = Menu { hover_swatch: Some(5), ..Menu::new(5, 6, false, false, 4, 1).with_tint(3) };
+    assert_eq!(Menu::decode(tinted.wire()), Some(tinted));
     // Positions clamp; workspaces and current are kept in range.
     let m = Menu::new(-5, 70000, false, false, 0, 7);
     assert_eq!((m.x, m.y, m.workspaces, m.current), (0, u16::MAX, 1, 0));
@@ -142,6 +147,11 @@ fn menu_layout_stays_on_screen_and_hits_rows() {
             let r = l.row(i);
             assert_eq!(l.hit(r.0 + 1, r.1 + 1), Hit::Row(i));
             assert_eq!(l.hit(r.0 + r.2 - 1, r.1 + r.3 - 1), Hit::Row(i));
+        }
+        // Bottom candy swatch strip hits swatches 1..=8.
+        for i in 0..sex_pdx::window_menu::SWATCH_COUNT {
+            let c = l.swatch_cell(i);
+            assert_eq!(l.hit(c.0 + c.2 / 2, c.1 + c.3 / 2), Hit::Swatch((i + 1) as u8));
         }
         assert_eq!(l.hit(x, y), Hit::Inside);
         assert_eq!(l.hit(x.saturating_sub(1), y), Hit::Outside);
@@ -166,6 +176,17 @@ fn window_menu_press_and_hover() {
     assert!(menu.hover(r1.0 as i32 + 2, r1.1 as i32 + 2, w, h, 1));
     assert!(!menu.hover(r1.0 as i32 + 3, r1.1 as i32 + 3, w, h, 1));
     assert_eq!(Menu::decode(menu.wire()).unwrap().hover, Some(1));
+    // Hover over candy swatch 4 highlights it and clears row hover.
+    let s3 = l.swatch_cell(3);
+    assert!(menu.hover((s3.0 + s3.2 / 2) as i32, (s3.1 + s3.3 / 2) as i32, w, h, 1));
+    let decoded = Menu::decode(menu.wire()).unwrap();
+    assert_eq!((decoded.hover, decoded.hover_swatch), (None, Some(4)));
+    // Clicking candy swatch 4 chooses Action::SetTint(4) and closes the menu.
+    assert_eq!(menu.press((s3.0 + s3.2 / 2) as i32, (s3.1 + s3.3 / 2) as i32, w, h, 1), Press::Choose { frame: 42, action: Action::SetTint(4) });
+    assert!(!menu.is_open());
+    // Re-open to check remaining rows.
+    menu.open(42, Menu::new(100, 100, false, false, 9, 0));
+    assert!(menu.hover(r1.0 as i32 + 2, r1.1 as i32 + 2, w, h, 1));
     assert!(menu.hover(-1, -1, w, h, 1));
     // The border does nothing and keeps the menu.
     assert_eq!(menu.press(l.panel.0 as i32, l.panel.1 as i32, w, h, 1), Press::Inside);

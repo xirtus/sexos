@@ -33,6 +33,7 @@ pub mod code {
     pub const J: u8 = 0x24;
     pub const K: u8 = 0x25;
     pub const L: u8 = 0x26;
+    pub const C: u8 = 0x2E;
     pub const V: u8 = 0x2F;
     pub const A: u8 = 0x1E;
     pub const B: u8 = 0x30;
@@ -152,6 +153,10 @@ pub enum WmAction {
     PrevTab,
     /// Super+T: dwindle on this workspace, or back to its previous layout.
     ToggleDwindle,
+    /// Super+Shift+C: cycle the focused window's candy color swatch.
+    CycleWindowTint,
+    /// Super+Shift+T: quickly switch between Light and Dark desktop modes.
+    ToggleThemeMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -212,7 +217,9 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::G, true) => WmAction::Ungroup,
         (code::PERIOD, _) => WmAction::NextTab,
         (code::COMMA, _) => WmAction::PrevTab,
-        (code::T, _) => WmAction::ToggleDwindle,
+        (code::T, false) => WmAction::ToggleDwindle,
+        (code::T, true) => WmAction::ToggleThemeMode,
+        (code::C, true) => WmAction::CycleWindowTint,
         _ => return None,
     })
 }

@@ -17,6 +17,8 @@ pub struct Surface {
     pub active_tab: u8,
     // Per-surface chrome flags (V1: bit 0 = top bar enabled)
     pub chrome_flags: u8,
+    /// Per-window candy swatch index (0 = Auto per-window hue, 1..=8 = explicit swatch).
+    pub candy_tint: u8,
     // Per-surface fill rects (up to MAX_RECTS; fill_count tracks highest set index + 1)
     pub fill_count: u8,
     pub fill_sx: [i32; MAX_RECTS],
@@ -65,7 +67,7 @@ pub const TEXT_MAX_ROWS: usize = 48;
 pub const TEXT_LEGACY_COLS: u8 = 20;
 pub const SURFACE_EMPTY: Surface = Surface {
     surface_id: 0, owner_pd: 0, x: 0, y: 0, w: 0, h: 0, color: 0, active: false,
-    tab_count: 0, active_tab: 0, chrome_flags: 0,
+    tab_count: 0, active_tab: 0, chrome_flags: 0, candy_tint: 0,
     fill_count: 0,
     fill_sx: [0i32; MAX_RECTS], fill_sy: [0i32; MAX_RECTS],
     fill_sw: [0u32; MAX_RECTS], fill_sh: [0u32; MAX_RECTS],

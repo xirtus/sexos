@@ -90,7 +90,9 @@ impl FrameGroups {
         let focused = surfaces.iter().find(|s| s.active && s.surface_id == focused)
             .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
             .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused);
-        let hit = |s: &&Surface| self.independent(s) && contains(self.rect(s,w,h),x,y);
+        // The OS cursor surface (0x90) is drawn in draw_cursor_z_top as an arrow
+        // bitmap; never composite its backing rectangle as an opaque window.
+        let hit = |s: &&Surface| s.surface_id != 0x90 && self.independent(s) && contains(self.rect(s,w,h),x,y);
         surfaces.iter().filter(|s| s.surface_id == focused).find(hit)
             .or_else(|| surfaces.iter().filter(|s| s.surface_id != focused).find(hit))
     }
