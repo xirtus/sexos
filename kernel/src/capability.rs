@@ -169,7 +169,7 @@ impl ProtectionDomain {
             message_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
-            incoming_replies: Mutex::new(VecDeque::with_capacity(1)),
+            incoming_replies: Mutex::new(VecDeque::with_capacity(crate::ipc::messages::MAX_INCOMING_REPLIES)),
             reply_credits: Mutex::new(crate::ipc::reply_credit::ReplyCredits::new()),
         };
 
@@ -190,7 +190,7 @@ impl ProtectionDomain {
             cap_table, signal_ring, message_ring,
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
-            incoming_replies: Mutex::new(VecDeque::new()),
+            incoming_replies: Mutex::new(VecDeque::with_capacity(crate::ipc::messages::MAX_INCOMING_REPLIES)),
             reply_credits: Mutex::new(crate::ipc::reply_credit::ReplyCredits::new()),
         }
     }

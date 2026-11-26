@@ -64,7 +64,8 @@ mod scheduler{
   // that contention with a publication bug and made this test flaky.
   super::REPLY_HELD.with(|held|assert!(!held.get(),"wake while this sender holds reply lock"));
   let replies=pd.incoming_replies.lock();
-  assert_eq!(replies.len(),1);assert!(replies[0].caller_pd>0);assert!(replies[0].caller_task>0);
+  assert!(!replies.is_empty() && replies.len()<=super::messages::MAX_INCOMING_REPLIES);
+  assert!(replies.iter().all(|r|r.caller_pd>0 && r.caller_task>0));
   super::WAKES.fetch_add(1,super::Ordering::Relaxed);
  }
 }
@@ -88,11 +89,28 @@ fn setup(sender:u32,task:u32)->&'static Domain{
  let reply=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((reply.caller_pd,reply.caller_task,reply.value),(14,301,0xdeadbeef));
  assert_eq!(router::send_reply(15,14),Ok(()));let reply=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((reply.caller_pd,reply.caller_task,reply.value),(10,777,14));assert_eq!(WAKES.load(Ordering::Relaxed),2);
 }
-#[test]fn full_slot_retains_old_reply_and_retry_publishes_only_after_consumption(){
- let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);router::send_reply(15,0x100).unwrap();calling(10,777);
- for _ in 0..20{assert_eq!(router::send_reply(15,0x200),Err(messages::IpcError::BufferFull));}
- assert_eq!(WAKES.load(Ordering::Relaxed),1);let old=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((old.caller_pd,old.caller_task,old.value),(14,301,0x100));
- router::send_reply(15,0x200).unwrap();let new=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((new.caller_pd,new.caller_task,new.value),(10,777,0x200));assert_eq!(WAKES.load(Ordering::Relaxed),2);
+#[test]fn back_to_back_replies_are_queued_fifo_and_full_queue_retains_all_until_consumed(){
+ let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);
+ // Second and subsequent back-to-back replies must NOT be dropped.
+ router::send_reply(15,0x100).unwrap();
+ calling_owed(10,777,messages::MAX_INCOMING_REPLIES as u32);
+ for i in 1..messages::MAX_INCOMING_REPLIES{
+  router::send_reply(15,0x100 + i as u64).unwrap();
+ }
+ // Once at MAX_INCOMING_REPLIES, extra replies fail with BufferFull without overwriting.
+ for _ in 0..5{assert_eq!(router::send_reply(15,0x999),Err(messages::IpcError::BufferFull));}
+ assert_eq!(WAKES.load(Ordering::Relaxed),messages::MAX_INCOMING_REPLIES);
+ let first=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();
+ assert_eq!((first.caller_pd,first.caller_task,first.value),(14,301,0x100));
+ // After consuming one slot, the retry succeeds and lands at the tail.
+ router::send_reply(15,0x999).unwrap();
+ for i in 1..messages::MAX_INCOMING_REPLIES{
+  let got=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();
+  assert_eq!((got.caller_pd,got.caller_task,got.value),(10,777,0x100 + i as u64));
+ }
+ let last=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();
+ assert_eq!((last.caller_pd,last.caller_task,last.value),(10,777,0x999));
+ assert_eq!(WAKES.load(Ordering::Relaxed),messages::MAX_INCOMING_REPLIES+1);
 }
 #[test]fn missing_zero_or_mismatched_scheduled_task_cannot_publish_or_wake(){
  let _lock=SERIAL.lock().unwrap();
@@ -125,13 +143,21 @@ fn setup(sender:u32,task:u32)->&'static Domain{
  let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);pd.main_task.store(core::ptr::null_mut(),Ordering::Release);
  router::send_reply(15,42).unwrap();let replies=pd.incoming_replies.lock();assert_eq!((replies[0].caller_pd,replies[0].caller_task),(14,301));assert_eq!(WAKES.load(Ordering::Relaxed),0);
 }
-#[test]fn concurrent_senders_have_one_winner_and_no_overwrite(){
- let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);let barrier=std::sync::Arc::new(std::sync::Barrier::new(16));
- let tasks=[503,911,47,302,800,618,79,145,956,431,827,294,387,659,714,562];
- let workers:Vec<_>=(1..=16u32).zip(tasks).map(|(sender,task)|{let barrier=barrier.clone();std::thread::spawn(move||{calling(sender,task);barrier.wait();(sender,task,router::send_reply(15,sender as u64+1000))})}).collect();
- let results:Vec<_>=workers.into_iter().map(|w|w.join().unwrap()).collect();let wins:Vec<_>=results.iter().filter(|(_,_,result)|result.is_ok()).collect();assert_eq!(wins.len(),1);
+#[test]fn concurrent_senders_all_survive_up_to_capacity_with_no_overwrite(){
+ let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);
+ const TOTAL:usize=20;
+ let barrier=std::sync::Arc::new(std::sync::Barrier::new(TOTAL));
+ let tasks=[503,911,47,302,800,618,79,145,956,431,827,294,387,659,714,562,601,602,603,604];
+ let workers:Vec<_>=(1..=TOTAL as u32).zip(tasks).map(|(sender,task)|{let barrier=barrier.clone();std::thread::spawn(move||{calling(sender,task);barrier.wait();(sender,task,router::send_reply(15,sender as u64+1000))})}).collect();
+ let results:Vec<_>=workers.into_iter().map(|w|w.join().unwrap()).collect();
+ let wins:Vec<_>=results.iter().filter(|(_,_,result)|result.is_ok()).collect();
+ assert_eq!(wins.len(),messages::MAX_INCOMING_REPLIES);
  assert!(results.iter().filter(|(_,_,r)|r.is_err()).all(|(_,_,r)|*r==Err(messages::IpcError::BufferFull)));
- let reply=messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();assert_eq!((reply.caller_pd,reply.caller_task),(wins[0].0,wins[0].1));assert_eq!(reply.value,wins[0].0 as u64+1000);assert_eq!(WAKES.load(Ordering::Relaxed),1);
+ let mut received=Vec::new();
+ while let Some(reply)=messages::IpcReply::take(&mut pd.incoming_replies.lock()){received.push((reply.caller_pd,reply.caller_task,reply.value));}
+ assert_eq!(received.len(),messages::MAX_INCOMING_REPLIES);
+ for (s,t,_) in &wins{assert!(received.contains(&(*s,*t,*s as u64+1000)));}
+ assert_eq!(WAKES.load(Ordering::Relaxed),messages::MAX_INCOMING_REPLIES);
 }
 
 #[test]fn retired_target_keeps_permanent_metadata_but_refuses_new_delivery(){
@@ -154,7 +180,10 @@ fn setup(sender:u32,task:u32)->&'static Domain{
  assert!(pd.incoming_replies.lock().is_empty());assert_eq!(WAKES.load(Ordering::Relaxed),1);
 }
 #[test]fn full_slot_retry_keeps_its_obligation_until_publication(){
- let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);router::send_reply(15,0x100).unwrap();calling_owed(10,777,1);
+ let _lock=SERIAL.lock().unwrap();let pd=setup(14,301);
+ calling_owed(14,301,messages::MAX_INCOMING_REPLIES as u32);
+ for i in 0..messages::MAX_INCOMING_REPLIES{router::send_reply(15,0x100 + i as u64).unwrap();}
+ calling_owed(10,777,1);
  for _ in 0..5{assert_eq!(router::send_reply(15,0x200),Err(messages::IpcError::BufferFull));assert_eq!(owed(),1);}
  messages::IpcReply::take(&mut pd.incoming_replies.lock()).unwrap();
  router::send_reply(15,0x200).unwrap();assert_eq!(owed(),0);

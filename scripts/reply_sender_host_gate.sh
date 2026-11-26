@@ -20,7 +20,7 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/reply_credit.rs" -o "$TEST_DIR/cred
 # Compiled control: an obligation that is never spent must fail exact-once.
 mkdir -p "$TEST_DIR/mutant/kernel/src/ipc" "$TEST_DIR/mutant/tests"
 cp "$ROOT_DIR/kernel/src/ipc.rs" "$ROOT_DIR/kernel/src/app_resources.rs" "$TEST_DIR/mutant/kernel/src/"
-cp "$ROOT_DIR/kernel/src/ipc/router.rs" "$TEST_DIR/mutant/kernel/src/ipc/"
+cp "$ROOT_DIR/kernel/src/ipc/router.rs" "$ROOT_DIR/kernel/src/ipc/messages.rs" "$TEST_DIR/mutant/kernel/src/ipc/"
 cp "$ROOT_DIR/tests/reply_credit.rs" "$TEST_DIR/mutant/tests/"
 python3 - "$ROOT_DIR/kernel/src/ipc/reply_credit.rs" "$TEST_DIR/mutant/kernel/src/ipc/reply_credit.rs" <<'PY'
 import sys
