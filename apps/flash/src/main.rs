@@ -1783,7 +1783,7 @@ extern "C" fn flash_main() -> ! {
             if frame_count == 0 && !splash_drawn && window.ready() {
                 let (win_w, win_h) = window.size();
                 if win_w >= 64 && win_h >= 64 {
-                    let pal = sex_theme::candy_ui::CandyPalette::dark();
+                    let pal = sex_graphics::theme::candy_ui::CandyPalette::dark();
                     let win_pixels = window.frame(win_w, win_h);
                     win_pixels.fill(pal.bg);
                     let title = b"FLASH PHOTO BOOTH";
@@ -1795,8 +1795,8 @@ extern "C" fn flash_main() -> ! {
                     let tx = win_w.saturating_sub(title.len() * 8) / 2;
                     let sx = win_w.saturating_sub(sub.len() * 8) / 2;
                     let cy = win_h / 2;
-                    draw_text_8x8(win_pixels, win_w, win_h, tx, cy.saturating_sub(14), title, pal.accent);
-                    draw_text_8x8(win_pixels, win_w, win_h, sx, cy + 8, sub, pal.text_dim);
+                    draw_text_8x8(win_pixels, win_w, win_h, tx, cy.saturating_sub(14), title, pal.accent, None);
+                    draw_text_8x8(win_pixels, win_w, win_h, sx, cy + 8, sub, pal.text_dim, None);
                     window.show_pixels(win_w, win_h);
                     splash_drawn = true;
                 }
