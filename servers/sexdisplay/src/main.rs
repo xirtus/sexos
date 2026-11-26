@@ -147,6 +147,7 @@ mod glyphs;
 mod lock_screen;
 mod bt_panel;
 mod window_menu;
+mod silkbar_menus;
 mod program_tray;
 mod tray_icons;
 mod bitmap_binding;
@@ -1252,7 +1253,8 @@ fn bar_pill_bg(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) 
         );
     }
 
-    // 2. Active window badge pill (focused window title or panel notice + app dot).
+    // 2. Active window badge pill (focused window title or panel notice + app dot)
+    //    followed by macOS/KDE-style top-bar menu triggers (File, Edit, View, Window).
     let ws0 = &bar.layout[ModuleSlot::Workspace0 as usize];
     if bar.layout[ModuleSlot::Workspace1 as usize].w > 0 && ws0.w > 0 {
         let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
@@ -1261,15 +1263,29 @@ fn bar_pill_bg(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) 
         } else {
             surface_title(scene.focus).map(|t| (t, false))
         };
+        let mut app_pill_right = 110 * scale;
         if let Some((text, is_notice)) = title_opt {
-            let max_end = ws0.x.saturating_sub(10 * scale);
+            let max_end = ws0.x.saturating_sub(10 * scale).min(128 * scale);
             let bx = 34 * scale;
             let text_w = glyphs::ui_width(text, scale as u32).unwrap_or(text.len() * 7 * scale);
             let right = (52 * scale + text_w + 8 * scale).min(max_end);
+            app_pill_right = right;
             if right > bx + 8 * scale && in_rect(x, y, bx, ws0.y, right - bx, ws0.h) {
                 return chrome_candy::candy_pill_pixel(
                     x, y, bx, ws0.y, right - bx, ws0.h, scale, mode_id, is_notice, body,
                 );
+            }
+        }
+        let open_kind = silkbar_menus::active_kind();
+        let bar_h = scene.metrics.bar() as usize;
+        for (trig, r) in sex_pdx::silkbar_menus::top_bar_menu_rects(bar_h, scale as u32, app_pill_right, ws0.x) {
+            if r.2 > 0 && in_rect(x, y, r.0, r.1, r.2, r.3) {
+                let active = open_kind == Some(trig.menu_kind());
+                if active {
+                    return chrome_candy::candy_pill_pixel(
+                        x, y, r.0, r.1, r.2, r.3, scale, mode_id, true, body,
+                    );
+                }
             }
         }
     }
@@ -1497,6 +1513,42 @@ fn panel_battery_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnaps
     ui_label_at_scaled(&text[..*n], x - left, y - top, background, scene.metrics.scale())
 }
 
+fn top_bar_menu_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot, background: u32) -> Option<u32> {
+    let scale = scene.metrics.scale() as usize;
+    let ws0 = &bar.layout[ModuleSlot::Workspace0 as usize];
+    if bar.layout[ModuleSlot::Workspace1 as usize].w == 0 || ws0.w == 0 {
+        return None;
+    }
+    let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
+    let title_opt = if notice.len > 0 {
+        Some(notice.as_bytes())
+    } else {
+        surface_title(scene.focus)
+    };
+    let app_pill_right = if let Some(text) = title_opt {
+        let max_end = ws0.x.saturating_sub(10 * scale).min(128 * scale);
+        let text_w = glyphs::ui_width(text, scale as u32).unwrap_or(text.len() * 7 * scale);
+        (52 * scale + text_w + 8 * scale).min(max_end)
+    } else {
+        110 * scale
+    };
+    let bar_h = scene.metrics.bar() as usize;
+    let line_h = glyphs::UI_H * scale;
+    for (trig, r) in sex_pdx::silkbar_menus::top_bar_menu_rects(bar_h, scale as u32, app_pill_right, ws0.x) {
+        if r.2 == 0 || !in_rect(x, y, r.0, r.1, r.2, r.3) {
+            continue;
+        }
+        let lbl = trig.label().as_bytes();
+        let tw = glyphs::ui_width(lbl, scale as u32).unwrap_or(lbl.len() * 6 * scale);
+        let lx = r.0 + r.2.saturating_sub(tw) / 2;
+        let ly = r.1 + r.3.saturating_sub(line_h) / 2;
+        if x >= lx && x < lx + tw && y >= ly && y < ly + line_h {
+            return ui_label_at_scaled(lbl, x - lx, y - ly, background, scene.metrics.scale());
+        }
+    }
+    None
+}
+
 /// Same visible top-strip content for full and incremental redraws.
 fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], scene: &scene::SceneSnapshot) -> u32 {
     let background = bar_color(x, y, bar, scene);
@@ -1505,6 +1557,7 @@ fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], scene: &s
     else if let Some(fg) = panel_battery_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_active_app_at(x, y, bar, scene) { fg }
     else if let Some(fg) = panel_title_fg_at(x, y, bar, scene, background) { fg }
+    else if let Some(fg) = top_bar_menu_fg_at(x, y, bar, scene, background) { fg }
     else if let Some(fg) = phase5_tint_swatch_at(x, y, bar) { fg }
     else if let Some(fg) = phase5_palette_dot_at(x, y, bar) { fg }
     else { background }
@@ -2650,7 +2703,7 @@ fn gpu_present(first:usize,end:usize)->bool{
 /// with its whole rectangle, in drawing order.
 fn glass_panels(w:usize,h:usize,scene:&scene::SceneSnapshot)->frost::Shown{
     let (bar,scale)=(scene.metrics.bar()as usize,scene.metrics.scale());
-    let mut shown:frost::Shown=[None;7];
+    let mut shown:frost::Shown=[None;8];
     let mut n=0;
     let mut add=|p:frost::Panel,r:Option<glass::Rect>|{if let Some(r)=r.filter(|r|r.2!=0&&r.3!=0){if n<shown.len(){shown[n]=Some((p,r));n+=1;}}};
     // The launcher panel (0x92) is a compositor surface: its own fill is the
@@ -2662,6 +2715,7 @@ fn glass_panels(w:usize,h:usize,scene:&scene::SceneSnapshot)->frost::Shown{
     let state=unsafe{WINDOW_SWITCHER};
     if state.visible()&&!state.grid{add(frost::Panel::Switcher,sex_pdx::window_switcher::Layout::new(w,h,state.count as usize,scale).map(|l|l.panel));}
     add(frost::Panel::WindowMenu,window_menu::glass_rect(w,h,scale));
+    add(frost::Panel::SilkBarMenu,silkbar_menus::glass_rect(w,h,scale));
     shown
 }
 
@@ -2704,6 +2758,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         bt_panel::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_window_switcher(fb,w,h,total,scene);
         window_menu::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
+        silkbar_menus::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize,scene);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
@@ -3711,8 +3766,21 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
     let y_bar = bar.saturating_add(slide);
     let line = glyphs::UI_H * s;
     let d = desk_theme::current();
-    let (bg, rim, track) = (d.menu, d.menu_rim, d.menu_picked);
-    let ring = d.focus;
+    let (bg, rim, track, ring) = match d.mode {
+        sex_theme::Mode::Dark => (
+            sex_theme::candy_lavender::DARK_MENU_BG & 0x00FF_FFFF,
+            sex_theme::candy_lavender::DARK_MENU_RIM & 0x00FF_FFFF,
+            sex_theme::candy_lavender::DARK_MENU_HOVER & 0x00FF_FFFF,
+            sex_theme::candy_lavender::ORCHID_ACCENT & 0x00FF_FFFF,
+        ),
+        sex_theme::Mode::Light => (
+            sex_theme::candy_lavender::LIGHT_MENU_BG & 0x00FF_FFFF,
+            sex_theme::candy_lavender::LIGHT_MENU_RIM & 0x00FF_FFFF,
+            sex_theme::candy_lavender::LIGHT_MENU_HOVER & 0x00FF_FFFF,
+            sex_theme::candy_lavender::ORCHID_ACCENT & 0x00FF_FFFF,
+        ),
+        sex_theme::Mode::HighContrast => (d.menu, d.menu_rim, d.menu_picked, d.focus),
+    };
     // Frosted glass inside an opaque rim (S6b), or the flat colour.
     let panel = |r: (usize, usize, usize, usize)| {
         frost::glass_or(fb, w, h, total, frost::Panel::TrayMenu, frost::inside(r, s), scale, bar, bg);
@@ -5221,6 +5289,7 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::desktop_widgets::OP_DESKTOP_WIDGETS => { if desktop_widgets::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::desktop_widgets::OP_WEATHER => desktop_widgets::weather(msg.caller_pd, msg.arg0, msg.arg1),
                 sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
+                sex_pdx::silkbar_menus::OP_SILKBAR_MENU => { if silkbar_menus::receive(msg.caller_pd, msg.arg0, msg.arg1) { needs_full_redraw = true; } }
                 sex_pdx::program_tray::OP_TRAY_VIEW => { if program_tray::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {
                     // Only the Shell turns animations on or off and hints a workspace slide.

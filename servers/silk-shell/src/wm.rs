@@ -44,6 +44,9 @@ pub mod code {
     pub const LEFT: u8 = 0x4B;
     pub const RIGHT: u8 = 0x4D;
     pub const DOWN: u8 = 0x50;
+    pub const GRAVE: u8 = 0x29;
+    pub const PAGE_UP: u8 = 0x49;
+    pub const PAGE_DOWN: u8 = 0x51;
     /// USB keyboards deliver Up and Down with these codes today.
     pub const UP_USB: u8 = 0x67;
     pub const DOWN_USB: u8 = 0x6C;
@@ -215,8 +218,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::ESC, _) => WmAction::Lock,
         (code::G, false) => WmAction::Group,
         (code::G, true) => WmAction::Ungroup,
-        (code::PERIOD, _) => WmAction::NextTab,
-        (code::COMMA, _) => WmAction::PrevTab,
+        (code::PERIOD, _) | (code::PAGE_DOWN, _) | (code::GRAVE, false) => WmAction::NextTab,
+        (code::COMMA, _) | (code::PAGE_UP, _) | (code::GRAVE, true) => WmAction::PrevTab,
         (code::T, false) => WmAction::ToggleDwindle,
         (code::T, true) => WmAction::ToggleThemeMode,
         (code::C, true) => WmAction::CycleWindowTint,

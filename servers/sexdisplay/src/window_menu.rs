@@ -76,15 +76,31 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     let s = scale as usize;
     let (x, y, pw, ph) = l.panel;
     use crate::frost;
-    frost::glass_or(fb, w, h, total, frost::Panel::WindowMenu, frost::inside(l.panel, s), scale, bar, desk().menu);
-    frost::rim(fb, w, h, total, l.panel, s, desk().menu_rim);
+    use sex_theme::{candy_lavender as cl, Mode};
+    let (menu_bg, menu_rim, menu_hover, menu_accent) = match desk().mode {
+        Mode::Dark => (
+            cl::DARK_MENU_BG & 0x00FF_FFFF,
+            cl::DARK_MENU_RIM & 0x00FF_FFFF,
+            cl::DARK_MENU_HOVER & 0x00FF_FFFF,
+            cl::ORCHID_ACCENT & 0x00FF_FFFF,
+        ),
+        Mode::Light => (
+            cl::LIGHT_MENU_BG & 0x00FF_FFFF,
+            cl::LIGHT_MENU_RIM & 0x00FF_FFFF,
+            cl::LIGHT_MENU_HOVER & 0x00FF_FFFF,
+            cl::ORCHID_ACCENT & 0x00FF_FFFF,
+        ),
+        Mode::HighContrast => (desk().menu, desk().menu_rim, desk().menu_picked, desk().focus),
+    };
+    frost::glass_or(fb, w, h, total, frost::Panel::WindowMenu, frost::inside(l.panel, s), scale, bar, menu_bg);
+    frost::rim(fb, w, h, total, l.panel, s, menu_rim);
     let line = super::glyphs::UI_H * s;
     for i in 0..l.rows {
         let Some(item) = menu.item(i) else { break };
         let r = l.row(i);
         if menu.hover == Some(i as u8) {
-            fill(fb, w, h, total, r, desk().menu_picked);
-            fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), desk().focus);
+            fill(fb, w, h, total, r, menu_hover);
+            fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), menu_accent);
         }
         // A rule above Close sets it apart from the rest.
         if item == sex_pdx::window_menu::Item::Close { fill(fb, w, h, total, (r.0, r.1, r.2, s), desk().menu_rim); }

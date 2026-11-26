@@ -17,14 +17,14 @@ use crate::desk_theme::current as desk;
 
 /// The popups that are glass, for receipts and for their once-per-show log.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Panel { TrayItemsMenu, TrayItemsTip, TrayItemsCard, TrayMenu, Bluetooth, Switcher, WindowMenu }
-const PANELS: usize = 7;
+pub enum Panel { TrayItemsMenu, TrayItemsTip, TrayItemsCard, TrayMenu, Bluetooth, Switcher, WindowMenu, SilkBarMenu }
+const PANELS: usize = 8;
 impl Panel {
     pub const fn name(self) -> &'static str {
         match self {
             Panel::TrayItemsMenu => "tray_items_menu", Panel::TrayItemsTip => "tray_items_tip",
             Panel::TrayItemsCard => "tray_items_card", Panel::TrayMenu => "tray_menu", Panel::Bluetooth => "bt_panel",
-            Panel::Switcher => "switcher", Panel::WindowMenu => "window_menu",
+            Panel::Switcher => "switcher", Panel::WindowMenu => "window_menu", Panel::SilkBarMenu => "silkbar_menu",
         }
     }
     const fn index(self) -> usize { self as usize }
