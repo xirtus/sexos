@@ -232,6 +232,8 @@ members = [
     "apps/filigree",
     "apps/cabaret",
     "crates/sex-gate",
+    "crates/tailor-core",
+    "apps/tailor",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
