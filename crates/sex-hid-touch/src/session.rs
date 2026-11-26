@@ -10,12 +10,22 @@
 //! bytes are dropped.
 use crate::descriptor::{self, Layout};
 use crate::i2c_hid::{self as hid, HidDescriptor};
-use crate::touch::{self, Frame};
+use crate::touch::{self, Frame, MouseReport};
 
 /// The bus side: one device address on one controller. `write` first, a repeated start,
 /// then `read`; either may be empty. False when the transfer failed.
 pub trait Bus {
     fn transfer(&mut self, write: &[u8], read: &mut [u8]) -> bool;
+    /// Waits `ms` milliseconds for device power-on or reset settling.
+    fn delay_ms(&mut self, _ms: u32) {}
+}
+
+/// One decoded report from the touchpad: either a PTP multi-touch frame or a fallback
+/// relative Mouse report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Report {
+    Touch(Frame),
+    Mouse(MouseReport),
 }
 
 /// The longest input report kept for de-duplication (Precision Touchpads send ~30-60 bytes).
@@ -58,6 +68,16 @@ fn read_register<B: Bus>(bus: &mut B, register: u16, out: &mut [u8]) -> bool {
     bus.transfer(&register.to_le_bytes(), out)
 }
 
+fn set_input_mode<B: Bus>(bus: &mut B, d: &HidDescriptor, layout: &Layout) -> bool {
+    let Some(id) = layout.input_mode_report else { return false };
+    let mut payload = [0u8; 8];
+    let plen = (layout.input_mode_bytes as usize).clamp(1, payload.len());
+    payload[0] = INPUT_MODE_TOUCHPAD;
+    let mut out = [0u8; 20];
+    let Some(n) = hid::set_feature(d.command_register, d.data_register, id, &payload[..plen], &mut out) else { return false };
+    bus.transfer(&out[..n], &mut [])
+}
+
 impl Touchpad {
     /// Brings up the pad whose HID descriptor sits at `descriptor_register` (from `_DSM`).
     /// `scratch` holds the report descriptor while it is parsed.
@@ -68,23 +88,36 @@ impl Touchpad {
         let mut cmd = [0u8; 5];
         let n = hid::set_power(d.command_register, true, &mut cmd);
         if !bus.transfer(&cmd[..n], &mut []) { return Err(ProbeError::Command("set_power")); }
+        bus.delay_ms(5);
         let n = hid::command(d.command_register, hid::OP_RESET, 0, 0, &mut cmd);
         if !bus.transfer(&cmd[..n], &mut []) { return Err(ProbeError::Command("reset")); }
-        // The reset answer is an empty input report; read it so it is not taken for data.
-        let mut ack = [0u8; 2];
-        let _ = bus.transfer(&[], &mut ack);
+        // Many I2C-HID touchpads (Dell/Synaptics/ELAN/Goodix) take 20-100 ms to reboot
+        // their MCU after RESET and return a 0x0000 sentinel on the input register.
+        bus.delay_ms(20);
+        for _ in 0..10 {
+            let mut ack = [0xFFu8; 2];
+            if bus.transfer(&[], &mut ack) && ack == [0, 0] { break; }
+            bus.delay_ms(10);
+        }
         let len = d.report_desc_length as usize;
         if len > scratch.len().min(MAX_REPORT_DESCRIPTOR) { return Err(ProbeError::ReportDescriptor); }
-        if !read_register(bus, d.report_desc_register, &mut scratch[..len]) { return Err(ProbeError::ReportDescriptor); }
+        let mut read_ok = false;
+        for attempt in 0..3 {
+            if read_register(bus, d.report_desc_register, &mut scratch[..len]) { read_ok = true; break; }
+            if attempt < 2 { bus.delay_ms(20); }
+        }
+        if !read_ok { return Err(ProbeError::ReportDescriptor); }
         let layout = descriptor::parse(&scratch[..len]).ok_or(ProbeError::ReportDescriptor)?;
-        if layout.touch_report.is_none() && layout.fingers == 0 { return Err(ProbeError::NotTouchpad); }
+        if layout.touch_report.is_none() && layout.fingers == 0 && layout.mouse_report.is_none() {
+            return Err(ProbeError::NotTouchpad);
+        }
         let mut touch_mode = false;
-        if let Some(id) = layout.input_mode_report {
-            let mut out = [0u8; 16];
-            let n = hid::set_feature(d.command_register, d.data_register, id, &[INPUT_MODE_TOUCHPAD], &mut out)
-                .ok_or(ProbeError::Command("input_mode"))?;
-            if !bus.transfer(&out[..n], &mut []) { return Err(ProbeError::Command("input_mode")); }
-            touch_mode = true;
+        if layout.input_mode_report.is_some() {
+            if set_input_mode(bus, &d, &layout) {
+                touch_mode = true;
+            } else if layout.mouse_report.is_none() {
+                return Err(ProbeError::Command("input_mode"));
+            }
         }
         let extent = touch::extent(&layout);
         Ok(Self { hid: d, layout, extent, touch_mode, last: [0; MAX_INPUT], last_len: 0, reports: 0, repeats: 0, last_empty: false })
@@ -93,13 +126,18 @@ impl Touchpad {
     /// Bytes one input read takes.
     pub fn input_len(&self) -> usize { (self.hid.max_input_length as usize).clamp(2, MAX_INPUT) }
 
-    /// Reads the input register once. `Ok(None)`: nothing new. `Err(())`: the bus failed.
-    pub fn poll<B: Bus>(&mut self, bus: &mut B) -> Result<Option<Frame>, ()> {
+    /// Reads the input register once, decoding either a PTP multi-touch frame or a
+    /// fallback Mouse-collection report. `Ok(None)`: nothing new. `Err(())`: bus failed.
+    pub fn poll_report<B: Bus>(&mut self, bus: &mut B) -> Result<Option<Report>, ()> {
         let mut raw = [0u8; MAX_INPUT];
         let n = self.input_len();
         self.last_empty = false;
         if !bus.transfer(&[], &mut raw[..n]) { return Err(()); }
         let Some(payload) = hid::input_payload(&raw[..n]) else { self.last_empty = true; return Ok(None) };
+        if let Some(mouse) = touch::decode_mouse(&self.layout, payload) {
+            self.reports += 1;
+            return Ok(Some(Report::Mouse(mouse)));
+        }
         if payload.len() == self.last_len && payload == &self.last[..self.last_len] {
             self.repeats += 1;
             return Ok(None);
@@ -108,7 +146,15 @@ impl Touchpad {
         self.last_len = payload.len();
         let frame = touch::decode(&self.layout, payload);
         if frame.is_some() { self.reports += 1; }
-        Ok(frame)
+        Ok(frame.map(Report::Touch))
+    }
+
+    /// Reads the input register once for PTP touch frames. `Ok(None)`: nothing new. `Err(())`: the bus failed.
+    pub fn poll<B: Bus>(&mut self, bus: &mut B) -> Result<Option<Frame>, ()> {
+        match self.poll_report(bus)? {
+            Some(Report::Touch(frame)) => Ok(Some(frame)),
+            _ => Ok(None),
+        }
     }
 
     /// Puts the pad to sleep (before s2idle or shutdown).
@@ -118,11 +164,16 @@ impl Touchpad {
         bus.transfer(&cmd[..n], &mut [])
     }
 
-    /// Wakes the pad from `sleep` (`SET_POWER` on).
+    /// Wakes the pad from `sleep` (`SET_POWER` on, then re-applies PTP Input Mode if active).
     pub fn wake<B: Bus>(&self, bus: &mut B) -> bool {
         let mut cmd = [0u8; 5];
         let n = hid::set_power(self.hid.command_register, true, &mut cmd);
-        bus.transfer(&cmd[..n], &mut [])
+        if !bus.transfer(&cmd[..n], &mut []) { return false; }
+        bus.delay_ms(10);
+        if self.touch_mode && self.layout.input_mode_report.is_some() {
+            let _ = set_input_mode(bus, &self.hid, &self.layout);
+        }
+        true
     }
 }
 

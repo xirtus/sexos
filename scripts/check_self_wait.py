@@ -219,7 +219,9 @@ ACPI_AUX_COHORTS=(
  # power.rs gains OP_DEVICE_SLEEP; sexacpi reports every MWAIT _CST state (wait loop unchanged), 2026-11-20
  ('8e6bb20e7be6ff97c756986704690f9a5ad3791d77106b69de16bfcc5618590a','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'),
  # x17 WMI/charge (CTL_CHARGE) merged with OP_DEVICE_SLEEP and MWAIT _CST reporting (wait unchanged), 2026-11-20
- ('bebe39ef539901e45a8b979c2c9e2f17bbe30d4cff62abfb98e0283f61f67721','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'))
+ ('bebe39ef539901e45a8b979c2c9e2f17bbe30d4cff62abfb98e0283f61f67721','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'),
+ # x17 trackpad: ACPI _HID/_CID match ignores case (wait loop unchanged), 2026-11-26
+ ('2dd1de9e1bb4de69e2e1cca06d56bc130d04173dc47a50caa4d57039257d34de','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')

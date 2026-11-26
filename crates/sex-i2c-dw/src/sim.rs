@@ -24,15 +24,25 @@ pub struct Sim<D: Device> {
     pub max_rx_level: usize,
     pub comp_type: u32,
     pub lpss_released: bool,
+    /// When true, DesignWare registers read 0xFFFF_FFFF until LPSS_RESETS is released.
+    pub require_lpss_reset: bool,
     pub hang: bool,
     pub rx_depth: usize,
+    /// Number of IC_STATUS polls before RX FIFO exposes queued bytes (simulates clock-stretching).
+    pub rx_delay_polls: usize,
+    rx_delay_left: usize,
+    /// Inject an arbitration-lost abort on the next transfer.
+    pub arb_lost_next: bool,
 }
 
 impl<D: Device> Sim<D> {
     pub fn new(address: u16, device: D) -> Self {
         Self { address, device, regs: [0; 0x400 / 4], rx: VecDeque::new(), pending_write: Vec::new(), in_transfer: false,
             abort_source: 0, raw: 0, nacked: false, restarts: 0, stops: 0, max_rx_level: 0, comp_type: COMP_TYPE,
-            lpss_released: false, hang: false, rx_depth: 16 }
+            lpss_released: false, require_lpss_reset: false, hang: false, rx_depth: 16, rx_delay_polls: 0, rx_delay_left: 0, arb_lost_next: false }
+    }
+    pub fn seed_stale_rx(&mut self, bytes: &[u8]) {
+        for &b in bytes { self.rx.push_back(b); }
     }
     pub fn reg(&self, offset: u32) -> u32 { self.regs[offset as usize / 4] }
     fn target(&self) -> u16 { (self.reg(IC_TAR) & 0x3ff) as u16 }
@@ -46,7 +56,12 @@ impl<D: Device> Sim<D> {
     fn command(&mut self, cmd: u32) {
         if !self.in_transfer {
             self.in_transfer = true;
-            if self.target() != self.address { self.abort(ABRT_7B_ADDR_NOACK); }
+            if self.arb_lost_next {
+                self.arb_lost_next = false;
+                self.abort(ABRT_ARB_LOST);
+            } else if self.target() != self.address {
+                self.abort(ABRT_7B_ADDR_NOACK);
+            }
         }
         if cmd & CMD_RESTART != 0 { self.restarts += 1; self.flush_write(); }
         if cmd & CMD_READ != 0 {
@@ -57,6 +72,9 @@ impl<D: Device> Sim<D> {
                 assert!(self.rx.len() < self.rx_depth, "receive FIFO overflow");
                 self.rx.push_back(b[0]);
                 self.max_rx_level = self.max_rx_level.max(self.rx.len());
+                if self.rx_delay_polls > 0 && self.rx_delay_left == 0 {
+                    self.rx_delay_left = self.rx_delay_polls;
+                }
             }
         } else { self.pending_write.push(cmd as u8); }
         if cmd & CMD_STOP != 0 {
@@ -71,13 +89,18 @@ impl<D: Device> Sim<D> {
 
 impl<D: Device> Regs for Sim<D> {
     fn read(&mut self, offset: u32) -> u32 {
+        if self.require_lpss_reset && !self.lpss_released && offset < LPSS_PRIVATE {
+            return u32::MAX;
+        }
         match offset {
             IC_COMP_TYPE => self.comp_type,
             IC_COMP_PARAM_1 => ((16 - 1) << 16) | ((self.rx_depth as u32 - 1) << 8),
             IC_ENABLE_STATUS => self.reg(IC_ENABLE) & 1,
             IC_STATUS => {
                 let mut s = STATUS_TFNF;
-                if !self.rx.is_empty() { s |= STATUS_RFNE; }
+                if !self.rx.is_empty() {
+                    if self.rx_delay_left > 0 { self.rx_delay_left -= 1; } else { s |= STATUS_RFNE; }
+                }
                 if self.hang { s |= STATUS_MST_ACTIVITY; }
                 s
             }
@@ -85,9 +108,9 @@ impl<D: Device> Regs for Sim<D> {
             IC_DATA_CMD => self.rx.pop_front().unwrap_or(0) as u32,
             IC_RAW_INTR_STAT => self.raw,
             IC_TX_ABRT_SOURCE => self.abort_source,
-            IC_CLR_TX_ABRT => { self.raw &= !INTR_TX_ABRT; self.abort_source = 0; 0 }
+            IC_CLR_TX_ABRT => { self.raw &= !INTR_TX_ABRT; self.abort_source = 0; self.in_transfer = false; self.nacked = false; self.pending_write.clear(); 0 }
             IC_CLR_STOP_DET => { self.raw &= !INTR_STOP_DET; 0 }
-            IC_CLR_INTR => { self.raw = 0; self.abort_source = 0; 0 }
+            IC_CLR_INTR => { self.raw = 0; self.abort_source = 0; self.in_transfer = false; self.nacked = false; self.pending_write.clear(); 0 }
             o => self.reg(o),
         }
     }
@@ -97,11 +120,22 @@ impl<D: Device> Regs for Sim<D> {
                 assert!(self.reg(IC_ENABLE) & 1 == 1, "command while disabled");
                 self.command(value)
             }
+            IC_ENABLE => {
+                if value & 1 == 0 {
+                    self.in_transfer = false;
+                    self.nacked = false;
+                    self.pending_write.clear();
+                }
+                self.regs[offset as usize / 4] = value;
+            }
             IC_TAR | IC_CON => {
                 assert!(self.reg(IC_ENABLE) & 1 == 0, "target or mode changed while enabled");
                 self.regs[offset as usize / 4] = value;
             }
-            LPSS_RESETS => { if value == LPSS_RESETS_RELEASE { self.lpss_released = true; } self.regs[offset as usize / 4] = value; }
+            LPSS_RESETS => {
+                self.lpss_released = value & LPSS_RESETS_RELEASE == LPSS_RESETS_RELEASE;
+                self.regs[offset as usize / 4] = value;
+            }
             o => self.regs[o as usize / 4] = value,
         }
     }

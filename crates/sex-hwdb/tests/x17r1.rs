@@ -62,3 +62,19 @@ fn unknown_devices_fall_back_to_class_and_are_not_claimed() {
     assert_eq!(class_name(0xff, 0, 0), "device");
     assert!(!Support::Planned.works() && Support::Platform.works());
 }
+
+#[test]
+fn x17_r1_serial_io_i2c_controllers_claimed_and_spi_excluded() {
+    use sex_hwdb::manifest::{claim, Lease, SERIAL_IO_I2C};
+    // Tiger Lake-H PCH Serial IO I2C0..I2C6 on Alienware x17 R1 (00:15.0 is 8086:43e8).
+    for did in [0x43e8u16, 0x43e9, 0x43ea, 0x43eb, 0x43ad, 0x43ae, 0x43d8] {
+        assert!(SERIAL_IO_I2C.contains(&did));
+        let (m, entry) = claim(id(0x8086, did, 0x0c, 0x80, 0x00)).expect("TGL-H I2C must be claimed");
+        assert_eq!(m.service, Service::Input);
+        assert_eq!(entry.lease, Lease::SerialIo);
+        assert_eq!(entry.slot, 28);
+    }
+    // 00:1f.5 8086:43a4 is Tiger Lake-H SPI Flash (class 0c8000): must NOT be leased as SerialIo I2C.
+    assert!(claim(id(0x8086, 0x43a4, 0x0c, 0x80, 0x00)).is_none());
+}
+
