@@ -90,8 +90,8 @@ def main():
   # A right-click on the label names it in the bar; Down steps to the next colour.
   s=len(t());click(*label,button='right');g['wait'](r'\[web.group.naming\] group=0\n',s,60)
   for _ in range(8):q.key('backspace');time.sleep(.06)
-  keys('work');s=len(t());q.key('down');g['wait'](r'\[web.group.colour\] group=0 colour=ffd93025\n',s,60)
-  s=len(t());q.key('ret');g['wait'](r'\[web.group.named\] group=0 name=work colour=ffd93025\n',s,60)
+  keys('work');s=len(t());q.key('down');g['wait'](r'\[web.group.colour\] group=0 colour=ffd6336c\n',s,60)
+  s=len(t());q.key('ret');g['wait'](r'\[web.group.named\] group=0 name=work colour=ffd6336c\n',s,60)
   # A click on the label folds A and C away; B stays shown.
   s=len(t());click(*label);g['wait'](r'\[web.group.folded\] group=0 on=1 tabs=2\n',s,60)
   assert '[web.tab.shown]' not in t()[s:]
