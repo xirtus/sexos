@@ -337,8 +337,19 @@ pub fn peer_state(slot:u64)->Result<PeerState,u64>{
     PeerState::decode(epoch,life)
 }
 
-/// 64-bit FNV-1a checksum used for crash records and tether hot-swap frames.
-pub fn fnv64(bytes: &[u8]) -> u64 { fnv(bytes) }
+/// 64-bit FNV-1a offset basis.
+pub const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Incremental 64-bit FNV-1a update over `bytes`.
+pub fn fnv64_update(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 64-bit FNV-1a checksum used for crash records and tether binary frames.
+pub fn fnv64(bytes: &[u8]) -> u64 { fnv64_update(FNV64_OFFSET, bytes) }
 
 /// Maps a server name (canonical or short alias) to its BOOT protection domain ID.
 pub fn server_pd_by_name(name: &str) -> Option<u32> {
@@ -381,6 +392,40 @@ pub fn parse_hotswap_header(line: &str) -> Option<HotswapHeader<'_>> {
     Some(HotswapHeader { name, pd: server_pd_by_name(name), size, fnv })
 }
 
+/// Maximum file size accepted by `SEXOS-PUSHFILE` (16 MiB, streamed directly to `sexfiles`).
+pub const PUSHFILE_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum remote path length in bytes for `SEXOS-PUSHFILE`.
+pub const PUSHFILE_MAX_PATH: usize = 240;
+
+/// Parsed `SEXOS-PUSHFILE <remote_path> <size> <fnv64_hex>` tether file upload header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushfileHeader<'a> {
+    pub path: &'a str,
+    pub size: usize,
+    pub fnv: u64,
+}
+
+/// Parses `SEXOS-PUSHFILE <remote_path> <size> <fnv64_hex>` (without trailing newline).
+pub fn parse_pushfile_header(line: &str) -> Option<PushfileHeader<'_>> {
+    let mut parts = line.split_ascii_whitespace();
+    if parts.next()? != "SEXOS-PUSHFILE" { return None; }
+    let path = parts.next()?;
+    let size: usize = parts.next()?.parse().ok()?;
+    let hex = parts.next()?;
+    if parts.next().is_some()
+        || path.is_empty()
+        || path.len() > PUSHFILE_MAX_PATH
+        || path.bytes().any(|b| b < 0x21 || b == 0x7f)
+        || size > PUSHFILE_MAX_BYTES
+        || hex.is_empty()
+        || hex.len() > 16
+    {
+        return None;
+    }
+    let fnv = u64::from_str_radix(hex, 16).ok()?;
+    Some(PushfileHeader { path, size, fnv })
+}
+
 /// Live userspace server hot-swap: replaces the ELF image of restartable server `pd`
 /// and restarts it in place. Returns the new entry point on success.
 #[cfg(target_arch = "x86_64")]
@@ -396,4 +441,35 @@ pub fn hotswap_server(pd: u32, elf: &[u8]) -> Result<u64, u64> {
             out("rcx") _, out("r11") _, out("r8") _, options(nostack));
     }
     if status == OK { Ok(entry) } else { Err(status) }
+}
+
+#[cfg(test)]
+mod pushfile_tests {
+    use super::*;
+
+    #[test]
+    fn fnv64_incremental_matches_oneshot() {
+        assert_eq!(fnv64(b""), FNV64_OFFSET);
+        assert_eq!(fnv64(b"foobar"), 0x8594_4171_f739_67e8);
+        let h = fnv64_update(FNV64_OFFSET, b"foo");
+        let h = fnv64_update(h, b"bar");
+        assert_eq!(h, fnv64(b"foobar"));
+    }
+
+    #[test]
+    fn parse_pushfile_header_valid_and_invalid() {
+        let h = parse_pushfile_header("SEXOS-PUSHFILE /media/Ventoy/moss.wav 750123 0123456789abcdef").unwrap();
+        assert_eq!(h.path, "/media/Ventoy/moss.wav");
+        assert_eq!(h.size, 750123);
+        assert_eq!(h.fnv, 0x0123_4567_89ab_cdef);
+
+        let empty = parse_pushfile_header("SEXOS-PUSHFILE /tmp/empty.bin 0 cbf29ce484222325").unwrap();
+        assert_eq!(empty.size, 0);
+
+        assert!(parse_pushfile_header("SEXOS-HOTSWAP sexbell 100 abcd").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a 100 abcd extra").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a 16777217 abcd").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a 10 nothex").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a\x01b 10 abcd").is_none());
+    }
 }

@@ -167,6 +167,23 @@ def build_hotswap_frame(server_name: str, elf_bytes: bytes) -> bytes:
     return header + elf_bytes
 
 
+PUSHFILE_MAX_BYTES = 16 * 1024 * 1024
+PUSHFILE_MAX_PATH = 240
+
+
+def build_pushfile_frame(remote_path: str, file_bytes: bytes) -> bytes:
+    """Build a framed SEXOS-PUSHFILE binary upload for Spindle."""
+    if not remote_path or any(ch.isspace() or ord(ch) < 0x21 or ord(ch) == 0x7f for ch in remote_path):
+        raise ValueError(f'invalid remote path: {remote_path!r}')
+    path_bytes = remote_path.encode('utf-8')
+    if len(path_bytes) > PUSHFILE_MAX_PATH:
+        raise ValueError(f'remote path too long ({len(path_bytes)} > {PUSHFILE_MAX_PATH})')
+    if len(file_bytes) > PUSHFILE_MAX_BYTES:
+        raise ValueError(f'file size {len(file_bytes)} exceeds limit ({PUSHFILE_MAX_BYTES})')
+    header = f'SEXOS-PUSHFILE {remote_path} {len(file_bytes)} {fnv64(file_bytes):016x}\n'.encode('utf-8')
+    return header + file_bytes
+
+
 def sweep_reply(header: bytes) -> bytes:
     """The data a `SEXOS-SWEEP ... down=N` trial asks for: N bytes of 64-byte lines."""
     if not header.startswith(b'SEXOS-SWEEP'):
@@ -266,6 +283,14 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
                             staged.unlink(missing_ok=True)
                         except OSError as exc:
                             print(f'tether: hotswap read failed ({staged}): {exc}', file=sys.stderr, flush=True)
+                    elif line.startswith(b'@PUSHFILE '):
+                        rel = line[10:].strip().decode('utf-8', 'replace')
+                        staged = (d / Path(rel).name)
+                        try:
+                            pending += staged.read_bytes()
+                            staged.unlink(missing_ok=True)
+                        except OSError as exc:
+                            print(f'tether: push-file read failed ({staged}): {exc}', file=sys.stderr, flush=True)
                     else:
                         pending += line
             if time.time() - last_state > 1:
@@ -358,6 +383,49 @@ def push_server(d: Path, server_name: str, elf_path: Path, wait: float):
     return 1
 
 
+def push_file(d: Path, local_path: Path, remote_path: str, wait: float):
+    """Push any local file over the active tether to remote_path on SexOS."""
+    state = read_state(d)
+    if not state.get('connected'):
+        print('tether: SexOS is not connected (run serve/connect, then `tether ADDRESS` in Spindle).', file=sys.stderr)
+        return 2
+    try:
+        file_bytes = local_path.read_bytes()
+        frame = build_pushfile_frame(remote_path, file_bytes)
+    except (OSError, ValueError) as exc:
+        print(f'tether: push-file failed: {exc}', file=sys.stderr)
+        return 2
+    log = current_log(d)
+    start = log.stat().st_size if log else 0
+    staged_name = f'pushfile-{int(time.time() * 1000)}-{os.getpid()}.bin'
+    (d / staged_name).write_bytes(frame)
+    with (d / 'inbox.txt').open('a') as f:
+        f.write(f'@PUSHFILE {staged_name}\n')
+    deadline = time.time() + wait
+    at = start
+    seen = ''
+    while time.time() < deadline:
+        time.sleep(0.15)
+        if not log:
+            log = current_log(d)
+            continue
+        size = log.stat().st_size
+        if size > at:
+            with log.open('rb') as f:
+                f.seek(at)
+                chunk = f.read(size - at).decode('utf-8', 'replace')
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            at = size
+            seen += chunk
+            if 'push-file: ok ' in seen:
+                return 0
+            if 'push-file: err ' in seen:
+                return 1
+    print('tether: timed out waiting for push-file confirmation.', file=sys.stderr)
+    return 1
+
+
 def tail(d: Path, n: int):
     log = current_log(d)
     if not log:
@@ -384,6 +452,10 @@ def main(argv=None):
     ps.add_argument('server_name', help='target server name (e.g. sexbell, sexinput, sexacpi, cufflinks, sexdisplay)')
     ps.add_argument('elf_path', type=Path, help='path to compiled PIE ELF binary')
     ps.add_argument('--wait', type=float, default=10.0, help='seconds to wait for hotswap result')
+    pf = sub.add_parser('push-file', help='push a local file onto SexOS over the active tether')
+    pf.add_argument('local_path', type=Path, help='path to local file to upload')
+    pf.add_argument('remote_path', help='destination path on SexOS (e.g. /media/Ventoy/moss.wav)')
+    pf.add_argument('--wait', type=float, default=30.0, help='seconds to wait for push-file confirmation')
     t = sub.add_parser('tail')
     t.add_argument('-n', type=int, default=80)
     sub.add_parser('status')
@@ -421,6 +493,8 @@ def main(argv=None):
         return send(a.dir, ' '.join(a.command), a.wait)
     if a.what == 'push-server':
         return push_server(a.dir, a.server_name, a.elf_path, a.wait)
+    if a.what == 'push-file':
+        return push_file(a.dir, a.local_path, a.remote_path, a.wait)
     if a.what == 'tail':
         return tail(a.dir, a.n)
     print(json.dumps(read_state(a.dir), indent=1))

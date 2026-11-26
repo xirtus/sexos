@@ -37,6 +37,7 @@ pub mod spindle_view;
 pub mod spindle_status;
 pub mod history_recovery;
 pub mod program_image;
+pub mod wav;
 pub use memory_region::MemoryRegionInfo;
 
 /// Opaque protection domain identifier. All inter-domain references use this type.
@@ -188,6 +189,7 @@ pub const OP_BELL_SUBSCRIBE:   u64 = 0xC5; // SilkBar → Bell: subscribe to lan
 pub const OP_BELL_SET_POLICY:  u64 = 0xC6; // Shell → Bell: set per-app user policy override
 pub const OP_BELL_MUTE_SENDER: u64 = 0xC7; // Shell → Bell: mute a sender PD
 pub const OP_BELL_TONE:        u64 = 0xC8; // Any holder → Bell: play a note (arg0 Hz, arg1 ms, arg2 volume %)
+pub const OP_BELL_PCM:         u64 = 0xCF; // Holder → Bell: stream 6 stereo 48 kHz i16 PCM frames packed in arg0..arg2
 
 // OP_BELL_NOTIFY category field reservation (BELL_ATTENTION_FIREWALL_V1).
 // category is a u8 packed into arg0 bits [7:0] of OP_BELL_NOTIFY — this is a

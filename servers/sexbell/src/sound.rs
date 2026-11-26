@@ -364,6 +364,10 @@ const LISTEN_AHEAD: usize = 4;
 /// The period the microphone handed back last, kept off the service's small stack.
 static mut HEARD: [u8; PERIOD_BYTES] = [0; PERIOD_BYTES];
 
+/// Direct PCM FIFO for `OP_BELL_PCM` (64 KiB = 16,384 stereo 48 kHz frames ≈ 341 ms).
+const PCM_RING_FRAMES: usize = 16_384;
+static mut PCM_RING: [[i16; 2]; PCM_RING_FRAMES] = [[0; 2]; PCM_RING_FRAMES];
+
 struct Player {
     card: Card,
     started: bool,
@@ -372,6 +376,8 @@ struct Player {
     len: usize,
     done: u32,     // frames of the current note already rendered
     phase: u32,    // 0..2^32 is one cycle
+    pcm_head: usize,
+    pcm_len: usize,
     tokens: [u16; IN_FLIGHT],
     first: usize,
     flying: usize,
@@ -407,13 +413,13 @@ impl Player {
     /// A paused stream doesn't count: Bell rests until the program kicks it again.
     fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active && !crate::restricted::denied(st.pd) && st.ring.load(ring::PAUSED) == 0) }
 
-    /// Mixes the next period of notes and streams into `period`, noting how many
-    /// frames each stream gave in `took[slot]`. False when there is nothing to play.
+    /// Mixes the next period of notes, direct PCM, and streams into `period`, noting
+    /// how many frames each stream gave in `took[slot]`. False when there is nothing to play.
     /// With `hold`, an open stream with less than a period queued gives nothing yet,
     /// so a stream that is behind waits for a whole period instead of playing in
     /// crumbs between silences.
     fn render(&mut self, slot: usize, hold: bool) -> bool {
-        if self.len == 0 && !self.streaming() { return false; }
+        if self.len == 0 && self.pcm_len == 0 && !self.streaming() { return false; }
         let mix = mix();
         *mix = [[0; 2]; PERIOD_FRAMES];
         let master = master_gain();
@@ -431,6 +437,17 @@ impl Player {
                 self.head = (self.head + 1) % NOTES; self.len -= 1; self.done = 0; self.phase = 0;
             }
             mix[frame] = [s as i32, s as i32];
+        }
+        if self.pcm_len > 0 && (!hold || self.pcm_len >= PERIOD_FRAMES) {
+            let pcm_ring = unsafe { &*core::ptr::addr_of!(PCM_RING) };
+            let pcm_n = self.pcm_len.min(PERIOD_FRAMES);
+            for frame in 0..pcm_n {
+                let [l, r] = pcm_ring[self.pcm_head];
+                self.pcm_head = (self.pcm_head + 1) % PCM_RING_FRAMES;
+                mix[frame][0] += (l as i64 * master as i64 >> 16) as i32;
+                mix[frame][1] += (r as i64 * master as i64 >> 16) as i32;
+            }
+            self.pcm_len -= pcm_n;
         }
         for (i, entry) in self.streams.iter_mut().enumerate() {
             self.took[slot][i] = 0;
@@ -603,12 +620,14 @@ impl Player {
         while self.flying < IN_FLIGHT && self.card.room() {
             let slot = (self.first + self.flying) % IN_FLIGHT;
             let notes = self.len > 0;
+            let pcm_before = self.pcm_len;
             if !self.render(slot, self.flying >= MIN_AHEAD) { break; }
+            let pcm_used = pcm_before != self.pcm_len;
             // A stream that is open but has nothing queued yet (it is starting, or
             // its program is busy) gets a few periods of silence, not the whole
             // window: what it writes next then plays within ~130 ms instead of
             // after half a second of silence already handed to the card.
-            if !notes && self.took[slot].iter().all(|&n| n == 0) && self.flying >= MIN_AHEAD { break; }
+            if !notes && !pcm_used && self.took[slot].iter().all(|&n| n == 0) && self.flying >= MIN_AHEAD { break; }
             let mut period = self.period;
             // A Bluetooth headset is up: the mix goes to Cufflinks, the card plays
             // silence (and keeps the clock).
@@ -668,7 +687,7 @@ pub fn init() {
 
 fn player_with(card: Card) -> Player {
     Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
-        head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
+        head: 0, len: 0, done: 0, phase: 0, pcm_head: 0, pcm_len: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
         period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false }
 }
 
@@ -817,8 +836,28 @@ pub fn tone(hz: u64, ms: u64, volume: u64) -> bool {
 /// Two rising notes: something needs the person now.
 pub fn chime() -> bool { tone(1319, 90, 30) && tone(1760, 140, 30) }
 
-/// Notes still to play, streams playing, or periods still with the device.
-pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0 || p.streaming() || p.hearing || p.asked > 0) }
+/// Push 6 stereo 48 kHz i16 PCM frames packed in 3 u64 words (`OP_BELL_PCM`).
+/// Returns true if all 6 frames fit in Bell's direct PCM FIFO.
+pub fn push_pcm(words: [u64; 3]) -> bool {
+    usb_check();
+    let Some(p) = player() else { return false };
+    let frames = sex_pdx::wav::unpack_pcm6(words);
+    let ring = unsafe { &mut *core::ptr::addr_of_mut!(PCM_RING) };
+    let room = PCM_RING_FRAMES - p.pcm_len;
+    let take = frames.len().min(room);
+    for &f in &frames[..take] {
+        let tail = (p.pcm_head + p.pcm_len) % PCM_RING_FRAMES;
+        ring[tail] = f;
+        p.pcm_len += 1;
+    }
+    if p.pcm_len >= PERIOD_FRAMES && (!p.started || p.flying < IN_FLIGHT) {
+        p.pump();
+    }
+    take == frames.len()
+}
+
+/// Notes still to play, direct PCM queued, streams playing, or periods still with the device.
+pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.pcm_len > 0 || p.flying > 0 || p.streaming() || p.hearing || p.asked > 0) }
 
 /// A program row says its ring has sound: play it from where Bell last took.
 /// False when there's no card or the caller has no ring.
