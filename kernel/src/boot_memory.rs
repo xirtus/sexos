@@ -187,14 +187,18 @@ pub fn program_image(len: usize) -> Option<ImageCopy> {
     let mut frames = alloc::vec::Vec::new();
     frames.try_reserve_exact(pages).ok()?;
     for i in 0..pages {
-        let Some(frame) = crate::program_frames::take() else { copy_window_restore(&frames); return None };
+        let Some(frame) = crate::program_frames::take_unzeroed() else { copy_window_restore(&frames); return None };
         let leaf = existing_leaf_address(window + i as u64 * 4096).expect("PROGRAM_COPY_LEAF") as *mut u64;
         unsafe { leaf.write_volatile((leaf.read_volatile() & !LEAF_FRAME) | frame); }
         frames.push(frame);
     }
     crate::smp::tlb::flush_pages(pages, (0..pages).map(|i| window + i as u64 * 4096));
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    unsafe { core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, window as *mut u8, len); }
+    unsafe {
+        core::ptr::copy_nonoverlapping((physical + hhdm) as *const u8, window as *mut u8, len);
+        let tail = pages * 4096 - len;
+        if tail != 0 { core::ptr::write_bytes((window as *mut u8).add(len), 0, tail); }
+    }
     Some(ImageCopy { frames, len, _held: held })
 }
 /// The page table for a 2 MiB span, with all of its entries clear.

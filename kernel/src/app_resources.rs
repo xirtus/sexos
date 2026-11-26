@@ -396,7 +396,11 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
         let first=segment.window/4096;let last=(segment.window+segment.memory-1)/4096;
         for index in first..=last{
             let va=app.arena+index*4096;
-            let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),crate::program_frames::take())else{
+            // A page the file fills completely is overwritten below: no need to zero it first.
+            let full=index*4096>=segment.window&&(index+1)*4096<=segment.window+segment.file;
+            let frame=if full{crate::program_frames::take_unzeroed()}else{crate::program_frames::take()};
+            let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),frame)else{
+                if let Some(f)=frame{crate::program_frames::give(f);}
                 fail(app,count,"no_memory");return Err(DENIED)};
             let mut flags=frame|5|((app.pkey as u64)<<59);
             if segment.writable{flags|=2}
