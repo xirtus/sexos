@@ -19,6 +19,10 @@ PINS = (
 
     ('timed', 'servers/sexnet/src/main.rs', '7aeeff9d3187ccef1bdc28a380b9e52541e8433e3d999c5da5563b813eaed0c6'),  # virtio-net link beside the PCI NIC; receive loop and two-tick envelope unchanged (Gemini #819), 2026-11-25
 
+    ('timed', 'servers/sexnet/src/main.rs', 'd0e0605f6f7c5afae22e9615ead0fc89f36ebc90c62a58dd931a82cf009e2d52'),  # 16-slot web_replies queue for multi-flow concurrency (receive loop & two-tick envelope unchanged; Gemini #827), 2026-11-26
+
+    ('timed', 'crates/sex-pdx/src/lib.rs', 'wait-v1:1d542707990dbc6e22a06b6637ebe2f7e85716630fa91796e33dfadb97c1251b'),  # OP_BELL_PCM constant added (wait wrappers unchanged; Gemini #827), 2026-11-26
+
     ('timed', 'servers/sexusb/src/main.rs', '02894ade100c69b36260c70e9d4b0bac12da2136466b429d6cfb60cca1335bc0'),  # declares deadline class (syscall 104) at start; quiet predicate unchanged (Gemini #819), 2026-11-25
 
     ('timed', 'servers/sexusb/src/main.rs', '106109a782232ae003f34f8554c995c5426e21f70afa76837d2edb1c4eafe0ec'),  # USB UVC ring wiring (quiet predicate unchanged; Gemini #827), 2026-11-26

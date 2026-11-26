@@ -357,7 +357,7 @@ def _task_ordinals_ok(records):
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:be9e938c6bbdc5e952457d2f9f366404b6d1a3bb14d3990b036606bee9a83069',
  'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
- 'crates/sex-pdx/src/crash_log.rs': '55481e34c541c7ce4fad78f03c3940d66cfbc331895e6c1d1803a984ad65de29',  # OP_HOTSWAP live server reload (no observer change), 2026-11-26
+ 'crates/sex-pdx/src/crash_log.rs': '27aa4fb9ca2938c812b1ef4d14d0cd7dfdd27356271ccae16043538680210c6c',  # OP_HOTSWAP + pushfile header helpers (no observer change), 2026-11-26
  'crates/sex-pdx/src/web.rs': '404f9c07116a41ef3ac80c797ffea6d54e008ca038aaac79fa7b4e81c5ca91c4',  # web protocol words for H2/H3 (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
