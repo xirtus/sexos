@@ -43,17 +43,33 @@ def build(files):
     return bytes(header + data)
 
 
+def collect_files(wifi_dir: Path, bt_dir: Path):
+    by_name = {}
+    if wifi_dir.is_dir():
+        for pattern in ("iwlwifi-*", "ibt-*"):
+            for f in sorted(wifi_dir.glob(pattern)):
+                if f.is_file() and not f.name.endswith(".part"):
+                    by_name[f.name] = f
+    if bt_dir.is_dir():
+        for f in sorted(bt_dir.glob("ibt-*")):
+            if f.is_file() and not f.name.endswith(".part"):
+                by_name[f.name] = f
+    return [by_name[k] for k in sorted(by_name)]
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--firmware", type=Path, default=ROOT / "target/wifi-firmware")
+    p.add_argument("--bt-firmware", type=Path, default=ROOT / "target/bt-firmware")
     p.add_argument("--out", type=Path, required=True)
     a = p.parse_args()
-    files = sorted(a.firmware.glob("iwlwifi-*")) if a.firmware.is_dir() else []
-    files = [f for f in files if f.is_file() and not f.name.endswith(".part")]
+    files = collect_files(a.firmware, a.bt_firmware)
     blob = build(files)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_bytes(blob)
-    print(f"[wifi.firmware.pack] files={len(files)} bytes={len(blob)} out={a.out}")
+    wifi_count = sum(1 for f in files if f.name.startswith("iwlwifi-"))
+    bt_count = sum(1 for f in files if f.name.startswith("ibt-"))
+    print(f"[wifi.firmware.pack] files={len(files)} wifi={wifi_count} bt={bt_count} bytes={len(blob)} out={a.out}")
 
 
 if __name__ == "__main__":

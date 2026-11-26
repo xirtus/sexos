@@ -275,7 +275,7 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
         serial_println!("[kernel.cap.class.skip] kind={:?} reason=invalid_bar bar={}", kind, kind.bar()); return false;
     };
     // Firmware may leave a part it does not use in D3hot (its registers read all ones).
-    if matches!(kind, crate::device_lease::Kind::SerialIo | crate::device_lease::Kind::Wifi) && crate::device_lease::wake_d0(dev) {
+    if matches!(kind, crate::device_lease::Kind::SerialIo | crate::device_lease::Kind::Wifi | crate::device_lease::Kind::Hda) && crate::device_lease::wake_d0(dev) {
         serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind={:?}", dev.bus, dev.dev, dev.func, kind);
     }
     if kind == crate::device_lease::Kind::Thunderbolt {

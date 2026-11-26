@@ -248,10 +248,17 @@ pub(crate) fn smbios() -> Option<Vec<u8>> {
 
 pub(crate) type Aml = Interpreter<Fw>;
 pub(crate) fn name(path: &str) -> Option<AmlName> { AmlName::from_str(path).ok() }
-pub(crate) fn int_of(o: &WrappedObject) -> Option<u64> { if let Object::Integer(v) = **o { Some(v) } else { None } }
+pub(crate) fn int_of(o: &WrappedObject) -> Option<u64> {
+    let o = o.clone().unwrap_transparent_reference();
+    if let Object::Integer(v) = *o { Some(v) } else { None }
+}
+pub(crate) fn eval_result(aml: &Aml, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Result<Option<WrappedObject>, AmlError> {
+    let Some(m) = name(method) else { return Ok(None) };
+    let Ok(full) = m.resolve(path) else { return Ok(None) };
+    aml.evaluate_if_present(full, args)
+}
 pub(crate) fn eval(aml: &Aml, path: &AmlName, method: &str, args: Vec<WrappedObject>) -> Option<WrappedObject> {
-    let full = name(method)?.resolve(path).ok()?;
-    aml.evaluate_if_present(full, args).ok().flatten()
+    eval_result(aml, path, method, args).ok().flatten()
 }
 pub(crate) fn eval_int(aml: &Aml, path: &AmlName, method: &str) -> Option<u64> { eval(aml, path, method, Vec::new()).and_then(|o| int_of(&o)) }
 fn id_string(o: &WrappedObject) -> Option<String> {

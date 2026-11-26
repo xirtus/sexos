@@ -251,6 +251,7 @@ fn by_class(id: Id) -> (Service, Support) {
         (0x03, _, _) => (Display, Firmware),
         (0x04, 0x03, _) if id.vendor != 0x10de && id.vendor != 0x1002 => (Bell, Driven),
         (0x04, 0x03, _) => (Bell, Planned),
+        (0x04, 0x01, _) if id.vendor == 0x8086 => (Bell, Driven),
         (0x04, _, _) => (Nothing, Unsupported),
         (0x05, _, _) | (0x06, _, _) | (0x08, _, _) | (0x11, _, _) => (Kernel, Platform),
         (0x0c, 0x03, 0x30) => (Usb, Driven),

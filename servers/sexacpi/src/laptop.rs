@@ -286,20 +286,37 @@ fn sleep(aml: &Aml, light: &mut Backlight, enter: bool) {
 // ── Sensors ────────────────────────────────────────────────────────────────
 
 fn integers(o: &Option<WrappedObject>) -> Option<Vec<Option<u64>>> {
-    let o = o.as_ref()?;
-    let Object::Package(items) = &**o else { return None };
+    let o = o.as_ref()?.clone().unwrap_transparent_reference();
+    let Object::Package(items) = &*o else { return None };
     Some(items.iter().map(int_of).collect())
 }
+
+static BAT_DIAG_LOGGED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static LID_DIAG_LOGGED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub fn read(aml: &Aml, d: &Devices, light: &Backlight, awcc: Option<&crate::wmi::Awcc>) -> w::Sensors {
     let mut s = w::Sensors::default();
     let mut raws = Vec::new();
     for b in d.batteries.iter() {
-        if eval_int(aml, b, "_STA").map_or(false, |v| v & 0x10 == 0) { continue; }
-        let bst = integers(&eval(aml, b, "_BST", Vec::new()));
-        let (info, bix) = match integers(&eval(aml, b, "_BIX", Vec::new())) { Some(p) => (Some(p), true), None => (integers(&eval(aml, b, "_BIF", Vec::new())), false) };
-        if let (Some(bst), Some(info)) = (bst, info) {
-            if let Some(r) = battery::Raw::from_packages(&bst, &info, bix) { raws.push(r); }
+        let sta_res = crate::eval_result(aml, b, "_STA", Vec::new());
+        let sta = sta_res.as_ref().ok().and_then(|o| o.as_ref()).and_then(int_of);
+        if sta.map_or(false, |v| v & 0x10 == 0) { continue; }
+        let bst_res = crate::eval_result(aml, b, "_BST", Vec::new());
+        let bst = integers(&bst_res.as_ref().ok().and_then(|o| o.clone()));
+        let bix_res = crate::eval_result(aml, b, "_BIX", Vec::new());
+        let bix = integers(&bix_res.as_ref().ok().and_then(|o| o.clone()));
+        let mut parsed = bst.as_deref().and_then(|bst| bix.as_deref().and_then(|info| battery::Raw::from_packages(bst, info, true)));
+        let mut bif_res = Ok(None);
+        if parsed.is_none() {
+            bif_res = crate::eval_result(aml, b, "_BIF", Vec::new());
+            let bif = integers(&bif_res.as_ref().ok().and_then(|o| o.clone()));
+            parsed = bst.as_deref().and_then(|bst| bif.as_deref().and_then(|info| battery::Raw::from_packages(bst, info, false)));
+        }
+        if let Some(r) = parsed {
+            raws.push(r);
+        } else if !BAT_DIAG_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            serial_println!("[sexacpi.battery.diag] path={} sta={:?} bst_err={:?} bix_err={:?} bif_err={:?}",
+                b, sta, bst_res.err(), bix_res.err(), bif_res.err());
         }
     }
     if let Some(ac) = d.ac.first() { s.on_ac = eval_int(aml, ac, "_PSR").map(|v| v != 0); }
@@ -310,7 +327,13 @@ pub fn read(aml: &Aml, d: &Devices, light: &Backlight, awcc: Option<&crate::wmi:
         s.battery_health = r.health;
         s.battery_critical = battery::must_shut_down(&r, s.on_ac);
     }
-    if let Some(lid) = d.lids.first() { s.lid_open = eval_int(aml, lid, "_LID").map(|v| v != 0); }
+    if let Some(lid) = d.lids.first() {
+        let lid_res = crate::eval_result(aml, lid, "_LID", Vec::new());
+        s.lid_open = lid_res.as_ref().ok().and_then(|o| o.as_ref()).and_then(int_of).map(|v| v != 0);
+        if s.lid_open.is_none() && !LID_DIAG_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            serial_println!("[sexacpi.lid.diag] path={} err={:?}", lid, lid_res.err());
+        }
+    }
     let mut hottest: Option<(u64, Option<u64>)> = None;
     for t in d.thermal.iter() {
         let Some(tmp) = eval_int(aml, t, "_TMP").filter(|v| thermal::plausible(*v)) else { continue };

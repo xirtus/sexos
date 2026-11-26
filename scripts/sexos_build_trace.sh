@@ -147,12 +147,14 @@ run_stage() {
       cp "$src" "$dst"
       ;;
     wifi_firmware)
-      # Intel Wi-Fi firmware files as one pack BOOT gives the network service. The
-      # fetch (pinned, SHA-256 checked) skips files already present and complete, so
-      # an earlier offline or interrupted build is completed; offline builds pack what
-      # they have and a chip without its file says "firmware missing" in the boot log.
+      # Intel Wi-Fi and Bluetooth firmware files as one pack BOOT gives sexnet and
+      # Cufflinks. Each fetch (pinned, SHA-256 checked) skips files already present
+      # and complete; offline builds pack what they have and a chip without its file
+      # says "firmware missing" in the boot log.
       bash scripts/fetch_wifi_firmware.sh target/wifi-firmware \
         || echo "[wifi.firmware] note: fetch incomplete; the pack holds only the files present"
+      bash scripts/fetch_bt_firmware.sh target/bt-firmware \
+        || echo "[bt.firmware] note: fetch incomplete; the pack holds only the files present"
       python3 scripts/make_wifi_firmware_pack.py --out iso_root/firmware/wifi.pack
       ;;
     nvidia_firmware)
