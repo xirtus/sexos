@@ -926,6 +926,16 @@ pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32, shell: u3
     crate::serial_println!("[boot.bt.ui] shell={} cufflinks={} slot={} notify={} runtime_mint=0", shell, cufflinks, sex_pdx::bt_ui::SLOT, sex_pdx::bt_ui::NOTIFY_SLOT);
 }
 
+/// USB UVC webcams: SexUSB and SexUVC share a 128 KiB metadata + frame ring and wake route.
+pub fn init_usb_uvc(usb: u32, uvc: u32) {
+    use sex_pdx::usb_uvc as u;
+    require_boot();
+    if uvc == 0 || DOMAIN_REGISTRY.get(uvc).is_none() { return; }
+    paired(usb, uvc, u::SLOT, u::REGION_ID, u::BYTES, true);
+    if let Some(d) = (usb != 0).then(|| DOMAIN_REGISTRY.get(usb)).flatten() { d.grant_capability(u::NOTIFY_SLOT, CapabilityData::Domain(uvc)); }
+    crate::serial_println!("[boot.usb.uvc] usb={} sexuvc={} slot={} notify={} bytes={} runtime_mint=0", usb, uvc, u::SLOT, u::NOTIFY_SLOT, u::BYTES);
+}
+
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
     require_boot();
     let virtual_base = alias(pd, physical, length, true, true);

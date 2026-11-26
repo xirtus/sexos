@@ -24,6 +24,10 @@ mod ether;
 mod bt;
 #[path = "audio.rs"]
 mod audio;
+#[path = "uvc_stream.rs"]
+mod uvc_stream;
+#[path = "uvc.rs"]
+mod uvc;
 #[path = "sleep.rs"]
 mod sleep;
 
@@ -181,6 +185,11 @@ pub struct Usb {
     /// The USB microphone in use (it may be another device than the card).
     mic: Option<audio::Mic>,
     mic_buffers: (u64, u64),
+    /// The USB UVC webcam in use, and the shared region to SexUVC (0: none).
+    uvc: Option<uvc::Uvc>,
+    pub uvc_region: u64,
+    uvc_ring: (u64, u64),
+    uvc_buffers: (u64, u64),
     /// Media buttons (headsets, remotes, keyboards' media keys): which interrupt
     /// endpoint (device + 1, index) and where the buttons sit in its reports.
     media: [(u8, u8, crate::hid::MediaLayout); 4],
@@ -206,7 +215,8 @@ impl Usb {
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
             bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8],
-            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0), media: [(0, 0, crate::hid::MediaLayout { fields: [crate::hid::MediaField { report_id: 0, bit: 0, size: 0, key: 0, array: false, umin: 0, umax: 0, lmin: 0 }; crate::hid::MEDIA_FIELDS], n: 0, ids: false }); 4], suspended: [0; MAX_CTL] }
+            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0),
+            uvc: None, uvc_region: 0, uvc_ring: (0, 0), uvc_buffers: (0, 0), media: [(0, 0, crate::hid::MediaLayout { fields: [crate::hid::MediaField { report_id: 0, bit: 0, size: 0, key: 0, array: false, umin: 0, umax: 0, lmin: 0 }; crate::hid::MEDIA_FIELDS], n: 0, ids: false }); 4], suspended: [0; MAX_CTL] }
     }
 
     /// Adds another controller; Ok(its index).
@@ -372,7 +382,8 @@ impl Usb {
         log!("[sexusb.device] slot={} port={} route={:#x} depth={} speed={} vendor={:#06x} product={:#06x} class={}",
             slot, root_port, route, depth, speed_name(speed), self.dev[i].vendor, self.dev[i].product, class);
         // A webcam (UVC): logged so the first boot names the built-in camera and what it offers.
-        if let Some(cam) = uvc_scan::scan(cfg) {
+        let uvc_cam = uvc_scan::scan(cfg);
+        if let Some(cam) = uvc_cam {
             log!("[sexusb.uvc] slot={} vendor={:#06x} product={:#06x} control={} stream={} alts={} max_payload={} bulk={} more_streams={}",
                 slot, self.dev[i].vendor, self.dev[i].product, cam.control_iface, cam.stream_iface, cam.alt_count,
                 cam.max_payload(speed), cam.bulk() as u8, cam.more_streams);
@@ -433,6 +444,9 @@ impl Usb {
         // another configuration, as on Realtek RTL8152/8153).
         if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_bt(i, cfg, config_value, speed)? { return Ok(i); }
         if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_ether(i, configs)? { return Ok(i); }
+        if let Some(cam) = uvc_cam {
+            if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_uvc(i, cam, config_value, speed)? { return Ok(i); }
+        }
         // A sound card; a headset's buttons (its HID interface) are driven next to it,
         // without choosing the configuration again (that would stop the sound).
         let audio = msc.is_none() && !picks.iter().flatten().any(|p| p.hub) && self.try_audio(i, configs)?;
@@ -722,6 +736,7 @@ impl Usb {
         self.ether_gone(i);
         self.bt_gone(i);
         self.audio_gone(i);
+        self.uvc_gone(i);
         if self.dev[i].storage.active {
             let disk = self.dev[i].storage.disk as usize;
             if self.disks[disk] == i as u8 + 1 { self.disks[disk] = 0; self.freed |= 1 << disk; }
@@ -792,6 +807,7 @@ impl Usb {
         if self.ether_event(i, e) { return; }
         if self.bt_event(i, e) { return; }
         if self.audio_event(i, e) { return; }
+        if self.uvc_event(i, e) { return; }
         let Some(k) = self.dev[i].intr.iter().position(|x| x.active && x.dci == dci) else { return };
         let Some(pos) = self.dev[i].intr[k].ring.index_of(e.pointer()) else { return };
         let code = e.code();
