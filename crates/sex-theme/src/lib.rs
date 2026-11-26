@@ -190,6 +190,8 @@ pub mod candy_lavender {
     pub const ON_ORCHID_ACTIVE: u32 = solid(0xFF_FFFF);
 }
 
+pub mod candy_ui;
+
 #[cfg(test)]
 mod tests {
     use super::*;

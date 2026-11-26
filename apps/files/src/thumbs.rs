@@ -21,24 +21,39 @@ use sex_font::Font;
 
 use crate::{at, join};
 
+use sex_theme::candy_ui::{
+    draw_candy_button, draw_candy_panel, draw_candy_selection_row, draw_candy_tab,
+    draw_candy_toolbar, ButtonState, ButtonStyle, CandyPalette,
+};
+
 /// Largest side of a thumbnail, in pixels.
 pub const SIDE: usize = 112;
 const CELL_W: usize = 136;
 const CELL_H: usize = SIDE + 30;
-const HEAD: usize = 34;
-const FOOT: usize = 40;
+const TOOLBAR_H: usize = 36;
+const TAB_BAR_H: usize = 26;
+const HEAD: usize = TOOLBAR_H + TAB_BAR_H + 6;
+const FOOT: usize = 32;
+const SIDEBAR_W: usize = 152;
 const DIR: &[u8] = b"thumbs";
 /// Pictures larger than this are not read for a thumbnail.
 const FILE_MAX: u64 = 48 * 1024 * 1024;
 
-// The grid is drawn in the dark theme's tokens (`sex_theme`) whatever the theme, as
-// picture grids are, so pictures read true; the accent follows Settings.
-const BG: u32 = 0x1C1A20; // Dark window
-const TILE: u32 = 0x26232B; // Dark surface
-const TEXT: u32 = 0xF1EEF4; // Dark text
-const DIM: u32 = 0xB3ADB9; // Dark text_dim
+const PAL: CandyPalette = CandyPalette::dark();
+const BG: u32 = PAL.bg;
+const TILE: u32 = PAL.card;
+const TEXT: u32 = PAL.text;
+const DIM: u32 = PAL.text_dim;
 /// Side of a file or folder icon in a tile.
 const ICON: usize = 80;
+
+const PLACES: [(&str, &[u8]); 5] = [
+    ("Home", b"/"),
+    ("Documents", b"/documents"),
+    ("Downloads", b"/downloads"),
+    ("Pictures", b"/pictures"),
+    ("Devices / Media", b"/media"),
+];
 
 pub enum Thumb { Picture { w: usize, h: usize, px: Vec<u32> }, Kind(&'static str) }
 
@@ -271,30 +286,102 @@ impl Thumbs {
         let _ = files::write(window, name, &out);
     }
 
+    /// Width of the left Places sidebar when the window is wide enough.
+    fn sidebar_w(width: usize) -> usize { if width >= 520 { SIDEBAR_W } else { 0 } }
     /// How many tiles fit across a window this wide.
-    pub fn columns(width: usize) -> usize { (width.saturating_sub(8) / CELL_W).max(1) }
+    pub fn columns(width: usize) -> usize { (width.saturating_sub(Self::sidebar_w(width) + 12) / CELL_W).max(1) }
     /// How many rows of tiles fit.
     fn rows(height: usize) -> usize { (height.saturating_sub(HEAD + FOOT) / CELL_H).max(1) }
 
-    /// Draws the grid into the window's pixels; `top` is moved to keep the cursor seen.
+    /// Draws the Dolphin/Finder-style Candy Lavender grid into the window's pixels;
+    /// `top` is moved to keep the cursor seen.
     pub fn draw(&mut self, window: &mut Window, head: &str, foot: &str, cwd: &[u8], entries: &[Entry], cursor: usize, top: &mut usize) {
         let (width, height) = window.size();
         let (width, height) = (width.max(CELL_W + 8), height.max(HEAD + FOOT + CELL_H));
         let px = window.pixels();
         let px = &mut px[..width * height];
         px.fill(BG);
+
+        let sb = Self::sidebar_w(width);
+        let content_x = sb + 8;
+
+        // 1. Top frosted Candy Lavender toolbar: <- -> ^ nav pills, breadcrumb path bar, Icons/List switcher, + tab.
+        draw_candy_toolbar(px, width, height, 0, 0, width as i32, TOOLBAR_H as i32, &PAL);
+        let nav_labels = ["<", ">", "^"];
+        let mut bx = 10i32;
+        for sym in nav_labels {
+            draw_candy_button(px, width, height, bx, 6, 26, 24, 8, ButtonStyle::Normal, ButtonState::Rest, &PAL);
+            self.text(px, width, (bx + 9) as usize, 10, 14, sym, TEXT);
+            bx += 30;
+        }
+        // Right-side view switcher & new-tab pill.
+        let plus_x = (width as i32 - 34).max(bx + 120);
+        let view_x = (plus_x - 104).max(bx + 80);
+        let path_x = bx + 6;
+        let path_w = (view_x - path_x - 10).max(60);
+        draw_candy_panel(px, width, height, path_x, 6, path_w, 24, 8, &PAL);
+        self.text(px, width, (path_x + 10) as usize, 10, (path_w - 18).max(8) as usize, head, TEXT);
+
+        draw_candy_tab(px, width, height, view_x, 6, 48, 24, true, ButtonState::Rest, &PAL);
+        self.text(px, width, (view_x + 8) as usize, 10, 38, "Icons", TEXT);
+        draw_candy_tab(px, width, height, view_x + 50, 6, 46, 24, false, ButtonState::Rest, &PAL);
+        self.text(px, width, (view_x + 59) as usize, 10, 34, "List", DIM);
+
+        draw_candy_button(px, width, height, plus_x, 6, 24, 24, 12, ButtonStyle::Normal, ButtonState::Rest, &PAL);
+        self.text(px, width, (plus_x + 8) as usize, 10, 12, "+", TEXT);
+
+        // 2. Folder Tab Bar right below the toolbar.
+        fill(px, width, 0, TOOLBAR_H, width, TAB_BAR_H, PAL.panel);
+        fill(px, width, 0, TOOLBAR_H + TAB_BAR_H - 1, width, 1, PAL.hairline);
+        let cur_name = crate::shown(cwd.rsplit(|&b| b == b'/').find(|s| !s.is_empty()).unwrap_or(b"Home"));
+        let mut tx = (sb + 8) as i32;
+        let tab1_w = (cur_name.len() as i32 * 8 + 38).clamp(84, 180);
+        draw_candy_tab(px, width, height, tx, TOOLBAR_H as i32 + 2, tab1_w, TAB_BAR_H as i32 - 4, true, ButtonState::Rest, &PAL);
+        self.text(px, width, (tx + 10) as usize, TOOLBAR_H + 5, (tab1_w - 28).max(16) as usize, cur_name, TEXT);
+        self.text(px, width, (tx + tab1_w - 16) as usize, TOOLBAR_H + 5, 12, "x", DIM);
+        tx += tab1_w + 6;
+        if tx + 86 < width as i32 {
+            draw_candy_tab(px, width, height, tx, TOOLBAR_H as i32 + 2, 76, TAB_BAR_H as i32 - 4, false, ButtonState::Rest, &PAL);
+            self.text(px, width, (tx + 10) as usize, TOOLBAR_H + 5, 58, "Home", DIM);
+            tx += 82;
+        }
+        if tx + 28 < width as i32 {
+            draw_candy_button(px, width, height, tx, TOOLBAR_H as i32 + 3, 22, TAB_BAR_H as i32 - 6, 8, ButtonStyle::Subtle, ButtonState::Rest, &PAL);
+            self.text(px, width, (tx + 7) as usize, TOOLBAR_H + 5, 12, "+", DIM);
+        }
+
+        // 3. Left frosted Places / Favorites sidebar.
+        if sb > 0 {
+            fill(px, width, 0, TOOLBAR_H + TAB_BAR_H, sb, height - TOOLBAR_H - TAB_BAR_H - FOOT, PAL.panel);
+            fill(px, width, sb - 1, TOOLBAR_H + TAB_BAR_H, 1, height - TOOLBAR_H - TAB_BAR_H - FOOT, PAL.hairline);
+            self.text(px, width, 12, HEAD + 2, sb - 20, "PLACES", DIM);
+            for (idx, (label, path)) in PLACES.iter().enumerate() {
+                let py = HEAD + 24 + idx * 28;
+                if py + 24 >= height - FOOT { break; }
+                let active = cwd == *path || (idx == 0 && cwd.is_empty());
+                if active {
+                    draw_candy_selection_row(px, width, height, 8, py as i32, (sb - 16) as i32, 24, 8, &PAL);
+                }
+                self.text(px, width, 18, py + 4, sb - 28, label, if active { TEXT } else { DIM });
+            }
+        }
+
+        // 4. Rounded Candy File Grid.
         let cols = Self::columns(width);
         let rows = Self::rows(height);
         let row = cursor / cols;
         if row < *top { *top = row; }
         if row >= *top + rows { *top = row + 1 - rows; }
-        self.text(px, width, 10, 8, width - 20, head, TEXT);
         let first = *top * cols;
         for (i, e) in entries.iter().enumerate().skip(first).take(rows * cols) {
             let (c, r) = ((i - first) % cols, (i - first) / cols);
-            let (x0, y0) = (8 + c * CELL_W, HEAD + r * CELL_H);
+            let (x0, y0) = (content_x + c * CELL_W, HEAD + r * CELL_H);
             let box_w = CELL_W - 8;
-            fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { self.picked } else { TILE });
+            if i == cursor {
+                draw_candy_button(px, width, height, x0 as i32, y0 as i32, box_w as i32, (CELL_H - 6) as i32, 10, ButtonStyle::Active, ButtonState::Rest, &PAL);
+            } else {
+                draw_candy_panel(px, width, height, x0 as i32, y0 as i32, box_w as i32, (CELL_H - 6) as i32, 10, &PAL);
+            }
             let inner = (x0 + (box_w - SIDE) / 2, y0 + 4);
             match (kind(&e.name, e.dir), self.made.get(&join(cwd, &e.name))) {
                 (_, Some(Thumb::Picture { w, h, px: t })) => {
@@ -302,7 +389,7 @@ impl Thumbs {
                     for y in 0..*h { px[(oy + y) * width + ox..(oy + y) * width + ox + w].copy_from_slice(&t[y * w..y * w + w]); }
                 }
                 (_, made) => {
-                    let tile = if i == cursor { self.picked } else { TILE };
+                    let tile = if i == cursor { PAL.selection } else { TILE };
                     // A picture that would not decode says so under its icon.
                     let failed = match made { Some(Thumb::Kind(k)) if k.ends_with('?') => Some(*k), _ => None };
                     let icon = self.icon(sex_icons::file_for(&e.name, e.dir));
@@ -318,11 +405,21 @@ impl Thumbs {
             }
             let mut name = String::from(crate::shown(&e.name));
             if e.dir { name.push('/'); }
-            self.text(px, width, x0 + 4, y0 + SIDE + 6, box_w - 8, &name, TEXT);
+            self.text(px, width, x0 + 6, y0 + SIDE + 6, box_w - 12, &name, TEXT);
         }
+
+        // 5. Clean frosted Candy bottom status bar ("N Folders, M Files").
+        let foot_y = height - FOOT;
+        draw_candy_toolbar(px, width, height, 0, foot_y as i32, width as i32, FOOT as i32, &PAL);
+        let folders = entries.iter().filter(|e| e.dir).count();
+        let files_n = entries.len().saturating_sub(folders);
         let more = entries.len().saturating_sub(first + rows * cols);
-        let foot = if more > 0 { alloc::format!("{} more below.  {}", more, foot) } else { String::from(foot) };
-        self.text(px, width, 10, height - FOOT + 12, width - 20, &foot, DIM);
+        let summary = if more > 0 {
+            alloc::format!("{folders} Folders, {files_n} Files  ({more} more below)  {foot}")
+        } else {
+            alloc::format!("{folders} Folders, {files_n} Files  {foot}")
+        };
+        self.text(px, width, 12, foot_y + 8, width - 24, &summary, DIM);
         window.show_pixels(width, height);
     }
 

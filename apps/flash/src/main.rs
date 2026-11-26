@@ -1518,13 +1518,19 @@ extern "C" fn flash_main() -> ! {
                 let vp_w = win_w;
                 let vp_h = win_h.saturating_sub(top_h + ctrl_h + film_h);
 
+                use sex_graphics::theme::candy_ui::{
+                    button_text_color, draw_candy_badge, draw_candy_button, draw_candy_panel,
+                    draw_candy_toolbar, ButtonState, ButtonStyle, CandyPalette,
+                };
+                let pal = CandyPalette::dark();
+
                 // Top Toolbar
-                fill_rect(win_pixels, win_w, win_h, Rect::new(0, 0, win_w, top_h), 0x001B1E28);
+                draw_candy_toolbar(win_pixels, win_w, win_h, 0, 0, win_w as i32, top_h as i32, &pal);
                 // Title
-                draw_text_8x8(win_pixels, win_w, win_h, 16, 14, b"FLASH PHOTO BOOTH", 0x00FFFFFF, None);
+                draw_text_8x8(win_pixels, win_w, win_h, 16, 14, b"FLASH PHOTO BOOTH", pal.text, None);
                 // Camera status dot & live telemetry overlay (source + resolution + FPS)
                 let is_live = usb_bank.is_some() || socket_conn.is_some();
-                let dot_col = if is_live { 0x0010B981 } else { 0x003B82F6 };
+                let dot_col = if is_live { pal.mint } else { pal.accent };
                 draw_circle(win_pixels, win_w, win_h, 172, 18, 4, dot_col);
                 let src_label = if usb_bank.is_some() {
                     "LIVE USB"
@@ -1542,7 +1548,7 @@ extern "C" fn flash_main() -> ! {
                     182,
                     14,
                     status_line.as_bytes(),
-                    if is_live { 0x00A7F3D0 } else { 0x0094A3B8 },
+                    if is_live { pal.mint } else { pal.text_dim },
                     None,
                 );
 
@@ -1550,8 +1556,8 @@ extern "C" fn flash_main() -> ! {
                 let filter_str = active_filter.name().as_bytes();
                 let pill_w = filter_str.len() * 8 + 20;
                 let pill_x = win_w.saturating_sub(pill_w + 16);
-                fill_rect(win_pixels, win_w, win_h, Rect::new(pill_x, 8, pill_w, 20), 0x002A303F);
-                draw_text_8x8(win_pixels, win_w, win_h, pill_x + 10, 14, filter_str, 0x00E2E8F0, None);
+                draw_candy_badge(win_pixels, win_w, win_h, pill_x as i32, 8, pill_w as i32, 20, pal.control, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, pill_x + 10, 14, filter_str, pal.text, None);
 
                 // Viewport rendering
                 if let Some(idx) = preview_photo {
@@ -1638,7 +1644,7 @@ extern "C" fn flash_main() -> ! {
 
                 // Control Bar
                 let ctrl_y = win_h - film_h - ctrl_h;
-                fill_rect(win_pixels, win_w, win_h, Rect::new(0, ctrl_y, win_w, ctrl_h), 0x001B1E28);
+                draw_candy_toolbar(win_pixels, win_w, win_h, 0, ctrl_y as i32, win_w as i32, ctrl_h as i32, &pal);
 
                 let btn_w_shutter = 104usize;
                 let btn_w_other = 88usize;
@@ -1647,6 +1653,7 @@ extern "C" fn flash_main() -> ! {
                 let start_bx = (win_w.saturating_sub(total_btn_w)) / 2;
                 let btn_h = 30usize;
                 let by = ctrl_y + 6;
+                let btn_r = 10i32;
 
                 let mut cur_bx = start_bx;
 
@@ -1658,56 +1665,60 @@ extern "C" fn flash_main() -> ! {
                 }
 
                 // 1. Effects
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, btn_w_other, btn_h), if grid_mode { 0x003B82F6 } else { 0x002E3547 });
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 10, by + 11, b"Effects (E)", 0x00FFFFFF, None);
+                let fx_style = if grid_mode { ButtonStyle::Active } else { ButtonStyle::Normal };
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, btn_w_other as i32, btn_h as i32, btn_r, fx_style, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 10, by + 11, b"Effects (E)", button_text_color(fx_style, &pal), None);
                 if should_log_controls {
                     log!("[flash.control] name=effects x={} y={} w={} h={}", cur_bx, by, btn_w_other, btn_h);
                 }
                 cur_bx += btn_w_other + btn_gap;
 
                 // 2. Filter
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, btn_w_other, btn_h), 0x002E3547);
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 14, by + 11, b"Filter (F)", 0x00FFFFFF, None);
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, btn_w_other as i32, btn_h as i32, btn_r, ButtonStyle::Normal, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 14, by + 11, b"Filter (F)", pal.text, None);
                 if should_log_controls {
                     log!("[flash.control] name=filter x={} y={} w={} h={}", cur_bx, by, btn_w_other, btn_h);
                 }
                 cur_bx += btn_w_other + btn_gap;
 
                 // 3. Shutter
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, btn_w_shutter, btn_h), 0x00DC2626);
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 12, by + 11, b"Shutter [Spc]", 0x00FFFFFF, None);
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, btn_w_shutter as i32, btn_h as i32, (btn_h / 2) as i32, ButtonStyle::Danger, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 12, by + 11, b"Shutter [Spc]", button_text_color(ButtonStyle::Danger, &pal), None);
                 if should_log_controls {
                     log!("[flash.control] name=shutter x={} y={} w={} h={}", cur_bx, by, btn_w_shutter, btn_h);
                 }
                 cur_bx += btn_w_shutter + btn_gap;
 
                 // 4. Timer
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, btn_w_other, btn_h), if countdown_step > 0 { 0x00D97706 } else { 0x002E3547 });
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 10, by + 11, b"Timer 3s(T)", 0x00FFFFFF, None);
+                let timer_style = if countdown_step > 0 { ButtonStyle::Active } else { ButtonStyle::Normal };
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, btn_w_other as i32, btn_h as i32, btn_r, timer_style, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 10, by + 11, b"Timer 3s(T)", button_text_color(timer_style, &pal), None);
                 if should_log_controls {
                     log!("[flash.control] name=timer x={} y={} w={} h={}", cur_bx, by, btn_w_other, btn_h);
                 }
                 cur_bx += btn_w_other + btn_gap;
 
                 // 5. Burst
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, btn_w_other, btn_h), if burst_active { 0x000D9488 } else { 0x002E3547 });
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 12, by + 11, b"Burst x4(B)", 0x00FFFFFF, None);
+                let burst_style = if burst_active { ButtonStyle::Active } else { ButtonStyle::Normal };
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, btn_w_other as i32, btn_h as i32, btn_r, burst_style, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 12, by + 11, b"Burst x4(B)", button_text_color(burst_style, &pal), None);
                 if should_log_controls {
                     log!("[flash.control] name=burst x={} y={} w={} h={}", cur_bx, by, btn_w_other, btn_h);
                 }
                 cur_bx += btn_w_other + btn_gap;
 
                 // 6. Video
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, btn_w_other, btn_h), if recording { 0x00B91C1C } else { 0x002E3547 });
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 16, by + 11, if recording { b"REC..." } else { b"Video (V)" }, 0x00FFFFFF, None);
+                let vid_style = if recording { ButtonStyle::Danger } else { ButtonStyle::Normal };
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, btn_w_other as i32, btn_h as i32, btn_r, vid_style, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 16, by + 11, if recording { b"REC..." } else { b"Video (V)" }, button_text_color(vid_style, &pal), None);
                 if should_log_controls {
                     log!("[flash.control] name=video x={} y={} w={} h={}", cur_bx, by, btn_w_other, btn_h);
                 }
                 cur_bx += btn_w_other + btn_gap;
 
                 // 7. Open in Gaze
-                fill_rect(win_pixels, win_w, win_h, Rect::new(cur_bx, by, 110, btn_h), 0x002563EB);
-                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 10, by + 11, b"Open in Gaze(G)", 0x00FFFFFF, None);
+                draw_candy_button(win_pixels, win_w, win_h, cur_bx as i32, by as i32, 110, btn_h as i32, btn_r, ButtonStyle::Primary, ButtonState::Rest, &pal);
+                draw_text_8x8(win_pixels, win_w, win_h, cur_bx + 10, by + 11, b"Open in Gaze(G)", button_text_color(ButtonStyle::Primary, &pal), None);
                 if should_log_controls {
                     log!("[flash.control] name=open_gaze x={} y={} w={} h={}", cur_bx, by, 110, btn_h);
                 }
@@ -1728,9 +1739,9 @@ extern "C" fn flash_main() -> ! {
 
                 // Bottom Filmstrip
                 let film_y = win_h - film_h;
-                fill_rect(win_pixels, win_w, win_h, Rect::new(0, film_y, win_w, film_h), 0x00101218);
+                fill_rect(win_pixels, win_w, win_h, Rect::new(0, film_y, win_w, film_h), pal.bg);
                 // Divider line
-                fill_rect(win_pixels, win_w, win_h, Rect::new(0, film_y, win_w, 1), 0x00252832);
+                fill_rect(win_pixels, win_w, win_h, Rect::new(0, film_y, win_w, 1), pal.hairline);
 
                 let card_w = 60usize;
                 let card_h = 44usize;
@@ -1743,21 +1754,16 @@ extern "C" fn flash_main() -> ! {
                         break;
                     }
                     let is_sel = preview_photo == Some(i);
-                    // Card background
-                    fill_rect(win_pixels, win_w, win_h, Rect::new(card_x, thumb_y, card_w, card_h), 0x001E222D);
+                    // Rounded Candy card background
+                    if is_sel {
+                        draw_candy_button(win_pixels, win_w, win_h, card_x as i32, thumb_y as i32, card_w as i32, card_h as i32, 8, ButtonStyle::Active, ButtonState::Rest, &pal);
+                    } else {
+                        draw_candy_panel(win_pixels, win_w, win_h, card_x as i32, thumb_y as i32, card_w as i32, card_h as i32, 8, &pal);
+                    }
                     // Blit thumbnail
                     let img_x = card_x + 4;
                     let img_y = thumb_y + 3;
                     scale_blit(&thumb.pixels, thumb.w, thumb.h, win_pixels, win_w, win_h, Rect::new(img_x, img_y, card_w - 8, card_h - 6));
-                    // Card outline
-                    draw_rect_outline(
-                        win_pixels,
-                        win_w,
-                        win_h,
-                        Rect::new(card_x, thumb_y, card_w, card_h),
-                        if is_sel { 0x003B82F6 } else { 0x00374151 },
-                        if is_sel { 2 } else { 1 },
-                    );
 
                     if should_log_controls {
                         log!("[flash.control] name=thumb_{} x={} y={} w={} h={}", i, card_x, thumb_y, card_w, card_h);

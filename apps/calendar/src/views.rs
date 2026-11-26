@@ -9,17 +9,22 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use sex_app::Window;
 use sex_calendar::{clock, tz, Date, Event as Entry, MonthGrid, PartStat, MONTH_NAMES, WEEKDAY_NAMES};
+use sex_theme::candy_ui::{
+    draw_candy_badge, draw_candy_panel, draw_candy_selection_row, draw_candy_tab,
+    draw_candy_toolbar, fill_rounded_rect, ButtonState, CandyPalette,
+};
 
-const BACK: u32 = 0x0017_191E;
-const PANEL: u32 = 0x000F_1014;
-const CELL: u32 = 0x0022_252C;
-const CELL_OUT: u32 = 0x001A_1C21;
-const ACCENT: u32 = 0x0035_74E8;
-const TODAY: u32 = 0x00E8_6A3A;
-const TEXT: u32 = 0x00E8_EAED;
-const DIM: u32 = 0x0080_868E;
-const SELECT: u32 = 0x002C_3A55;
-const LINE: u32 = 0x002A_2E36;
+const PAL: CandyPalette = CandyPalette::dark();
+const BACK: u32 = PAL.bg;
+const PANEL: u32 = PAL.panel;
+const CELL: u32 = PAL.card;
+const CELL_OUT: u32 = PAL.well;
+const ACCENT: u32 = PAL.accent;
+const TODAY: u32 = PAL.danger;
+const TEXT: u32 = PAL.text;
+const DIM: u32 = PAL.text_dim;
+const SELECT: u32 = PAL.selection;
+const LINE: u32 = PAL.hairline;
 
 pub struct Faces { pub small: Face, pub tiny: Face, pub big: Face }
 
@@ -81,6 +86,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
     let (w, h) = (l.w as usize, l.h as usize);
     let mut c = Canvas { px: window.pixels(), w, h };
     c.fill(0, 0, l.w, l.h, BACK);
+    draw_candy_toolbar(c.px, c.w, c.h, 0, 0, l.side_x, 68, &PAL);
     let title = match app.view {
         View::Month => format!("{} {}", MONTH_NAMES[app.selected.month as usize - 1], app.selected.year),
         View::Week => { let s = week_start(app.selected); format!("Week {} of {}", s.iso_week().1, s.iso_week().0) }
@@ -93,8 +99,9 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
     for (i, name) in TABS.iter().enumerate() {
         let x = 8 + i as i32 * Layout::TAB_W;
         if x + Layout::TAB_W > l.side_x { break; }
-        c.fill(x + 2, Layout::TAB_Y, Layout::TAB_W - 4, Layout::TAB_H, if i == current { ACCENT } else { CELL });
-        c.centred(&mut f.tiny, x + 2, Layout::TAB_Y, Layout::TAB_W - 4, Layout::TAB_H, name, TEXT);
+        let on = i == current;
+        draw_candy_tab(c.px, c.w, c.h, x + 2, Layout::TAB_Y, Layout::TAB_W - 4, Layout::TAB_H, on, ButtonState::Rest, &PAL);
+        c.centred(&mut f.tiny, x + 2, Layout::TAB_Y, Layout::TAB_W - 4, Layout::TAB_H, name, if on { TEXT } else { DIM });
     }
     match app.view {
         View::Month => month(&mut c, app, &l, f),
@@ -105,8 +112,8 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
     }
     side(&mut c, app, &l, f);
     if let Some(b) = &app.banner {
-        c.fill(8, 4, l.side_x - 16, 32, TODAY);
-        c.text(&mut f.small, 16, 10, b, TEXT, l.side_x - 32);
+        draw_candy_badge(c.px, c.w, c.h, 8, 4, l.side_x - 16, 32, TODAY, &PAL);
+        c.text(&mut f.small, 16, 10, b, 0x00FF_FFFF, l.side_x - 32);
     }
     let bottom = match app.ask {
         Some(ask) => {
@@ -252,9 +259,13 @@ fn clock_view(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
     let line = |c: &mut Canvas, f: &mut Faces, text: &str, sub: &str, color: u32, row: usize| {
         let y = l.grid_y + row as i32 * Layout::ROW_H;
         if y + Layout::ROW_H > l.h - 30 { return; }
-        c.fill(l.grid_x, y + 1, width, Layout::ROW_H - 2, if row == app.picked { SELECT } else { CELL });
-        c.text(&mut f.small, l.grid_x + 8, y + 3, text, color, width - 16);
-        c.text(&mut f.tiny, l.grid_x + 8, y + 3 + f.small.h as i32, sub, DIM, width - 16);
+        if row == app.picked {
+            draw_candy_selection_row(c.px, c.w, c.h, l.grid_x, y + 2, width, Layout::ROW_H - 4, 8, &PAL);
+        } else {
+            draw_candy_panel(c.px, c.w, c.h, l.grid_x, y + 2, width, Layout::ROW_H - 4, 8, &PAL);
+        }
+        c.text(&mut f.small, l.grid_x + 10, y + 4, text, color, width - 18);
+        c.text(&mut f.tiny, l.grid_x + 10, y + 4 + f.small.h as i32, sub, DIM, width - 18);
     };
     for a in &app.clock.alarms {
         let days: String = if a.days == 0 { String::from("once") } else { (0..7).filter(|i| a.days & (1 << i) != 0).map(|i| WEEKDAY_NAMES[i]).collect::<Vec<_>>().join(" ") };
@@ -280,9 +291,17 @@ fn calendars(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
     for (row, info) in app.cal.all_calendars().iter().enumerate() {
         let y = l.grid_y + row as i32 * Layout::ROW_H;
         if y + Layout::ROW_H > l.h - 30 { break; }
-        c.fill(l.grid_x, y + 1, width, Layout::ROW_H - 2, if row == app.picked { SELECT } else { CELL });
-        // The box: the calendar's colour when shown, an outline when hidden.
-        if info.visible { c.fill(l.grid_x + 8, y + 10, 22, 22, info.color); } else { c.outline(l.grid_x + 8, y + 10, 22, 22, 2, info.color); }
+        if row == app.picked {
+            draw_candy_selection_row(c.px, c.w, c.h, l.grid_x, y + 2, width, Layout::ROW_H - 4, 8, &PAL);
+        } else {
+            draw_candy_panel(c.px, c.w, c.h, l.grid_x, y + 2, width, Layout::ROW_H - 4, 8, &PAL);
+        }
+        // Rounded pill swatch: filled when visible, outlined when hidden.
+        if info.visible {
+            fill_rounded_rect(c.px, c.w, c.h, l.grid_x + 10, y + 11, 20, 20, 6, info.color);
+        } else {
+            c.outline(l.grid_x + 10, y + 11, 20, 20, 2, info.color);
+        }
         let count = app.cal.events.iter().filter(|e| e.calendar == info.id).count();
         let mark = if info.id == app.target { "  (new events go here)" } else { "" };
         c.text(&mut f.small, l.grid_x + 40, y + 3, &format!("{}{mark}", info.name), if info.visible { TEXT } else { DIM }, width - 48);
@@ -294,20 +313,23 @@ fn calendars(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
 /// The chosen day's events beside the views.
 fn side(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
     c.fill(l.side_x, 0, l.w - l.side_x, l.h, PANEL);
+    c.fill(l.side_x, 0, 1, l.h, LINE);
     let side_w = l.w - l.side_x - 16;
     let cols = (side_w / f.small.w as i32) as usize;
     let weekday = WEEKDAY_NAMES[app.selected.weekday() as usize];
-    c.text(&mut f.small, l.side_x + 8, 12, &format!("{weekday} {}", app.selected), TEXT, side_w);
+    c.text(&mut f.small, l.side_x + 10, 12, &format!("{weekday} {}", app.selected), TEXT, side_w);
     let (year, week) = app.selected.iso_week();
-    c.text(&mut f.tiny, l.side_x + 8, 34, &format!("ISO week {week} of {year}"), DIM, side_w);
+    c.text(&mut f.tiny, l.side_x + 10, 34, &format!("ISO week {week} of {year}"), DIM, side_w);
     let events = app.cal.on_day(app.selected);
     let mut y = 60;
-    if events.is_empty() { c.text(&mut f.small, l.side_x + 8, y, "No events", DIM, side_w); }
+    if events.is_empty() { c.text(&mut f.small, l.side_x + 10, y, "No events", DIM, side_w); }
     for (k, e) in events.iter().enumerate() {
         if y + f.small.h as i32 > l.h - 30 { break; }
-        if app.agenda && k == app.picked { c.fill(l.side_x + 4, y - 2, l.w - l.side_x - 8, 76, SELECT); }
+        if app.agenda && k == app.picked {
+            draw_candy_selection_row(c.px, c.w, c.h, l.side_x + 6, y - 2, l.w - l.side_x - 12, 76, 8, &PAL);
+        }
         let color = color_of(app, e);
-        c.fill(l.side_x + 4, y, 3, f.tiny.h as i32 + f.small.h as i32, color);
+        fill_rounded_rect(c.px, c.w, c.h, l.side_x + 6, y, 3, f.tiny.h as i32 + f.small.h as i32, 2, color);
         let mut head = when(e);
         if e.rule.is_some() { head.push_str(" (repeats)"); }
         if !e.alarms.is_empty() { head.push_str(" (reminder)"); }

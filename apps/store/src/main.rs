@@ -172,13 +172,18 @@ fn picture(window: &mut Window, base: &str, asset: &Asset, max_w: usize, max_h: 
 
 // ---- Drawing ----------------------------------------------------------------------
 
-const BG: u32 = 0x1B1D22;
-const PANEL: u32 = 0x262930;
-const PICKED: u32 = 0x3D6FD6;
-const TEXT: u32 = 0xE6E8EC;
-const DIM: u32 = 0x9AA0AA;
-const ACCENT: u32 = 0xE0569B;
-const GOOD: u32 = 0x4CAF7A;
+use sex_theme::candy_ui::{
+    button_text_color, draw_candy_badge, draw_candy_button, draw_candy_panel,
+    draw_candy_selection_row, draw_candy_tab, draw_candy_toolbar, ButtonState, ButtonStyle,
+    CandyPalette,
+};
+
+const PAL: CandyPalette = CandyPalette::dark();
+const BG: u32 = PAL.bg;
+const TEXT: u32 = PAL.text;
+const DIM: u32 = PAL.text_dim;
+const ACCENT: u32 = PAL.accent;
+const GOOD: u32 = PAL.mint;
 const GLYPH_W: usize = 22;
 const GLYPH_H: usize = 20;
 /// 13 px, in 1/64 pixel.
@@ -208,6 +213,24 @@ impl Canvas {
     }
     fn fill(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         for row in y..(y + h).min(self.h) { let s = row * self.w; self.px[s + x.min(self.w)..s + (x + w).min(self.w)].fill(color); }
+    }
+    fn toolbar(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        draw_candy_toolbar(self.px, self.w, self.h, x as i32, y as i32, w as i32, h as i32, &PAL);
+    }
+    fn panel(&mut self, x: usize, y: usize, w: usize, h: usize, r: i32) {
+        draw_candy_panel(self.px, self.w, self.h, x as i32, y as i32, w as i32, h as i32, r, &PAL);
+    }
+    fn button(&mut self, x: usize, y: usize, w: usize, h: usize, style: ButtonStyle) {
+        draw_candy_button(self.px, self.w, self.h, x as i32, y as i32, w as i32, h as i32, (h as i32 / 2).min(10), style, ButtonState::Rest, &PAL);
+    }
+    fn tab(&mut self, x: usize, y: usize, w: usize, h: usize, active: bool) {
+        draw_candy_tab(self.px, self.w, self.h, x as i32, y as i32, w as i32, h as i32, active, ButtonState::Rest, &PAL);
+    }
+    fn badge(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
+        draw_candy_badge(self.px, self.w, self.h, x as i32, y as i32, w as i32, h as i32, color, &PAL);
+    }
+    fn select_row(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        draw_candy_selection_row(self.px, self.w, self.h, x as i32, y as i32, w as i32, h as i32, 6, &PAL);
     }
     fn image(&mut self, x: usize, y: usize, pic: &Pic) {
         for row in 0..pic.h {
@@ -334,6 +357,7 @@ impl View {
         let (w, h) = (self.canvas.w, self.canvas.h);
         self.hits.clear();
         self.canvas.fill(0, 0, w, h, BG);
+        self.canvas.toolbar(0, 0, w, 32);
         match self.mode {
             Mode::List => self.render_list(window),
             Mode::Page(i) => self.render_page(window, i),
@@ -341,7 +365,7 @@ impl View {
         }
         // The bottom: what happened last, and the keys.
         let foot = h.saturating_sub(18 * (STATUS_LINES + 1) + 8);
-        self.canvas.fill(0, foot, w, h - foot, PANEL);
+        self.canvas.toolbar(0, foot, w, h - foot);
         let lines: Vec<String> = match working { Some(s) => vec![s.to_string()], None => self.status.iter().map(|l| shown(l).to_string()).collect() };
         for (k, l) in lines.iter().enumerate() { self.canvas.text(10, foot + 4 + 18 * k, w - 20, l, TEXT); }
         let keys = match self.mode {
@@ -367,8 +391,8 @@ impl View {
         if updates > 0 {
             let badge = format!("{updates} update{}", if updates == 1 { "" } else { "s" });
             let bw = self.canvas.measure(&badge) + 16;
-            self.canvas.fill(w - bw - 10, 6, bw, 22, ACCENT);
-            self.canvas.text(w - bw - 2, 8, bw, &badge, TEXT);
+            self.canvas.badge(w - bw - 10, 5, bw, 22, ACCENT);
+            self.canvas.text(w - bw - 2, 7, bw, &badge, PAL.text_on_accent);
         }
         // Categories.
         let mut x = 10;
@@ -376,8 +400,9 @@ impl View {
         for (k, name) in names.iter().enumerate() {
             let tw = self.canvas.measure(name) + 20;
             if x + tw > w { break; }
-            self.canvas.fill(x, 36, tw, 22, if k == self.category { PICKED } else { PANEL });
-            self.canvas.text(x + 10, 37, tw, name, TEXT);
+            let on = k == self.category;
+            self.canvas.tab(x, 36, tw, 22, on);
+            self.canvas.text(x + 10, 37, tw, name, if on { TEXT } else { DIM });
             self.hits.push((x, 36, tw, 22, Hit::Tab(k)));
             x += tw + 6;
         }
@@ -390,7 +415,7 @@ impl View {
             let tile_w = ((w - 20) / 4).min(220);
             for (k, i) in featured.iter().enumerate() {
                 let x = 10 + k * (tile_w + 6);
-                self.canvas.fill(x, y, tile_w, TILE_ICON + 12, PANEL);
+                self.canvas.panel(x, y, tile_w, TILE_ICON + 12, 8);
                 if let Some(ic) = self.icon(window, *i, TILE_ICON) { let pic = self.icons[ic].1.take().unwrap(); self.canvas.image(x + 6, y + 6, &pic); self.icons[ic].1 = Some(pic); }
                 let (name, summary) = (self.all[*i].full_name(), self.all[*i].item.summary.clone());
                 self.canvas.text(x + TILE_ICON + 12, y + 6, tile_w - TILE_ICON - 16, &name, TEXT);
@@ -411,7 +436,7 @@ impl View {
             if l.item.grants != 0 { line.push_str(&format!("  asks for: {}", sex_pkg::index::grant_words(l.item.grants))); }
             let mark = match (l.installed, l.newer) { (Some(v), true) => format!("installed {v}, update"), (Some(_), false) => "installed".into(), _ => String::new() };
             let ry = y + (k - self.top) * ROW;
-            if k == self.selected { self.canvas.fill(6, ry, w - 12, ROW, PICKED); }
+            if k == self.selected { self.canvas.select_row(6, ry, w - 12, ROW); }
             let mw = self.canvas.measure(&mark);
             self.canvas.text(12, ry + 1, w - 30 - mw, &line, TEXT);
             let newer = l.newer;
@@ -422,11 +447,11 @@ impl View {
     fn render_page(&mut self, window: &mut Window, i: usize) {
         let w = self.canvas.w;
         let bottom = self.canvas.h.saturating_sub(18 * (STATUS_LINES + 1) + 12);
-        self.canvas.fill(10, 6, 70, 22, PANEL);
+        self.canvas.button(10, 5, 72, 22, ButtonStyle::Normal);
         self.canvas.text(18, 7, 60, "< Back", TEXT);
-        self.hits.push((10, 6, 70, 22, Hit::Back));
+        self.hits.push((10, 5, 72, 22, Hit::Back));
         if let Some(ic) = self.icon(window, i, ICON) { let pic = self.icons[ic].1.take().unwrap(); self.canvas.image(16, 40, &pic); self.icons[ic].1 = Some(pic); }
-        else { self.canvas.fill(16, 40, ICON, ICON, PANEL); }
+        else { self.canvas.panel(16, 40, ICON, ICON, 10); }
         let l = self.all[i].clone();
         let x = 16 + ICON + 16;
         self.canvas.text(x, 40, w - x - 10, &format!("{} {}", l.full_name(), l.item.version), TEXT);
@@ -440,14 +465,15 @@ impl View {
         let mut bx = 16;
         let by = 118;
         let bw = self.canvas.measure(label) + 24;
-        self.canvas.fill(bx, by, bw, 24, if label == "Installed" { PANEL } else { PICKED });
-        self.canvas.text(bx + 12, by + 2, bw, label, TEXT);
+        let pstyle = if label == "Installed" { ButtonStyle::Disabled } else { ButtonStyle::Primary };
+        self.canvas.button(bx, by, bw, 24, pstyle);
+        self.canvas.text(bx + 12, by + 2, bw, label, button_text_color(pstyle, &PAL));
         if label != "Installed" { self.hits.push((bx, by, bw, 24, Hit::Install)); }
         bx += bw + 8;
         if l.installed.is_some() {
             let rw = self.canvas.measure("Remove") + 24;
-            self.canvas.fill(bx, by, rw, 24, PANEL);
-            self.canvas.text(bx + 12, by + 2, rw, "Remove", TEXT);
+            self.canvas.button(bx, by, rw, 24, ButtonStyle::Danger);
+            self.canvas.text(bx + 12, by + 2, rw, "Remove", button_text_color(ButtonStyle::Danger, &PAL));
             self.hits.push((bx, by, rw, 24, Hit::Remove));
             bx += rw + 8;
         }
@@ -471,10 +497,10 @@ impl View {
     fn render_repos(&mut self) {
         let w = self.canvas.w;
         self.canvas.text(10, 8, w - 20, "Repositories", TEXT);
-        self.canvas.text(10, 28, w - 20, "Add one in Spindle (it is your trust decision): pkg repo add NAME URL KEY", DIM);
+        self.canvas.text(10, 38, w - 20, "Add one in Spindle (it is your trust decision): pkg repo add NAME URL KEY", DIM);
         for (k, line) in self.repos.clone().iter().enumerate() {
-            let y = 56 + k * ROW;
-            if k == self.repo_selected { self.canvas.fill(6, y, w - 12, ROW, PICKED); }
+            let y = 62 + k * ROW;
+            if k == self.repo_selected { self.canvas.select_row(6, y, w - 12, ROW); }
             self.canvas.text(12, y + 1, w - 24, shown(line), TEXT);
             self.hits.push((6, y, w - 12, ROW, Hit::RepoRow(k)));
         }

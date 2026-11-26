@@ -907,6 +907,7 @@ dependencies = [
  "sex-fetch",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -3381,6 +3382,7 @@ dependencies = [
  "sex-feed",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -5199,6 +5201,7 @@ dependencies = [
  "sex-app",
  "sex-mesh",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -7342,7 +7345,9 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-config",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -7745,6 +7750,7 @@ name = "sex-mesh"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-theme",
 ]
 
 [[package]]
@@ -8665,6 +8671,7 @@ dependencies = [
  "sex-image",
  "sex-pdx",
  "sex-pkg",
+ "sex-theme",
  "sha2 0.10.9",
 ]
 
