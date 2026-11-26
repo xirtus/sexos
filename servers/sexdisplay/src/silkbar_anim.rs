@@ -5,7 +5,10 @@
 //! deterministic, host-testable, zero idle cost when settled, and strictly
 //! instant-snap when animations / Reduce Motion are off.
 
-use crate::chrome_candy::{mix_u8, MODE_DARK, MODE_HIGH_CONTRAST};
+use crate::chrome_candy::{
+    mix_u8, MODE_DARK, MODE_HIGH_CONTRAST,
+    SILKBAR_DARK_SPECULAR, SILKBAR_LIGHT_PILL_RIM, SILKBAR_ORCHID_ACCENT, SILKBAR_ORCHID_GLOW,
+};
 
 /// Matches `silkbar_model::LAYOUT_COUNT` (Launcher + 9 workspaces + 3 chips + Clock + Bell).
 pub const SLOT_COUNT: usize = 15;
@@ -220,7 +223,7 @@ impl SilkBarAnim {
     }
 }
 
-/// Renders a sleek macOS-style translucent rounded hover / active / press
+/// Renders a smooth anti-aliased candy-lavender translucent hover / active / press
 /// capsule behind a SilkBar item box `(bx, by, bw, bh)`.
 pub fn slot_capsule_pixel(
     x: usize,
@@ -239,7 +242,7 @@ pub fn slot_capsule_pixel(
 ) -> u32 {
     if hover_alpha == 0 && active_alpha == 0 && !pressed { return bg; }
     let s = scale.max(1);
-    let pad_y = s;
+    let pad_y = 2 * s;
     let ph = bh.saturating_sub(2 * pad_y);
     let pw = bw;
     if pw < 4 * s || ph < 4 * s { return bg; }
@@ -247,8 +250,8 @@ pub fn slot_capsule_pixel(
     let top = by + pad_y;
     if x < left || x >= left + pw || y < top || y >= top + ph { return bg; }
 
-    // Rounded pill SDF (corner radius = 5 * s, clamped to ph/2).
-    let r = (5 * s).min(ph / 2) as i32;
+    // Smooth rounded pill SDF (corner radius = 6 * s, clamped to ph/2).
+    let r = (6 * s).min(ph / 2) as i32;
     let r2 = r * 2;
     let px2 = (x * 2 + 1) as i32;
     let py2 = (y * 2 + 1) as i32;
@@ -261,7 +264,19 @@ pub fn slot_capsule_pixel(
     let dx = px2 - cx;
     let dy = py2 - cy;
     let d2 = dx * dx + dy * dy;
-    if d2 >= r2 * r2 { return bg; }
+    let r2_sq = r2 * r2;
+    if d2 >= r2_sq { return bg; }
+
+    // Crisp straight edges (d = r2 - 1) with smooth anti-aliasing on curved corners.
+    let aa_inner = (r2 - 1).max(1);
+    let aa_sq = aa_inner * aa_inner;
+    let cov: u8 = if d2 <= aa_sq {
+        255
+    } else {
+        let num = (r2_sq - d2).max(0) as u32;
+        let den = (r2_sq - aa_sq).max(1) as u32;
+        ((num * 255) / den).min(255) as u8
+    };
 
     let on_rim = d2 >= (r2 - 2 * s as i32).max(1).pow(2)
         || (x >= left && x < left + s)
@@ -270,21 +285,23 @@ pub fn slot_capsule_pixel(
         || (y + s >= top + ph);
 
     if mode_id == MODE_HIGH_CONTRAST {
-        return if on_rim { 0x00FF_E600 } else { bg };
+        let px = if on_rim { 0x00FF_E600 } else { bg };
+        return mix_u8(bg, px, cov);
     }
 
     let strength = hover_alpha.max(active_alpha).max(if pressed { 255 } else { 0 });
     let is_active = active_alpha > 16 || pressed;
+    let candy_accent = mix_u8(accent & 0x00FF_FFFF, SILKBAR_ORCHID_ACCENT, 96);
     let (fill_col, max_fill_a, rim_col, max_rim_a): (u32, u32, u32, u32) = if mode_id == MODE_DARK {
         if is_active {
-            (mix_u8(0x00FF_FFFF, accent & 0x00FF_FFFF, 120), 68, accent & 0x00FF_FFFF, 130)
+            (mix_u8(SILKBAR_ORCHID_GLOW, candy_accent, 140), 82, SILKBAR_ORCHID_GLOW, 152)
         } else {
-            (0x00FF_FFFF, 38, 0x00FF_FFFF, 64)
+            (SILKBAR_DARK_SPECULAR, 48, SILKBAR_ORCHID_GLOW, 92)
         }
     } else if is_active {
-        (mix_u8(0x001E_1B28, accent & 0x00FF_FFFF, 140), 54, accent & 0x00FF_FFFF, 140)
+        (mix_u8(SILKBAR_ORCHID_ACCENT, accent & 0x00FF_FFFF, 110), 68, candy_accent, 156)
     } else {
-        (0x001E_1B28, 26, 0x001E_1B28, 48)
+        (SILKBAR_ORCHID_ACCENT, 40, SILKBAR_LIGHT_PILL_RIM, 96)
     };
 
     let fill_a = ((max_fill_a * strength as u32) / 255) as u8;
@@ -293,11 +310,12 @@ pub fn slot_capsule_pixel(
         let rim_a = ((max_rim_a * strength as u32) / 255) as u8;
         out = mix_u8(out, rim_col, rim_a);
     }
-    out
+    mix_u8(bg, out, cov)
 }
 
-/// Animated workspace pill: smoothly interpolates width (`5px` dot -> `16×6` capsule)
-/// and color (`muted` -> `active`) using `expand` (`0..=255`), with a soft hover lift.
+/// Animated workspace pill: smoothly interpolates width (`5px` dot -> `15×6` capsule)
+/// and color (`muted` -> glowing orchid/lavender `active`) using `expand` (`0..=255`),
+/// with a soft glowing orchid halo on the active workspace and smooth anti-aliasing.
 pub fn animated_workspace_pill_pixel(
     x: usize,
     y: usize,
@@ -323,7 +341,14 @@ pub fn animated_workspace_pill_pixel(
     if pw == 0 || ph == 0 || bw < pw || bh < ph { return None; }
     let left = bx + (bw - pw) / 2;
     let top = by + (bh - ph) / 2;
-    if x < left || x >= left + pw || y < top || y >= top + ph { return None; }
+    let glow_pad = if e > 64 { 2 * s } else { 0 };
+    if x < left.saturating_sub(glow_pad)
+        || x >= left + pw + glow_pad
+        || y < top.saturating_sub(glow_pad)
+        || y >= top + ph + glow_pad
+    {
+        return None;
+    }
 
     let r = ph as i32;
     let cy2 = (top * 2 + ph) as i32;
@@ -335,17 +360,40 @@ pub fn animated_workspace_pill_pixel(
     let dx = px2 - cx2;
     let dy = py2 - cy2;
     let d2 = dx * dx + dy * dy;
-    if d2 >= r * r { return None; }
 
+    // Soft orchid/lavender outer halo around active/urgent workspace pill.
+    if d2 >= r * r {
+        if glow_pad == 0 { return None; }
+        let glow_r = r + (glow_pad as i32) * 2;
+        if d2 >= glow_r * glow_r { return None; }
+        let num = (glow_r * glow_r - d2).max(0) as u32;
+        let den = (glow_r * glow_r - r * r).max(1) as u32;
+        let glow_col = if urgent {
+            urgent_col & 0x00FF_FFFF
+        } else {
+            mix_u8(SILKBAR_ORCHID_GLOW, active_col & 0x00FF_FFFF, 96)
+        };
+        let glow_a = (((num * 92) / den) * e / 255).min(96) as u8;
+        if glow_a == 0 { return None; }
+        return Some(mix_u8(bg, glow_col, glow_a));
+    }
+
+    let glowing_active = mix_u8(active_col & 0x00FF_FFFF, SILKBAR_ORCHID_ACCENT, 84);
     let base_col = if urgent {
-        urgent_col
+        urgent_col & 0x00FF_FFFF
     } else {
-        mix_u8(muted_col & 0x00FF_FFFF, active_col & 0x00FF_FFFF, expand)
+        mix_u8(muted_col & 0x00FF_FFFF, glowing_active, expand)
     };
-    let final_col = if hover_alpha > 0 {
-        mix_u8(base_col, 0x00FF_FFFF, (hover_alpha as u32 * 56 / 255) as u8)
+    // Subtle candy top-half sheen inside the active capsule.
+    let sheen_col = if e > 128 && y < top + ph / 2 {
+        mix_u8(base_col, SILKBAR_ORCHID_GLOW, 72)
     } else {
         base_col
+    };
+    let final_col = if hover_alpha > 0 {
+        mix_u8(sheen_col, 0x00FF_FFFF, (hover_alpha as u32 * 56 / 255) as u8)
+    } else {
+        sheen_col
     };
     let aa = (r - 2).max(1);
     let cov: u8 = if d2 <= aa * aa {

@@ -133,6 +133,35 @@ pub fn tokens(mode: Mode, accent: u32) -> Tokens {
 /// The tokens the two appearance settings describe.
 pub fn from_settings(theme: i32, accent: i32) -> Tokens { tokens(Mode::from_setting(theme), accent as u32 & 0xFF_FFFF) }
 
+/// Candy & Lavender SilkBar palette tokens (`0xAARRGGBB`).
+/// Shared reference palette for SilkBar's frosted lavender gradient,
+/// anti-aliased candy pills, specular highlight, and orchid hairlines.
+pub mod candy_lavender {
+    use super::solid;
+
+    /// Dark mode: deep-plum / lavender-velvet top -> lavender-lilac sheen bottom.
+    pub const DARK_BAR_TOP: u32 = solid(0x21_1635);
+    pub const DARK_BAR_BOTTOM: u32 = solid(0x31_224C);
+    pub const DARK_SPECULAR: u32 = solid(0xEC_DFFF);
+    pub const DARK_HAIRLINE: u32 = solid(0xB8_8CFF);
+    pub const DARK_PILL_FILL: u32 = solid(0x3D_2B5E);
+    pub const DARK_PILL_RIM: u32 = solid(0xC9_A8FF);
+    pub const DARK_TEXT: u32 = solid(0xF6_F0FF);
+
+    /// Light mode: airy pastel-lavender top -> soft orchid-lilac sheen bottom.
+    pub const LIGHT_BAR_TOP: u32 = solid(0xF1_E8FF);
+    pub const LIGHT_BAR_BOTTOM: u32 = solid(0xE4_D6FC);
+    pub const LIGHT_SPECULAR: u32 = solid(0xFD_FAFF);
+    pub const LIGHT_HAIRLINE: u32 = solid(0xA7_8BFA);
+    pub const LIGHT_PILL_FILL: u32 = solid(0xFA_F6FF);
+    pub const LIGHT_PILL_RIM: u32 = solid(0xB8_9CF8);
+    pub const LIGHT_TEXT: u32 = solid(0x1E_162E);
+
+    /// Signature candy orchid accent & glow.
+    pub const ORCHID_ACCENT: u32 = solid(0xA7_8BFA);
+    pub const ORCHID_GLOW: u32 = solid(0xD8_B4FE);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +176,18 @@ mod tests {
         }
         assert_eq!(from_settings(1, 0x3584E4).mode, Mode::Dark);
         assert_eq!(from_settings(7, 0).mode, Mode::Light);
+    }
+
+    #[test]
+    fn candy_lavender_silkbar_meets_wcag_aa() {
+        use candy_lavender::*;
+        // Dark candy-lavender bar and frosted pill surfaces meet WCAG AAA (>= 7.0).
+        assert!(contrast(DARK_TEXT, DARK_BAR_TOP) >= 7.0);
+        assert!(contrast(DARK_TEXT, DARK_BAR_BOTTOM) >= 7.0);
+        assert!(contrast(DARK_TEXT, DARK_PILL_FILL) >= 7.0);
+        // Light candy-lavender bar and frosted pill surfaces meet WCAG AAA (>= 7.0).
+        assert!(contrast(LIGHT_TEXT, LIGHT_BAR_TOP) >= 7.0);
+        assert!(contrast(LIGHT_TEXT, LIGHT_BAR_BOTTOM) >= 7.0);
+        assert!(contrast(LIGHT_TEXT, LIGHT_PILL_FILL) >= 7.0);
     }
 }
