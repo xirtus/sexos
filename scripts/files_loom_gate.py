@@ -30,7 +30,7 @@ files, and the metadata file; the second stick holds the files copied out of the
 byte for byte (SHA-256) as they are in them."""
 import argparse,hashlib,io,os,random,re,shutil,subprocess,tarfile,time,zipfile
 from pathlib import Path
-from program_gate_geometry import current_tile
+from program_gate_geometry import current_tile,maximize
 ROOT=Path(__file__).resolve().parents[1]
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','[':'bracket_left',']':'bracket_right',',':'comma'}
 SHIFTED={':':'semicolon','_':'minus','(':'9',')':'0','+':'equal','@':'2'}
@@ -208,6 +208,9 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-split.ppm')})
   # The same two tabs also draw as independent graphical tile grids. A click
   # in the right pane focuses it; keyboard switching then returns to the left.
+  # Two tile grids side by side need room (two 136 px columns and a full row):
+  # Loom can be tiled small next to the other boot windows, so zoom it first.
+  maximize(g,surfaces[-1]);time.sleep(.5)
   step(lambda:ctrl('g'),r'\[files.app.grid\] on=1 dir=/media/LOOM/docs')
   g['wait'](r'\[loom.split.grid\] active=2 pair=1 left=/media/LOOM/docs right=/media/LOOM/ren',0,60)
   time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'folder-split-grid.ppm')})
