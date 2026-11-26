@@ -538,11 +538,34 @@ pub fn init_boot() {
     let vmd: Vec<Bdf> = pci.iter()
         .filter(|d| sex_hwdb::is_vmd(sex_hwdb::Id { vendor: d.vendor_id, device: d.device_id, class: d.class_id, subclass: d.subclass_id, prog_if: d.prog_if }))
         .map(|d| Bdf::new(d.bus, d.dev, d.func)).collect();
-    // Per service: its root, pool and reserved-memory tables, and the 64 leaf
-    // tables (plus parents) of its 128 MiB window. Then context tables, the
-    // firmware domains and the self-test.
-    let services = { let mut p: Vec<u32> = leased.iter().map(|l| l.1).collect(); p.sort(); p.dedup(); p.len() as u64 };
-    let count = (64 + services * 96).next_power_of_two();
+    let covers = |r: &Reserved, b: Bdf| r.first <= b.sid() && b.sid() <= r.last;
+    // Upper bound on 4 KiB page-table frames needed for every unit, leased service
+    // (root, DMA pools, RMRRs, 128 MiB lend window), firmware RMRR domain, and self-test.
+    let range_tables = |start: u64, len: u64| -> u64 {
+        if len == 0 { return 0; }
+        let end = start.saturating_add(len);
+        let spans = |shift: u32| end.div_ceil(1u64 << shift).saturating_sub(start >> shift);
+        spans(21) + spans(30) + spans(39)
+    };
+    let mut service_pds: Vec<u32> = leased.iter().map(|l| l.1).collect();
+    service_pds.sort();
+    service_pds.dedup();
+    let window_frames = range_tables(0, abi::WINDOW_BYTES) + 3;
+    let mut need: u64 = 64 + units.len() as u64 + (leased.len() as u64) * 2;
+    for &pd in &service_pds {
+        need += 1 + window_frames;
+        for &(_, base, len) in pools.iter().filter(|p| p.0 == pd) { need += range_tables(base, len); }
+        for r in &reserved {
+            if leased.iter().any(|&(lb, lp)| lp == pd && covers(r, lb)) {
+                need += range_tables(r.start, r.end.saturating_sub(r.start));
+            }
+        }
+    }
+    for r in &reserved {
+        let targets = if r.first == r.last { 1 } else { present.iter().filter(|b| covers(r, **b)).count() as u64 };
+        need += targets * (2 + range_tables(r.start, r.end.saturating_sub(r.start)));
+    }
+    let count = need.next_power_of_two();
     let base = crate::boot_memory::backing(count * PAGE);
     let mut frames = KernelFrames { hhdm, coherent, base, next: 0, count };
     if vendor == Vendor::Amd {
@@ -566,7 +589,6 @@ pub fn init_boot() {
         }
     }
     let mut state = State { vendor, units, domains: Vec::new(), devices: Vec::new(), levels, frames, next_did: 1 };
-    let covers = |r: &Reserved, b: Bdf| r.first <= b.sid() && b.sid() <= r.last;
 
     // One domain per service with at least one translated device.
     for &(bdf, pd) in &leased {

@@ -12,7 +12,12 @@ use crate::vbios::{FwsecCommand, Vbios};
 use crate::{chip::Chip, libos, radix3, sequencer, Clock, Dma, Error, Mmio};
 
 /// Firmware files (linux-firmware `nvidia/ga102/gsp/*-535.113.01.bin`).
-pub struct Firmware<'a> { pub booter_load: &'a [u8], pub bootloader: &'a [u8], pub gsp: &'a [u8] }
+pub struct Firmware<'a> {
+    pub booter_load: &'a [u8],
+    pub booter_unload: Option<&'a [u8]>,
+    pub bootloader: &'a [u8],
+    pub gsp: &'a [u8],
+}
 
 pub const FW_VERSION: &str = "535.113.01";
 
@@ -83,10 +88,14 @@ pub struct Sizes {
 impl Sizes {
     pub fn for_firmware(chip: &Chip, f: &Firmware) -> Result<Sizes, Error> {
         let booter = fw::booter(f.booter_load)?;
+        let booter_len = match f.booter_unload {
+            Some(u) => booter.staged_len().max(fw::booter(u)?.staged_len()),
+            None => booter.staged_len(),
+        };
         let (_, bl) = fw::bootloader(f.bootloader)?;
         let rm = fw::gsp_rm(f.gsp, chip.signature_section())?;
         Ok(Sizes {
-            booter: page(booter.staged_len()),
+            booter: page(booter_len),
             rm_image: page(rm.image.len()),
             radix3_l2: radix3::lvl2_len(rm.image.len()),
             signature: page(rm.signature.len()),
@@ -130,6 +139,8 @@ pub struct Report {
     pub events: u32,
     pub sequencer_runs: u32,
     pub init_done: bool,
+    /// True if a stale WPR2 (warm boot) was torn down via `booter_unload`.
+    pub unloaded_wpr2: bool,
     /// Commands queued so far: the next command's sequence number (for [`crate::rm::Session`]).
     pub cmdq_seq: u32,
 }
@@ -149,6 +160,20 @@ pub struct Config {
 pub trait Log { fn step(&mut self, step: Step, r: &Report); }
 impl<F: FnMut(Step, &Report)> Log for F { fn step(&mut self, step: Step, r: &Report) { self(step, r) } }
 
+/// Tear down a stale WPR2 (left by a previous OS / warm boot) by running `booter_unload` on SEC2.
+fn unload_wpr2(m: &mut impl Mmio, c: &mut impl Clock, ucode_bytes: &[u8], buf: &mut Dma) -> Result<(), Error> {
+    let unload = fw::booter(ucode_bytes)?;
+    let fuse = unload.fuse_register().ok_or(Error::NoSignature("booter_unload: unknown engine"))?;
+    let idx = unload.signature_index(m.read(fuse))?;
+    let need = unload.staged_len();
+    if buf.len() < need { return Err(Error::BufferTooSmall { need, have: buf.len() }); }
+    unload.stage(buf.cpu, idx)?;
+    SEC2.run_hs(m, c, buf.bus, &unload, 0, Some(0))?;
+    let wpr2_hi = m.read(regs::PFB_WPR2_ADDR_HI);
+    if wpr2_hi != 0 { return Err(Error::Wpr2Busy(wpr2_hi)); }
+    Ok(())
+}
+
 /// Run the whole boot. `vbios` receives the ROM (1 MiB is always enough).
 pub fn boot(m: &mut impl Mmio, c: &mut impl Clock, cfg: &Config, f: &Firmware, vbios: &mut [u8], mem: &mut Memory, log: &mut impl Log) -> Result<Report, Failed> {
     let mut r = Report::default();
@@ -162,7 +187,15 @@ pub fn boot(m: &mut impl Mmio, c: &mut impl Clock, cfg: &Config, f: &Firmware, v
     r.chipset = chip.chipset;
     r.fb_size = (m.read(regs::PFB_VIDMEM_SIZE_MB) as u64) << 20;
     let wpr2_hi = m.read(regs::PFB_WPR2_ADDR_HI);
-    if wpr2_hi != 0 { return Err(Failed { step: Step::Chip, error: Error::Wpr2Busy(wpr2_hi) }); }
+    if wpr2_hi != 0 {
+        match f.booter_unload {
+            Some(u) => {
+                unload_wpr2(m, c, u, &mut mem.booter).map_err(fail(Step::Chip))?;
+                r.unloaded_wpr2 = true;
+            }
+            None => return Err(Failed { step: Step::Chip, error: Error::Wpr2Busy(wpr2_hi) }),
+        }
+    }
     log.step(Step::Chip, &r);
 
     // 2. VBIOS and FWSEC.

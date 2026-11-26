@@ -8,8 +8,12 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use linked_list_allocator::Heap;
 
-/// Least the heap grows by, so growth is rare.
+/// Least the heap grows by on small-RAM machines (512 MiB / 1 GiB QEMU).
 const STEP: usize = 4 * 1024 * 1024;
+/// Larger growth step on machines with >= 4 GiB RAM to avoid frequent growth stalls.
+const LARGE_RAM_THRESHOLD: usize = 4 << 30;
+const LARGE_STEP: usize = 16 * 1024 * 1024;
+static STEP_BYTES: AtomicUsize = AtomicUsize::new(STEP);
 static TABLES: AtomicBool = AtomicBool::new(false);
 /// How far the heap may grow, set once its page tables are made.
 static LIMIT: AtomicUsize = AtomicUsize::new(0);
@@ -54,7 +58,8 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs, part: u64) -> u64 {
 fn grow(heap: &mut Heap, layout: Layout) -> bool {
     if !TABLES.load(Ordering::Acquire) { return false; }
     let top = heap.top() as usize;
-    let want = (layout.size() + layout.align() + 4096).max(STEP).next_multiple_of(4096);
+    let step = STEP_BYTES.load(Ordering::Acquire);
+    let want = (layout.size() + layout.align() + 4096).max(step).next_multiple_of(4096);
     let end = crate::HEAP_START + LIMIT.load(Ordering::Acquire);
     let want = want.min(end.saturating_sub(top)) & !4095;
     if want == 0 { return false; }
@@ -73,6 +78,20 @@ fn grow(heap: &mut Heap, layout: Layout) -> bool {
     true
 }
 
+/// Growth ceiling set at BOOT (`prepare_growth`).
+pub fn limit() -> usize { LIMIT.load(Ordering::Acquire) }
+
+/// On large-RAM machines (>= 4 GiB), pre-map free heap headroom before sealing BOOT so
+/// early runtime allocations do not immediately stall on growth. No-op on < 4 GiB machines.
+pub fn ensure_headroom(min_free: usize) {
+    if !TABLES.load(Ordering::Acquire) || STEP_BYTES.load(Ordering::Acquire) <= STEP { return; }
+    let mut heap = crate::ALLOCATOR.lock();
+    let have = heap.free();
+    if have < min_free {
+        if let Ok(layout) = Layout::from_size_align(min_free - have, 4096) { let _ = grow(&mut heap, layout); }
+    }
+}
+
 /// Page tables for the heap's whole address space, every leaf past BOOT's part clear.
 /// Runs once the page allocator owns free memory.
 pub fn prepare_growth() {
@@ -83,6 +102,7 @@ pub fn prepare_growth() {
     let free = crate::memory::allocator::debug_global_free_frames() as usize * 4096;
     let limit = (free / 4).next_power_of_two().clamp(1 << 30, crate::HEAP_SIZE);
     LIMIT.store(limit, Ordering::Release);
+    if free >= LARGE_RAM_THRESHOLD { STEP_BYTES.store(LARGE_STEP, Ordering::Release); }
     let end = (crate::HEAP_START + limit) as u64;
     let scratch = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0).expect("KHEAP_TABLE_SCRATCH");
     let mut span = first;
@@ -98,5 +118,5 @@ pub fn prepare_growth() {
     }
     crate::memory::allocator::GLOBAL_ALLOCATOR.free(scratch, 0);
     TABLES.store(true, Ordering::Release);
-    crate::serial_println!("[kernel.heap.tables] initial={} max={}", crate::HEAP_INITIAL, limit);
+    crate::serial_println!("[kernel.heap.tables] initial={} max={} step={}", crate::HEAP_INITIAL, limit, STEP_BYTES.load(Ordering::Relaxed));
 }
