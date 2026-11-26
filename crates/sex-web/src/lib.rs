@@ -653,7 +653,23 @@ const PICTURE_LIMITS: sex_image::Limits = sex_image::Limits { max_width: 4096, m
 /// The whole window: modern chrome showing `bar_text` (the address, or what is being typed,
 /// with a caret when `editing`), then `page` scrolled by `scroll`.
 pub fn frame(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, bar_text: &str, editing: bool) {
-    let chrome = Chrome { text: bar_text, editing, ..Chrome::default() };
+    let (tab_label, omni_text) = if let Some((title, url)) = bar_text.split_once(" \u{2014} ") {
+        (String::from(title), url)
+    } else if !page.title.is_empty() {
+        (page.title.clone(), bar_text)
+    } else {
+        let lbl = if bar_text.is_empty() { "New tab" } else { bar_text.trim_start_matches("https://").trim_start_matches("http://") };
+        (String::from(lbl), bar_text)
+    };
+    let tabs = [tab_label];
+    let chrome = Chrome {
+        text: omni_text,
+        editing,
+        tabs: &tabs,
+        active: 0,
+        shields: Some((true, 0)),
+        ..Chrome::default()
+    };
     frame_with(page, fonts, pixels, width, height, scroll, focus, &chrome);
 }
 
