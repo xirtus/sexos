@@ -1115,8 +1115,8 @@ pub fn init() {
     assert!(sexnet_id!=0,"BOOT_SPINDLE_NETWORK_SERVICE");
     for target in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.app==sex_pdx::app_catalog::App::Spindle).map(|i|i.target) {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(target).expect("BOOT_SPINDLE_NETWORK_SUBJECT");
-        assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_SPINDLE_NETWORK_COLLISION");
-        pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+        assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none()&&pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_SPINDLE_SLOT_COLLISION");
+        pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id)); pd.grant_capability(sex_pdx::power::SLOT,crate::capability::CapabilityData::Power(sex_pdx::power::Grant{holder_pd:target,rights:sex_pdx::power::SENSE|sex_pdx::power::PROFILE}));
         let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
         serial_println!("[boot.spindle.net.route] target={} task={} slot=18 service={} fixed_peer=1 nic_metadata=0 runtime_mint=0",target,unsafe{(*task).id},sexnet_id);
     }

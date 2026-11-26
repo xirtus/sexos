@@ -221,6 +221,21 @@ pub fn controls(aml: &Aml, light: &mut Backlight, awcc: &mut Option<crate::wmi::
                 None => serial_println!("[sexacpi.charge.set] value={} supported=0", value),
             },
             w::CTL_PROFILE => if let (Some(a), Some(p)) = (awcc.as_mut(), sex_laptop::profile::Profile::from_u8(value)) { a.follow(aml, p) },
+            w::CTL_THERMAL_PROFILE => {
+                use sex_laptop::awcc::Kind;
+                let k = match value {
+                    w::THERMAL_CUSTOM => Some(Kind::Custom),
+                    w::THERMAL_QUIET => Some(Kind::Quiet),
+                    w::THERMAL_BALANCED => Some(Kind::Balanced),
+                    w::THERMAL_BALANCED_PERFORMANCE => Some(Kind::BalancedPerformance),
+                    w::THERMAL_PERFORMANCE => Some(Kind::Performance),
+                    w::THERMAL_COOL => Some(Kind::Cool),
+                    w::THERMAL_LOW_POWER => Some(Kind::LowPower),
+                    w::THERMAL_GMODE => Some(Kind::GMode),
+                    _ => None,
+                };
+                if let (Some(a), Some(k)) = (awcc.as_mut(), k) { a.set_kind(aml, k); }
+            }
             _ => {}
         }
         any = true;

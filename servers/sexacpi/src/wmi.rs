@@ -120,6 +120,21 @@ impl Awcc {
         let ok = awcc::activate(&mut self.fw(aml), &inv, id);
         serial_println!("[sexacpi.awcc.set] desktop={} firmware={:#04x} kind={} ok={}", p.name(), id, awcc::kind(id).map_or("unknown", awcc::kind_name), ok as u8);
     }
+
+    /// Directly activates a specific AWCC thermal profile kind (from Spindle `profile <name>`).
+    pub fn set_kind(&mut self, aml: &Aml, wanted: awcc::Kind) {
+        let id = self.inventory.profiles().iter().copied().find(|&p| awcc::kind(p) == Some(wanted))
+            .or_else(|| (wanted == awcc::Kind::GMode).then_some(awcc::PROFILE_GMODE));
+        let Some(id) = id else {
+            serial_println!("[sexacpi.awcc.set] kind={} firmware=none", awcc::kind_name(wanted));
+            return;
+        };
+        let inv = self.inventory;
+        let ok = awcc::activate(&mut self.fw(aml), &inv, id);
+        serial_println!("[sexacpi.awcc.set] kind={} firmware={:#04x} ok={}", awcc::kind_name(wanted), id, ok as u8);
+        self.reads = 0;
+        self.refresh(aml);
+    }
 }
 
 /// Dell hotkey events: which device and notify value carry them.

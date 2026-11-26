@@ -5,7 +5,7 @@ use sex_pdx::fs as w;
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 
 const CWD_MAX: usize = 512;
-const CAT_MAX: u64 = 32 * 1024;
+const CAT_MAX: u64 = 512 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Sum, Create, Write, Append(u8), Df, Program(u64, u64), Plugin(u8, u64), Install, Mount, Unmount, Update, Package, Organize }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize, fnv: u64 }
@@ -396,8 +396,9 @@ impl Client {
         self.start(Cmd::Plugin(workspace, key), w::PREPARE, path.len(), 0, m as u64);
     }
     /// Delivers the current request. Retries a full queue on the next pass.
-    pub fn send(&mut self) -> bool {
+    pub fn send(&mut self, sb: &Scrollback) -> bool {
         if self.cmd.is_none() || self.sent { return false; }
+        if self.cmd == Some(Cmd::Cat) && unsafe { crate::tether_command::TETHER.backpressure(sb) } { return false; }
         let r = w::Request { seq: self.seq, kind: self.kind, path_len: self.path_len, offset: self.offset, length: self.length };
         let a = r.args();
         match sex_pdx::pdx_call_checked(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
