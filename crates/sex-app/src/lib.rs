@@ -931,8 +931,27 @@ pub mod files {
     fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
         m.type_id == 1 && m.caller_pd == FILES && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
     }
-    /// One request, answered before it returns.
+    /// Requests that change nothing, so they can be sent again after Files restarts.
+    fn idempotent(kind: u8) -> bool {
+        matches!(kind, w::STAT | w::LIST | w::READ | w::STATFS | w::ARGS | w::PING | w::READ_IO_STATS)
+    }
+    /// One request, answered before it returns. A busy or restarting Files refuses with
+    /// not-ready, and the call waits for it as before. When Files restarts after taking
+    /// the request, the kernel answers `PEER_RESTARTED`: a request that changes nothing is
+    /// sent again (a few times at most); any other fails as unavailable, since the old
+    /// run may or may not have done it.
     fn once(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<u32, Error> {
+        let mut restarts = 0u32;
+        loop {
+            match once_attempt(hold, kind, path_len, offset, length) {
+                Err(Restarted) if idempotent(kind) && restarts < 4 => restarts += 1,
+                Err(Restarted) => return Err(w::UNAVAILABLE),
+                Ok(answer) => return answer,
+            }
+        }
+    }
+    struct Restarted;
+    fn once_attempt(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<Result<u32, Error>, Restarted> {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
         let a = r.args();
@@ -942,7 +961,7 @@ pub mod files {
             match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
                 Ok(m) => break m,
                 Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
-                Err(_) => return Err(w::UNAVAILABLE),
+                Err(_) => return Ok(Err(w::UNAVAILABLE)),
             }
         };
         // The main task sleeps until its inbox has something (or briefly, to see the
@@ -950,7 +969,7 @@ pub mod files {
         let worker = crate::thread::is_worker();
         let mut idle = 0u32;
         loop {
-            let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq))) {
+            let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq) || sex_pdx::ipc_recv::is_peer_restarted(m, FILES))) {
                 Some(m) => m,
                 None => match sex_pdx::pdx_try_listen_raw(0) {
                     Some(m) => { idle = 0; m }
@@ -963,8 +982,10 @@ pub mod files {
             if mine(&m, seq) {
                 let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
                 if status != w::OK { REFUSED_VALUE.store(value, Ordering::Relaxed); }
-                return if status == w::OK { Ok(value) } else { Err(status) };
+                return Ok(if status == w::OK { Ok(value) } else { Err(status) });
             }
+            // Files restarted after taking this request: the old run's answer never comes.
+            if sex_pdx::ipc_recv::is_peer_restarted(&m, FILES) { return Err(Restarted); }
             if is_answer(&m) { mailbox::put(m); continue; }
             match hold {
                 Some(window) => if let Some(event) = window.event(&m) {
