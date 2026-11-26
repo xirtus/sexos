@@ -71,6 +71,7 @@ fn throughput_and_temperature_conversions() {
 
 #[test]
 fn sweep_arg_parsing() {
+    assert_eq!(DEFAULT_ITERS, 64);
     assert_eq!(parse_sweep_args(b"sched"), Some(SweepKind::Sched(DEFAULT_ITERS)));
     assert_eq!(parse_sweep_args(b"  SCHED  1000 "), Some(SweepKind::Sched(1000)));
     assert_eq!(parse_sweep_args(b"ipc"), Some(SweepKind::Ipc(DEFAULT_ITERS)));

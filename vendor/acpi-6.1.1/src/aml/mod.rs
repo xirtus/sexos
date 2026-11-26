@@ -419,6 +419,7 @@ where
                     }
                     Opcode::Increment | Opcode::Decrement => {
                         let [Argument::Object(operand)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
+                        let operand = operand.clone().unwrap_reference();
                         let token = self.object_token.lock();
                         let Object::Integer(operand) = (unsafe { operand.gain_mut(&token) }) else {
                             Err(AmlError::ObjectNotOfExpectedType {
@@ -2509,7 +2510,7 @@ where
 
     fn do_field_write(&self, field: &FieldUnit, value: WrappedObject) -> Result<(), AmlError> {
         trace!("AML field write. Field = {:?}. Value = {}", field, value);
-
+        let value = value.unwrap_reference();
         let value_bytes = match &*value {
             Object::Integer(value) => &value.to_le_bytes() as &[u8],
             Object::Buffer(bytes) => bytes,

@@ -2,7 +2,7 @@
 //! Pure, host-testable math and argument parsers for Spindle's `sweep` and `power`/`profile` commands.
 //! Zero static buffers, zero OS dependencies.
 
-pub const DEFAULT_ITERS: usize = 500;
+pub const DEFAULT_ITERS: usize = 64;
 pub const MAX_ITERS: usize = 10_000;
 
 /// Summary statistics for a slice of cycle/latency samples.

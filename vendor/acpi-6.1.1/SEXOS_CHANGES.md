@@ -45,3 +45,10 @@
   implement `FieldUnitKind::Bank` (`BankField`) and `FieldUnitKind::Index` (`IndexField`).
   Upstream returned `LibUnimplemented`, breaking laptop `_BST`/`_BIF`/`_BIX` battery
   packages and indexed EC/lid fields on the Alienware x17 R1.
+- `aml/object.rs`, `aml/mod.rs`: `Object::as_integer`, `as_string`, `as_buffer`,
+  `to_integer`, and `to_buffer` now unwrap `Object::Reference` (matching `Object::typ()`),
+  and `Opcode::Increment`/`Decrement` and `do_field_write` unwrap reference operands before
+  matching `Object::Integer`/`Buffer`. Upstream matched only direct variants, failing with
+  `ObjectNotOfExpectedType { expected: Integer, got: Integer }` on lid (`_LID`) and local
+  increment/decrement paths on the Alienware x17 R1.
+
