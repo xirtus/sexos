@@ -168,21 +168,26 @@ fn receipt_digest(key: &str) -> u128 {
     (high as u128) << 64 | low as u128
 }
 
-/// Each visible run keeps its own lease. A dead run's file stops participating
-/// after ten seconds; the smallest live task owns Bell delivery.
+/// Each visible run keeps its own lease: the first word is refreshed while the
+/// run lives, the second is when it started. A dead run's file stops
+/// participating after ten seconds; the earliest-started live run owns Bell
+/// delivery. (Task numbers are not an age order: a reborn row's task carries
+/// its generation in the high bits, so a newer run can have a smaller number.)
 fn notice_ui_owner(my_task: u32, now: u64) -> bool {
     let entries = match files::direct::list(b"") { Ok(entries) => entries, Err(_) => return false };
-    let mut first: Option<u32> = None;
+    let mut first: Option<(u64, u32)> = None;
     for entry in entries {
         let Some(suffix) = entry.name.strip_prefix(NOTICE_UI_PREFIX) else { continue };
         let Ok(name) = core::str::from_utf8(suffix) else { continue };
         let Ok(task) = name.parse::<u32>() else { continue };
-        let mut stamp = [0u8; 8];
-        if files::direct::read_at(&entry.name, 0, &mut stamp) != Ok(8) { continue; }
-        let seen = u64::from_le_bytes(stamp);
-        if lease_live(seen, now) { first = Some(first.map_or(task, |current| current.min(task))); }
+        let mut stamp = [0u8; 16];
+        let Ok(n) = files::direct::read_at(&entry.name, 0, &mut stamp) else { continue };
+        if n < 8 { continue; }
+        let seen = u64::from_le_bytes(stamp[..8].try_into().unwrap());
+        let started = if n >= 16 { u64::from_le_bytes(stamp[8..].try_into().unwrap()) } else { u64::MAX };
+        if lease_live(seen, now) { first = Some(first.map_or((started, task), |current| current.min((started, task)))); }
     }
-    first == Some(my_task)
+    first.map(|(_, task)| task) == Some(my_task)
 }
 
 fn notice_ui_name(task: u32) -> String { format!("notice.ui-{task}") }
@@ -1187,7 +1192,11 @@ pub extern "C" fn _start() -> ! {
     window.title(b"Date");
     let ui_name = notice_ui_name(window.task);
     let _ = files::direct::create(ui_name.as_bytes());
-    let _ = files::direct::write_at(ui_name.as_bytes(), 0, &now_ms().to_le_bytes());
+    let started = now_ms();
+    let mut lease = [0u8; 16];
+    lease[..8].copy_from_slice(&started.to_le_bytes());
+    lease[8..].copy_from_slice(&started.to_le_bytes());
+    let _ = files::direct::write_at(ui_name.as_bytes(), 0, &lease);
     let _ = files::direct::remove(NOTICE_UI);
     ensure_notice_worker();
     let mut faces = views::Faces { small: Face::new(10, 20), tiny: Face::new(8, 16), big: Face::new(16, 30) };
