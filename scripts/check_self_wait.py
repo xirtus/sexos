@@ -360,7 +360,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '0b72ffacafdbfce18323734be07acdfa224927ef0d65baac1831f4928cea5dd8',  # self pointer at gs:[32], per-core FS/TSC_AUX caches and IRET snapshot (no observer change; Gemini #699), 2026-11-26
- 'kernel/src/app_resources.rs': '7f9e3f565051eac895c851e0e58ea8f3c7934e326aa0ff096a0dc4ffa75afb30',  # retire purges handoff slots + IPC v2 teardown (no observer change), 2026-11-25
+ 'kernel/src/app_resources.rs': 'b1b1dfda0016755aa8d4c868e93daf13d5598d550082798a87998810a6c4eeed',  # program pages the file fills come unzeroed (no observer change; Gemini #696), 2026-11-26
  'kernel/src/service_restart.rs': '555bb544fde987179952f7f83e8fea945ce91f804996938e209e3f5ce4dfeaa8',  # restart tears down IPC v2 state, named hang limits (no observer change), 2026-11-25
  'kernel/src/crash_log.rs': '9a34837711796f87b9d53de4be81116561eec80b7920866af1ef4723683dacee',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}

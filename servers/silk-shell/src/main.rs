@@ -322,7 +322,7 @@ unsafe fn shell_program_reborn(msg: &sex_pdx::PdxMessage) {
     }
 }
 unsafe fn shell_lifecycle_hint(msg: &sex_pdx::PdxMessage) -> bool {
-    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN { shell_program_reborn(msg); return true; }
+    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_REBORN { shell_program_reborn(msg); program_rebirth_poll(); return true; }
     if msg.type_id != sex_pdx::app_lifecycle::OP_APP_EXIT { return false; }
     if msg.caller_pd == 0 { launch_ended(msg.arg0 as u32, msg.arg1 as u32); }
     for e in APP_CUSTODY.iter_mut().flatten() { e.hint(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2); }
