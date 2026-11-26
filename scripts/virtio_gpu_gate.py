@@ -72,11 +72,11 @@ def main():
   time.sleep(3)
   first=shot('desktop.ppm')
   if first[:2]!=(w,h):raise RuntimeError(f'host resource {first[:2]} != {(w,h)}')
-  # The bar (the candy Light theme's pale SilkBar glass since the desktop
-  # follows the system theme), the rose-gold lips of the launcher button and
-  # the red close light of the first window. The close light carries its
+  # The bar (the candy-lavender Light theme's frosted SilkBar glass since the
+  # desktop follows the system theme), the rose-gold lips of the launcher button
+  # and the red close light of the first window. The close light carries its
   # always-visible glyph, so check that red dominates rather than one shade.
-  checks={'bar':(px(first,300,14),(221,220,224))}
+  checks={'bar':(px(first,300,14),(207,198,228))}
   bad={k:v for k,v in checks.items() if not near(*v)}
   close=px(first,20,49)
   if not(close[0]>=close[1]+50 and close[0]>=close[2]+50):bad['close']=(close,'red close light')

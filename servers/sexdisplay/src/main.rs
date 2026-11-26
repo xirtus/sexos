@@ -1237,8 +1237,96 @@ fn module_rect(bar: &SilkBar, slot: ModuleSlot) -> (usize, usize, usize, usize) 
     (lb.x, lb.y, lb.w, lb.h)
 }
 
-fn bar_slot_bg(x: usize, y: usize, slot_idx: usize, b: &silkbar_model::LayoutBox, scene: &scene::SceneSnapshot) -> u32 {
+/// Smooth candy-lavender SilkBar background with frosted rounded pills around
+/// the launcher, active window badge, workspace strip, status cluster, and clock.
+fn bar_pill_bg(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> u32 {
     let body = bar_body(x, y, scene);
+    let scale = scene.metrics.scale().max(1) as usize;
+    let mode_id = scene.tokens.mode_id;
+
+    // 1. Launcher pill.
+    let launch = &bar.layout[ModuleSlot::Launcher as usize];
+    if launch.w > 0 && in_rect(x, y, launch.x, launch.y, launch.w, launch.h) {
+        return chrome_candy::candy_pill_pixel(
+            x, y, launch.x, launch.y, launch.w, launch.h, scale, mode_id, false, body,
+        );
+    }
+
+    // 2. Active window badge pill (focused window title or panel notice + app dot).
+    let ws0 = &bar.layout[ModuleSlot::Workspace0 as usize];
+    if bar.layout[ModuleSlot::Workspace1 as usize].w > 0 && ws0.w > 0 {
+        let notice = unsafe { &*core::ptr::addr_of!(PANEL_NOTICE) };
+        let title_opt = if notice.len > 0 {
+            Some((notice.as_bytes(), true))
+        } else {
+            surface_title(scene.focus).map(|t| (t, false))
+        };
+        if let Some((text, is_notice)) = title_opt {
+            let max_end = ws0.x.saturating_sub(10 * scale);
+            let bx = 34 * scale;
+            let text_w = glyphs::ui_width(text, scale as u32).unwrap_or(text.len() * 7 * scale);
+            let right = (52 * scale + text_w + 8 * scale).min(max_end);
+            if right > bx + 8 * scale && in_rect(x, y, bx, ws0.y, right - bx, ws0.h) {
+                return chrome_candy::candy_pill_pixel(
+                    x, y, bx, ws0.y, right - bx, ws0.h, scale, mode_id, is_notice, body,
+                );
+            }
+        }
+    }
+
+    // 3. Workspace cluster pill (unified frosted lavender capsule behind workspace dots).
+    if ws0.w > 0 {
+        let ws_last = if bar.layout[ModuleSlot::Workspace1 as usize].w > 0 {
+            &bar.layout[ModuleSlot::Workspace8 as usize]
+        } else {
+            ws0
+        };
+        let pad = 4 * scale;
+        let bx = ws0.x.saturating_sub(pad);
+        let bw = (ws_last.x + ws_last.w + pad).saturating_sub(bx);
+        if bw > 0 && in_rect(x, y, bx, ws0.y, bw, ws0.h) {
+            return chrome_candy::candy_pill_pixel(
+                x, y, bx, ws0.y, bw, ws0.h, scale, mode_id, false, body,
+            );
+        }
+    }
+
+    // 4. Right-side status cluster pill (battery text + Wi-Fi/Net, Volume, Battery, Bell).
+    let chip0 = &bar.layout[ModuleSlot::Chip0 as usize];
+    let bell = &bar.layout[ModuleSlot::Bell as usize];
+    let clock = &bar.layout[ModuleSlot::Clock as usize];
+    if chip0.w > 0 && bell.w > 0 {
+        let (_, batt_n, batt_w) = unsafe { *core::ptr::addr_of!(PANEL_BATTERY) };
+        let bx = if batt_n > 0 {
+            chip0.x.saturating_sub(10 * scale).saturating_sub(batt_w).saturating_sub(6 * scale)
+        } else {
+            chip0.x.saturating_sub(4 * scale)
+        };
+        let raw_right = bell.x + bell.w + 3 * scale;
+        let right = if clock.w > 0 {
+            raw_right.min(clock.x.saturating_sub(2 * scale))
+        } else {
+            raw_right
+        };
+        if right > bx && in_rect(x, y, bx, chip0.y, right - bx, chip0.h) {
+            return chrome_candy::candy_pill_pixel(
+                x, y, bx, chip0.y, right - bx, chip0.h, scale, mode_id, false, body,
+            );
+        }
+    }
+
+    // 5. Clock pill (soft orchid-kissed frosted candy-lavender pill).
+    if clock.w > 0 && in_rect(x, y, clock.x, clock.y, clock.w, clock.h) {
+        return chrome_candy::candy_pill_pixel(
+            x, y, clock.x, clock.y, clock.w, clock.h, scale, mode_id, true, body,
+        );
+    }
+
+    body
+}
+
+fn bar_slot_bg(x: usize, y: usize, slot_idx: usize, b: &silkbar_model::LayoutBox, bar: &SilkBar, scene: &scene::SceneSnapshot) -> u32 {
+    let body = bar_pill_bg(x, y, bar, scene);
     if slot_idx >= silkbar_anim::SLOT_COUNT || b.w == 0 { return body; }
     let anim = unsafe { (*core::ptr::addr_of!(SILKBAR_ANIM)).snapshot() };
     silkbar_anim::slot_capsule_pixel(
@@ -1260,7 +1348,7 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
         let b=&bar.layout[slot_idx];
         if b.w==0||!in_rect(x,y,b.x,b.y,b.w,b.h){continue;}
         let scale=scene.metrics.scale()as usize;
-        let bg = bar_slot_bg(x, y, slot_idx, b, scene);
+        let bg = bar_slot_bg(x, y, slot_idx, b, bar, scene);
         if i==0&&bar.layout[ModuleSlot::Workspace1 as usize].w==0 {
             let left=b.x+(b.w-10*scale)/2;let top=b.y+(b.h-10*scale)/2;
             if in_rect(x,y,left,top,10*scale,10*scale)
@@ -1290,7 +1378,7 @@ fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option
         let b = &bar.layout[slot_idx];
         let(cx,cy,cw,ch)=(b.x,b.y,b.w,b.h);
         if cw == 0 || !in_rect(x, y, cx, cy, cw, ch) { continue; }
-        let bg = bar_slot_bg(x, y, slot_idx, b, scene);
+        let bg = bar_slot_bg(x, y, slot_idx, b, bar, scene);
         if !bar.chips[idx].visible { return Some(bg); }
         let size=scene.metrics.px(16)as usize;
         let left=cx+cw.saturating_sub(size)/2;let top=cy+ch.saturating_sub(size)/2;
@@ -1566,7 +1654,7 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
     let bell_box = &bar.layout[bell_slot];
     if bell_box.w > 0 && in_rect(x, y, bell_box.x, bell_box.y, bell_box.w, bell_box.h) {
         let s = &bar.bell_state;
-        let bg = bar_slot_bg(x, y, bell_slot, bell_box, scene);
+        let bg = bar_slot_bg(x, y, bell_slot, bell_box, bar, scene);
         if let Some(c) = chrome_candy::bell_icon_pixel(
             x, y, bell_box.x, bell_box.y, bell_box.w, bell_box.h, scene.metrics.scale() as usize,
             s.flags & 1 != 0, s.total_visible, s.redacted_count,
@@ -1580,17 +1668,17 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
     let clock_slot = ModuleSlot::Clock as usize;
     let clock_box = &bar.layout[clock_slot];
     if clock_box.w > 0 && in_rect(x, y, clock_box.x, clock_box.y, clock_box.w, clock_box.h) {
-        return bar_slot_bg(x, y, clock_slot, clock_box, scene);
+        return bar_slot_bg(x, y, clock_slot, clock_box, bar, scene);
     }
     // Launcher button: the SexOS lips (sex_pdx::brand) over animated capsule.
     let launch_slot = ModuleSlot::Launcher as usize;
     let launch_box = &bar.layout[launch_slot];
     if launch_box.w > 0 && in_rect(x, y, launch_box.x, launch_box.y, launch_box.w, launch_box.h) {
-        let body = bar_slot_bg(x, y, launch_slot, launch_box, scene);
+        let body = bar_slot_bg(x, y, launch_slot, launch_box, bar, scene);
         return launcher_mark_at(x - launch_box.x, y - launch_box.y, launch_box.w, launch_box.h)
             .map_or(body, |(color, cover)| sex_pdx::brand::blend(color, body, cover));
     }
-    bar_body(x, y, scene)
+    bar_pill_bg(x, y, bar, scene)
 }
 
 /// The lips in the launcher button, cached for the button's size: 5/6 of its
