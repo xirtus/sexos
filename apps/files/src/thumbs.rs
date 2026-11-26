@@ -30,11 +30,11 @@ use sex_theme::candy_ui::{
 pub const SIDE: usize = 112;
 const CELL_W: usize = 136;
 const CELL_H: usize = SIDE + 30;
-const TOOLBAR_H: usize = 36;
-const TAB_BAR_H: usize = 26;
-const HEAD: usize = TOOLBAR_H + TAB_BAR_H + 6;
-const FOOT: usize = 32;
-const SIDEBAR_W: usize = 152;
+const TOOLBAR_H: usize = 30;
+const TAB_BAR_H: usize = 22;
+const HEAD: usize = TOOLBAR_H + TAB_BAR_H + 4;
+const FOOT: usize = 24;
+const SIDEBAR_W: usize = 128;
 const DIR: &[u8] = b"thumbs";
 /// Pictures larger than this are not read for a thumbnail.
 const FILE_MAX: u64 = 48 * 1024 * 1024;
@@ -287,7 +287,7 @@ impl Thumbs {
     }
 
     /// Width of the left Places sidebar when the window is wide enough.
-    fn sidebar_w(width: usize) -> usize { if width >= 520 { SIDEBAR_W } else { 0 } }
+    fn sidebar_w(width: usize) -> usize { if width >= 560 { SIDEBAR_W } else { 0 } }
     /// How many tiles fit across a window this wide.
     pub fn columns(width: usize) -> usize { (width.saturating_sub(Self::sidebar_w(width) + 12) / CELL_W).max(1) }
     /// How many rows of tiles fit.

@@ -17,8 +17,8 @@ use crate::{column_below, paint, text_run, Fonts, Target};
 
 // ── Layout metrics ───────────────────────────────────────────────────────────
 
-/// Height of the compact Helium-style single-row top bar.
-pub const TOP_BAR_H: i32 = 38;
+/// Height of the compact Helium-style single-row top bar (matches canonical 30px viewport origin).
+pub const TOP_BAR_H: i32 = 30;
 /// Height of the optional toggleable bookmarks bar beneath the top bar.
 pub const BOOKMARKS_H: i32 = 26;
 /// Default height of the browser chrome above the page viewport (single-row compact bar).
@@ -421,8 +421,8 @@ pub fn shields_pill_width(shields: Option<(bool, u32)>) -> i32 {
 
 /// Computes single-row Helium top bar rectangles for window `width`, `shields_w`, and `vertical_tabs`.
 pub fn toolbar_layout(width: i32, shields_w: i32, vertical_tabs: bool) -> ToolbarLayout {
-    let y = 6;
-    let h = TOP_BAR_H - 12; // 26
+    let y = 3;
+    let h = TOP_BAR_H - 6; // 24
     let btn_w = 26;
     let gap = 3;
 

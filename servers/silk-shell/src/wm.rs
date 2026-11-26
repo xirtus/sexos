@@ -208,7 +208,7 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::F, true) => WmAction::FrameMeter,
         (code::V, false) => WmAction::ClipboardHistory,
         (code::V, true) | (code::SPACE, true) => WmAction::ToggleFloating,
-        (code::SPACE, false) => WmAction::Spotlight,
+        (code::SPACE, false) => WmAction::CycleLayout,
         (code::M, _) => WmAction::ToggleMonocle,
         (code::BRACKET_RIGHT, _) => WmAction::GrowMaster,
         (code::BRACKET_LEFT, _) => WmAction::ShrinkMaster,

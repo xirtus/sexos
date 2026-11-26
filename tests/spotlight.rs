@@ -242,7 +242,7 @@ fn tile_click_launch_esc_and_outside_click_dismissal() {
 fn spotlight_hotkeys_super_space_super_d_and_alt_space() {
     let plain = wm::Mods { shift: false, ctrl: false };
     let shift = wm::Mods { shift: true, ctrl: false };
-    assert_eq!(wm::binding(wm::code::SPACE, plain), Some(wm::WmAction::Spotlight));
+    assert_eq!(wm::binding(wm::code::SPACE, plain), Some(wm::WmAction::CycleLayout));
     assert_eq!(wm::binding(wm::code::D, plain), Some(wm::WmAction::Spotlight));
     assert_eq!(wm::binding(wm::code::D, shift), Some(wm::WmAction::Launcher));
     assert_eq!(wm::binding(wm::code::SPACE, shift), Some(wm::WmAction::ToggleFloating));

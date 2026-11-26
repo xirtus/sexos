@@ -14,8 +14,8 @@ use crate::desk_theme::current as desk;
 
 const SHELL_PD: u32 = 3;
 
-/// Largest cached Spotlight app icon side (`48` logical px at max scale `3`).
-const ICON_CAP: usize = 144;
+/// Largest cached Spotlight app icon side (`48` px, keeping static BSS compact ~125 KiB).
+const ICON_CAP: usize = 48;
 
 struct IconCache {
     /// Cached pixel side per `CATALOG` index (`0` = not yet rasterized).
