@@ -186,8 +186,16 @@ def main():
   g['stop']()  # No Close event reaches Date after the completed staged save.
   g=boot(a.iso,disk,a.out,'date-reboot',a.resolution);t=g['text'];q=g['q']
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  target,task,sid,_,s=start('')
-  g['wait'](r'\[calendar.loaded\] events=8\n',s,60)
+  # Date was still open when the power went, so Spindle's session restore opens it
+  # again; use that run instead of starting a second one.
+  g['wait'](r'\[spindle.session.restore\] scene=\d path=\S*date\b',0,240)
+  started=g['wait'](r'\[spindle.session.started\] target=(\d+) task=(\d+) scene=\d',0,240)
+  target,task=started[1],started[2]
+  g['wait'](rf'\[calendar.ready\] target={target} task={task} ',0,120)
+  sid=int(g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',0,60)[1])
+  g['wait'](rf'\[display.app.pixels\] target={target} ',0,60);time.sleep(2)
+  g['focus'](sid);time.sleep(.5)
+  g['wait'](r'\[calendar.loaded\] events=8\n',0,60)
   s=len(t());q.key('ret')
   g['wait'](rf'\[calendar.day\] date={today} events=\d+\n',s,60)
   g['wait'](rf'\[calendar.event\] date={today} when=10:20-11:20 title=power cut\n',s,60)
