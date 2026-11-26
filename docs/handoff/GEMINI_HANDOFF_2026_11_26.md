@@ -29,7 +29,8 @@ The x17 (Alienware x17 R1, Intel AX210) tethers over Wi-Fi to Andreas's Mac:
 on the x17 `tether 192.168.1.177` (Spindle), on the Mac
 `cd ~/Projects/Sex/sexwork/tether && python3 tether_host.py --dir logs serve`.
 Image on the Ventoy stick: `sexos-x17-9f37ce20.iso` (master after PR #822).
-First sustained session: connected 22:31 local, full 535 KB boot log delivered.
+First sustained session: connected 22:31 local, full 535 KB boot log delivered, and
+`wifi` sent from the Mac 6 minutes later answered over the tether.
 
 What was wrong (all fixed, all merged in PRs #526 and #822):
 1. `link::decap` required RX status bit 11 (DEC_DONE); iwlwifi/iwx need only
@@ -60,10 +61,9 @@ Next on the x17 (in this order):
    compare `unicast_in` and `tid_in` before/after.
 2. Re-run `tether sweep 192.168.1.177 2` once to measure throughput and check the
    `idle45` shape now passes (it failed 16/16 before keep-alive and the power fix).
-3. Block-ack (A-MPDU RX) has never worked: the firmware always reports BAID 0x7f.
-   With PMF off the router's ADDBA requests now arrive in plain text, so check
-   `[wifi.ba] sessions=` and `[wifi.link.now4]`; if a session forms and traffic stalls,
-   decline ADDBA (it's optional) rather than ship a broken reorder path.
+3. Block-ack now works: at 04:37Z, 6 minutes into the session, `wifi` over the tether
+   showed `ba tid=0 window=64 passed=309 dropped=4`, `unicast_in=315`, nothing
+   undecrypted. Watch `dropped` and `in_a_row` in `[wifi.link.now4]` on long runs.
 4. Then the x17 hardware checklist: NVIDIA RTX 3070 GSP boot log (Limine entry
    "SexOS with NVIDIA GPU"), trackpad (PR #824), sound, NVMe, power. Use the tether
    to run commands and collect logs instead of photos.
