@@ -45,7 +45,7 @@ def main():
  g=boot(a.iso,disk,a.out,'calendar',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
-   v=KEYS.get(k,k)
+   v=KEYS.get(k,('shift',k.lower()) if k.isupper() else k)
    if isinstance(v,tuple):q.cmd('send-key',{'keys':[{'type':'qcode','data':x}for x in v],'hold-time':80})
    else:q.key(v)
    time.sleep(.08)
