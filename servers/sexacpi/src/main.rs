@@ -322,23 +322,37 @@ fn inventory(aml: &Aml) -> Devices {
     d
 }
 
+/// Why `_CST` produced no usable MWAIT states, for `[sexacpi.idle.fallback]`.
+enum CstDiag {
+    NoCst,
+    NotPackage,
+    Filtered { entries: usize, first_space: u8, first_width: u8, first_offset: u8, first_kind: u64, first_latency: u64 },
+}
+
 /// Every `_CST` state entered with MWAIT (functional fixed hardware, Intel class),
 /// as (type, exit latency in us, MWAIT hint). The kernel picks among them per idle period.
-fn cstates(aml: &Aml, cpu: &AmlName) -> Vec<(u8, u16, u32)> {
+fn cstates(aml: &Aml, cpu: &AmlName) -> (Vec<(u8, u16, u32)>, Option<CstDiag>) {
     let mut out = Vec::new();
-    let Some(cst) = eval(aml, cpu, "_CST", Vec::new()) else { return out };
-    let Object::Package(items) = &*cst else { return out };
+    let Some(cst) = eval(aml, cpu, "_CST", Vec::new()) else { return (out, Some(CstDiag::NoCst)); };
+    let Object::Package(items) = &*cst else { return (out, Some(CstDiag::NotPackage)); };
+    let mut entries = 0usize;
+    let mut first = (0u8, 0u8, 0u8, 0u64, 0u64);
     for item in items.iter().skip(1) {
         let Object::Package(state) = &**item else { continue };
         if state.len() < 4 { continue; }
         let Object::Buffer(reg) = &*state[0] else { continue };
         let (Some(kind), Some(latency)) = (int_of(&state[1]), int_of(&state[2])) else { continue };
+        if entries == 0 && reg.len() >= 6 { first = (reg[3], reg[4], reg[5], kind, latency); }
+        entries += 1;
         // Generic register descriptor: 0x82, len(2), space, width, offset, access, address(8).
         if reg.len() < 12 || reg[0] != 0x82 || reg[3] != 0x7F || reg[4] != 1 || reg[5] != 2 { continue; }
         let hint = u32::from_le_bytes([reg[7], reg[8], reg[9], reg[10]]);
         if kind >= 2 && latency <= 1000 { out.push((kind as u8, latency as u16, hint)); }
     }
-    out
+    let diag = if out.is_empty() {
+        Some(CstDiag::Filtered { entries, first_space: first.0, first_width: first.1, first_offset: first.2, first_kind: first.3, first_latency: first.4 })
+    } else { None };
+    (out, diag)
 }
 
 // ── Discrete GPU power (D3cold) ────────────────────────────────────────────
@@ -542,8 +556,15 @@ fn load() -> Option<&'static Aml> {
     }
     let tables = streams.len();
     let mut loaded = 0;
-    for stream in streams {
-        if bounded(|| aml.load_table(&stream[36..])).is_ok() { loaded += 1; }
+    for (i, stream) in streams.into_iter().enumerate() {
+        match bounded(|| aml.load_table(&stream[36..])) {
+            Ok(()) => loaded += 1,
+            Err(e) => {
+                // ACPI SDT header bytes 16..24 hold the 8-byte OEM Table ID.
+                let oem = core::str::from_utf8(&stream[16..24]).unwrap_or("?").trim_end_matches(['\0', ' ']);
+                serial_println!("[sexacpi.table.err] index={} oem={} len={} err={:?}", i, oem, stream.len(), e);
+            }
+        }
     }
     serial_println!("[sexacpi.tables] loaded={} of={}", loaded, tables);
     (loaded > 0).then_some(aml)
@@ -559,7 +580,7 @@ pub extern "C" fn _start() -> ! {
         let _ = w::call4(w::FW_INVENTORY, 0, u64::MAX, 1);
         loop { let _ = sex_pdx::sys_wait_self_ticks(64); }
     };
-    let (devices, s5, cstate, ec, mut light) = bounded(|| {
+    let (devices, s5, cstate, cst_diag, ec, mut light) = bounded(|| {
         // The embedded controller first: `_INI` and `_REG` may already read it.
         let ec = laptop::ec_install(aml, &acpi_devices(aml));
         // Interrupts go through the APIC: tell the firmware before _INI runs.
@@ -573,17 +594,38 @@ pub extern "C" fn _start() -> ! {
             }
         }
         let devices = inventory(aml);
-        let cstate = devices.processors.first().map(|cpu| cstates(aml, cpu)).unwrap_or_default();
+        let (cstate, cst_diag) = match devices.processors.first() {
+            Some(cpu) => cstates(aml, cpu),
+            None => (Vec::new(), None),
+        };
         let light = laptop::Backlight::find(aml, &acpi_devices(aml));
-        (devices, s5, cstate, ec, light)
+        (devices, s5, cstate, cst_diag, ec, light)
     });
     let counts = devices.batteries.len().min(255) as u64 | (devices.lids.len().min(255) as u64) << 8
         | (devices.thermal.len().min(255) as u64) << 16 | (devices.i2c_hid.len().min(255) as u64) << 24 | 1 << 32;
     let _ = w::call4(w::FW_INVENTORY, counts, s5, 0);
+    let mut last_idle_err = w::OK;
     let idle = cstate.iter().fold(u64::MAX, |any, &(kind, latency, hint)| {
         let r = w::call4(w::FW_IDLE, kind as u64 | (latency as u64) << 8 | (hint as u64) << 32, 0, 0)[0];
-        if r == w::OK { r } else { any }
+        if r == w::OK { r } else { last_idle_err = r; any }
     });
+    if idle != w::OK {
+        if devices.processors.is_empty() {
+            serial_println!("[sexacpi.idle.fallback] idle=hlt reason=no_processors");
+        } else if cstate.is_empty() {
+            let cpu = &devices.processors[0];
+            match cst_diag {
+                Some(CstDiag::NoCst) | None => serial_println!("[sexacpi.idle.fallback] idle=hlt reason=no_cst cpu={}", cpu),
+                Some(CstDiag::NotPackage) => serial_println!("[sexacpi.idle.fallback] idle=hlt reason=cst_not_package cpu={}", cpu),
+                Some(CstDiag::Filtered { entries, first_space, first_width, first_offset, first_kind, first_latency }) => {
+                    serial_println!("[sexacpi.idle.fallback] idle=hlt reason=cst_filtered cpu={} entries={} first_space={:#x} first_width={} first_offset={} first_kind={} first_latency={}",
+                        cpu, entries, first_space, first_width, first_offset, first_kind, first_latency);
+                }
+            }
+        } else {
+            serial_println!("[sexacpi.idle.fallback] idle=hlt reason=fw_idle_rejected states={} err={:#x}", cstate.len(), last_idle_err);
+        }
+    }
     serial_println!("[sexacpi.ready] aml=1 batteries={} ac={} lids={} thermal={} processors={} i2c_hid={} s5={:#x} idle={} ec={} backlight={}",
         devices.batteries.len(), devices.ac.len(), devices.lids.len(), devices.thermal.len(), devices.processors.len(), devices.i2c_hid.len(),
         s5, if idle == w::OK { "mwait" } else { "hlt" }, ec.is_some() as u8, light.output.is_some() as u8);

@@ -169,6 +169,7 @@ fn exact(vendor: u16, device: u16) -> Option<Device> {
         (0x8086, 0x43c8) => known("Tiger Lake-H HD Audio (cAVS)", Bell, Driven),
         (0x8086, 0xa0c8) => known("Tiger Lake-LP HD Audio (cAVS)", Bell, Driven),
         (0x8086, 0x43ed) => known("Tiger Lake-H USB 3.2 xHCI", Usb, Driven),
+        (0x8086, 0x43a4) => known("Tiger Lake-H SPI Flash", Kernel, Platform),
         (0x8086, 0xa0ed) => known("Tiger Lake-LP USB 3.2 xHCI", Usb, Driven),
         (0x8086, 0x9a13) => known("Tiger Lake Thunderbolt 4 USB xHCI", Usb, Driven),
         (0x8086, 0x9a1b) | (0x8086, 0x9a1d) => known("Tiger Lake Thunderbolt 4 NHI", Usb, InProgress),

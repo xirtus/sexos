@@ -103,7 +103,7 @@ fn alienware_wmax_end_to_end() {
     assert_eq!(inv.sensors(), &[0x01, 0x06, 0x03]);
     assert_eq!(inv.profiles(), &[awcc::PROFILE_USTT_BALANCED, awcc::PROFILE_USTT_PERFORMANCE, awcc::PROFILE_USTT_QUIET]);
     let r = awcc::read(&mut fw, &inv);
-    assert_eq!(&r.rpm[..2], &[2400, 2100]);
+    assert_eq!(&r.rpm[..2], &[Some(2400), Some(2100)]);
     assert_eq!(&r.celsius[..3], &[Some(41), Some(38), None]);
     assert_eq!(r.profile, Some(awcc::PROFILE_USTT_BALANCED));
 

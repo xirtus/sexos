@@ -315,10 +315,19 @@ fn stop_uncertain_io() {
     serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
 }
 
-/// The most one NVMe command moves: BLOCK_CMD_RUN, or less when the drive's MDTS
-/// says so (set once the first drive is up).
+/// Maximum bytes one zero-copy loaned NVMe command moves: 512 pages (2 MiB),
+/// matching Micron 2300 MDTS=9 and fitting in a single 4 KiB PRP list page
+/// (PRP1 = page 0, PRP list = 511 entries = 4088 bytes).
+const LOAN_CMD_MAX: u64 = 512 * PAGE_SIZE;
+
+/// The most one bounced NVMe command moves: BLOCK_CMD_RUN, or less when the
+/// drive's MDTS says so (set once the first drive is up).
 fn cmd_run() -> u64 { NVME_CMD_RUN.load(Ordering::Relaxed) }
 static NVME_CMD_RUN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(BLOCK_CMD_RUN);
+
+/// The most one zero-copy loaned NVMe command moves: up to min(MDTS, 2 MiB).
+fn loan_cmd_run() -> u64 { NVME_LOAN_CMD_RUN.load(Ordering::Relaxed) }
+static NVME_LOAN_CMD_RUN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(BLOCK_CMD_RUN);
 
 /// One line the first time a request is cut smaller only because of the drive's MDTS.
 fn note_mdts_split(write: bool, size: u64, run: u64) {
@@ -347,13 +356,14 @@ fn prp2_for(buffer: &sex_pdx::dma_pool::DmaBuffer, size: u64) -> Option<u64> {
 }
 
 /// PRP2 when the data pages are a loan (consecutive device addresses from
-/// `loan`); the PRP list itself still lives in the lease's pool page.
+/// `loan`); the PRP list itself still lives in the lease's 4 KiB pool page
+/// (up to 512 entries, covering up to 512 pages = 2 MiB in a single command).
 fn prp2_for_loan(buffer: &sex_pdx::dma_pool::DmaBuffer, loan: u64, size: u64) -> Option<u64> {
     let pages = size.div_ceil(PAGE_SIZE);
-    if pages == 0 || pages > BLOCK_CMD_RUN / PAGE_SIZE { return None; }
+    if pages == 0 || pages > LOAN_CMD_MAX / PAGE_SIZE { return None; }
     if pages == 1 { return Some(0); }
     if pages == 2 { return Some(loan + PAGE_SIZE); }
-    if buffer.length < BLOCK_CMD_RUN + PAGE_SIZE { return None; }
+    if buffer.length < BLOCK_CMD_RUN + PAGE_SIZE || (pages - 1) * 8 > PAGE_SIZE { return None; }
     let list = (buffer.virtual_address + BLOCK_CMD_RUN) as *mut u64;
     for i in 1..pages {
         unsafe { core::ptr::write_volatile(list.add((i - 1) as usize), loan + i * PAGE_SIZE); }
@@ -376,6 +386,7 @@ const IRQ_SILENT_WAITS:u64=64;
 fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::Report{
     const QUICK_TURNS:u32=256;
     let mut quick=0u32;
+    let mut inbox_busy=false;
     let cqe=(cq_va as *const u8).wrapping_add(head as usize*16)as *const u32;
     let irq=NVME_IRQ.load(Ordering::Relaxed);
     let report=completion_wait::wait(cid,phase,||unsafe{
@@ -391,13 +402,35 @@ fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::
                 if n==1||n==64||n==4096{sex_pdx::serial_record!("[sexdrive.nvme.irq.wake] n={} sleeps={}",n,NVME_IRQ_WAITS.load(Ordering::Relaxed));}
                 return Ok(());
             }
-            NVME_IRQ_WAITS.fetch_add(1,Ordering::Relaxed);
-            return sex_pdx::sys_wait_self_ticks(1);
+            if inbox_busy{
+                // A queued IPC message keeps sys_wait_self_ticks from parking until this
+                // DMA finishes; yield cleanly instead of spinning in syscall 70.
+                for _ in 0..64{core::hint::spin_loop();}
+                sex_pdx::sys_yield();
+                return Ok(());
+            }
+            let before=sex_pdx::get_ticks();
+            sex_pdx::sys_wait_self_ticks(1)?;
+            if sex_pdx::device::irq_take()!=0{
+                NVME_IRQ_WAITS.fetch_add(1,Ordering::Relaxed);
+                let n=NVME_IRQ_WAKES.fetch_add(1,Ordering::Relaxed)+1;
+                if n==1||n==64||n==4096{sex_pdx::serial_record!("[sexdrive.nvme.irq.wake] n={} sleeps={}",n,NVME_IRQ_WAITS.load(Ordering::Relaxed));}
+                return Ok(());
+            }
+            if sex_pdx::get_ticks()!=before{
+                NVME_IRQ_WAITS.fetch_add(1,Ordering::Relaxed);
+            }else{
+                // Returned immediately in the same tick with no IRQ: inbox/reply is pending.
+                inbox_busy=true;
+                sex_pdx::sys_yield();
+            }
+            return Ok(());
         }
         // A device usually answers within microseconds: give the core away briefly
         // first, and only then sleep whole ticks, so a command does not cost a tick.
         if quick<QUICK_TURNS{quick+=1;sex_pdx::sys_yield();Ok(())}else{sex_pdx::sys_wait_self_ticks(1)}
     });
+    if irq&&report.result.is_ok(){let _=sex_pdx::device::irq_take();}
     // An interrupt that never arrives (a route that does not work on this machine, such
     // as behind Intel VMD) costs a tick per command: after enough of those, poll.
     if irq&&NVME_IRQ_WAKES.load(Ordering::Relaxed)==0&&NVME_IRQ_WAITS.load(Ordering::Relaxed)>=IRQ_SILENT_WAITS{
@@ -645,9 +678,9 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     // A call longer than one command (#307): NVMe sends the whole run as one batch of
     // commands in flight together (nvme_batch); RAID and AHCI take the pieces one
     // after another.
-    let run = if serving_ahci() { BLOCK_CMD_RUN } else { cmd_run() };
+    let direct = !(raid::serving() && !raid::raw()) && !serving_ahci();
+    let run = if serving_ahci() { BLOCK_CMD_RUN } else if direct && loan != 0 { loan_cmd_run() } else { cmd_run() };
     if size > run && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && dst_va != 0 {
-        let direct = !(raid::serving() && !raid::raw()) && !serving_ahci();
         note_mdts_split(false, size, run);
         if direct { return nvme_batch(false, offset, size, dst_va, loan); }
         let mut at = 0u64;
@@ -662,8 +695,9 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     }
     if raid::serving() && !raid::raw() { return raid::read(offset, size, dst_va); }
     if serving_ahci() { return ahci_read_into_mapped_va(offset, size, dst_va); }
+    let max_cmd = if loan != 0 { loan_cmd_run() } else { cmd_run() };
     if size == 0
-        || size > cmd_run()
+        || size > max_cmd
         || (offset % NVME_LBA_BYTES) != 0
         || (size % NVME_LBA_BYTES) != 0
         || dst_va == 0
@@ -726,8 +760,8 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    if transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }
     let zero_copy = loan != 0;
+    if !zero_copy && transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }
     // No zero fill: the device writes all `size` bytes, copied out only after a
     // successful completion, so stale bounce contents never reach the caller.
     let prp2 = if zero_copy { prp2_for_loan(&transfer.buffer, loan, size) } else { prp2_for(&transfer.buffer, size) };
@@ -736,7 +770,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES).saturating_sub(1);
-    let max_lba = WRITE_PROOF_LBA;
+    let max_lba = disk_sectors().saturating_sub(1);
     let last_lba = slba.saturating_add(nlb);
     let range_ok = if slba > max_lba { 0u64 } else if nlb > (max_lba - slba) { 0u64 } else { 1u64 };
     if hot_log() { serial_println!(
@@ -1054,6 +1088,7 @@ fn prp2_in_slot(list: &sex_pdx::dma_pool::DmaBuffer, first: u64, size: u64) -> O
 fn nvme_wait_batch(cq_va: u64, head: u32, phase: u32, accept: impl Fn(u16) -> bool) -> completion_wait::Report {
     const QUICK_TURNS: u32 = 256;
     let mut quick = 0u32;
+    let mut inbox_busy = false;
     let cqe = (cq_va as *const u8).wrapping_add(head as usize * 16) as *const u32;
     let irq = NVME_IRQ.load(Ordering::Relaxed);
     let report = completion_wait::wait_for(accept, phase, || unsafe {
@@ -1062,8 +1097,25 @@ fn nvme_wait_batch(cq_va: u64, head: u32, phase: u32, accept: impl Fn(u16) -> bo
     }, sex_pdx::get_ticks, || {
         if irq {
             if sex_pdx::device::irq_take() != 0 { NVME_IRQ_WAKES.fetch_add(1, Ordering::Relaxed); return Ok(()); }
-            NVME_IRQ_WAITS.fetch_add(1, Ordering::Relaxed);
-            return sex_pdx::sys_wait_self_ticks(1);
+            if inbox_busy {
+                for _ in 0..64 { core::hint::spin_loop(); }
+                sex_pdx::sys_yield();
+                return Ok(());
+            }
+            let before = sex_pdx::get_ticks();
+            sex_pdx::sys_wait_self_ticks(1)?;
+            if sex_pdx::device::irq_take() != 0 {
+                NVME_IRQ_WAITS.fetch_add(1, Ordering::Relaxed);
+                NVME_IRQ_WAKES.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+            if sex_pdx::get_ticks() != before {
+                NVME_IRQ_WAITS.fetch_add(1, Ordering::Relaxed);
+            } else {
+                inbox_busy = true;
+                sex_pdx::sys_yield();
+            }
+            return Ok(());
         }
         if quick < QUICK_TURNS { quick += 1; sex_pdx::sys_yield(); Ok(()) } else { sex_pdx::sys_wait_self_ticks(1) }
     });
@@ -1346,9 +1398,9 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
 
     let slba = offset / NVME_LBA_BYTES;
     let nlb = (size / NVME_LBA_BYTES - 1) as u32;
-    let max_lba = WRITE_PROOF_LBA;
+    let max_lba = disk_sectors().saturating_sub(1);
     let last_lba = slba + nlb as u64;
-    let range_ok = if slba <= max_lba { 1u64 } else { 0u64 };
+    let range_ok = if slba > max_lba { 0u64 } else if (nlb as u64) > (max_lba - slba) { 0u64 } else { 1u64 };
     if hot_log() { serial_println!(
         "[sexdrive.nvme.cmd.range] path=typed slba={} nlb={} max_lba={} ok={}",
         slba, nlb as u64, max_lba, range_ok
@@ -3094,13 +3146,15 @@ fn nvme_probe_bar() {
     // Which drive this is, for the bare-metal boot log, and how much one command may move.
     let id_page = unsafe { core::slice::from_raw_parts(id_va as *const u8, PAGE_SIZE as usize) };
     let mut drive_cmd_run = BLOCK_CMD_RUN;
+    let mut drive_loan_cmd_run = BLOCK_CMD_RUN;
     if let Some(drive) = identify::controller(id_page) {
         drive_cmd_run = identify::max_transfer(drive.mdts, BLOCK_CMD_RUN);
+        drive_loan_cmd_run = identify::max_transfer(drive.mdts, LOAN_CMD_MAX);
         let (mut model, mut firmware) = ([0u8; 40], [0u8; 8]);
         let (m, f) = (identify::text(&drive.model, &mut model), identify::text(&drive.firmware, &mut firmware));
-        sex_pdx::serial_record!("[sexdrive.nvme.drive] vendor={:04x} model=\"{}\" firmware=\"{}\" mdts={} max_transfer_kib={} namespaces={}",
+        sex_pdx::serial_record!("[sexdrive.nvme.drive] vendor={:04x} model=\"{}\" firmware=\"{}\" mdts={} max_transfer_kib={} loan_kib={} namespaces={}",
             drive.vendor, core::str::from_utf8(&model[..m]).unwrap_or("?"), core::str::from_utf8(&firmware[..f]).unwrap_or("?"),
-            drive.mdts, drive_cmd_run / 1024, drive.namespaces);
+            drive.mdts, drive_cmd_run / 1024, drive_loan_cmd_run / 1024, drive.namespaces);
     }
     let nn = unsafe { core::ptr::read_volatile((id_va + 516) as *const u32) };
     NVME_RTD3E_US.store(unsafe { core::ptr::read_volatile((id_va + 88) as *const u32) }, Ordering::Relaxed);
@@ -3194,7 +3248,7 @@ fn nvme_probe_bar() {
         1u64,
         io_qsize as u64,
         io_cq_phys,
-        1u64
+        (1u32 | cq_ien) as u64
     );
 
     compiler_fence(Ordering::SeqCst);
@@ -3450,7 +3504,8 @@ fn nvme_probe_bar() {
     let sq1tdbl = 0x1000u64 + ((2u64 * 1u64) << (2 + cap_dstrd));
     let cq1hdbl = 0x1000u64 + ((2u64 * 1u64 + 1u64) << (2 + cap_dstrd));
     serial_println!(
-        "[sexdrive.nvme.ioq.ready] qid=1 depth=16 sq_tail={} cq_head={} cq_phase={} sq1tdbl={:#x} cq1hdbl={:#x}",
+        "[sexdrive.nvme.ioq.ready] qid=1 depth={} sq_tail={} cq_head={} cq_phase={} sq1tdbl={:#x} cq1hdbl={:#x}",
+        io_entries as u64,
         0u64,
         0u64,
         1u64,
@@ -3470,6 +3525,7 @@ fn nvme_probe_bar() {
         serial_println!("[sexdrive.nvme.irq] mode=none polling=1");
     }
     NVME_CMD_RUN.store(drive_cmd_run, Ordering::Relaxed);
+    NVME_LOAN_CMD_RUN.store(drive_loan_cmd_run, Ordering::Relaxed);
     NVME_IO_DEPTH.store(io_entries, Ordering::Relaxed);
     sex_pdx::serial_record!("[sexdrive.nvme.queue] qid=1 entries={} mqes={} batch_max={} prp_slots={}",
         io_entries, cap_mqes, ioq::MAX_IN_FLIGHT.min(io_entries as usize - 1), prp_slot_count());

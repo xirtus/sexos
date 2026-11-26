@@ -24,6 +24,9 @@ fn alienware_x17_r1_parts_are_named_and_owned() {
     // Non-Intel 04:01 multimedia audio devices are not Intel HDA/cAVS.
     assert!(manifest::claim(id(0x1234, 0x5678, 0x04, 0x01, 0)).is_none());
     assert_eq!(describe(id(0x8086, 0x43ed, 0x0c, 0x03, 0x30)).support, Support::Driven);
+    let spi = describe(id(0x8086, 0x43a4, 0x0c, 0x80, 0));
+    assert_eq!(spi.model, "Tiger Lake-H SPI Flash");
+    assert_eq!((spi.service, spi.support), (Service::Kernel, Support::Platform));
 }
 
 #[test]
