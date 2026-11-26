@@ -106,8 +106,19 @@ impl Sim {
         assert_eq!((self.reg(a2 + F::BROM_ENGIDMASK), self.reg(a2 + F::BROM_CURR_UCODE_ID)), (1, 3));
         let sign = self.reg(a2 + F::BROM_PARAADDR0) as usize;
         assert!(self.sec2.dmem[sign..sign + SIG].iter().all(|&b| b == 0xb0), "Booter signature for fuse 1");
-        // Booter gets GspFwWprMeta's address in the mailboxes.
+        // Booter gets GspFwWprMeta's address in the mailboxes (or 0 for booter_unload).
         let meta_bus = self.reg(regs::SEC2_BASE + F::MAILBOX0) as u64 | (self.reg(regs::SEC2_BASE + F::MAILBOX1) as u64) << 32;
+        if meta_bus == 0 {
+            if self.fail_booter {
+                self.regs.insert(regs::SEC2_BASE + F::MAILBOX0, 0);
+                return; // leave PFB_WPR2_ADDR_HI set to simulate stuck WPR2
+            }
+            self.regs.insert(regs::PFB_WPR2_ADDR_LO, 0);
+            self.regs.insert(regs::PFB_WPR2_ADDR_HI, 0);
+            self.regs.insert(regs::SEC2_BASE + F::MAILBOX0, 0);
+            self.notes.push("booter_unload cleared wpr2".into());
+            return;
+        }
         let meta = self.bus(meta_bus, 256).to_vec();
         assert_eq!(r64(&meta, 0), 0xdc3aae21371a60b3, "WPR meta magic");
         assert!(self.reg(regs::PFB_WPR2_ADDR_HI) != 0, "FWSEC ran first");
@@ -300,7 +311,7 @@ fn run(fwsec_fuse: u32, fail_booter: bool, send_init_done: bool) -> (Result<boot
 /// Boot, then (if it worked) hand the live simulation and memory to `after`.
 fn run_then(fwsec_fuse: u32, fail_booter: bool, send_init_done: bool, after: impl FnOnce(&mut Sim, &mut Ticks, &mut Memory, &boot::Report)) -> (Result<boot::Report, boot::Failed>, Sim, Vec<Step>, Ticks) {
     let (bl, bt, gsp) = (bootloader(), booter(), gsp_elf(700)); // 700 pages: radix3 level 2 spans two pages
-    let f = Firmware { booter_load: &bt, bootloader: &bl, gsp: &gsp };
+    let f = Firmware { booter_load: &bt, booter_unload: None, bootloader: &bl, gsp: &gsp };
     let chip = Chip::decode(0x174000a1).unwrap();
     let sizes = boot::Sizes::for_firmware(&chip, &f).unwrap();
     let mut arena = vec![0u8; sizes.total() + 64 * 4096];
@@ -328,6 +339,7 @@ fn boots_to_init_done() {
     let r = r.unwrap();
     assert_eq!(steps, [Step::Chip, Step::Vbios, Step::Layout, Step::Prepare, Step::Fwsec, Step::Riscv, Step::Booter, Step::InitDone]);
     assert!(r.init_done);
+    assert!(!r.unloaded_wpr2);
     assert_eq!((r.chipset, r.fb_size, r.vbios_version), (0x174, 8 << 30, [0x94, 0x30, 0x04, 0x05, 0x07]));
     assert_eq!((r.fwsec_sig, r.booter_sig, r.events, r.sequencer_runs), (0, 0, 3, 1));
     assert_eq!(sim.reg(0x1234), 0xcafe, "sequencer REG_WRITE ran");
@@ -363,9 +375,9 @@ fn silent_gsp_times_out() {
 
 #[test]
 fn refuses_when_wpr2_is_already_set() {
-    // A previous driver left GSP-RM running: Booter-unload must come first.
+    // Without booter_unload, a stale WPR2 fails at Step::Chip with Error::Wpr2Busy.
     let (bl, bt, gsp) = (bootloader(), booter(), gsp_elf(4));
-    let f = Firmware { booter_load: &bt, bootloader: &bl, gsp: &gsp };
+    let f = Firmware { booter_load: &bt, booter_unload: None, bootloader: &bl, gsp: &gsp };
     let mut sim = Sim { regs: HashMap::new(), rom: vbios(), arena: std::ptr::null_mut(), arena_len: 0, gsp: Falcon::new(), sec2: Falcon::new(), rm_image: vec![], doorbells: 0, fwsec_fuse: 0, fail_booter: false, send_init_done: true, notes: vec![], shm: 0, msg_slot: 0, cmd_read: 0, objects: vec![], calls: vec![] };
     sim.regs.insert(regs::PFB_WPR2_ADDR_HI, 0x7fff0);
     let mut scratch = vec![0u8; 4096];
@@ -376,6 +388,58 @@ fn refuses_when_wpr2_is_already_set() {
     let cfg = Config { system: Default::default(), init_polls: 1 };
     let e = boot::boot(&mut sim, &mut Ticks(0), &cfg, &f, &mut [0u8; 16], &mut mem, &mut |_: Step, _: &boot::Report| {}).unwrap_err();
     assert_eq!((e.step, e.error), (Step::Chip, Error::Wpr2Busy(0x7fff0)));
+}
+
+#[test]
+fn unloads_stale_wpr2_and_boots() {
+    // Warm boot: WPR2 is non-zero; booter_unload tears it down on SEC2 and boot succeeds.
+    let (bl, bt, gsp) = (bootloader(), booter(), gsp_elf(700));
+    let f = Firmware { booter_load: &bt, booter_unload: Some(&bt), bootloader: &bl, gsp: &gsp };
+    let chip = Chip::decode(0x174000a1).unwrap();
+    let sizes = boot::Sizes::for_firmware(&chip, &f).unwrap();
+    let mut arena = vec![0u8; sizes.total() + 64 * 4096];
+    let mut sim = Sim {
+        regs: HashMap::new(), rom: vbios(), arena: arena.as_mut_ptr(), arena_len: arena.len(),
+        gsp: Falcon::new(), sec2: Falcon::new(), rm_image: sex_gpu_nv::fw::gsp_rm(&gsp, ".fwsignature_ga10x").unwrap().image.to_vec(),
+        doorbells: 0, fwsec_fuse: 0, fail_booter: false, send_init_done: true, notes: vec![],
+        shm: 0, msg_slot: 0, cmd_read: 0, objects: vec![], calls: vec![],
+    };
+    sim.regs.insert(regs::PCI_ROM_SHADOW, 1);
+    sim.regs.insert(regs::PFB_WPR2_ADDR_LO, 0x70000);
+    sim.regs.insert(regs::PFB_WPR2_ADDR_HI, 0x7fff0);
+    let mut scratch = vec![0u8; 2 * msgq::MAX_MSG];
+    let mut mem = Memory::carve(&mut arena, ARENA_BUS, &sizes, &mut scratch).unwrap();
+    let cfg = Config { system: rpc::SystemInfo { bar0: 0xa000_0000, bar1: 0x40_0000_0000, bar_inst: 0x42_0000_0000, bus: 1, devfn: 0, max_user_va: 0x7fff_ffff_f000 }, init_polls: 1000 };
+    let mut vb = vec![0u8; 1 << 20];
+    let mut steps = vec![];
+    let mut t = Ticks(0);
+    let r = boot::boot(&mut sim, &mut t, &cfg, &f, &mut vb, &mut mem, &mut |s: Step, _: &boot::Report| steps.push(s)).unwrap();
+    assert!(r.init_done);
+    assert!(r.unloaded_wpr2);
+    assert_eq!(sim.sec2.ran, 2, "SEC2 ran booter_unload then booter_load");
+    assert_eq!(steps, [Step::Chip, Step::Vbios, Step::Layout, Step::Prepare, Step::Fwsec, Step::Riscv, Step::Booter, Step::InitDone]);
+}
+
+#[test]
+fn fails_when_booter_unload_leaves_wpr2_busy() {
+    let (bl, bt, gsp) = (bootloader(), booter(), gsp_elf(4));
+    let f = Firmware { booter_load: &bt, booter_unload: Some(&bt), bootloader: &bl, gsp: &gsp };
+    let chip = Chip::decode(0x174000a1).unwrap();
+    let sizes = boot::Sizes::for_firmware(&chip, &f).unwrap();
+    let mut arena = vec![0u8; sizes.total() + 64 * 4096];
+    let mut sim = Sim {
+        regs: HashMap::new(), rom: vbios(), arena: arena.as_mut_ptr(), arena_len: arena.len(),
+        gsp: Falcon::new(), sec2: Falcon::new(), rm_image: vec![],
+        doorbells: 0, fwsec_fuse: 0, fail_booter: true, send_init_done: true, notes: vec![],
+        shm: 0, msg_slot: 0, cmd_read: 0, objects: vec![], calls: vec![],
+    };
+    sim.regs.insert(regs::PFB_WPR2_ADDR_HI, 0x7fff0);
+    let mut scratch = vec![0u8; 2 * msgq::MAX_MSG];
+    let mut mem = Memory::carve(&mut arena, ARENA_BUS, &sizes, &mut scratch).unwrap();
+    let cfg = Config { system: Default::default(), init_polls: 1 };
+    let e = boot::boot(&mut sim, &mut Ticks(0), &cfg, &f, &mut [0u8; 16], &mut mem, &mut |_: Step, _: &boot::Report| {}).unwrap_err();
+    assert_eq!((e.step, e.error), (Step::Chip, Error::Wpr2Busy(0x7fff0)));
+    assert_eq!(sim.sec2.ran, 1);
 }
 
 #[test]

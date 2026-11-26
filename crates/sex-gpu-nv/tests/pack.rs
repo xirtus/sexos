@@ -76,7 +76,7 @@ fn hex_compare() {
 #[test]
 fn carves_the_pool_in_page_steps() {
     let (bl, bt, gsp) = (common::bootloader(), common::booter(), common::gsp_elf(40));
-    let f = boot::Firmware { booter_load: &bt, bootloader: &bl, gsp: &gsp };
+    let f = boot::Firmware { booter_load: &bt, booter_unload: None, bootloader: &bl, gsp: &gsp };
     let chip = Chip::decode(0x174000a1).unwrap();
     let sizes = boot::Sizes::for_firmware(&chip, &f).unwrap();
     let mut pool = vec![0u8; sizes.total()];
@@ -98,7 +98,7 @@ fn real_pack_holds_the_pinned_firmware() {
     let blob = std::fs::read(path).unwrap();
     let p = Pack::parse(&blob).unwrap();
     for (name, _) in pack::PINS { p.pinned(name).unwrap(); }
-    let f = boot::Firmware { booter_load: p.pinned(pack::BOOTER_LOAD).unwrap().data, bootloader: p.pinned(pack::BOOTLOADER).unwrap().data, gsp: p.pinned(pack::GSP_RM).unwrap().data };
+    let f = boot::Firmware { booter_load: p.pinned(pack::BOOTER_LOAD).unwrap().data, booter_unload: Some(p.pinned(pack::BOOTER_UNLOAD).unwrap().data), bootloader: p.pinned(pack::BOOTLOADER).unwrap().data, gsp: p.pinned(pack::GSP_RM).unwrap().data };
     let sizes = boot::Sizes::for_firmware(&Chip::decode(0x174000a1).unwrap(), &f).unwrap();
     // The service's pool (sex_pdx::nvidia_gpu::DMA_BYTES) holds the whole boot.
     assert!(sizes.total() <= 64 << 20, "boot needs {} bytes", sizes.total());

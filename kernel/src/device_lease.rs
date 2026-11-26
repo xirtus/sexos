@@ -92,21 +92,29 @@ pub fn force_power(dev: &PciDevice) -> u32 {
     dev.read_u32(0xc8)
 }
 
-/// PCI power management: firmware may leave a Serial IO function in D3hot, where its
-/// registers read all ones. Puts it in D0 (the driver waits out the 10 ms recovery).
-pub fn wake_d0(dev: &PciDevice) -> bool {
-    if dev.read_u32(0x04) >> 16 & 0x10 == 0 { return false; }
+fn pm_cap(dev: &PciDevice) -> Option<u8> {
+    if dev.read_u32(0x04) >> 16 & 0x10 == 0 { return None; }
     let mut at = (dev.read_u32(0x34) & 0xfc) as u8;
     for _ in 0..48 {
-        if at < 0x40 { return false; }
+        if at < 0x40 { return None; }
         let head = dev.read_u32(at);
-        if head & 0xff == 0x01 {
-            let pmcsr = dev.read_u32(at + 4);
-            if pmcsr & 3 != 0 { dev.write_u32(at + 4, pmcsr & !3); return true; }
-            return false;
-        }
+        if head & 0xff == 0x01 { return Some(at); }
         at = (head >> 8 & 0xfc) as u8;
     }
+    None
+}
+
+/// Raw lower 16 bits of PMCSR, if the function advertises PCI Power Management.
+pub fn pmcsr(dev: &PciDevice) -> Option<u32> {
+    pm_cap(dev).map(|at| dev.read_u32(at + 4) & 0xffff)
+}
+
+/// PCI power management: firmware may leave a Serial IO, Wi-Fi, or GPU function in D3hot,
+/// where its BARs or registers read invalid/all ones. Puts it in D0.
+pub fn wake_d0(dev: &PciDevice) -> bool {
+    let Some(at) = pm_cap(dev) else { return false };
+    let pmcsr = dev.read_u32(at + 4);
+    if pmcsr & 3 != 0 { dev.write_u32(at + 4, pmcsr & !3); return true; }
     false
 }
 
