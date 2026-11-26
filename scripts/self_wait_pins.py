@@ -13,6 +13,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
 """
 PINS = (
 
+    ('timed', 'kernel/src/program_workers.rs', 'fn-v1:caee19c8fe550e0069e4dd0ab87f9263f730edc13c31b467011edd7c3ed9c2be'),  # thread pointer set also updates the per-core FS base cache (no wait change; Gemini #699), 2026-11-26
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:ed226ed78e3660e073a3dfd8862b6d71bd407826d686cbd19d4f1fb7c268fe62'),  # syscall entry reads PKRU once; GP report reads the per-core IRET snapshot (no wait change; Gemini #699), 2026-11-26
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:41a967417d003a89c8baca507f6898e52b1a7e9d17752c1930f613003d174578'),  # fault kill purges handoff slots + IPC v2 teardown after exit (no wait change; Gemini #819), 2026-11-25
 
     ('timed', 'kernel/src/program_workers.rs', 'fn-v1:d10bc5f46ea06738125daf3234fe9fbfb3c636834c52b9979e43cfa9567dd9ff'),  # worker end purges handoff before unpark (no wait change; Gemini #819), 2026-11-25
