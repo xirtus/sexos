@@ -3,7 +3,7 @@
 use super::{SilkBarUpdate,UpdateKind};
 pub const VERSION:u8=1;
 /// Observation budgets, not civil seconds. Expiry only hides a snapshot.
-pub const HEALTH_TICKS:u64=620;
+pub const HEALTH_TICKS:u64=30_000;
 pub const STAGNANT_TURNS:u32=65_536;
 pub const TOTAL_TURNS:u32=1_048_576;
 #[repr(u8)]

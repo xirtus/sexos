@@ -272,8 +272,13 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
     serial_println!("[kernel.pci.class.found] {:02x}:{:02x}.{} kind={:?} vendor={:04x} device={:04x}",
         dev.bus, dev.dev, dev.func, kind, dev.vendor_id, dev.device_id);
     // Firmware may leave a part it does not use in D3hot (its BARs or registers read invalid/all ones).
-    if matches!(kind, crate::device_lease::Kind::SerialIo | crate::device_lease::Kind::Wifi | crate::device_lease::Kind::NvidiaGpu)
-        && crate::device_lease::wake_d0(dev)
+    if matches!(
+        kind,
+        crate::device_lease::Kind::SerialIo
+            | crate::device_lease::Kind::Wifi
+            | crate::device_lease::Kind::NvidiaGpu
+            | crate::device_lease::Kind::Hda
+    ) && crate::device_lease::wake_d0(dev)
     {
         crate::hal::acpi::stall_us(10_000);
         serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind={:?}", dev.bus, dev.dev, dev.func, kind);

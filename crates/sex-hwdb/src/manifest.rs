@@ -169,6 +169,9 @@ pub const BELL: Manifest = Manifest {
         // One sound card is driven: whichever comes first holds slot 20.
         Match::id(0x1af4, 0x1059, Lease::Virtio, 20),
         Match::class(0x04_03_00, CLASS, Lease::Hda, 20),
+        // Intel cAVS/DSP audio (class 04:01, e.g. Tiger Lake-H 8086:43c8) exposes
+        // standard HDA MMIO registers on BAR0 when operated in HDA mode.
+        Match::vendor_class(0x8086, 0x04_01_00, CLASS, Lease::Hda, 20),
     ],
 };
 

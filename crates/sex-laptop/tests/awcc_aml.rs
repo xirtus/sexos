@@ -180,3 +180,89 @@ fn unary_maths_and_divide_by_zero() {
     assert!(aml.evaluate_if_present(AmlName::from_str("\\DIV0").unwrap(), vec![int(0)]).is_err());
     assert_eq!(as_int(eval(&aml, "\\DIV0", vec![int(5)])), 2);
 }
+
+/// Laptop `_BST`/`_BIF`/`_BIX` methods populate their return package via
+/// `Store(val, Index(PBST, i))` and `CopyObject(...)`, and EC/lid registers often use
+/// `IndexField`.
+#[test]
+fn battery_package_index_store_and_ec_index_field() {
+    use acpi::aml::op_region::{OpRegion, RegionHandler, RegionSpace};
+    use acpi::aml::AmlError;
+    use std::sync::Mutex;
+
+    // 1. Store and CopyObject through ReferenceKind::RefOf (Index(PBST, i)).
+    let mut aml = Vec::new();
+    aml.extend_from_slice(&[0x08, b'P', b'B', b'S', b'T', 0x12, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00]);
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0x70, 0x0a, 0x02, 0x88, b'P', b'B', b'S', b'T', 0x00, 0x00]);
+    body.extend_from_slice(&[0x9d, 0x0b, 0x34, 0x12, 0x88, b'P', b'B', b'S', b'T', 0x0a, 0x02, 0x00]);
+    body.extend_from_slice(&[0xa4, b'P', b'B', b'S', b'T']);
+    aml.push(0x14);
+    aml.push((1 + 4 + 1 + body.len()) as u8);
+    aml.extend_from_slice(b"_BST");
+    aml.push(0x00);
+    aml.extend_from_slice(&body);
+
+    let interp = interpreter();
+    interp.load_table(&aml).unwrap();
+    let res = eval(&interp, "\\_BST", vec![]).unwrap();
+    let Object::Package(items) = &*res else { panic!("expected package") };
+    assert_eq!(as_int(Some(items[0].clone())), 0x02);
+    assert_eq!(as_int(Some(items[1].clone())), 0x00);
+    assert_eq!(as_int(Some(items[2].clone())), 0x1234);
+    assert_eq!(as_int(Some(items[3].clone())), 0x00);
+
+    // 2. IndexField over an EmbeddedControl OpRegion (e.g. `_LID`).
+    struct FakeEc {
+        idx: Mutex<u8>,
+        ram: Mutex<[u8; 256]>,
+    }
+    impl RegionHandler for FakeEc {
+        fn read_u8(&self, r: &OpRegion) -> Result<u8, AmlError> {
+            match r.base {
+                0 => Ok(*self.idx.lock().unwrap()),
+                1 => Ok(self.ram.lock().unwrap()[*self.idx.lock().unwrap() as usize]),
+                _ => Ok(0),
+            }
+        }
+        fn read_u16(&self, _: &OpRegion) -> Result<u16, AmlError> { Ok(0) }
+        fn read_u32(&self, _: &OpRegion) -> Result<u32, AmlError> { Ok(0) }
+        fn read_u64(&self, _: &OpRegion) -> Result<u64, AmlError> { Ok(0) }
+        fn write_u8(&self, r: &OpRegion, v: u8) -> Result<(), AmlError> {
+            match r.base {
+                0 => *self.idx.lock().unwrap() = v,
+                1 => self.ram.lock().unwrap()[*self.idx.lock().unwrap() as usize] = v,
+                _ => {}
+            }
+            Ok(())
+        }
+        fn write_u16(&self, _: &OpRegion, _: u16) -> Result<(), AmlError> { Ok(()) }
+        fn write_u32(&self, _: &OpRegion, _: u32) -> Result<(), AmlError> { Ok(()) }
+        fn write_u64(&self, _: &OpRegion, _: u64) -> Result<(), AmlError> { Ok(()) }
+    }
+
+    let mut ram = [0u8; 256];
+    ram[0x01] = 0x01;
+    let interp2 = interpreter();
+    interp2.install_region_handler(
+        RegionSpace::EmbeddedControl,
+        FakeEc { idx: Mutex::new(0), ram: Mutex::new(ram) },
+    );
+
+    let mut aml2 = Vec::new();
+    aml2.extend_from_slice(&[0x5b, 0x80, b'E', b'C', b'O', b'R', 0x03, 0x00, 0x0a, 0x02]);
+    aml2.extend_from_slice(&[
+        0x5b, 0x81, 16, b'E', b'C', b'O', b'R', 0x01,
+        b'E', b'C', b'I', b'X', 0x08,
+        b'E', b'C', b'D', b'A', 0x08,
+    ]);
+    aml2.extend_from_slice(&[
+        0x5b, 0x86, 17, b'E', b'C', b'I', b'X', b'E', b'C', b'D', b'A', 0x01,
+        0x00, 0x08,
+        b'L', b'I', b'D', b'S', 0x08,
+    ]);
+    aml2.extend_from_slice(&[0x14, 11, b'_', b'L', b'I', b'D', 0x00, 0xa4, b'L', b'I', b'D', b'S']);
+
+    interp2.load_table(&aml2).unwrap();
+    assert_eq!(as_int(eval(&interp2, "\\_LID", vec![])), 1);
+}
