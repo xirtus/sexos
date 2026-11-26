@@ -31,8 +31,8 @@ const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 #[derive(Clone, Copy)]
 struct Page { frame: u64, pristine: u64 }
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
-// Net, Files, Input, Bell, Display, Shell, Denim, Saddle, Drive and USB.
-const SERVICES: usize = 10;
+// Net, Files, Input, Bell, Display, Shell, Denim, Saddle, Drive, USB, ACPI, Cufflinks, GPU.
+const SERVICES: usize = 13;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
 // BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
 static SERVICE_IDS:[AtomicU32;SERVICES]=[const{AtomicU32::new(0)};SERVICES];
@@ -229,8 +229,101 @@ pub fn poll() -> bool {
     }
     busy
 }
+#[derive(Clone, Copy)]
+struct SwapPage { leaf: u64, pte: u64, pristine: u64 }
+struct PendingSwap { pd: u32, entry: u64, count: usize, pages: [SwapPage; MAX_PAGES] }
+static PENDING: Mutex<PendingSwap> = Mutex::new(PendingSwap { pd: 0, entry: 0, count: 0, pages: [SwapPage { leaf: 0, pte: 0, pristine: 0 }; MAX_PAGES] });
+static PENDING_PD: AtomicU32 = AtomicU32::new(0);
+
+/// Stage a validated, relocated, PKU-scanned PIE ELF for restartable server `target_pd` and end it cleanly.
+pub fn replace_image(target_pd: u32, elf: &[u8]) -> Result<u64, u64> {
+    use sex_pdx::crash_log as w;
+    let err = |r: &str, c: u64| { crate::serial_println!("[service.hotswap.err] pd={} reason={}", target_pd, r); Err(c) };
+    let Some(index) = SERVICE_IDS.iter().position(|id| target_pd != 0 && id.load(Ordering::Acquire) == target_pd) else { return err("not_restartable", w::NOT_FOUND) };
+    let Some(domain) = crate::ipc::DOMAIN_REGISTRY.get(target_pd) else { return err("no_domain", w::NOT_FOUND) };
+    let (pkey, base) = (domain.pku_key, code_base(target_pd as u8));
+    let Ok(parsed) = crate::program_image::parse(elf, SLOT_BYTES) else { return err("bad_elf", w::INVALID) };
+    let (mut image_pages, mut writable_pages) = (0usize, 0usize);
+    for seg in &parsed.segments[..parsed.count] {
+        let (first, last) = ((seg.window / 4096) as usize, ((seg.window + seg.memory - 1) / 4096) as usize);
+        image_pages = image_pages.max(last + 1);
+        if seg.writable { writable_pages += last - first + 1; }
+    }
+    if image_pages == 0 || image_pages > MAX_PAGES || writable_pages + (STACK_BYTES / 4096) as usize > MAX_PAGES { return err("too_many_pages", w::INVALID); }
+    let Some(mut pending) = PENDING.try_lock() else { return err("busy", w::RETRY) };
+    if pending.pd != 0 { return err("busy", w::RETRY); }
+    let (mut frames, mut pristines, mut ptes, mut exec) = (alloc::vec![0u64; image_pages], alloc::vec![0u64; image_pages], alloc::vec![0u64; image_pages], alloc::vec![false; image_pages]);
+    let free_all = |f: &[u64], p: &[u64]| { for &x in f.iter().chain(p.iter()) { if x != 0 { crate::program_frames::give(x); } } };
+    for seg in &parsed.segments[..parsed.count] {
+        for idx in (seg.window / 4096) as usize..=((seg.window + seg.memory - 1) / 4096) as usize {
+            if frames[idx] == 0 {
+                let Some(f) = crate::program_frames::take() else { free_all(&frames, &pristines); return err("no_memory", w::FULL) };
+                frames[idx] = f; ptes[idx] = f | 5 | ((pkey as u64) << 59) | if seg.writable { 2 } else { 0 } | if !seg.executable { 1 << 63 } else { 0 };
+            }
+            exec[idx] |= seg.executable;
+        }
+    }
+    let write = |mut at: u64, mut b: &[u8]| -> bool {
+        while !b.is_empty() {
+            let Some(&f) = frames.get((at / 4096) as usize).filter(|&&x| x != 0) else { return false };
+            let n = b.len().min(4096 - (at as usize & 4095));
+            crate::boot_memory::write_frames(f + (at & 4095), &b[..n]); at += n as u64; b = &b[n..];
+        }
+        true
+    };
+    for seg in &parsed.segments[..parsed.count] { if !write(seg.window, &elf[seg.offset as usize..seg.offset as usize + seg.file as usize]) { free_all(&frames, &pristines); return err("segment", w::INVALID); } }
+    for i in 0..parsed.rela_count {
+        let Some((at, val)) = crate::program_image::relocation(elf, &parsed, i, base) else { free_all(&frames, &pristines); return err("relocation", w::INVALID) };
+        if !write(at, &val.to_le_bytes()) { free_all(&frames, &pristines); return err("relocation", w::INVALID); }
+    }
+    let Some(hhdm) = crate::HHDM_REQUEST.response().map(|r| r.offset) else { free_all(&frames, &pristines); return err("no_hhdm", w::INVALID) };
+    let mut scan = sex_pdx::program_code::Scan::new();
+    for idx in 0..image_pages {
+        if !exec[idx] || frames[idx] == 0 { scan = sex_pdx::program_code::Scan::new(); continue; }
+        let page = unsafe { core::slice::from_raw_parts((frames[idx] + hhdm) as *const u8, 4096) };
+        if scan.feed(page, false).is_some() { free_all(&frames, &pristines); return err("key_instruction", w::DENIED); }
+    }
+    let mut count = 0usize;
+    for idx in 0..image_pages {
+        if frames[idx] == 0 { continue; }
+        let Some(leaf) = crate::boot_memory::arena_leaf(base + idx as u64 * 4096, pkey) else { free_all(&frames, &pristines); return err("no_pt", w::FULL) };
+        if ptes[idx] & 2 != 0 {
+            let Some(pf) = crate::program_frames::take() else { free_all(&frames, &pristines); return err("no_memory", w::FULL) };
+            crate::boot_memory::copy_frame(frames[idx], pf); pristines[idx] = pf;
+        }
+        pending.pages[count] = SwapPage { leaf, pte: ptes[idx], pristine: pristines[idx] }; count += 1;
+    }
+    let entry = base + parsed.entry;
+    (pending.entry, pending.count, pending.pd) = (entry, count, target_pd); PENDING_PD.store(target_pd, Ordering::Release); drop(pending);
+    GAVE_UP[index].store(false, Ordering::Release); LOOP[index].store(0, Ordering::Release); request_end(target_pd);
+    crate::serial_println!("[service.hotswap.ok] pd={} entry={:#x} bytes={}", target_pd, entry, elf.len());
+    Ok(entry)
+}
+
+fn apply_swap(s: &mut Service, pd: &crate::capability::ProtectionDomain, swap: &PendingSwap) {
+    let (mut stack, mut n_stack, base) = ([Page { frame: 0, pristine: 0 }; (STACK_BYTES / 4096) as usize], 0usize, code_base(s.pd as u8));
+    for va in (s.stack_top.saturating_sub(STACK_BYTES)..s.stack_top).step_by(4096) {
+        let Some(leaf) = crate::boot_memory::existing_leaf_address(va) else { continue };
+        let frame = unsafe { core::ptr::read_volatile(leaf as *const u64) } & PTE_FRAME;
+        if let Some(&p) = s.pages[..s.count].iter().find(|p| p.frame == frame) { if n_stack < stack.len() { stack[n_stack] = p; n_stack += 1; } }
+    }
+    for va in (base..base + SLOT_BYTES).step_by(4096) {
+        let Some(leaf) = crate::boot_memory::existing_leaf_address(va) else { continue };
+        let val = unsafe { core::ptr::read_volatile(leaf as *const u64) };
+        if val & 5 == 5 && (val >> 59) & 15 == pd.pku_key as u64 { unsafe { core::ptr::write_volatile(leaf as *mut u64, 0) }; }
+    }
+    let mut n = 0usize;
+    for sp in &swap.pages[..swap.count] {
+        unsafe { core::ptr::write_volatile(sp.leaf as *mut u64, sp.pte) };
+        if sp.pristine != 0 && n < MAX_PAGES { s.pages[n] = Page { frame: sp.pte & PTE_FRAME, pristine: sp.pristine }; n += 1; }
+    }
+    for &p in &stack[..n_stack] { if n < MAX_PAGES { s.pages[n] = p; n += 1; } }
+    (s.count, s.entry) = (n, swap.entry);
+    crate::smp::tlb::flush_pages(usize::MAX, core::iter::empty());
+}
+
 fn poll_one(index: usize) -> bool {
-    let Some(s) = SERVICE[index].try_lock() else { return true };
+    let Some(mut s) = SERVICE[index].try_lock() else { return true };
     if s.pd == 0 || GAVE_UP[index].load(Ordering::Relaxed) { return false; }
     let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(s.pd) else { return false };
     let main = pd.main_task.load(Ordering::Acquire);
@@ -306,6 +399,10 @@ fn poll_one(index: usize) -> bool {
         }
     }
     crate::device_irq::reset_end(s.pd);
+    if PENDING_PD.load(Ordering::Acquire) == s.pd {
+        let Some(mut swap) = PENDING.try_lock() else { return true };
+        if swap.pd == s.pd { apply_swap(&mut s, pd, &swap); swap.pd = 0; PENDING_PD.store(0, Ordering::Release); }
+    }
     for page in s.pages[..s.count].iter().filter(|p| p.pristine != 0) { crate::boot_memory::copy_frame(page.pristine, page.frame); }
     // Requests to the dead run, and answers it was owed, belong to that run.
     let mut dropped = 0;

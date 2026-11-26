@@ -36,6 +36,7 @@ pub mod spindle_probe;
 pub mod spindle_view;
 pub mod spindle_status;
 pub mod history_recovery;
+pub mod program_image;
 pub use memory_region::MemoryRegionInfo;
 
 /// Opaque protection domain identifier. All inter-domain references use this type.

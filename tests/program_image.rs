@@ -1,6 +1,6 @@
 // A program file is untrusted bytes: everything the loader will touch is bounded
 // before the first write, and no input panics the checker.
-#[path = "../kernel/src/program_image.rs"]
+#[path = "../crates/sex-pdx/src/program_image.rs"]
 mod program_image;
 #[path = "../crates/sex-pdx/src/program_store.rs"]
 mod program_store;

@@ -237,9 +237,21 @@ mod ipc {
 
 mod boot_memory {
     pub fn existing_leaf_address(_: u64) -> Option<u64> { None }
+    pub fn arena_leaf(_: u64, _: u8) -> Option<u64> { None }
     pub fn backing(_: u64) -> u64 { 0 }
     pub fn copy_frame(_: u64, _: u64) {}
+    pub fn write_frames(_: u64, _: &[u8]) {}
 }
+mod program_frames { pub fn take() -> Option<u64> { None } pub fn give(_: u64) {} }
+#[path = "../crates/sex-pdx/src/program_image.rs"]
+mod program_image;
+#[path = "../crates/sex-pdx/src/program_code.rs"]
+pub mod program_code;
+pub struct HhdmResp { pub offset: u64 }
+pub struct HhdmReq;
+impl HhdmReq { pub fn response(&self) -> Option<HhdmResp> { Some(HhdmResp { offset: 0 }) } }
+pub static HHDM_REQUEST: HhdmReq = HhdmReq;
+mod smp { pub mod tlb { pub fn flush_pages(_: usize, _: impl Iterator<Item = u64>) {} } }
 mod pci_command { pub fn quiesce(_: &crate::capability::ProtectionDomain) {} }
 mod iommu { pub fn revoke(_: u32) {} }
 mod device_irq {
@@ -253,6 +265,7 @@ mod program_workers {
 }
 mod console { pub fn stop(_: std::fmt::Arguments) -> ! { panic!("unexpected desktop stop") } }
 mod interrupts { pub static TICKS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(100); }
+extern crate alloc;
 
 #[path = "../kernel/src/service_restart.rs"]
 mod service_restart;

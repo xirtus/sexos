@@ -857,6 +857,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     if unsafe{tether_command::TETHER.active()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"The tether is using the network: tether off first, then try again.");return true}
     let recognized = match cmd {
         b"tether"=>{unsafe{let busy=fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy();(*core::ptr::addr_of_mut!(tether_command::TETHER)).command(args,sb,busy);}true},
+        b"hotswap"=>{tether_command::hotswap_command(args,sb);true},
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
         b"capture"=>{unsafe{capture_command::CAPTURE.start(args,sb);}true},

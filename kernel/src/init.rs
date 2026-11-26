@@ -980,6 +980,7 @@ pub fn init() {
     crate::service_restart::capture(sexdrive_id, 2);
     // USB: a new run resets the host controller and finds the same devices again.
     crate::service_restart::capture(sexusb_id, 5);
+    for (id, dom) in [(sexacpi_id, 50), (cufflinks_id, 52), (sexgpu_id, 53)] { crate::service_restart::capture(id, dom); }
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
