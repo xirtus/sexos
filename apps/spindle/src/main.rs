@@ -108,6 +108,9 @@ mod tether_command;
 mod calc_command;
 mod complete;
 mod silk_command;
+mod sweep_math;
+mod sweep_command;
+mod power_command;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -857,6 +860,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     if unsafe{tether_command::TETHER.active()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"The tether is using the network: tether off first, then try again.");return true}
     let recognized = match cmd {
         b"tether"=>{unsafe{let busy=fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy();(*core::ptr::addr_of_mut!(tether_command::TETHER)).command(args,sb,busy);}true},
+        b"sweep"=>{sweep_command::command(args,sb);true},
+        b"power"=>{power_command::power_command(sb);true},
+        b"profile"=>{power_command::profile_command(args,sb);true},
+        b"fan"=>{power_command::fan_command(sb);true},
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
         b"capture"=>{unsafe{capture_command::CAPTURE.start(args,sb);}true},
@@ -898,7 +905,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  crashes      what stopped, this start and earlier ones");
             sb.push(b"  hw [all|TEXT|save [PATH]]  hardware report from the boot log; save writes it to a file");
             sb.push(b"  hw record [PATH|off]  rewrite the hardware report every 30 s (two files in turn)");
-            sb.push(b"  tether HOST[:PORT]|off  stream this Spindle to tether_host.py there; run its commands");
+            sb.push(b"  tether HOST[:PORT]|off|sweep  stream Spindle to tether_host.py or run Wi-Fi sweep");
+            sb.push(b"  sweep sched|ipc|nvme|all  real-hardware syscall, IPC v2, and NVMe read benchmarks");
+            sb.push(b"  power | profile [NAME] | fan  ACPI sensors, AWCC fan RPMs, and thermal profiles");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -2877,7 +2886,7 @@ pub extern "C" fn _start() -> ! {
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
         unsafe{record_command::RECORD.poll();}
         if unsafe{capture_command::CAPTURE.step(sb,!DISPLAY_IO.pending())}{unsafe{content_render(&line,sb);}}
-        if unsafe{fs_commands::FS.send()}{}
+        if unsafe{fs_commands::FS.send(sb)}{}
         {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
             // A line held while the session file was busy runs before the session opens more.

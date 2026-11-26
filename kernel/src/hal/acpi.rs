@@ -810,9 +810,9 @@ fn control(caller: u32, word: u64) -> [u64; 5] {
             if value == 0 { crate::pci_power::tell_drivers(false); }
             [w::OK, 0, 0, 0, 0]
         }
-        w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET => queue_control(word),
         w::CTL_CHARGE if !w::charge_value_ok(value) => [w::INVALID, 0, 0, 0, 0],
-        w::CTL_CHARGE => queue_control(word),
+        w::CTL_THERMAL_PROFILE if value > w::THERMAL_GMODE => [w::INVALID, 0, 0, 0, 0],
+        w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET | w::CTL_CHARGE | w::CTL_THERMAL_PROFILE => queue_control(word),
         _ => [w::INVALID, 0, 0, 0, 0],
     }
 }
@@ -869,7 +869,7 @@ pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg:
             [w::OK, 0, 0, 0, 0]
         }
         w::SENSORS if has(w::SENSE) || has(w::REQUEST) => read_sensors(has(w::REQUEST)),
-        w::CONTROL if has(w::REQUEST) => control(pd.id, arg),
+        w::CONTROL if has(w::REQUEST) || (has(w::PROFILE) && matches!(arg & 0xFF, w::CTL_PROFILE | w::CTL_THERMAL_PROFILE)) => control(pd.id, arg),
         w::FW_CONTROL if has(w::FIRMWARE) => fw_control(),
         w::FW_TABLE if has(w::FIRMWARE) => fw_table(arg, arg2),
         w::FW_IO if has(w::FIRMWARE) => fw_io(arg, arg2),
