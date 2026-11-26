@@ -1161,7 +1161,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                         let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
                         Some(owner)
                     } else { None };
-                    if let Ok(ticket) = prepare(None, r, path, data, owner) {
+                    if let Ok(ticket) = prepare(core::ptr::null_mut(), r, path, data, owner) {
                         return w::reply(r.seq, w::OK, ticket);
                     }
                 }
@@ -1482,12 +1482,12 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         _ => Err(Error::Name),
     }
 }
-fn prepare(fs: impl Into<Option<&mut Fs<'static, Disk>>>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>) -> Result<u32, Error> {
+fn prepare(fs: *mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>) -> Result<u32, Error> {
     // `/bin/NAME` with no such file may still be the disk program store's NAME or `/media/<vol>/programs/NAME`:
     // the load looks there, and refuses then if none has it.
     let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
         .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
-    let note = if let Some(fs) = fs.into() {
+    let note = if let Some(fs) = unsafe { fs.as_mut() } {
         match fs.open(path) {
             Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
             Ok(_) => {}
