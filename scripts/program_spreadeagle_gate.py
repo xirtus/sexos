@@ -138,7 +138,10 @@ def main():
   g['wait'](r'\[spindle.fetch.line\] Saved \d+ bytes',s,240)
   s=len(t());run('run spreadeagle filter-overflow.xlsx')
   large=g['wait'](r'\[spreadeagle.open\] target=(\d+) task=(\d+) name=filter-overflow.xlsx sheets=Items\n',s,900)
+  # The hand-made fixture has no styles part, so it opens with one import warning.
+  g['wait'](r'\[spreadeagle.warnings.shown\] count=1',s,120)
   g['focus'](SURFACE[int(large[1])]);time.sleep(.8)
+  s=len(t());q.key('esc');g['wait'](r'\[spreadeagle.warnings.closed\]',s,120)
   ctrl_shift('l',r'\[spreadeagle.command\] data.filter\n')
   ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=1000\n')
   s=len(t());q.key('slash');type_line('Item 1100')
