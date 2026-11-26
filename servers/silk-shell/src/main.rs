@@ -14236,9 +14236,20 @@ unsafe fn handle_app_surface_req_inner(surface_id: u64, title_id: u64, arg2: u64
     if hidden {
         pdx_call(SLOT_DISPLAY, 0xEE, frame_surface, 0, 0);
         sex_pdx::serial_record!("[shell.launch.placed] target={} surface={} scene={}", caller_pd, frame_surface, scene);
+    } else if combined {
+        let mut sent = false;
+        for _ in 0..64 {
+            match pdx_call(SLOT_DISPLAY, sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED, frame_surface,
+                (100u64) << 32 | 200u64,
+                (400u64) << 32 | 600u64) {
+                (0, _) => { sent = true; break; }
+                (sex_pdx::ERR_SERVICE_NOT_READY, _) => sys_yield(),
+                _ => break,
+            }
+        }
+        if !sent { return false; }
     } else {
-        let display_op = if combined { sex_pdx::app_lifecycle::OP_WINDOW_OPEN_COMBINED } else { 0xEC };
-        pdx_call(SLOT_DISPLAY, display_op, frame_surface,
+        pdx_call(SLOT_DISPLAY, 0xEC, frame_surface,
             (100u64) << 32 | 200u64,
             (400u64) << 32 | 600u64);
     }
@@ -29100,6 +29111,8 @@ pub extern "C" fn _start() -> ! {
                     let accepted = handle_app_surface_req_inner(msg.arg0, msg.arg1, msg.arg2, msg.caller_pd, combined);
                     if accepted {
                         mutated = true;
+                    } else if combined {
+                        pdx_reply(msg.caller_pd, 0);
                     }
                 }
             }

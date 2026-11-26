@@ -19,6 +19,9 @@ static TEST_LOCK:Mutex<()>=Mutex::new(());
 fn hot_log()->bool{false}
 fn pdx_listen_raw(slot:u64)->Message{assert_eq!(slot,0);INBOX.lock().unwrap().as_ref().unwrap().recv().unwrap()}
 fn pdx_reply(caller:u32,value:u64){EFFECTS.lock().unwrap().replies.push((caller,value));}
+// Reply-and-receive (syscall 103) double: the reply lands, nothing waits, so the next turn listens.
+type PdxMessage=Message;
+mod ipc_recv{pub(crate) fn pdx_reply_recv(caller:u32,value:u64)->Result<Option<super::Message>,()>{super::pdx_reply(caller,value);Ok(None)}}
 fn block_buffer_view(caller:u32,slot:u64,size:u64,_rights:u8)->Option<RegionView>{
  if caller==27&&slot==17&&size>0&&size<=BLOCK_MAX_RUN{Some(RegionView{virtual_address:0x400000})}else{None}
 }
@@ -46,7 +49,7 @@ fn setup()->mpsc::Sender<Message>{
 fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,arg2:17}}
 #[test]fn idle_service_waits_then_handles_a_real_queued_request(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();let(start_tx,start_rx)=mpsc::channel();
- let worker=std::thread::spawn(move||{start_tx.send(()).unwrap();service_next_request();});start_rx.recv().unwrap();
+ let worker=std::thread::spawn(move||{start_tx.send(()).unwrap();service_next_request(&mut None);});start_rx.recv().unwrap();
  assert!(EFFECTS.lock().unwrap().device.is_empty());assert!(EFFECTS.lock().unwrap().replies.is_empty());
  tx.send(msg(BLOCK_READ)).unwrap();worker.join().unwrap();
  assert_eq!(EFFECTS.lock().unwrap().replies,[(27,0)]);
@@ -54,23 +57,23 @@ fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,ar
 #[test]fn queued_read_write_flush_and_unknown_request_complete_without_demo_work(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
  for op in [BLOCK_READ,BLOCK_WRITE,BLOCK_SYNC,99]{tx.send(msg(op)).unwrap();}
- for _ in 0..4{service_next_request();}
+ for _ in 0..4{service_next_request(&mut None);}
  let e=EFFECTS.lock().unwrap();assert_eq!(e.device,[(BLOCK_READ,400*512,512),(BLOCK_WRITE,400*512,512),(BLOCK_SYNC,0,0)]);
  assert_eq!(e.replies,[(27,0),(27,0),(27,0),(27,BLOCK_ERR_BAD_CMD)]);
 }
 #[test]fn real_read_opcode_is_not_mistaken_for_a_scalar_receipt_kind(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();assert_eq!(BLOCK_READ,1);
  tx.send(Message{caller_pd:3,arg1:0,arg2:0,..msg(1)}).unwrap();tx.send(msg(BLOCK_READ)).unwrap();
- service_next_request();service_next_request();assert_eq!(EFFECTS.lock().unwrap().replies,[(3,BLOCK_ERR_BAD_LEN),(27,0)]);
+ service_next_request(&mut None);service_next_request(&mut None);assert_eq!(EFFECTS.lock().unwrap().replies,[(3,BLOCK_ERR_BAD_LEN),(27,0)]);
 }
 #[test]fn failed_read_keeps_service_alive_and_next_request_sees_stopped_device(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();EFFECTS.lock().unwrap().fail_next_read=true;
- tx.send(msg(BLOCK_READ)).unwrap();tx.send(msg(BLOCK_READ)).unwrap();service_next_request();service_next_request();
+ tx.send(msg(BLOCK_READ)).unwrap();tx.send(msg(BLOCK_READ)).unwrap();service_next_request(&mut None);service_next_request(&mut None);
  let e=EFFECTS.lock().unwrap();assert_eq!(e.device.len(),1);assert_eq!(e.replies,[(27,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_NO_DEVICE)]);
 }
 #[test]fn peer_slot_and_length_rejections_never_reach_device(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
- for m in [Message{caller_pd:9,..msg(BLOCK_READ)},Message{arg2:99,..msg(BLOCK_WRITE)},Message{arg1:BLOCK_MAX_RUN+512,..msg(BLOCK_READ)},Message{arg0:1,..msg(BLOCK_READ)}]{tx.send(m).unwrap();service_next_request();}
+ for m in [Message{caller_pd:9,..msg(BLOCK_READ)},Message{arg2:99,..msg(BLOCK_WRITE)},Message{arg1:BLOCK_MAX_RUN+512,..msg(BLOCK_READ)},Message{arg0:1,..msg(BLOCK_READ)}]{tx.send(m).unwrap();service_next_request(&mut None);}
  let e=EFFECTS.lock().unwrap();assert!(e.device.is_empty());assert_eq!(e.replies,[(9,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_BAD_LEN),(27,BLOCK_ERR_BAD_LEN)]);
 }
 #[test]fn initial_frame_fills_only_the_boot_buffer_before_publication(){
@@ -80,14 +83,14 @@ fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,ar
 }
 #[test]fn shutdown_powers_the_disk_down_and_later_io_is_refused(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
- for op in [BLOCK_SHUTDOWN,BLOCK_WRITE,BLOCK_SYNC,BLOCK_CAPACITY,BLOCK_SHUTDOWN]{let m=if op==BLOCK_WRITE{msg(op)}else{Message{arg0:0,arg1:0,arg2:0,..msg(op)}};tx.send(m).unwrap();service_next_request();}
+ for op in [BLOCK_SHUTDOWN,BLOCK_WRITE,BLOCK_SYNC,BLOCK_CAPACITY,BLOCK_SHUTDOWN]{let m=if op==BLOCK_WRITE{msg(op)}else{Message{arg0:0,arg1:0,arg2:0,..msg(op)}};tx.send(m).unwrap();service_next_request(&mut None);}
  let e=EFFECTS.lock().unwrap();assert_eq!(e.device,[(BLOCK_SHUTDOWN,0,0)]);
  assert_eq!(e.replies,[(27,0),(27,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_NO_DEVICE),(27,2048),(27,BLOCK_ERR_NO_DEVICE)]);
 }
 #[test]fn kernel_sleep_notice_flushes_without_a_reply(){
  let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
- tx.send(Message{type_id:power::OP_DEVICE_SLEEP,caller_pd:0,arg0:1,arg1:0,arg2:0}).unwrap();service_next_request();
+ tx.send(Message{type_id:power::OP_DEVICE_SLEEP,caller_pd:0,arg0:1,arg1:0,arg2:0}).unwrap();service_next_request(&mut None);
  assert_eq!(EFFECTS.lock().unwrap().device,[(BLOCK_SYNC,0,0)]);assert!(EFFECTS.lock().unwrap().replies.is_empty());
- tx.send(Message{type_id:power::OP_DEVICE_SLEEP,caller_pd:0,arg0:0,arg1:0,arg2:0}).unwrap();service_next_request();
+ tx.send(Message{type_id:power::OP_DEVICE_SLEEP,caller_pd:0,arg0:0,arg1:0,arg2:0}).unwrap();service_next_request(&mut None);
  assert_eq!(EFFECTS.lock().unwrap().device.len(),1);assert!(EFFECTS.lock().unwrap().replies.is_empty());
 }

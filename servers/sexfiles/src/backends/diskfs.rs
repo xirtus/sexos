@@ -288,9 +288,10 @@ impl DiskFs {
             "[sexfiles.diskfs.call] slot={} opcode={:#x} arg0={:#x} arg1={:#x} arg2={:#x}",
             SLOT_BLOCK, opcode, arg0, arg1, arg2
         ); }
-        // SLOT_BLOCK is a Domain capability → AsyncEnqueue: enqueues to sexdrive's
-        // ring and returns (0,0) immediately. Must call pdx_listen_raw(0) to collect
-        // sexdrive's reply via the incoming_replies priority queue (send_reply path).
+        // Fast-path block I/O: pdx_call_recv (sys 102) enqueues to sexdrive, hands off
+        // directly on the same core, and returns the first inbox event (normally sexdrive's
+        // reply) in registers in a single kernel entry. Interleaved client requests are
+        // stashed in DEFERRED and replayed by the trampoline main loop.
         // The disk driver may be down for a moment (it crashed or hung, and the kernel is
         // resetting the controller): the call is refused until it runs again, and a call
         // the dead run took comes back as PEER_RESTARTED. Every block request is safe to
@@ -299,54 +300,65 @@ impl DiskFs {
         let began = sex_pdx::get_ticks();
         let mut resent = 0u32;
         'send: loop {
-        let (send_status, _) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
-        if send_status == sex_pdx::ERR_SERVICE_NOT_READY
-            && sex_pdx::get_ticks().saturating_sub(began) < 60_000
-            && !matches!(sex_pdx::crash_log::peer_state(SLOT_BLOCK as u64), Ok(p) if p.life == sex_pdx::crash_log::PeerLife::GaveUp) {
-            sys_yield();
-            continue 'send;
-        }
-        if send_status != 0 {
-            if hot_log() { serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status); }
-            if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
-                let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
-                if hot_log() { serial_println!(
-                    "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
-                    op, send_status, arg1
-                ); }
-            }
-            return send_status;
-        }
-        // Loop until we get the IPC reply (type_id=0x1) from sexdrive.
-        // type_id=0x1 = kernel IPC reply; incoming_replies has priority in pdx_listen_raw(0).
-        // SEXFILES_DEFER_V1: non-reply messages here are LIVE client requests
-        // arriving mid-roundtrip (the old "stale startup message" discard ate
-        // them — vanished-request root cause). Stash for the main loop.
-        loop {
-            let msg = pdx_listen_raw(0);
-            if msg.type_id == 0x1 && msg.caller_pd==2 && msg.arg0 == sex_pdx::crash_log::PEER_RESTARTED {
-                resent += 1;
-                sex_pdx::serial_record!("[sexfiles.block.resend] opcode={:#x} lba={} bytes={} attempt={}", opcode, arg0 / BLOCK_SECTOR_SIZE, arg1, resent);
-                if resent > 8 { return BLOCK_ERR_NO_DEVICE; }
-                continue 'send;
-            }
-            if msg.type_id == 0x1 && msg.caller_pd==2 {
-                let reply_val = msg.arg0;
-                if hot_log() { serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val); }
-                if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
-                    let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
-                    if hot_log() { serial_println!(
-                        "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
-                        op, reply_val, arg1
-                    ); }
+            let mut pending = match sex_pdx::ipc_recv::pdx_call_recv(SLOT_BLOCK, opcode, arg0, arg1, arg2) {
+                Ok(msg) => msg,
+                Err(send_status)
+                    if send_status == sex_pdx::ERR_SERVICE_NOT_READY
+                        && sex_pdx::get_ticks().saturating_sub(began) < 60_000
+                        && !matches!(
+                            sex_pdx::crash_log::peer_state(SLOT_BLOCK as u64),
+                            Ok(p) if p.life == sex_pdx::crash_log::PeerLife::GaveUp
+                        ) =>
+                {
+                    sys_yield();
+                    continue 'send;
                 }
-                return reply_val;
+                Err(send_status) => {
+                    if hot_log() { serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status); }
+                    if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
+                        let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
+                        if hot_log() { serial_println!(
+                            "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
+                            op, send_status, arg1
+                        ); }
+                    }
+                    return send_status;
+                }
+            };
+            // Loop until we get the IPC reply (type_id=0x1) from sexdrive.
+            // type_id=0x1 = kernel IPC reply; incoming_replies has priority in pdx_call_recv / pdx_listen_raw(0).
+            // SEXFILES_DEFER_V1: non-reply messages here are LIVE client requests
+            // arriving mid-roundtrip. Stash for the main loop.
+            loop {
+                let msg = match pending.take() {
+                    Some(m) => m,
+                    None => pdx_listen_raw(0),
+                };
+                if msg.type_id == 0x1 && msg.caller_pd == 2 && msg.arg0 == sex_pdx::crash_log::PEER_RESTARTED {
+                    resent += 1;
+                    sex_pdx::serial_record!("[sexfiles.block.resend] opcode={:#x} lba={} bytes={} attempt={}", opcode, arg0 / BLOCK_SECTOR_SIZE, arg1, resent);
+                    if resent > 8 { return BLOCK_ERR_NO_DEVICE; }
+                    continue 'send;
+                }
+                if msg.type_id == 0x1 && msg.caller_pd == 2 {
+                    let reply_val = msg.arg0;
+                    if hot_log() { serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val); }
+                    if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
+                        let op = if opcode == BLOCK_READ { "READ" } else { "WRITE" };
+                        if hot_log() { serial_println!(
+                            "[sexfiles.diskfs.block.reply] op={} status={} bytes={}",
+                            op, reply_val, arg1
+                        ); }
+                    }
+                    return reply_val;
+                }
+                if msg.type_id != 0 && msg.type_id != 1 {
+                    crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.caller_task, msg.arg0, msg.arg1, msg.arg2);
+                }
+                if pending.is_none() {
+                    sys_yield();
+                }
             }
-            if msg.type_id != 0 && msg.type_id != 1 {
-                crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.caller_task, msg.arg0, msg.arg1, msg.arg2);
-            }
-            sys_yield();
-        }
         }
     }
 
