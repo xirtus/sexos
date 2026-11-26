@@ -265,6 +265,11 @@ struct PendingPresentation { identity: sex_pdx::notify::Presentation, sender_tas
 /// One slot keeps the cross-service ordering unambiguous; another confirmed
 /// sender gets Retry and may ask again after the first receipt or timeout.
 static mut PENDING_PRESENTATION: Option<PendingPresentation> = None;
+/// This Bell run's identity for confirmed notices: its restart epoch (Shell reads
+/// the same value for the Bell route). Services have no app task row to name it.
+fn bell_epoch() -> u32 {
+    sex_pdx::crash_log::self_epoch().map_or(0, |e| e.min(u32::MAX as u64) as u32)
+}
 
 // ── Mute List ────────────────────────────────────────────────────────
 
@@ -1488,7 +1493,7 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::notify::OP_NOTIFICATION_HANDLED => {
                 if msg.caller_pd != 3 { continue; }
                 let Some(pending) = (unsafe { PENDING_PRESENTATION }) else { continue };
-                let live_bell_task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
+                let live_bell_task = bell_epoch();
                 let live_sender_task = sex_pdx::system_stats::domain(pending.identity.sender).map_or(0, |run| run.task);
                 let Some(disposition) = pending.identity.accepts_ack_for_live_tasks(msg.arg0, msg.arg1,
                     msg.arg2, pending.sender_task, live_bell_task, live_sender_task) else {
@@ -1565,7 +1570,7 @@ pub extern "C" fn _start() -> ! {
                         acknowledge(sex_pdx::notify::Disposition::Retry);
                         continue;
                     }
-                    let task = sex_pdx::system_stats::domain(sex_pdx::notify::BELL_PD).map_or(0, |run| run.task);
+                    let task = bell_epoch();
                     if task == 0 || msg.caller_task == 0 || caller > u16::MAX as u32 {
                         acknowledge(sex_pdx::notify::Disposition::Retry);
                         continue;

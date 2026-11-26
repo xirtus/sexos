@@ -108,7 +108,10 @@ fn begin(
     text: &str,
 ) -> core::result::Result<(Result, Vec<u8>, u64), &'static str> {
     let word = console::stdio(console::PIPED, console::PIPED, console::NULL);
-    let ticket = relay::prepare_piped(b"/bin/quil-ls", b"", 0, word)
+    // The same words sex-std's own Command puts first: a hidden helper whose
+    // streams Files holds. Without them quil-ls waits for typing in a window it
+    // does not have.
+    let ticket = relay::prepare_piped(b"/bin/quil-ls", b"+hidden +piped", 0, word)
         .map_err(|_| "Install Quil's language service first")?;
     launch::start_ticket(ticket, false, true, COOKIE)
         .map_err(|_| "Could not start language service")?;

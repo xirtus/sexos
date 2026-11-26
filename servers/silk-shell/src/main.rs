@@ -17029,15 +17029,21 @@ unsafe fn shell_memory_poll() {
     shell_notice(&text[..k], 2);
     sex_pdx::serial_record!("[shell.oom.end] target={} task={} pages={} ok={}", e.target, e.task, pages, ok as u8);
 }
+/// Bell's incarnation, the identity a confirmed notice is bound to. Services
+/// have no app task row, so the kernel's restart epoch for the Bell route names
+/// this Bell run (0 while Bell is down or unknown).
+fn notify_bell_epoch() -> u32 {
+    sex_pdx::crash_log::peer_state(SLOT_BELL).ok().filter(|p| p.live()).map_or(0, |p| p.epoch.min(u32::MAX as u64) as u32)
+}
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id == sex_pdx::notify::OP_NOTIFICATION_BEGIN {
         if msg.caller_pd != NOTIFY_BELL_PD { return true; }
-        let live_bell = sex_pdx::system_stats::domain(NOTIFY_BELL_PD).map_or(0, |run| run.task);
+        let live_bell = notify_bell_epoch();
         let sender = sex_pdx::notify::decode_begin_sender(msg.arg2);
         let key_required = sender.is_some_and(|(_, keyed)| keyed);
         let identity = sender.and_then(|(sender, _)| sex_pdx::notify::Presentation::new(
-            msg.arg0, msg.arg1 as u32, sender, msg.caller_task));
-        if live_bell == msg.caller_task
+            msg.arg0, msg.arg1 as u32, sender, live_bell));
+        if live_bell != 0
             && msg.arg1 <= u32::MAX as u64 {
             NOTIFY_PRESENTATION = identity.map(|identity| PendingNoticePresentation {
                 identity, since: sex_pdx::get_ticks(), key_required, key: None });
@@ -17047,7 +17053,7 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id == sex_pdx::notify::OP_NOTIFICATION_KEY {
         if msg.caller_pd == NOTIFY_BELL_PD {
             if let Some(pending) = NOTIFY_PRESENTATION.as_mut() {
-                if pending.identity.matches_key(msg.arg0, msg.caller_task) {
+                if pending.identity.matches_key(msg.arg0, notify_bell_epoch()) {
                     pending.key = Some((msg.arg1, msg.arg2));
                 }
             }
@@ -17063,7 +17069,7 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
     let presentation = NOTIFY_PRESENTATION.filter(|pending|
         sex_pdx::get_ticks().saturating_sub(pending.since) < 5_000
-            && pending.identity.matches_text(&text, msg.caller_task));
+            && pending.identity.matches_text(&text, notify_bell_epoch()));
     NOTIFY_PRESENTATION = None;
     let acknowledge = |disposition: sex_pdx::notify::Disposition| {
         if let Some(presentation) = presentation {
