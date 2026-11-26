@@ -115,7 +115,14 @@ def main():
         w, h, closed = shot('closed')
         back = sum(1 for y in range(py0, min(py0 + ph, h)) for x in range(px0, min(px0 + pw, w))
                    if closed[(y * w + x) * 3:(y * w + x) * 3 + 3] == before[(y * w + x) * 3:(y * w + x) * 3 + 3])
-        if back < pw * ph * 9 // 10: raise RuntimeError('panel still drawn after Escape (%d of %d pixels back)' % (back, pw * ph))
+        if back < pw * ph * 9 // 10:
+            # Say where the panel area still differs, and how, so a miss is diagnosable from the log.
+            diff = [(x, y) for y in range(py0, min(py0 + ph, h)) for x in range(px0, min(px0 + pw, w))
+                    if closed[(y * w + x) * 3:(y * w + x) * 3 + 3] != before[(y * w + x) * 3:(y * w + x) * 3 + 3]]
+            xs, ys = [p[0] for p in diff], [p[1] for p in diff]
+            samples = [(x, y, tuple(before[(y * w + x) * 3:(y * w + x) * 3 + 3]), tuple(closed[(y * w + x) * 3:(y * w + x) * 3 + 3])) for x, y in diff[::max(1, len(diff) // 6)][:6]]
+            raise RuntimeError('panel still drawn after Escape (%d of %d pixels back; differing box x=%d..%d y=%d..%d; before->closed %r)'
+                               % (back, pw * ph, min(xs), max(xs), min(ys), max(ys), samples))
         if '[cufflinks.panic]' in text(): raise RuntimeError('Cufflinks panicked')
 
         result = dict(ok=True, status=panel[3], lines=int(panel[2]), panel=[px0, py0, pw, ph], changed=changed, bright=bright,

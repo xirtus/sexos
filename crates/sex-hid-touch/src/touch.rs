@@ -23,6 +23,15 @@ impl Frame {
     pub fn fingers(&self) -> usize { self.down().count() }
 }
 
+/// A relative pointer report from a touchpad's fallback Mouse collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseReport {
+    pub dx: i32,
+    pub dy: i32,
+    pub wheel: i32,
+    pub buttons: u8,
+}
+
 /// Logical size of the surface (X, Y maxima) for scaling.
 pub fn extent(l: &Layout) -> (i32, i32) {
     let x = l.finger_field(0, d::PAGE_DESKTOP, d::USAGE_X).map_or(4095, |f| f.logical_max.max(1));
@@ -37,11 +46,20 @@ pub fn decode(l: &Layout, raw: &[u8]) -> Option<Frame> {
         let first = *raw.first()?;
         if Some(first) != l.touch_report { return None; }
         &raw[1..]
-    } else { raw };
+    } else {
+        if l.touch_report.is_none() { return None; }
+        raw
+    };
     let mut f = Frame::default();
     let reported = l.field(d::PAGE_DIGITIZER, d::USAGE_CONTACT_COUNT).and_then(|c| d::value(c, report)).map(|v| v.max(0) as usize);
     let slots = (l.fingers as usize).min(d::MAX_FINGERS);
-    let n = reported.map_or(slots, |c| c.min(slots));
+    let mut n = reported.map_or(slots, |c| c.min(slots));
+    // Hybrid single-slot pads send Contact Count = 0 on continuation packets while tip is down.
+    if n == 0 && slots == 1 {
+        let tip0 = l.finger_field(0, d::PAGE_DIGITIZER, d::USAGE_TIP_SWITCH)
+            .and_then(|fd| d::value(fd, report)).unwrap_or(0) != 0;
+        if tip0 { n = 1; }
+    }
     for i in 0..n {
         let i8 = i as u8;
         let get = |page, usage| l.finger_field(i8, page, usage).and_then(|fd| d::value(fd, report));
@@ -57,6 +75,28 @@ pub fn decode(l: &Layout, raw: &[u8]) -> Option<Frame> {
     f.count = n;
     f.button = l.field(d::PAGE_BUTTON, 1).and_then(|b| d::value(b, report)).unwrap_or(0) != 0;
     Some(f)
+}
+
+/// Decodes a Mouse-collection report when the touchpad is in mouse emulation mode.
+pub fn decode_mouse(l: &Layout, raw: &[u8]) -> Option<MouseReport> {
+    let report = if l.uses_report_ids {
+        let first = *raw.first()?;
+        if Some(first) != l.mouse_report { return None; }
+        &raw[1..]
+    } else {
+        if l.mouse_report.is_none() { return None; }
+        raw
+    };
+    let dx = l.mouse_field(d::PAGE_DESKTOP, d::USAGE_X).and_then(|f| d::value(f, report)).unwrap_or(0);
+    let dy = l.mouse_field(d::PAGE_DESKTOP, d::USAGE_Y).and_then(|f| d::value(f, report)).unwrap_or(0);
+    let wheel = l.mouse_field(d::PAGE_DESKTOP, d::USAGE_WHEEL).and_then(|f| d::value(f, report)).unwrap_or(0);
+    let mut buttons = 0u8;
+    for b in 0..3u8 {
+        if l.mouse_field(d::PAGE_BUTTON, (b + 1) as u16).and_then(|f| d::value(f, report)).unwrap_or(0) != 0 {
+            buttons |= 1 << b;
+        }
+    }
+    Some(MouseReport { dx, dy, wheel, buttons })
 }
 
 #[cfg(test)]

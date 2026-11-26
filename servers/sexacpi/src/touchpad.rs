@@ -72,18 +72,22 @@ fn path_from(bytes: &[u8], scope: &AmlName) -> Option<AmlName> {
 }
 
 fn hid_register(aml: &Aml, dev: &AmlName) -> Option<u16> {
-    let args = alloc::vec![
-        WrappedObject::new(Object::Buffer(dsm_uuid().to_vec())),
-        WrappedObject::new(Object::Integer(1)),
-        WrappedObject::new(Object::Integer(1)),
-        WrappedObject::new(Object::Package(Vec::new())),
-    ];
-    let o = eval(aml, dev, "_DSM", args)?;
-    match &*o {
-        Object::Integer(v) => Some(*v as u16),
-        Object::Buffer(b) if b.len() >= 2 => Some(u16::from_le_bytes([b[0], b[1]])),
-        _ => None,
+    for rev in [1u64, 0u64] {
+        let args = alloc::vec![
+            WrappedObject::new(Object::Buffer(dsm_uuid().to_vec())),
+            WrappedObject::new(Object::Integer(rev)),
+            WrappedObject::new(Object::Integer(1)),
+            WrappedObject::new(Object::Package(Vec::new())),
+        ];
+        let Some(o) = eval(aml, dev, "_DSM", args) else { continue };
+        match &*o {
+            Object::Integer(v) => return Some(*v as u16),
+            Object::Buffer(b) if b.len() >= 2 => return Some(u16::from_le_bytes([b[0], b[1]])),
+            Object::Buffer(b) if b.len() == 1 => return Some(b[0] as u16),
+            _ => {}
+        }
     }
+    None
 }
 
 /// `3cdff6f7-4267-4555-ad05-b30a3d8938de` in ACPI's byte order (HID over I2C 1.0 §5.1).
@@ -91,12 +95,27 @@ fn dsm_uuid() -> [u8; 16] {
     [0xF7, 0xF6, 0xDF, 0x3C, 0x67, 0x42, 0x55, 0x45, 0xAD, 0x05, 0xB3, 0x0A, 0x3D, 0x89, 0x38, 0xDE]
 }
 
+fn power_on(aml: &Aml, dev: &AmlName) {
+    if let Some(list) = eval(aml, dev, "_PR0", Vec::new()) {
+        if let Object::Package(items) = &*list {
+            for item in items.iter() {
+                let Object::String(s) = &**item else { continue };
+                let Some(n) = name(s) else { continue };
+                let found = aml.namespace.lock().search(&n, dev).ok()
+                    .and_then(|(full, obj)| matches!(*obj, Object::PowerResource { .. }).then_some(full));
+                if let Some(full) = found { let _ = eval(aml, &full, "_ON", Vec::new()); }
+            }
+        }
+    }
+    let _ = eval(aml, dev, "_PS0", Vec::new());
+}
+
 fn counts(aml: &Aml, controller: &AmlName, khz: u32) -> Option<(u16, u16, u16)> {
     let method = if khz >= 1000 { "FPCN" } else if khz >= 400 { "FMCN" } else { "SSCN" };
     let o = eval(aml, controller, method, Vec::new())?;
     let Object::Package(items) = &*o else { return None };
     let v: Vec<u64> = items.iter().filter_map(int_of).collect();
-    (v.len() >= 2).then(|| (v[0] as u16, v[1] as u16, v.get(2).copied().unwrap_or(0) as u16))
+    (v.len() >= 2 && v[0] > 0 && v[1] > 0).then(|| (v[0] as u16, v[1] as u16, v.get(2).copied().unwrap_or(0) as u16))
 }
 
 /// One touchpad's description, or why there is none.
@@ -114,7 +133,7 @@ pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
     let controller = path_from(&controller, dev).ok_or("bad_controller_path")?;
     let adr = eval_int(aml, &controller, "_ADR").ok_or("controller_no_adr")?;
     let hid = hid_register(aml, dev).ok_or("no_dsm")?;
-    for p in [&controller, dev] { let _ = eval(aml, p, "_PS0", Vec::new()); }
+    for p in [&controller, dev] { power_on(aml, p); }
     let khz = (hz / 1000).clamp(100, 1000);
     let irq = match (apic, &gpio) {
         (Some(i), _) => Ok(i),
