@@ -13,6 +13,7 @@ CT = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>'''
 RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -27,7 +28,19 @@ WB_RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
 <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>'''
+# The smallest complete styles part: one font, the two required fills, one border and
+# one cell format. Without it the file opens with a "no styles part" import warning.
+STYLES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>'''
 STRINGS = ['Item', 'Cost', 'Rent', 'Food', 'Fun', 'Total', 'Per year',
            'Welcome to Spreadeagle, the SexOS spreadsheet.', 'Arrows move, type to edit, Enter commits, Ctrl+S saves.']
 SST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -53,7 +66,7 @@ NOTES = sheet([(1, [s('A1', 7)]), (2, [s('A2', 8)])])
 out = Path(__file__).resolve().parent / 'assets' / 'welcome.xlsx'
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
     for name, text in [('[Content_Types].xml', CT), ('_rels/.rels', RELS), ('xl/workbook.xml', WB),
-                       ('xl/_rels/workbook.xml.rels', WB_RELS), ('xl/sharedStrings.xml', SST),
+                       ('xl/_rels/workbook.xml.rels', WB_RELS), ('xl/sharedStrings.xml', SST), ('xl/styles.xml', STYLES),
                        ('xl/worksheets/sheet1.xml', BUDGET), ('xl/worksheets/sheet2.xml', NOTES)]:
         zi = zipfile.ZipInfo(name, (2026, 11, 14, 0, 0, 0))
         zi.compress_type = zipfile.ZIP_DEFLATED

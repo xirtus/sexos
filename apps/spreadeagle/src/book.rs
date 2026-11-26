@@ -1204,7 +1204,9 @@ mod tests {
     fn opens_the_hand_written_xlsx() {
         let path = temp("welcome.xlsx");
         std::fs::write(&path, WELCOME).unwrap();
-        let (book, _) = Book::open(&path).unwrap();
+        let (book, warnings) = Book::open(&path).unwrap();
+        // The first file everyone sees must open without an import warning.
+        assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(book.sheets(), ["Budget", "Notes"]);
         assert_eq!(book.shown(0, 0).text, "Item");
         assert_eq!(book.shown(1, 1), Shown { text: "1200".into(), right: true, error: false });
