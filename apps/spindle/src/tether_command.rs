@@ -172,6 +172,24 @@ const HOTSWAP_IDLE: HotswapRx = HotswapRx {
     expected_len: 0, received: 0, expected_fnv: 0, buf: alloc::vec::Vec::new(),
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PushPhase { Idle, Opening, Ready, Writing, Discard }
+
+struct PushfileRx {
+    phase: PushPhase,
+    fs_submitted: bool,
+    path: [u8; log::PUSHFILE_MAX_PATH],
+    path_len: usize,
+    expected_len: usize,
+    received: usize,
+    expected_fnv: u64,
+    fnv: u64,
+}
+const PUSHFILE_IDLE: PushfileRx = PushfileRx {
+    phase: PushPhase::Idle, fs_submitted: false, path: [0; log::PUSHFILE_MAX_PATH], path_len: 0,
+    expected_len: 0, received: 0, expected_fnv: 0, fnv: log::FNV64_OFFSET,
+};
+
 pub struct Tether {
     phase: Phase,
     seq: u32,
@@ -208,6 +226,7 @@ pub struct Tether {
     listening: bool,
     sweep: Sweep,
     hotswap: HotswapRx,
+    pushfile: PushfileRx,
     /// Control tether to reconnect automatically after a `tether sweep` completes.
     resume: Resume,
 }
@@ -220,6 +239,7 @@ pub static mut TETHER: Tether = Tether {
     queue_head: 0, queue_count: 0, empty_receives: 0, recv_turn: false, bytes_out: 0, commands: 0, listening: false,
     sweep: SWEEP_IDLE,
     hotswap: HOTSWAP_IDLE,
+    pushfile: PUSHFILE_IDLE,
     resume: RESUME_NONE,
 };
 
@@ -486,6 +506,7 @@ impl Tether {
         self.next_at = 0;
         self.sent = false;
         self.hotswap_reset();
+        self.pushfile_reset();
     }
 
     fn hotswap_reset(&mut self) {
@@ -499,9 +520,20 @@ impl Tether {
         self.hotswap.buf = alloc::vec::Vec::new();
     }
 
+    fn pushfile_reset(&mut self) {
+        self.pushfile.phase = PushPhase::Idle;
+        self.pushfile.fs_submitted = false;
+        self.pushfile.path_len = 0;
+        self.pushfile.expected_len = 0;
+        self.pushfile.received = 0;
+        self.pushfile.expected_fnv = 0;
+        self.pushfile.fnv = log::FNV64_OFFSET;
+    }
+
     fn end(&mut self) {
         // A call still out is answered and dropped by `receive` (phase Close).
         self.hotswap_reset();
+        self.pushfile_reset();
         self.phase = Phase::Close;
         self.next_at = 0;
     }
@@ -615,19 +647,25 @@ impl Tether {
             Phase::Drop => self.net_call(w::CLOSE, 0, Call::Plain),
             Phase::CloseListener => self.net_call_on(LISTEN_FLOW, w::CLOSE, 0, Call::Close),
             Phase::Live => {
+                self.step_pushfile(sb);
                 if self.out_len == 0 { self.fill(sb); }
+                let push_rx = matches!(self.pushfile.phase, PushPhase::Ready | PushPhase::Discard);
+                let push_wait = matches!(self.pushfile.phase, PushPhase::Opening | PushPhase::Writing)
+                    || (self.pushfile.phase == PushPhase::Ready && unsafe { crate::fs_commands::FS.busy() });
                 // Receives and sends take turns, so commands get through during the log dump.
                 self.recv_turn = !self.recv_turn;
-                if self.out_len > 0 && !self.recv_turn {
+                if self.out_len > 0 && (!self.recv_turn || push_wait) {
                     // At most SEND_MAX a call, the size the Wi-Fi sweep proved on the x17.
                     let n = self.out_len.min(SEND_MAX);
                     region[..n].copy_from_slice(&self.out[..n]);
                     self.net_call(w::SEND, n as u64, Call::Send);
+                } else if push_wait {
+                    self.next_at = now + 2;
                 } else if self.empty_receives >= STATE_EVERY {
                     self.empty_receives = 0;
                     self.net_call(w::STATE, 0, Call::State);
                 } else {
-                    let room = if self.sweep.active || self.hotswap.active { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
+                    let room = if self.sweep.active || self.hotswap.active || push_rx { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
                     self.net_call(w::RECEIVE, room as u64, Call::Receive);
                 }
             }
@@ -773,7 +811,8 @@ impl Tether {
                     }
                 }
                 Call::Receive => {
-                    let n = if self.sweep.active || self.hotswap.active { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
+                    let push_rx = matches!(self.pushfile.phase, PushPhase::Ready | PushPhase::Discard);
+                    let n = if self.sweep.active || self.hotswap.active || push_rx { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
                     if n == 0 {
                         self.empty_receives += 1;
                         if self.out_len == 0 { self.next_at = now + POLL_MS; }
@@ -785,6 +824,9 @@ impl Tether {
                     } else if self.hotswap.active {
                         self.empty_receives = 0;
                         self.feed_hotswap(&region[..n], sb);
+                    } else if push_rx {
+                        self.empty_receives = 0;
+                        self.feed_pushfile(&region[..n], sb);
                     } else {
                         self.empty_receives = 0;
                         self.inbound[self.in_len..self.in_len + n].copy_from_slice(&region[..n]);
@@ -800,6 +842,157 @@ impl Tether {
             _ => {}
         }
         true
+    }
+
+    fn step_pushfile(&mut self, sb: &mut Scrollback) {
+        match self.pushfile.phase {
+            PushPhase::Opening => {
+                if !self.pushfile.fs_submitted {
+                    if unsafe { crate::fs_commands::FS.busy() || crate::play_command::PLAY.busy() } {
+                        return;
+                    }
+                    let path = self.pushfile.path;
+                    let plen = self.pushfile.path_len;
+                    if unsafe { crate::fs_commands::FS.start_push_open(&path[..plen]) } {
+                        self.pushfile.fs_submitted = true;
+                    } else {
+                        let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                        say!(sb, "push-file: err {} filesystem unavailable", pstr);
+                        if self.pushfile.expected_len == 0 {
+                            self.pushfile_reset();
+                            if self.in_len > 0 { self.split_lines(sb); }
+                        } else {
+                            self.pushfile.phase = PushPhase::Discard;
+                            self.drain_inbound_pushfile(sb);
+                        }
+                    }
+                    return;
+                }
+                let Some(st) = (unsafe { crate::fs_commands::PUSHFILE_STATUS.take() }) else { return };
+                self.pushfile.fs_submitted = false;
+                let path = self.pushfile.path;
+                let plen = self.pushfile.path_len;
+                let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                if st != sex_pdx::fs::OK {
+                    say!(sb, "push-file: err {} open failed (status={})", pstr, st);
+                    if self.pushfile.expected_len == 0 {
+                        self.pushfile_reset();
+                        if self.in_len > 0 { self.split_lines(sb); }
+                    } else {
+                        self.pushfile.phase = PushPhase::Discard;
+                        self.drain_inbound_pushfile(sb);
+                    }
+                    return;
+                }
+                if self.pushfile.expected_len == 0 {
+                    if self.pushfile.fnv != self.pushfile.expected_fnv {
+                        say!(sb, "push-file: err {} checksum mismatch (got {:016x} want {:016x})", pstr, self.pushfile.fnv, self.pushfile.expected_fnv);
+                    } else {
+                        say!(sb, "push-file: ok {} (0 bytes)", pstr);
+                    }
+                    self.pushfile_reset();
+                    if self.in_len > 0 { self.split_lines(sb); }
+                    return;
+                }
+                self.pushfile.phase = PushPhase::Ready;
+                self.drain_inbound_pushfile(sb);
+            }
+            PushPhase::Writing => {
+                let Some(st) = (unsafe { crate::fs_commands::PUSHFILE_STATUS.take() }) else { return };
+                let path = self.pushfile.path;
+                let plen = self.pushfile.path_len;
+                let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                if st != sex_pdx::fs::OK {
+                    say!(sb, "push-file: err {} write failed (status={})", pstr, st);
+                    if self.pushfile.received >= self.pushfile.expected_len {
+                        self.pushfile_reset();
+                        if self.in_len > 0 { self.split_lines(sb); }
+                    } else {
+                        self.pushfile.phase = PushPhase::Discard;
+                    }
+                    return;
+                }
+                if self.pushfile.received >= self.pushfile.expected_len {
+                    if self.pushfile.fnv != self.pushfile.expected_fnv {
+                        say!(sb, "push-file: err {} checksum mismatch (got {:016x} want {:016x})", pstr, self.pushfile.fnv, self.pushfile.expected_fnv);
+                    } else {
+                        say!(sb, "push-file: ok {} ({} bytes)", pstr, self.pushfile.expected_len);
+                    }
+                    self.pushfile_reset();
+                    if self.in_len > 0 { self.split_lines(sb); }
+                } else {
+                    self.pushfile.phase = PushPhase::Ready;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn drain_inbound_pushfile(&mut self, sb: &mut Scrollback) {
+        let left = self.in_len;
+        if left > 0 {
+            let mut tmp = [0u8; IN_MAX];
+            tmp[..left].copy_from_slice(&self.inbound[..left]);
+            self.in_len = 0;
+            self.feed_pushfile(&tmp[..left], sb);
+        }
+    }
+
+    fn feed_pushfile(&mut self, bytes: &[u8], sb: &mut Scrollback) {
+        let need = self.pushfile.expected_len.saturating_sub(self.pushfile.received);
+        let take = bytes.len().min(need);
+        let rest = &bytes[take..];
+
+        if self.pushfile.phase == PushPhase::Discard {
+            self.pushfile.received += take;
+            if self.pushfile.received >= self.pushfile.expected_len {
+                self.pushfile_reset();
+                if !rest.is_empty() {
+                    let n = rest.len().min(IN_MAX - self.in_len);
+                    self.inbound[self.in_len..self.in_len + n].copy_from_slice(&rest[..n]);
+                    self.in_len += n;
+                    self.split_lines(sb);
+                }
+            }
+            return;
+        }
+
+        // PushPhase::Ready — stream chunk directly to `sexfiles` without heap allocation.
+        if !rest.is_empty() {
+            let n = rest.len().min(IN_MAX - self.in_len);
+            self.inbound[self.in_len..self.in_len + n].copy_from_slice(&rest[..n]);
+            self.in_len += n;
+        }
+        let offset = self.pushfile.received as u64;
+        self.pushfile.fnv = log::fnv64_update(self.pushfile.fnv, &bytes[..take]);
+        self.pushfile.received += take;
+        let path = self.pushfile.path;
+        let plen = self.pushfile.path_len;
+        if take == 0 {
+            if self.pushfile.received >= self.pushfile.expected_len {
+                let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                if self.pushfile.fnv != self.pushfile.expected_fnv {
+                    say!(sb, "push-file: err {} checksum mismatch (got {:016x} want {:016x})", pstr, self.pushfile.fnv, self.pushfile.expected_fnv);
+                } else {
+                    say!(sb, "push-file: ok {} ({} bytes)", pstr, self.pushfile.expected_len);
+                }
+                self.pushfile_reset();
+                if self.in_len > 0 { self.split_lines(sb); }
+            }
+            return;
+        }
+        if unsafe { crate::fs_commands::FS.start_push_write(&path[..plen], offset, &bytes[..take]) } {
+            self.pushfile.phase = PushPhase::Writing;
+        } else {
+            let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+            say!(sb, "push-file: err {} write start failed", pstr);
+            if self.pushfile.received >= self.pushfile.expected_len {
+                self.pushfile_reset();
+                if self.in_len > 0 { self.split_lines(sb); }
+            } else {
+                self.pushfile.phase = PushPhase::Discard;
+            }
+        }
     }
 
     fn feed_hotswap(&mut self, bytes: &[u8], sb: &mut Scrollback) {
@@ -850,6 +1043,22 @@ impl Tether {
             self.in_len -= end + 1;
             let text = trim(&line[..n]);
             if text.is_empty() { continue; }
+            if text.starts_with(b"SEXOS-PUSHFILE ") {
+                let Some(hdr) = core::str::from_utf8(text).ok().and_then(log::parse_pushfile_header) else {
+                    say!(sb, "push-file: err invalid header");
+                    continue;
+                };
+                self.pushfile_reset();
+                self.pushfile.phase = PushPhase::Opening;
+                self.pushfile.expected_len = hdr.size;
+                self.pushfile.expected_fnv = hdr.fnv;
+                let pb = hdr.path.as_bytes();
+                let pl = pb.len().min(self.pushfile.path.len());
+                self.pushfile.path[..pl].copy_from_slice(&pb[..pl]);
+                self.pushfile.path_len = pl;
+                self.step_pushfile(sb);
+                return;
+            }
             if text.starts_with(b"SEXOS-HOTSWAP ") {
                 let Some(hdr) = core::str::from_utf8(text).ok().and_then(log::parse_hotswap_header) else {
                     say!(sb, "hotswap: err invalid header");

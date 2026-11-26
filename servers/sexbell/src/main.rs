@@ -1525,6 +1525,14 @@ pub extern "C" fn _start() -> ! {
                     msg.caller_pd, msg.arg0, msg.arg1, volume, queued as u8, sound::present() as u8, allowed as u8);
             }
 
+            sex_pdx::OP_BELL_PCM => {
+                // Direct 48 kHz stereo i16 PCM stream (6 frames per message) from Spindle/holders.
+                let allowed = !is_muted(msg.caller_pd) && !is_policy_muted(msg.caller_pd);
+                if allowed {
+                    let _ = sound::push_pcm([msg.arg0, msg.arg1, msg.arg2]);
+                }
+            }
+
             _ => {
                 unsafe {
                     static mut BELL_UNKNOWN_BUDGET: u32 = 8;
