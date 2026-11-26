@@ -2072,7 +2072,11 @@ impl Browser {
                     self.open_context_menu(wx, wy);
                     return;
                 }
-                Kind::Down { .. } | Kind::Wheel { .. } => {
+                Kind::Wheel { .. } => {
+                    self.context_menu = None;
+                    self.draw();
+                }
+                Kind::Down { .. } => {
                     self.context_menu = None;
                     self.draw();
                     return;
