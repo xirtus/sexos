@@ -75,14 +75,17 @@ def main():
   g['focus'](SURFACE[int(o[1])]);time.sleep(.8)
   return o
  def ctrl_shift(k,pattern):
+  time.sleep(.4)  # let queued send-key presses (80 ms holds) land first
   s=len(t());keys=('ctrl','shift',k)
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
   return g['wait'](pattern,s,120)
  def ctrl_alt(k,pattern):
+  time.sleep(.4)  # let queued send-key presses (80 ms holds) land first
   s=len(t());keys=('ctrl','alt',k)
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
   return g['wait'](pattern,s,120)
  def shift(k):
+  time.sleep(.4)
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('shift',k)),(False,(k,'shift')))for x in ks]});time.sleep(.3)
  def close(o):
   s=len(t());q.key('f11');g['wait'](r'\[spreadeagle\.closed\]\n',s,120)
