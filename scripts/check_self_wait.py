@@ -354,12 +354,12 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
  'crates/sex-pdx/src/crash_log.rs': '3104eb235e1e1d2d3840a5ea43ef39d5aa8cc95358a9d104494d9f14ba480997',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
- 'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
+ 'crates/sex-pdx/src/web.rs': '404f9c07116a41ef3ac80c797ffea6d54e008ca038aaac79fa7b4e81c5ca91c4',  # web protocol words for H2/H3 (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
- 'kernel/src/app_resources.rs': 'a27fb46c3cc99ae69f526ec4614d3778b6a93c58b26302cc115881ab8780dcdd',  # is_program_slot for service stacks (no observer change), 2026-11-23
- 'kernel/src/service_restart.rs': '846f8eeb0930389a8488b313c5ec43438fa2b62a947c0364f23c85981960151d',  # service stack comment (no observer change), 2026-11-23
+ 'kernel/src/app_resources.rs': '7f9e3f565051eac895c851e0e58ea8f3c7934e326aa0ff096a0dc4ffa75afb30',  # retire purges handoff slots + IPC v2 teardown (no observer change), 2026-11-25
+ 'kernel/src/service_restart.rs': '555bb544fde987179952f7f83e8fea945ce91f804996938e209e3f5ce4dfeaa8',  # restart tears down IPC v2 state, named hang limits (no observer change), 2026-11-25
  'kernel/src/crash_log.rs': '9a34837711796f87b9d53de4be81116561eec80b7920866af1ef4723683dacee',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 

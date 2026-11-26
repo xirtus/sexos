@@ -310,6 +310,8 @@ fn send_report_once(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u6
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Declare low-latency USB HID/audio deadline class explicitly from userspace (syscall 104).
+    let _ = sex_pdx::sched::deadline(8_000);
     serial_println!("[sexusb.init.start]");
     sex_pdx::serial_record!("[input.payload.mode] component=sexusb mode=redacted");
     // Every xHCI this service holds: the first at SLOT_USB_HOST, more (a laptop's

@@ -19,6 +19,7 @@ mod nic;
 mod ethernet;
 mod link;
 mod realtek;
+mod virtio_net;
 mod arp;
 mod jobs;
 mod dns_jobs;
@@ -5362,20 +5363,29 @@ pub extern "C" fn _start() -> ! {
     let mut last_dns_egress=0u32;
     // Exclusive profiles: never alias a normal driver and the historical proof
     // driver's pool/queues over the same immutable BOOT device reservation.
+    let mut ethernet:Option<link::Link<nic::Live>>=None;
     let mut device = if SEXNET_PROOF_PROFILE_ENABLED {None} else if network_config.is_none(){
         sex_pdx::serial_record!("[sexnet.nic.prepare.unavailable] status={} dma=0 packets=0",network_config_result.err().unwrap_or(sex_pdx::pci_command::DENIED));None
     } else {
         match nic::Live::open() {
             Ok(hardware) => Some(nic::Device::new(hardware, sex_pdx::get_ticks())),
-            Err(status) => {
-                sex_pdx::serial_record!("[sexnet.nic.prepare.unavailable] status={} dma=0 packets=0",status);
-                None
+            Err(status) => match virtio_net::Driver::open() {
+                Ok(v) => {
+                    let m = v.mac;
+                    sex_pdx::serial_record!("[sexnet.virtio.ready] vendor=1af4 product=1041 rx={} tx={} mac={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} dma_region=2 used={}",
+                        v.rx_count(), v.tx_count(), m[0], m[1], m[2], m[3], m[4], m[5], virtio_net::USED_BYTES);
+                    ethernet = Some(link::Link::Virtio(v));
+                    None
+                },
+                Err(_) => {
+                    sex_pdx::serial_record!("[sexnet.nic.prepare.unavailable] status={} dma=0 packets=0",status);
+                    None
+                },
             },
         }
     };
     // Intel Wi-Fi (stages W2-W3): power up and initialise the firmware beside the wired NIC.
     let mut wifi=wifi::Wifi::open(sex_pdx::get_ticks());
-    let mut ethernet:Option<link::Link<nic::Live>>=None;
     let mut usb_look=0u64;
     let mut pending_packet:Option<sex_net::Frame>=None;
     let mut transport:Option<sex_net::Engine<'static>>=None;
@@ -5466,13 +5476,13 @@ pub extern "C" fn _start() -> ! {
         // and clear the card's causes before draining the ring; arm it once the card runs.
         if net_irq.armed {
             let bits=sex_pdx::device::irq_take();
-            if net_irq.took(bits){if let Some(d)=ethernet.as_mut().and_then(|l|l.pci_mut()){d.acknowledge_interrupts();}}
-            if !ethernet.as_ref().is_some_and(|l|l.active()&&matches!(l,link::Link::Pci(_))){
+            if net_irq.took(bits){if let Some(d)=ethernet.as_mut().filter(|l|l.has_irq()){d.acknowledge_interrupts();}}
+            if !ethernet.as_ref().is_some_and(|l|l.active()&&l.has_irq()){
                 let _=sex_pdx::device::irq_mask(sex_pdx::SLOT_NIC,0);net_irq.reset();
                 sex_pdx::serial_record!("[sexnet.irq] armed=0 reason=link_gone polling=1");
             }
         } else if net_irq.may_arm() {
-            if let Some(d)=ethernet.as_mut().and_then(|l|l.pci_mut()).filter(|d|d.phase()==ethernet::Phase::Running){
+            if let Some(d)=ethernet.as_mut().filter(|l|l.has_irq()&&l.phase()==ethernet::Phase::Running){
                 use sex_pdx::device::Mode;
                 match sex_pdx::device::at_slot(sex_pdx::SLOT_NIC).filter(|l|l.vectors>0&&l.mode!=Mode::None){
                     Some(lease)=>{
@@ -5530,7 +5540,7 @@ pub extern "C" fn _start() -> ! {
                     Some(ethernet::Event::Received{sequence,index,frame})=>{
                         if net_irq.received()==irq_wait::Verdict::Silent{
                             let _=sex_pdx::device::irq_mask(sex_pdx::SLOT_NIC,0);
-                            if let Some(d)=driver.pci_mut(){d.disarm_interrupts();}
+                            driver.disarm_interrupts();
                             sex_pdx::serial_record!("[sexnet.irq.silent] missed={} wakes=0 polling=1",irq_wait::SILENT_LIMIT);
                         }
                         if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx] sequence={} index={} length={} hash={:#x}",sequence,index,frame.length,ethernet::fingerprint(&frame.bytes[..frame.length]));}
@@ -5628,7 +5638,7 @@ pub extern "C" fn _start() -> ! {
                     if net_irq.armed&&!wifi_transport&&!restriction.pending()&&!preparing&&!reply_pending&&!seed.busy(){
                         sex_pdx::sys_wait_self_ticks(irq_wait::QUIET_TICKS).expect("BOOT_SELF_WAIT_AUTHORITY");
                         let bits=sex_pdx::device::irq_take();net_irq.slept(bits);
-                        if net_irq.took(bits){if let Some(d)=ethernet.as_mut().and_then(|l|l.pci_mut()){d.acknowledge_interrupts();}}
+                        if net_irq.took(bits){if let Some(d)=ethernet.as_mut().filter(|l|l.has_irq()){d.acknowledge_interrupts();}}
                         continue;
                     }
                     // Existing try-listen yields once; then bounded own-task

@@ -24,6 +24,8 @@ mod hal{pub mod acpi{pub fn poll(){}}}
 mod scheduler{
  pub use super::ownership as task_ownership;
  pub struct Task{pub id:u32,pub state:super::TaskOwnership}
+ // Exit purges stale handoff slots; no per-core handoff exists in this double.
+ pub fn purge_handoff_for_task(_task:*mut Task)->usize{0}
  pub fn unpark_thread(task:*mut Task){if !task.is_null(){unsafe{(*task).state.wake();}super::WAKES.fetch_add(1,super::Ordering::Relaxed);}}
 }
 mod ipc{

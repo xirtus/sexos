@@ -3,14 +3,13 @@
 //! number for it. A client's bytes pass through its own BOOT region, and
 //! each call is served in one turn.
 use crate::jobs::Identity;
-use sex_net::{Address, Engine, OpenBuffers, OpenState};
+use sex_net::{dns_secure, Address, Answers, Engine, OpenBuffers, OpenState};
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 use sex_pdx::web as w;
-use sex_tls::open::{Session, Stage};
+use sex_tls::open::{ClientCache, Session, Stage};
 use sex_tls::Failure;
 
 extern crate alloc;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 // Room for a name's A and AAAA questions and both their answers at once.
 static mut DNS_RX: [u8; 2048] = [0; 2048];
@@ -29,6 +28,24 @@ const MAX_SOCKETS: usize = 4096;
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 /// A question to the resolver is one at a time; another caller waits this long at most.
 const RESOLVE_HOLD_TICKS: u64 = 5_000;
+/// Internal identity owning a flow used for DoT/DoH secure DNS resolution.
+const SECURE_DNS_OWNER: Identity = Identity { pd: u32::MAX, task: 0xD15 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SecurePhase { Connecting, Handshake, Exchange, Done }
+
+struct SecureResolve {
+    who: Identity,
+    host: [u8; 253],
+    host_len: usize,
+    flow: usize,
+    phase: SecurePhase,
+    lookup: dns_secure::Lookup,
+    req: Vec<u8>,
+    req_sent: usize,
+    result: Option<Result<Answers, ()>>,
+}
+
 /// One flow of the service: who holds it (and under which of their own numbers) and,
 /// when encrypted, its TLS session and the wire bytes still to send. `listening` is the
 /// port a listening flow listens on.
@@ -57,7 +74,11 @@ impl Slot {
         // What the site agreed to, once per session: the version, suite and key exchange.
         if !self.told && tls.stage() == Stage::Ready {
             self.told = true;
-            if let Some((version, suite, group)) = tls.agreed() { sex_pdx::serial_record!("[net.tls.agreed] flow={} version={:?} suite={:?} group={:?}", i, version, suite, group); }
+            let alpn = tls.alpn().and_then(|p| core::str::from_utf8(p).ok()).unwrap_or("none");
+            let resumed = tls.resumed() as u8;
+            if let Some((version, suite, group)) = tls.agreed() {
+                sex_pdx::serial_record!("[net.tls.agreed] flow={} version={:?} suite={:?} group={:?} resumed={} alpn={}", i, version, suite, group, resumed, alpn);
+            }
         }
     }
     fn free(&mut self, i: usize, engine: Option<&mut Engine<'static>>) {
@@ -68,7 +89,42 @@ impl Slot {
         if let Some(e) = engine { e.open_close(i); }
     }
 }
-pub struct Service { bound: [u32; PROGRAM_ROWS], slots: Vec<Slot>, sockets: Vec<Option<(Identity, u8)>>, resolving: Option<(Identity, u64)>, attached: bool, announced: bool, announced6: bool, tls_used: bool, pub time: crate::clock_sync::Sync }
+pub struct Service {
+    bound: [u32; PROGRAM_ROWS],
+    slots: Vec<Slot>,
+    sockets: Vec<Option<(Identity, u8)>>,
+    resolving: Option<(Identity, u64)>,
+    secure_resolve: Option<SecureResolve>,
+    secure_dns_seq: u16,
+    tls_cache: Option<ClientCache>,
+    attached: bool,
+    announced: bool,
+    announced6: bool,
+    tls_used: bool,
+    pub time: crate::clock_sync::Sync,
+}
+fn dns_mode_code(mode: dns_secure::Mode) -> u32 {
+    if mode == dns_secure::Mode::Plain { return w::DNS_MODE_PLAIN; }
+    if mode == dns_secure::PRESETS[0].1 { return w::DNS_MODE_DOT_CLOUDFLARE; }
+    if mode == dns_secure::PRESETS[0].2 { return w::DNS_MODE_DOH_CLOUDFLARE; }
+    if mode == dns_secure::PRESETS[1].1 { return w::DNS_MODE_DOT_QUAD9; }
+    if mode == dns_secure::PRESETS[1].2 { return w::DNS_MODE_DOH_QUAD9; }
+    if mode == dns_secure::PRESETS[2].1 { return w::DNS_MODE_DOT_GOOGLE; }
+    if mode == dns_secure::PRESETS[2].2 { return w::DNS_MODE_DOH_GOOGLE; }
+    w::DNS_MODE_PLAIN
+}
+fn dns_mode_from_code(code: u32) -> Option<dns_secure::Mode> {
+    match code {
+        w::DNS_MODE_PLAIN => Some(dns_secure::Mode::Plain),
+        w::DNS_MODE_DOT_CLOUDFLARE => Some(dns_secure::PRESETS[0].1),
+        w::DNS_MODE_DOH_CLOUDFLARE => Some(dns_secure::PRESETS[0].2),
+        w::DNS_MODE_DOT_QUAD9 => Some(dns_secure::PRESETS[1].1),
+        w::DNS_MODE_DOH_QUAD9 => Some(dns_secure::PRESETS[1].2),
+        w::DNS_MODE_DOT_GOOGLE => Some(dns_secure::PRESETS[2].1),
+        w::DNS_MODE_DOH_GOOGLE => Some(dns_secure::PRESETS[2].2),
+        _ => None,
+    }
+}
 fn address(family: u8, bytes: &[u8]) -> Option<Address> {
     match family {
         w::FAMILY_V4 => Some(Address::V4(bytes.try_into().ok()?)),
@@ -84,7 +140,25 @@ fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
 impl Service {
-    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), sockets: Vec::new(), resolving: None, attached: false, announced: false, announced6: false, tls_used: false, time: crate::clock_sync::Sync::new() } }
+    pub const fn new() -> Self {
+        Self {
+            bound: [0; PROGRAM_ROWS],
+            slots: Vec::new(),
+            sockets: Vec::new(),
+            resolving: None,
+            secure_resolve: None,
+            secure_dns_seq: 1,
+            tls_cache: None,
+            attached: false,
+            announced: false,
+            announced6: false,
+            tls_used: false,
+            time: crate::clock_sync::Sync::new(),
+        }
+    }
+    fn tls_cache(&mut self) -> &ClientCache {
+        self.tls_cache.get_or_insert_with(ClientCache::new)
+    }
     /// The IP stack under the service was replaced (Wi-Fi came up or went down):
     /// flows, sockets and the lease note belonged to the old one. Run-Shell bindings stay.
     pub fn reset(&mut self) { self.reset_link() }
@@ -122,15 +196,104 @@ impl Service {
     pub fn reset_link(&mut self) {
         let bound = self.bound;
         let mut time = core::mem::replace(&mut self.time, crate::clock_sync::Sync::new());
+        let tls_cache = self.tls_cache.take();
         time.reset();
         *self = Self::new();
         self.bound = bound;
         self.time = time;
+        self.tls_cache = tls_cache;
     }
-    pub fn busy(&self) -> bool { self.slots.iter().any(|s| s.tls.is_some()) }
+    pub fn busy(&self) -> bool { self.slots.iter().any(|s| s.tls.is_some()) || self.secure_resolve.is_some() }
+    fn pump_secure_resolve(&mut self, engine: &mut Engine<'static>) {
+        let Some(mut sr) = self.secure_resolve.take() else { return };
+        let flow = sr.flow;
+        match sr.phase {
+            SecurePhase::Connecting => match engine.open_state(flow) {
+                OpenState::Open => {
+                    let server_name = sr.lookup.mode().server_name().unwrap_or("");
+                    let alpn: &[&[u8]] = match sr.lookup.mode() {
+                        dns_secure::Mode::Https { .. } => &[b"http/1.1"],
+                        _ => &[b"dot"],
+                    };
+                    let started = Self::seed_and_time().and_then(|(mut seed, seconds)| {
+                        let cache = self.tls_cache();
+                        Session::start_with_cache(server_name, &mut seed, seconds, alpn, cache).ok()
+                    });
+                    if let Some(session) = started {
+                        let slot = &mut self.slots[flow];
+                        slot.tls = Some(session);
+                        slot.told = false;
+                        self.tls_used = true;
+                        sr.phase = SecurePhase::Handshake;
+                    } else {
+                        self.slots[flow].free(flow, Some(engine));
+                        sr.result = Some(Err(()));
+                        sr.phase = SecurePhase::Done;
+                    }
+                }
+                OpenState::Opening => {}
+                OpenState::PeerClosed | OpenState::Closed => {
+                    self.slots[flow].free(flow, Some(engine));
+                    sr.result = Some(Err(()));
+                    sr.phase = SecurePhase::Done;
+                }
+            },
+            SecurePhase::Handshake => {
+                let stage = self.slots[flow].tls.as_ref().map(|t| t.stage());
+                match stage {
+                    Some(Stage::Ready) => { sr.phase = SecurePhase::Exchange; }
+                    Some(Stage::Handshake) => {}
+                    _ => {
+                        self.slots[flow].free(flow, Some(engine));
+                        sr.result = Some(Err(()));
+                        sr.phase = SecurePhase::Done;
+                    }
+                }
+            }
+            SecurePhase::Exchange => {
+                if let Some(tls) = self.slots[flow].tls.as_mut() {
+                    if sr.req_sent < sr.req.len() {
+                        let n = tls.send(&sr.req[sr.req_sent..]);
+                        sr.req_sent += n;
+                        if sr.req_sent == sr.req.len() { tls.finish_request(); }
+                    }
+                    let mut buf = [0u8; 1024];
+                    let n = tls.receive(&mut buf);
+                    if n > 0 {
+                        match sr.lookup.receive(&buf[..n]) {
+                            Ok(Some(answers)) => {
+                                let _ = engine.open_cache_store_secure(&sr.host[..sr.host_len], &sr.lookup, answers);
+                                self.slots[flow].free(flow, Some(engine));
+                                sr.result = Some(Ok(answers));
+                                sr.phase = SecurePhase::Done;
+                            }
+                            Ok(None) => {}
+                            Err(_) => {
+                                let _ = engine.open_cache_store(&sr.host[..sr.host_len], sr.lookup.six(), Answers { v4: None, v6: None }, sex_net::CACHE_NEGATIVE_TTL);
+                                self.slots[flow].free(flow, Some(engine));
+                                sr.result = Some(Err(()));
+                                sr.phase = SecurePhase::Done;
+                            }
+                        }
+                    } else if tls.drained() {
+                        self.slots[flow].free(flow, Some(engine));
+                        sr.result = Some(Err(()));
+                        sr.phase = SecurePhase::Done;
+                    }
+                } else {
+                    self.slots[flow].free(flow, Some(engine));
+                    sr.result = Some(Err(()));
+                    sr.phase = SecurePhase::Done;
+                }
+            }
+            SecurePhase::Done => {}
+        }
+        self.secure_resolve = Some(sr);
+    }
     /// Moves encrypted bytes between the flows and their sessions, each turn of the service.
     pub fn pump(&mut self, engine: &mut Engine<'static>) {
         for (i, slot) in self.slots.iter_mut().enumerate() { slot.pump(i, engine); }
+        self.pump_secure_resolve(engine);
         if self.attached {
             let sockets = &mut self.sockets;
             let mut take = |e: &mut Engine<'static>| -> Option<usize> {
@@ -169,6 +332,9 @@ impl Service {
         for (i,slot)in self.slots.iter_mut().enumerate(){if slot.owner.is_some_and(|(owner,_)|owner.pd==target){slot.free(i,engine.as_deref_mut());}}
         for (i,socket)in self.sockets.iter_mut().enumerate(){if socket.is_some_and(|(owner,_)|owner.pd==target){*socket=None;if let Some(e)=engine.as_deref_mut(){e.open_udp_close(i);}}}
         if self.resolving.is_some_and(|(owner,_)|owner.pd==target){self.resolving=None;}
+        if self.secure_resolve.as_ref().is_some_and(|sr|sr.who.pd==target){
+            if let Some(sr)=self.secure_resolve.take(){self.slots[sr.flow].free(sr.flow,engine.as_deref_mut());}
+        }
     }
     /// A program that ended holds nothing here.
     pub fn retire(&mut self, who: Identity, mut engine: Option<&mut Engine<'static>>) {
@@ -179,6 +345,9 @@ impl Service {
             if socket.is_some_and(|(o, _)| o == who) { *socket = None; if let Some(e) = engine.as_deref_mut() { e.open_udp_close(i); } }
         }
         if self.resolving.is_some_and(|(o, _)| o == who) { self.resolving = None; }
+        if self.secure_resolve.as_ref().is_some_and(|sr| sr.who == who) {
+            if let Some(sr) = self.secure_resolve.take() { self.slots[sr.flow].free(sr.flow, engine.as_deref_mut()); }
+        }
     }
     pub fn handle(&mut self, who: Identity, a: u64, value: u64, engine: Option<&mut Engine<'static>>) -> u64 {
         let seq = (a & 0xFF_FFFF) as u32;
@@ -249,7 +418,7 @@ impl Service {
                 Some(i) => { self.slots[i].owner = Some((who, number)); self.slots[i].listening = 0; Some(i) }
                 None => return w::reply(seq, w::BUSY, 0),
             },
-            w::UP | w::RESOLVE | w::RESOLVE_ALL | w::ADDRESSES => None,
+            w::UP | w::RESOLVE | w::RESOLVE_ALL | w::ADDRESSES | w::DNS_MODE | w::DNS_STATS => None,
             // A flow that is not the caller's is closed, as far as the caller can tell.
             w::STATE if mine.is_none() => return w::reply(seq, w::OK, w::STATE_CLOSED),
             w::CLOSE if mine.is_none() => return w::reply(seq, w::OK, 0),
@@ -282,12 +451,33 @@ impl Service {
                 }
                 w::reply(seq, w::OK, n as u32)
             }
+            w::DNS_MODE => {
+                let req_code = value as u32;
+                if req_code == w::DNS_MODE_QUERY {
+                    return w::reply(seq, w::OK, dns_mode_code(engine.open_dns_mode()));
+                }
+                let Some(mode) = dns_mode_from_code(req_code) else { return w::reply(seq, w::INVALID, 0) };
+                engine.set_open_dns_mode(mode);
+                sex_pdx::serial_record!("[net.dns.mode] code={} port={}", req_code, mode.port());
+                w::reply(seq, w::OK, req_code)
+            }
+            w::DNS_STATS => {
+                let stats = engine.open_cache_stats();
+                region[0..8].copy_from_slice(&stats.hits.to_le_bytes());
+                region[8..16].copy_from_slice(&stats.misses.to_le_bytes());
+                region[16..24].copy_from_slice(&(stats.entries as u64).to_le_bytes());
+                w::reply(seq, w::OK, stats.entries as u32)
+            }
             w::RESOLVE | w::RESOLVE_ALL => {
                 // One question at a time: another caller's waits until it is answered.
                 // sexnet's own question for the time server steps aside for a program's.
                 if self.resolving.is_some_and(|(o, at)| o != who && o != crate::clock_sync::SELF && now.saturating_sub(at) < RESOLVE_HOLD_TICKS) { return w::reply(seq, w::BUSY, 0); }
+                let mode = engine.open_dns_mode();
                 // value 0 asks for the next answer to the question already sent.
                 if value != 0 {
+                    if let Some(old) = self.secure_resolve.take() {
+                        self.slots[old.flow].free(old.flow, Some(engine));
+                    }
                     self.resolving = Some((who, now));
                     let len = value as usize;
                     if len > 253 { return w::reply(seq, w::INVALID, 0); }
@@ -295,10 +485,70 @@ impl Service {
                     name[..len].copy_from_slice(&region[..len]);
                     // Test builds only: a name that makes the service fall over, to show it comes back.
                     if option_env!("SEXOS_NET_CRASH_PROBE").is_some() && &name[..len] == b"crash.invalid" { sex_pdx::serial_record!("[sexnet.crash.probe]"); unsafe { core::ptr::write_volatile(8 as *mut u8, 1) }; }
+                    if mode != dns_secure::Mode::Plain {
+                        let six = kind == w::RESOLVE_ALL && engine.open_global6().is_some();
+                        match engine.open_cache_lookup(&name[..len], six) {
+                            Ok(Some(found)) => {
+                                self.resolving = None;
+                                if kind == w::RESOLVE_ALL {
+                                    let mut n = 0;
+                                    for a in [found.v6.map(Address::V6), found.v4.map(Address::V4)].into_iter().flatten() { put(&mut region[n * w::ADDRESS_BYTES..], a); n += 1; }
+                                    return if n > 0 { w::reply(seq, w::OK, n as u32) } else { w::reply(seq, w::NO_NAME, 0) };
+                                }
+                                return match found.v4 {
+                                    Some(a) => { region[..4].copy_from_slice(&a); w::reply(seq, w::OK, 0) }
+                                    None => w::reply(seq, w::NO_NAME, 0),
+                                };
+                            }
+                            Ok(None) => {}
+                            Err(_) => { self.resolving = None; return w::reply(seq, w::NO_NAME, 0); }
+                        }
+                        let Some(addr) = mode.address() else { self.resolving = None; return w::reply(seq, w::FAILED, 0); };
+                        let Some(flow) = self.free_slot(engine, None) else { self.resolving = None; return w::reply(seq, w::BUSY, 0); };
+                        self.secure_dns_seq = self.secure_dns_seq.wrapping_add(2) | 1;
+                        let Ok(lookup) = dns_secure::Lookup::new(mode, &name[..len], six, self.secure_dns_seq) else {
+                            self.resolving = None;
+                            return w::reply(seq, w::NO_NAME, 0);
+                        };
+                        if engine.open_connect(flow, Address::V4(addr), mode.port()).is_err() {
+                            self.resolving = None;
+                            return w::reply(seq, w::NO_NAME, 0);
+                        }
+                        self.slots[flow].owner = Some((SECURE_DNS_OWNER, 0));
+                        self.slots[flow].listening = 0;
+                        let req = lookup.request();
+                        self.secure_resolve = Some(SecureResolve {
+                            who, host: name, host_len: len, flow, phase: SecurePhase::Connecting,
+                            lookup, req, req_sent: 0, result: None,
+                        });
+                        return w::reply(seq, w::WAIT, 0);
+                    }
                     let asked = if kind == w::RESOLVE { engine.open_resolve(&name[..len]) } else { engine.open_resolve_all(&name[..len]) };
                     return match asked { Ok(()) => w::reply(seq, w::WAIT, 0), Err(_) => { self.resolving = None; w::reply(seq, w::NO_NAME, 0) } };
                 }
                 if self.resolving.map(|(o, _)| o) != Some(who) { return w::reply(seq, w::NO_NAME, 0); }
+                if let Some(sr) = self.secure_resolve.as_ref().filter(|sr| sr.who == who) {
+                    if sr.phase != SecurePhase::Done {
+                        return w::reply(seq, w::WAIT, 0);
+                    }
+                    let sr = self.secure_resolve.take().unwrap();
+                    self.resolving = None;
+                    return match sr.result {
+                        Some(Ok(found)) => {
+                            if kind == w::RESOLVE_ALL {
+                                let mut n = 0;
+                                for a in [found.v6.map(Address::V6), found.v4.map(Address::V4)].into_iter().flatten() { put(&mut region[n * w::ADDRESS_BYTES..], a); n += 1; }
+                                if n > 0 { w::reply(seq, w::OK, n as u32) } else { w::reply(seq, w::NO_NAME, 0) }
+                            } else {
+                                match found.v4 {
+                                    Some(a) => { region[..4].copy_from_slice(&a); w::reply(seq, w::OK, 0) }
+                                    None => w::reply(seq, w::NO_NAME, 0),
+                                }
+                            }
+                        }
+                        _ => w::reply(seq, w::NO_NAME, 0),
+                    };
+                }
                 if kind == w::RESOLVE_ALL {
                     return match engine.open_resolved_all() {
                         Ok(Some(found)) => {
@@ -319,19 +569,35 @@ impl Service {
                 }
             }
             w::TLS_START => {
-                let len = value as usize;
+                let offer_h2 = (value & w::TLS_ALPN_H2_FLAG) != 0;
+                let len = (value & 0xFFFF) as usize;
                 if len == 0 || len > 253 { return w::reply(seq, w::INVALID, 0); }
                 let mut name = [0u8; 253];
                 name[..len].copy_from_slice(&region[..len]);
                 let Ok(host) = core::str::from_utf8(&name[..len]) else { return w::reply(seq, w::INVALID, 0) };
                 let Some((mut seed, seconds)) = Self::seed_and_time() else { return w::reply(seq, w::FAILED, 0) };
+                let alpn: &[&[u8]] = if offer_h2 { &[b"h2", b"http/1.1"] } else { &[b"http/1.1"] };
+                let started = {
+                    let cache = self.tls_cache();
+                    Session::start_with_cache(host, &mut seed, seconds, alpn, cache)
+                };
                 let slot = &mut self.slots[i];
                 slot.tls = None;
                 slot.out_at = 0; slot.out_len = 0;
-                match Session::start(host, &mut seed, seconds) {
+                match started {
                     Ok(session) => { slot.tls = Some(session); slot.told = false; self.tls_used = true; w::reply(seq, w::OK, 0) }
                     Err(_) => w::reply(seq, w::FAILED, 0),
                 }
+            }
+            w::TLS_ALPN => {
+                let Some(tls) = self.slots[i].tls.as_ref() else { return w::reply(seq, w::FAILED, 0) };
+                let proto = match tls.alpn() {
+                    Some(b"h2") => w::ALPN_H2,
+                    Some(b"http/1.1") => w::ALPN_HTTP11,
+                    _ => w::ALPN_NONE,
+                };
+                let resumed = if tls.resumed() { w::TLS_RESUMED_BIT } else { 0 };
+                w::reply(seq, w::OK, proto | resumed)
             }
             w::TLS_STAGE => {
                 let Some(tls) = self.slots[i].tls.as_ref() else { return w::reply(seq, w::FAILED, 0) };

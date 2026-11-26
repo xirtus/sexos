@@ -15,7 +15,12 @@ pub mod dns_wire;
 pub mod v6config;
 pub mod dns_secure;
 pub mod firewall;
+pub mod tcp_options;
+pub mod congestion;
+pub mod datapath;
 pub const MAX_FRAME:usize=1514;
+pub const ADAPTER_MAX_BURST:usize=64;
+pub const ADAPTER_OPEN_BURST:usize=16;
 pub const FLOW_BYTES:usize=4096;
 pub const TURN_BYTES:usize=256;
 pub const NEIGHBOR_CAPACITY:usize=8;
@@ -58,28 +63,55 @@ impl Frame{
   if port>config.source_base{Some((port-config.source_base)as u32)}else{None}
  }
 }
-struct Adapter{rx:Option<Frame>,tx:Option<Frame>}
+struct Adapter{rx:alloc::collections::VecDeque<Frame>,tx:alloc::collections::VecDeque<Frame>,capacity:usize}
+impl Adapter{
+    fn new(capacity:usize)->Self{
+        let cap=capacity.clamp(1,ADAPTER_MAX_BURST);
+        Self{rx:alloc::collections::VecDeque::with_capacity(cap),tx:alloc::collections::VecDeque::with_capacity(cap),capacity:cap}
+    }
+    fn capacity(&self)->usize{self.capacity}
+    fn set_capacity(&mut self,capacity:usize){
+        let cap=capacity.clamp(1,ADAPTER_MAX_BURST);
+        self.capacity=cap;
+        if self.rx.capacity()<cap{self.rx.reserve(cap-self.rx.len());}
+        if self.tx.capacity()<cap{self.tx.reserve(cap-self.tx.len());}
+    }
+    fn rx_len(&self)->usize{self.rx.len()}
+    fn tx_len(&self)->usize{self.tx.len()}
+    fn rx_is_full(&self)->bool{self.rx.len()>=self.capacity}
+    fn tx_is_full(&self)->bool{self.tx.len()>=self.capacity}
+    fn push_rx(&mut self,frame:Frame)->Result<(),Error>{
+        if self.rx_is_full(){return Err(Error::Busy);}
+        self.rx.push_back(frame);Ok(())
+    }
+    fn pop_tx(&mut self)->Option<Frame>{self.tx.pop_front()}
+    fn has_tx(&self)->bool{!self.tx.is_empty()}
+    fn retain_tx<F:FnMut(&Frame)->bool>(&mut self,f:F){self.tx.retain(f);}
+    fn clear(&mut self){self.rx.clear();self.tx.clear();}
+}
 struct Receive(Frame);
-struct Transmit<'a>(&'a mut Option<Frame>);
+struct Transmit<'a>(&'a mut alloc::collections::VecDeque<Frame>,usize);
 impl phy::RxToken for Receive{
     fn consume<R,F>(self,f:F)->R where F:FnOnce(&[u8])->R{f(&self.0.bytes[..self.0.length])}
 }
 impl phy::TxToken for Transmit<'_>{
     fn consume<R,F>(self,length:usize,f:F)->R where F:FnOnce(&mut[u8])->R{
         // Device MTU constrains trusted stack output, before any DMA exposure.
-        assert!(length<=MAX_FRAME&&self.0.is_none(),"TRANSPORT_TX_CAPACITY");
-        let mut frame=Frame::empty();frame.length=length;let result=f(&mut frame.bytes[..length]);*self.0=Some(frame);result
+        assert!(length<=MAX_FRAME&&self.0.len()<self.1,"TRANSPORT_TX_CAPACITY");
+        let mut frame=Frame::empty();frame.length=length;let result=f(&mut frame.bytes[..length]);self.0.push_back(frame);result
     }
 }
 impl Device for Adapter{
     type RxToken<'a>=Receive where Self:'a;
     type TxToken<'a>=Transmit<'a> where Self:'a;
     fn receive(&mut self,_:Instant)->Option<(Receive,Transmit<'_>)>{
-        if self.tx.is_some(){return None;}
-        Some((Receive(self.rx.take()?),Transmit(&mut self.tx)))
+        if self.tx.len()>=self.capacity{return None;}
+        Some((Receive(self.rx.pop_front()?),Transmit(&mut self.tx,self.capacity)))
     }
-    fn transmit(&mut self,_:Instant)->Option<Transmit<'_>>{if self.tx.is_some(){None}else{Some(Transmit(&mut self.tx))}}
-    fn capabilities(&self)->DeviceCapabilities{let mut caps=DeviceCapabilities::default();caps.medium=Medium::Ethernet;caps.max_transmission_unit=MAX_FRAME;caps.max_burst_size=Some(1);caps}
+    fn transmit(&mut self,_:Instant)->Option<Transmit<'_>>{
+        if self.tx.len()>=self.capacity{None}else{Some(Transmit(&mut self.tx,self.capacity))}
+    }
+    fn capabilities(&self)->DeviceCapabilities{let mut caps=DeviceCapabilities::default();caps.medium=Medium::Ethernet;caps.max_transmission_unit=MAX_FRAME;caps.max_burst_size=Some(self.capacity);caps}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Statistics{
     /// Bytes consumed into private echo custody, not delivered/committed receipts.
@@ -110,7 +142,10 @@ fn let_go(s:&mut tcp::Socket){
 struct Open{tcp:alloc::vec::Vec<SocketHandle>,udp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,next_udp_port:u16,query:Question,
     /// Each TCP flow's listening group (port and the group's own number), so several flows
     /// can wait on one port as its backlog.
-    groups:alloc::vec::Vec<Option<(u16,usize)>>,six:Six,cache:alloc::vec::Vec<Cached>}
+    groups:alloc::vec::Vec<Option<(u16,usize)>>,six:Six,cache:alloc::vec::Vec<Cached>,
+    dns_mode:dns_secure::Mode,cache_hits:u64,cache_misses:u64}
+/// Cache hit/miss counters and current entry count for the open-side DNS cache.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct DnsCacheStats{pub hits:u64,pub misses:u64,pub entries:usize}
 /// What the IPv6 network said about resolvers: RDNSS entries from router advertisements
 /// with when each runs out, and stateless DHCPv6's answer.
 struct Six{rdnss:[Option<([u8;16],u64)>;v6config::MAX_RESOLVERS],dhcp6:SocketHandle,ask:bool,xid:u32,started:u64,next_at:u64,timeout:u64,
@@ -130,6 +165,15 @@ pub const CACHE_ENTRIES:usize=512;
 pub const CACHE_MIN_TTL:u32=5;
 pub const CACHE_MAX_TTL:u32=86400;
 pub const CACHE_NEGATIVE_TTL:u32=30;
+fn insert_cache_entry(cache:&mut alloc::vec::Vec<Cached>,name:[u8;255],len:usize,six:bool,v4:Option<[u8;4]>,v6:Option<[u8;16]>,ttl:u32,now:u64){
+    let seconds=if v4.is_none()&&v6.is_none(){CACHE_NEGATIVE_TTL}else{ttl.clamp(CACHE_MIN_TTL,CACHE_MAX_TTL)};
+    let entry=Cached{name,len,six,v4,v6,until:now.saturating_add(seconds as u64*1000)};
+    cache.retain(|c|!(c.len==entry.len&&c.name[..c.len]==entry.name[..entry.len]));
+    if cache.len()>=CACHE_ENTRIES{
+        if let Some(i)=cache.iter().enumerate().min_by_key(|(_,c)|c.until).map(|(i,_)|i){cache.swap_remove(i);}
+    }
+    if cache.try_reserve(1).is_ok(){cache.push(entry);}
+}
 impl Six{
     fn start(&mut self,now:u64,seed:u64){
         self.ask=true;self.started=now;self.next_at=now;self.timeout=0;
@@ -193,7 +237,7 @@ impl<'a> Engine<'a>{
         if mac==[0;6]||mac[0]&1!=0{return Err(Error::Mac);}
         let time=Instant::from_millis(i64::try_from(now).map_err(|_|Error::Clock)?);
         rx.fill(0);tx.fill(0);client_rx.fill(0);client_tx.fill(0);dns_rx.fill(0);dns_tx.fill(0);
-        let mut adapter=Adapter{rx:None,tx:None};let mut config=InterfaceConfig::new(EthernetAddress(mac).into());config.random_seed=seed;
+        let mut adapter=Adapter::new(1);let mut config=InterfaceConfig::new(EthernetAddress(mac).into());config.random_seed=seed;
         let mut iface=Interface::new(config,&mut adapter,time);
         iface.update_ip_addrs(|ips|{ips.push(IpCidr::new(IpAddress::v4(network.local[0],network.local[1],network.local[2],network.local[3]),network.prefix)).expect("ONE_STATIC_ADDRESS");});
         iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(network.gateway[0],network.gateway[1],network.gateway[2],network.gateway[3])).map_err(|_|Error::Config)?;
@@ -228,13 +272,14 @@ impl<'a> Engine<'a>{
         let HardwareAddress::Ethernet(mac)=self.iface.hardware_addr() else{return Err(Error::Mac)};
         let mut config=InterfaceConfig::new(mac.into());config.random_seed=self.seed;config.slaac=true;
         let addresses:alloc::vec::Vec<IpCidr>=self.iface.ip_addrs().to_vec();
+        self.adapter.set_capacity(ADAPTER_OPEN_BURST);
         let mut iface=Interface::new(config,&mut self.adapter,Instant::from_millis(self.last as i64));
         iface.update_ip_addrs(|ips|{for a in addresses{let _=ips.push(a);}let _=ips.push(IpCidr::new(IpAddress::Ipv6(Ipv6Address::from(link_local(mac.0))),64));});
         let g=self.network.gateway;iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(g[0],g[1],g[2],g[3])).map_err(|_|Error::Config)?;
         self.iface=iface;
         let query=Question{id:1,name:[0;255],len:0,resolver:Address::V4([0;4]),six:false,v4:None,v6:None,done4:true,done6:true,first_at:0,ttl:u32::MAX,kept:true};
         let six=Six{rdnss:[None;v6config::MAX_RESOLVERS],dhcp6,ask:false,xid:0,started:0,next_at:0,timeout:0,dhcp_resolvers:[None;v6config::MAX_RESOLVERS],refresh_at:None};
-        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query,groups:alloc::vec::Vec::new(),six,cache:alloc::vec::Vec::new()});
+        self.open=Some(Open{tcp,udp:alloc::vec::Vec::new(),dns,dhcp,lease:None,next_port:OPEN_PORT_BASE,next_udp_port:UDP_PORT_BASE,query,groups:alloc::vec::Vec::new(),six,cache:alloc::vec::Vec::new(),dns_mode:dns_secure::Mode::Plain,cache_hits:0,cache_misses:0});
         Ok(())
     }
     /// The global IPv6 address SLAAC gave, if any.
@@ -315,22 +360,60 @@ impl<'a> Engine<'a>{
     }
     /// Names in the cache now.
     pub fn open_cache_len(&self)->usize{self.open.as_ref().map_or(0,|o|o.cache.len())}
+    /// Cache hit/miss counters and current entry count.
+    pub fn open_cache_stats(&self)->DnsCacheStats{
+        match self.open.as_ref(){
+            Some(o)=>DnsCacheStats{hits:o.cache_hits,misses:o.cache_misses,entries:o.cache.len()},
+            None=>DnsCacheStats{hits:0,misses:0,entries:0},
+        }
+    }
+    /// Current open-side DNS resolution mode (plain by default, or DoT/DoH).
+    pub fn open_dns_mode(&self)->dns_secure::Mode{self.open.as_ref().map_or(dns_secure::Mode::Plain,|o|o.dns_mode)}
+    /// Sets the open-side DNS resolution mode. Cached entries remain shared across modes.
+    pub fn set_open_dns_mode(&mut self,mode:dns_secure::Mode){if let Some(o)=self.open.as_mut(){o.dns_mode=mode;}}
     /// Forgets every remembered lookup (the network changed).
     pub fn open_cache_flush(&mut self){if let Some(o)=self.open.as_mut(){o.cache.clear();}}
+    /// Checks the DNS cache for `host` (with `six` requiring an AAAA-capable entry).
+    /// Serves both plain and secure (DoT/DoH) lookups and tracks hit/miss counters.
+    pub fn open_cache_lookup(&mut self,host:&[u8],six:bool)->Result<Option<Answers>,Error>{
+        let now=self.last;
+        let mut name=[0u8;255];
+        let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        open.cache.retain(|c|c.until>now);
+        if let Some(c)=open.cache.iter().find(|c|c.len==len&&c.name[..len]==name[..len]&&(c.six||!six)){
+            open.cache_hits=open.cache_hits.saturating_add(1);
+            return Ok(Some(Answers{v4:c.v4,v6:if six{c.v6}else{None}}));
+        }
+        open.cache_misses=open.cache_misses.saturating_add(1);
+        Ok(None)
+    }
+    /// Populates the shared DNS cache with `answers` and `ttl` (seconds, clamped to
+    /// `[CACHE_MIN_TTL, CACHE_MAX_TTL]`, or `CACHE_NEGATIVE_TTL` when both are `None`).
+    pub fn open_cache_store(&mut self,host:&[u8],six:bool,answers:Answers,ttl:u32)->Result<(),Error>{
+        let now=self.last;
+        let mut name=[0u8;255];
+        let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
+        let open=self.open.as_mut().ok_or(Error::Config)?;
+        insert_cache_entry(&mut open.cache,name,len,six,answers.v4,answers.v6,ttl,now);
+        Ok(())
+    }
+    /// Populates the shared DNS cache directly from a completed `dns_secure::Lookup`
+    /// using its minimum answer TTL (`lookup.ttl()`).
+    pub fn open_cache_store_secure(&mut self,host:&[u8],lookup:&dns_secure::Lookup,answers:Answers)->Result<(),Error>{
+        self.open_cache_store(host,lookup.six(),answers,lookup.ttl())
+    }
     fn open_ask(&mut self,host:&[u8],six:bool)->Result<(),Error>{
         let local=self.network.local;
         let now=self.last;
         let mut name=[0u8;255];
         let len=dns_wire::encode_name(host,&mut name).ok_or(Error::Length)?;
-        {
+        if let Some(c)=self.open_cache_lookup(host,six)?{
+            // Answered from memory: nothing goes on the wire.
             let open=self.open.as_mut().ok_or(Error::Config)?;
-            open.cache.retain(|c|c.until>now);
-            if let Some(c)=open.cache.iter().find(|c|c.len==len&&c.name[..len]==name[..len]&&(c.six||!six)){
-                // Answered from memory: nothing goes on the wire.
-                let q=&mut open.query;
-                q.name=name;q.len=len;q.six=six;q.v4=c.v4;q.v6=if six{c.v6}else{None};q.done4=true;q.done6=true;q.first_at=now.max(1);q.kept=true;
-                return Ok(());
-            }
+            let q=&mut open.query;
+            q.name=name;q.len=len;q.six=six;q.v4=c.v4;q.v6=if six{c.v6}else{None};q.done4=true;q.done6=true;q.first_at=now.max(1);q.kept=true;
+            return Ok(());
         }
         let resolver=self.open_resolver().ok_or(Error::Config)?;
         let open=self.open.as_mut().ok_or(Error::Config)?;
@@ -376,14 +459,7 @@ impl<'a> Engine<'a>{
         q.ttl=ttl;
         if q.done4&&q.done6&&!q.kept{
             q.kept=true;
-            let seconds=if q.v4.is_none()&&q.v6.is_none(){CACHE_NEGATIVE_TTL}else{q.ttl.clamp(CACHE_MIN_TTL,CACHE_MAX_TTL)};
-            let entry=Cached{name:q.name,len:q.len,six:q.six,v4:q.v4,v6:q.v6,until:now.saturating_add(seconds as u64*1000)};
-            let cache=&mut open.cache;
-            cache.retain(|c|!(c.len==entry.len&&c.name[..c.len]==entry.name[..entry.len]));
-            if cache.len()>=CACHE_ENTRIES{
-                if let Some(i)=cache.iter().enumerate().min_by_key(|(_,c)|c.until).map(|(i,_)|i){cache.swap_remove(i);}
-            }
-            if cache.try_reserve(1).is_ok(){cache.push(entry);}
+            insert_cache_entry(&mut open.cache,q.name,q.len,q.six,q.v4,q.v6,q.ttl,now);
         }
     }
     /// The IPv4 answer to the current question, if it arrived. Err for a final failure.
@@ -573,19 +649,45 @@ impl<'a> Engine<'a>{
     pub fn open_udp_close(&mut self,i:usize){if let Ok(h)=self.udp_handle(i){self.flows.get_mut::<udp::Socket>(h).close();}}
     pub fn statistics(&self)->Statistics{self.stats}
     pub fn failure(&self)->Option<Error>{self.failed}
-    pub fn can_receive(&self)->bool{!self.stopped&&self.adapter.rx.is_none()}
+    pub fn can_receive(&self)->bool{!self.stopped&&!self.adapter.rx_is_full()}
+    pub fn burst_capacity(&self)->usize{self.adapter.capacity()}
+    pub fn set_burst_capacity(&mut self,capacity:usize){self.adapter.set_capacity(capacity);}
+    pub fn rx_queued(&self)->usize{self.adapter.rx_len()}
+    pub fn tx_queued(&self)->usize{self.adapter.tx_len()}
     pub fn submit_frame(&mut self,bytes:&[u8])->Result<(),Error>{
-        if self.stopped{return Err(Error::Stopped);}if self.adapter.rx.is_some(){return Err(Error::Busy);}
+        if self.stopped{return Err(Error::Stopped);}if self.adapter.rx_is_full(){return Err(Error::Busy);}
         if !(14..=MAX_FRAME).contains(&bytes.len()){return Err(Error::Length);}
         if let Some(open)=self.open.as_mut(){if let Some(advert)=v6config::router_advert(bytes){open.six.advert(advert,self.last);}}
-        let mut frame=Frame::empty();frame.length=bytes.len();frame.bytes[..bytes.len()].copy_from_slice(bytes);self.adapter.rx=Some(frame);Ok(())
+        let mut frame=Frame::empty();frame.length=bytes.len();frame.bytes[..bytes.len()].copy_from_slice(bytes);self.adapter.push_rx(frame)
     }
-    pub fn take_frame(&mut self)->Option<Frame>{self.adapter.tx.take()}
-    pub fn has_frame(&self)->bool{self.adapter.tx.is_some()}
+    /// Submit a burst of up to `frames.len()` Ethernet frames into the bounded RX ring.
+    /// Stops on full ring without dropping earlier queued frames and returns the count accepted.
+    pub fn submit_frames(&mut self,frames:&[&[u8]])->Result<usize,Error>{
+        if self.stopped{return Err(Error::Stopped);}
+        let mut accepted=0usize;
+        for bytes in frames{
+            if self.adapter.rx_is_full(){break;}
+            self.submit_frame(bytes)?;
+            accepted+=1;
+        }
+        Ok(accepted)
+    }
+    pub fn take_frame(&mut self)->Option<Frame>{self.adapter.pop_tx()}
+    /// Drain up to `max` queued TX frames into `out` in FIFO order.
+    pub fn take_frames(&mut self,out:&mut alloc::vec::Vec<Frame>,max:usize)->usize{
+        let mut taken=0usize;
+        while taken<max{
+            let Some(frame)=self.adapter.pop_tx() else{break};
+            out.push(frame);
+            taken+=1;
+        }
+        taken
+    }
+    pub fn has_frame(&self)->bool{self.adapter.has_tx()}
     pub fn stop(&mut self,reason:Error){
         self.stopped=true;self.failed=Some(reason);self.flows.get_mut::<tcp::Socket>(self.handle).abort();let_go(self.flows.get_mut::<tcp::Socket>(self.client_handle));
         self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
-        self.adapter.rx=None;self.adapter.tx=None;self.pending.fill(0);self.pending_length=0;self.pending_offset=0;
+        self.adapter.clear();self.pending.fill(0);self.pending_length=0;self.pending_offset=0;
     }
     /// One fixed BOOT endpoint, reached directly on-link or through the checked
     /// gateway. Ticket is private service data; no address/capability input.
@@ -625,7 +727,8 @@ impl<'a> Engine<'a>{
     /// never relabels an old frame as shared listener/gateway traffic.
     pub fn client_abort(&mut self){
         let_go(self.flows.get_mut::<tcp::Socket>(self.client_handle));
-        if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket(&self.network).is_some()){self.adapter.tx=None;}
+        let net=self.network;
+        self.adapter.retain_tx(|f|f.client_ticket(&net).is_none());
     }
 
     /// Emit one fixed-name DNS query, with no transport-level retry. The finite
@@ -662,12 +765,14 @@ impl<'a> Engine<'a>{
     /// service storage. This does not claim that close scrubs the backing bytes.
     pub fn dns_abort(&mut self){
         self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
-        if self.adapter.tx.as_ref().is_some_and(|f|f.dns_ticket(&self.network).is_some()){self.adapter.tx=None;}
+        let net=self.network;
+        self.adapter.retain_tx(|f|f.dns_ticket(&net).is_none());
     }
 
-    /// Processes at most one frame and one256-byte echo transfer per turn.
-    /// Private single-frame backpressure bounds stack egress independently of
-    /// retransmission timers. No DMA submission occurs in this library.
+    /// Processes up to `burst_capacity()` queued RX frames and one 256-byte echo transfer per turn.
+    /// Private single-frame backpressure (`burst_capacity() == 1`) bounds stack egress independently
+    /// of retransmission timers; open-internet and burst modes drain up to `burst_capacity()` frames.
+    /// No DMA submission occurs in this library.
     pub fn advance(&mut self,now:u64){
         if self.stopped{return;}if now<self.last||now>i64::MAX as u64{self.stop(Error::Clock);return;}self.last=now;
         let time=Instant::from_millis(now as i64);
@@ -678,8 +783,13 @@ impl<'a> Engine<'a>{
             self.iface.poll_maintenance(time);
             if let Some(IpAddress::Ipv4(g))=v4.map(|r|r.via_router){let _=self.iface.routes_mut().add_default_ipv4_route(g);}
         }else{self.iface.poll_maintenance(time);}
-        let had_rx=self.adapter.rx.is_some();self.iface.poll_ingress_single(time,&mut self.adapter,&mut self.flows);
-        if had_rx&&self.adapter.rx.is_none(){self.stats.packets=self.stats.packets.saturating_add(1);}
+        let burst_limit=self.adapter.capacity();
+        for _ in 0..burst_limit{
+            let before=self.adapter.rx_len();
+            if before==0||self.adapter.tx_is_full(){break;}
+            self.iface.poll_ingress_single(time,&mut self.adapter,&mut self.flows);
+            if self.adapter.rx_len()<before{self.stats.packets=self.stats.packets.saturating_add(1);}else{break;}
+        }
         let connection=self.flows.get_mut::<tcp::Socket>(self.handle);
         if !self.active_flow&&matches!(connection.state(),State::Established|State::CloseWait){
             let Some(flow)=self.stats.flow.checked_add(1)else{self.stop(Error::Protocol);return;};

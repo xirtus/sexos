@@ -24,9 +24,9 @@ fn x17_r1_parts_find_their_services() {
 
 #[test]
 fn unclaimed_devices_stay_unleased() {
-    // VMD (RAID class 01:04), other makers' Wi-Fi, IDE-mode SATA, USB 2 EHCI, virtio-net, bridges.
+    // VMD (RAID class 01:04), other makers' Wi-Fi, IDE-mode SATA, USB 2 EHCI, legacy virtio-net, bridges.
     for d in [id(0x8086, 0x9a0b, 1, 4, 0), id(0x14c3, 0x0616, 2, 0x80, 0), id(0x8086, 0x2922, 1, 6, 0),
-              id(0x8086, 0x293a, 0x0c, 3, 0x20), id(0x1af4, 0x1041, 2, 0, 0), id(0x8086, 0x29c0, 6, 0, 0)] {
+              id(0x8086, 0x293a, 0x0c, 3, 0x20), id(0x1af4, 0x1000, 2, 0, 0), id(0x8086, 0x29c0, 6, 0, 0)] {
         assert!(claim(d).is_none(), "{:?}", d);
     }
 }
@@ -47,12 +47,21 @@ fn virtio_sound_is_claimed_by_id_not_class() {
 }
 
 #[test]
+fn virtio_net_is_claimed_by_id_not_class() {
+    assert_eq!(claim(id(0x1af4, 0x1041, 2, 0, 0)).map(|(m, e)| (m.service, e.lease, e.slot)),
+        Some((Service::Net, Lease::Virtio, 19)));
+    // Legacy/transitional virtio-net (0x1000) stays unleased.
+    assert!(claim(id(0x1af4, 0x1000, 2, 0, 0)).is_none());
+}
+
+#[test]
 fn first_slots_are_the_ones_drivers_read() {
     let slot = |d| claim(d).map(|(_, e)| e.slot);
     assert_eq!(slot(id(0x1b36, 0x0010, 1, 8, 2)), Some(16));
     assert_eq!(slot(id(0x8086, 0x2922, 1, 6, 1)), Some(21));
     assert_eq!(slot(id(0x1b36, 0x000d, 0x0c, 3, 0x30)), Some(8));
     assert_eq!(slot(id(0x8086, 0x10d3, 2, 0, 0)), Some(19));
+    assert_eq!(slot(id(0x1af4, 0x1041, 2, 0, 0)), Some(19));
     assert_eq!(slot(id(0x8086, 0x293e, 4, 3, 0)), Some(20));
     assert_eq!(slot(id(0x1af4, 0x1059, 4, 1, 0)), Some(20));
     assert_eq!(slot(id(0x8086, 0x51f0, 2, 0x80, 0)), Some(22));

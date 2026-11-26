@@ -83,6 +83,7 @@ pub fn poll_paging_exit_notifications(){
         let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(target)else{continue;};
         let task=pd.main_task.load(Ordering::Acquire);
         if task.is_null() || task!=watch.task.load(Ordering::Acquire) || !unsafe{(*task).state.snapshot().exited}{continue;}
+        crate::scheduler::purge_handoff_for_task(task);
         busy=true;
         let pager_id=watch.pager.load(Ordering::Acquire);
         let Some(pager)=crate::ipc::DOMAIN_REGISTRY.get(pager_id)else{continue;};

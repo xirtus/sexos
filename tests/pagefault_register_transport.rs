@@ -60,6 +60,8 @@ mod scheduler {
   let state=unsafe{(*task).state.snapshot()};if !state.exited{return Err(5);}if state.phase!=super::ownership::Phase::Dead{return Err(super::RETRY);}
   Ok(DeadTarget{task_id:unsafe{(*task).id}})
  }
+ // Fault teardown purges stale handoff slots; no per-core handoff exists in this double.
+ pub fn purge_handoff_for_task(_task:*mut Task)->usize{0}
  pub unsafe fn resume_resolved_fault(task:*mut Task)->bool{let result=(*task).state.complete_fault();if result{super::RESUMES.fetch_add(1,super::Ordering::Relaxed);}result}
 }
 mod ipc {

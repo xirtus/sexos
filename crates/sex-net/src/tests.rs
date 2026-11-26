@@ -618,3 +618,83 @@ fn queries(e:&mut Engine<'static>,now:&mut u64)->Vec<(u16,Vec<u8>)>{let mut v=Ve
   assert!(syn.is_some_and(|s|s.dst==PEER6&&s.body[13]&0x12==2),"abort={abort}: no IPv6 SYN");
  }
 }
+#[test]fn adapter_multi_frame_burst_batching_and_bounded_backpressure(){
+ let mut e=engine();
+ // Controlled engine defaults to single-frame private backpressure.
+ assert_eq!(e.burst_capacity(),1);
+ // Scale to 8-frame burst batching.
+ e.set_burst_capacity(8);
+ assert_eq!(e.burst_capacity(),8);
+ let reqs:Vec<Vec<u8>>=(0..10u8).map(|i|arp_for([10,0,2,40+i],LOCAL)).collect();
+ let slices:Vec<&[u8]>=reqs.iter().map(|v|v.as_slice()).collect();
+ // Bounded ring accepts 8 of 10 frames without overwriting earlier frames.
+ assert_eq!(e.submit_frames(&slices),Ok(8));
+ assert_eq!(e.rx_queued(),8);
+ assert!(!e.can_receive());
+ assert_eq!(e.submit_frame(&reqs[8]),Err(Error::Busy));
+ // A single advance() turn processes the entire 8-frame RX burst and emits 8 ARP replies!
+ e.advance(1);
+ assert_eq!(e.rx_queued(),0);
+ assert_eq!(e.tx_queued(),8);
+ assert_eq!(e.statistics().packets,8);
+ let mut replies=Vec::new();
+ assert_eq!(e.take_frames(&mut replies,8),8);
+ assert_eq!(e.tx_queued(),0);
+ for(i,reply)in replies.iter().enumerate(){
+  assert_eq!(&reply.bytes[20..22],&[0,2]);
+  assert_eq!(&reply.bytes[38..42],&[10,0,2,40+i as u8]);
+ }
+ // Capacity clamps cleanly to ADAPTER_MAX_BURST.
+ e.set_burst_capacity(999);
+ assert_eq!(e.burst_capacity(),ADAPTER_MAX_BURST);
+}
+#[test]fn secure_dot_and_doh_populate_shared_dns_cache_with_ttls_and_stats(){
+ let(mut e,mut now,_)=resolving();
+ // Default mode is Plain; switching to DoT and DoH preserves the shared cache.
+ assert_eq!(e.open_dns_mode(),dns_secure::Mode::Plain);
+ let dot=dns_secure::PRESETS[0].1;
+ e.set_open_dns_mode(dot);
+ assert_eq!(e.open_dns_mode(),dot);
+ assert_eq!(e.open_cache_lookup(b"secure.example",true),Ok(None));
+ let s0=e.open_cache_stats();
+ assert_eq!(s0.misses,2); // 1 from resolving() + 1 from open_cache_lookup
+ let mut lookup=dns_secure::Lookup::new(dot,b"secure.example",true,0x101).unwrap();
+ let req=lookup.request();
+ let n=u16::from_be_bytes([req[0],req[1]]) as usize;
+ let (qa,rest)=req[2..].split_at(n);
+ let qaaaa=&rest[2..];
+ let mut wire=Vec::new();
+ for m in [answer_ttl(qa,&[203,0,113,10],90),answer_ttl(qaaaa,&PEER6,45)]{
+  wire.extend_from_slice(&(m.len() as u16).to_be_bytes());
+  wire.extend_from_slice(&m);
+ }
+ let ans=lookup.receive(&wire).unwrap().unwrap();
+ assert_eq!(lookup.ttl(),45);
+ e.open_cache_store_secure(b"secure.example",&lookup,ans).unwrap();
+ // Now both secure cache lookup and plain open_resolve_all hit without wire traffic!
+ assert_eq!(e.open_cache_lookup(b"SECURE.EXAMPLE",true),Ok(Some(ans)));
+ e.open_resolve_all(b"secure.example").unwrap();
+ assert_eq!(e.open_resolved_all(),Ok(Some(ans)));
+ assert!(queries(&mut e,&mut now).is_empty());
+ let s1=e.open_cache_stats();
+ assert_eq!(s1.hits,2);
+ assert_eq!(s1.entries,1);
+ // After 45s TTL expires, cache lookup misses again.
+ now+=45_000;e.advance(now);
+ assert_eq!(e.open_cache_lookup(b"secure.example",true),Ok(None));
+ // DoH lookup populates cache with its TTL too.
+ let doh=dns_secure::PRESETS[1].2;
+ e.set_open_dns_mode(doh);
+ let mut hlookup=dns_secure::Lookup::new(doh,b"doh.example",false,1).unwrap();
+ let hreq=hlookup.request();
+ let hdr_end=hreq.windows(4).position(|w|w==b"\r\n\r\n").unwrap()+4;
+ let body=answer_ttl(&hreq[hdr_end..],&[198,51,100,22],120);
+ let mut resp=alloc::format!("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: {}\r\n\r\n",body.len()).into_bytes();
+ resp.extend_from_slice(&body);
+ let hans=hlookup.receive(&resp).unwrap().unwrap();
+ assert_eq!(hlookup.ttl(),120);
+ e.open_cache_store_secure(b"doh.example",&hlookup,hans).unwrap();
+ assert_eq!(e.open_cache_lookup(b"doh.example",false),Ok(Some(hans)));
+ assert_eq!(e.open_cache_stats().hits,3);
+}
+

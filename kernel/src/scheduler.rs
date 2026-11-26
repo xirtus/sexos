@@ -223,6 +223,9 @@ impl Task {
         // context gives the same entry RSP.
         let stack_top = ((stack_top - 8) & !0xF) + 8;
         let pd_ptr = self.context.pd_ptr;
+        // Detach any IPC v2 wait queues or unanswered reply cap held by the dead run
+        // before resetting Task fields so no client hangs and no stale pointer remains.
+        crate::ipc_v2::syscall::teardown_task(self as *mut Task, sex_pdx::endpoint::E_RESTARTED);
         // Every field comes from the constructor; only the kernel stack, the FPU block
         // (reset below) and the first-run argument carry over.
         unsafe {
@@ -242,9 +245,50 @@ impl Task {
         // A core's handoff slot still naming the last run lives outside the task: with
         // custody reset, a stale slot would run this task's kernel stack a second time
         // (the soak's ret-to-0 after a service restart).
-        let purged = SCHEDULERS.iter().filter(|s| s.handoff.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok()).count();
+        let purged = purge_handoff_for_task(me);
         if purged != 0 { serial_println!("[task.rearm.purged] task={} handoffs={}", id, purged); }
     }
+}
+
+/// Removes any stale handoff slot across all cores pointing to `task`.
+/// If `task` was still `Queued` with `EXITED`, retires its token to `Dead`
+/// so custody never wedges. Returns how many handoff slots were cleared.
+pub fn purge_handoff_for_task(task: *mut Task) -> usize {
+    if task.is_null() { return 0; }
+    let mut purged = 0;
+    for sched in SCHEDULERS.iter() {
+        if sched.handoff.compare_exchange(task, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            purged += 1;
+            let state = unsafe { (*task).state.snapshot() };
+            if state.exited && state.phase == task_ownership::Phase::Queued {
+                let _ = unsafe { (*task).state.begin_dispatch(sched.core_id) };
+            }
+        }
+    }
+    purged
+}
+
+/// Removes any stale handoff slot across all cores pointing to any task belonging
+/// to protection domain `pd_id`. Returns how many handoff slots were cleared.
+pub fn purge_handoff_for_pd(pd_id: u32) -> usize {
+    if pd_id == 0 { return 0; }
+    let mut purged = 0;
+    for sched in SCHEDULERS.iter() {
+        let task = sched.handoff.load(Ordering::Acquire);
+        if task.is_null() { continue; }
+        let addr = task as usize;
+        if addr < crate::HEAP_START || addr >= crate::HEAP_START + crate::HEAP_SIZE { continue; }
+        if unsafe { (*task).context.pd_id } == pd_id as u64 {
+            if sched.handoff.compare_exchange(task, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                purged += 1;
+                let state = unsafe { (*task).state.snapshot() };
+                if state.exited && state.phase == task_ownership::Phase::Queued {
+                    let _ = unsafe { (*task).state.begin_dispatch(sched.core_id) };
+                }
+            }
+        }
+    }
+    purged
 }
 
 /// For a kernel fault report: this core's current task (id, custody snapshot) and the
@@ -619,10 +663,32 @@ impl Scheduler {
     }
 
     /// The waiting partner's turn, unless partners have had too many in a row: then it
-    /// joins the back of the queue like any wake.
+    /// joins the back of the queue like any wake. Dead, exited, unactivated, or
+    /// restarting tasks are dropped here so a stale handoff pointer can never run.
     fn take_handoff(&self) -> *mut Task {
         let task = self.handoff.swap(ptr::null_mut(), Ordering::AcqRel);
         if task.is_null() { self.handoff_streak.store(0, Ordering::Relaxed); return task; }
+        let addr = task as usize;
+        if addr < crate::HEAP_START || addr >= crate::HEAP_START + crate::HEAP_SIZE {
+            serial_println!("[sched.handoff.reject] ptr={:#x} reason=out_of_heap", addr as u64);
+            self.handoff_streak.store(0, Ordering::Relaxed);
+            return ptr::null_mut();
+        }
+        let state = unsafe { (*task).state.snapshot() };
+        let pd_id = unsafe { (*task).context.pd_id as u32 };
+        if state.exited || matches!(state.phase, task_ownership::Phase::Dead | task_ownership::Phase::Constructed) {
+            if state.exited && state.phase == task_ownership::Phase::Queued {
+                let _ = unsafe { (*task).state.begin_dispatch(self.core_id) };
+            }
+            self.handoff_streak.store(0, Ordering::Relaxed);
+            return ptr::null_mut();
+        }
+        // A live task of a service being restarted holds a real run token: it waits in
+        // the queue like any wake rather than skipping ahead, and is never dropped.
+        if crate::service_restart::down(pd_id) {
+            self.handoff_streak.store(0, Ordering::Relaxed);
+            return if self.runqueue.try_push(task).is_ok() { ptr::null_mut() } else { task };
+        }
         if self.handoff_streak.fetch_add(1, Ordering::Relaxed) < HANDOFF_STREAK {
             HANDOFFS.fetch_add(1, Ordering::Relaxed);
             return task;
@@ -662,12 +728,13 @@ impl Scheduler {
         let handoff = self.handoff_armed.swap(false, Ordering::Relaxed);
         let (mut urgent, mut due, mut partner) = (false, false, false);
         let period = unsafe { (*task).deadline_us.load(Ordering::Relaxed) };
+        let pd_id = unsafe { (*task).context.pd_id as u32 };
         let admitted = unsafe { (*task).state.try_admit(|| {
             let now = core::arch::x86_64::_rdtsc();
             // Wake latency counts real wakes, not a turn given up by yielding.
             if woken { unsafe { (*task).woken_at.store(now, Ordering::Relaxed) }; }
             if woken && period != 0 && !home.budget.exhausted() && home.deadline.try_push(task, now + home.budget.cycles(period)).is_ok() { due = true; return Ok(()); }
-            if handoff && home.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { partner = true; return Ok(()); }
+            if handoff && !crate::service_restart::down(pd_id) && home.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { partner = true; return Ok(()); }
             // A service woken by an interactive caller's request runs with the caller's
             // class for that wake (K3b donation): Shell's call to Files does not queue
             // behind a busy program on Files' core.
@@ -1404,6 +1471,8 @@ pub unsafe fn finish_current_task(regs_ptr: *const crate::interrupts::SyscallReg
     assert!(!task.is_null(), "TASK_FINISH_WITHOUT_TASK");
     (*task).wait_deadline.cancel();
     (*task).state.exit();
+    purge_handoff_for_task(task);
+    crate::ipc_v2::syscall::teardown_task(task, sex_pdx::endpoint::E_CLOSED);
     // A worker that ends with an error (a panic) ends its program's run.
     if (*regs_ptr).rdi != 0 { crate::program_workers::faulted(task); }
     if !crate::program_records::is_record((*task).context.pd_id){serial_println!("[task.finish] pd={} task={} reason={} terminal=1",core.current_pd(),(*task).id,(*regs_ptr).rdi);}

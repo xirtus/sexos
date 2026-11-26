@@ -146,12 +146,13 @@ pub const USB: Manifest = Manifest {
     ],
 };
 
-/// sexnet: Intel and Realtek wired Ethernet (the model table in `sex_pdx::pci_command`
-/// decides which parts have a known register layout), and Intel Wi-Fi (the chip table
-/// in `sex_wifi::devices` decides which ones it can start).
+/// sexnet: modern virtio-net, Intel and Realtek wired Ethernet (the model table in
+/// `sex_pdx::pci_command` decides which parts have a known register layout), and Intel
+/// Wi-Fi (the chip table in `sex_wifi::devices` decides which ones it can start).
 pub const NET: Manifest = Manifest {
     service: Service::Net, max_devices: 0, vectors: 1,
     matches: &[
+        Match::id(0x1af4, 0x1041, Lease::Virtio, 19),
         Match::vendor_class(0x8086, 0x02_00_00, CLASS, Lease::Nic, 19),
         Match::vendor_class(0x10ec, 0x02_00_00, CLASS, Lease::Nic, 19),
         Match::vendor_class(0x1186, 0x02_00_00, CLASS, Lease::Nic, 19),

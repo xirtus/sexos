@@ -37,8 +37,14 @@ mod scheduler{
  impl Task{pub fn rearm(&mut self,id:u32,entry:u64,stack:u64,pd:&crate::capability::ProtectionDomain){self.id=id;self.context.rip=entry;self.context.rsp=stack;self.context.pd_id=pd.id as u64;self.context.pd_ptr=pd;self.state=crate::ownership::TaskOwnership::new();}}
  pub struct Scheduler;pub static SCHEDULERS:[Scheduler;1]=[Scheduler];
  impl Scheduler{pub fn activate_task(&self,t:*mut Task)->bool{unsafe{if !crate::app_resources::activation_permitted((*t).context.pd_id as u32){return false}(*t).state.activate()}}}
+ // Retirement purges stale handoff slots; no per-core handoff exists in this double.
+ pub fn purge_handoff_for_pd(_pd:u32)->usize{0}
  pub fn unpark_thread(task:*mut Task){if !task.is_null(){unsafe{(*task).state.wake();}crate::WAKES.fetch_add(1,crate::Ordering::Relaxed);}}
 }
+// IPC v2 teardown double: no endpoints exist here, so it only ends the object incarnation
+// exactly as the production teardown_pd does last.
+mod ipc_v2{pub mod syscall{pub fn teardown_pd(pd:u32,_status:u64)->usize{crate::capability_table::OBJECTS.end_incarnation(pd);0}}}
+pub mod endpoint{pub const E_CLOSED:u64=0xFFFF_FFFF_FFFF_FFF3;}
 mod core_local{pub static INITIALIZED_CORES:crate::AtomicU32=crate::AtomicU32::new(1);pub struct CoreLocal{pub core_id:u32}impl CoreLocal{pub fn get()->Self{Self{core_id:0}}}}
 mod interrupts{pub static TICKS:crate::AtomicU64=crate::AtomicU64::new(0);}
 mod capability{

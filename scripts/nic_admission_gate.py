@@ -3,7 +3,19 @@
 import argparse,hashlib,json,pathlib,re,shutil,subprocess,time
 from check_nic_discovery import inspect
 
-def validate(text,count,leases,skip=None):
+def validate(text,count,leases,skip=None,virtio=False):
+ if virtio:
+  errors=[]
+  grants=re.findall(r'\[kernel\.cap\.virtio\.grant\] pd=13 slot=19 product=0x1041\b',text)
+  if len(grants)!=leases:errors.append('wrong BOOT virtio-net lease count for exact SexNet subject')
+  maps=re.findall(r'\[boot\.memory\.mmio\] pd=13 slot=19 bytes=(\d+) actual_bytes=(\d+)',text)
+  if len(maps)!=leases or any(int(n)==0 or int(n)>65536 or int(n)>int(actual)for n,actual in maps):errors.append('invalid virtio-net BAR admission')
+  seal=text.find('[boot.memory.authority.sealed]')
+  if seal<0 or any(m.start()>seal for m in re.finditer(r'\[kernel\.cap\.virtio\.grant\] pd=13 slot=19',text)):errors.append('virtio-net authority not fixed before BOOT seal')
+  if '[sexnet.virtio.ready] vendor=1af4 product=1041'not in text:errors.append('sexnet virtio-net driver did not initialize')
+  if '[sexnet.ether.ready] model=Virtio'not in text:errors.append('sexnet virtio-net ethernet link did not become ready')
+  if not re.search(r'\[app\.surface\.presented\] target=15 surface=300 .*ok=1',text):errors.append('cached/offline application did not present')
+  return dict(ok=not errors,errors=errors,devices=[('0x1af4','0x1041')],expected_devices=count,expected_leases=leases,bar_views=maps)
  result=inspect(text,expected_leases=leases);errors=result['errors']
  if len(result['devices'])!=count:errors.append('actual enumerated device count differs')
  if skip and '[kernel.cap.nic.skip] reason='+skip not in text:errors.append('missing explicit skip reason')
@@ -19,12 +31,13 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',type=pathlib.Path,required=True);p.add_argument('--source-disk',type=pathlib.Path,required=True);p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--preparation',action='store_true');p.add_argument('--ethernet',action='store_true');a=p.parse_args();a.preparation=a.preparation or a.ethernet
  iso=a.iso.resolve(strict=True);src=a.source_disk.resolve(strict=True);out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
  if any(out.iterdir()):raise RuntimeError('fresh output required')
- variants=[('single',['-nic','none','-netdev','user,id=n1','-device','e1000e,netdev=n1'],1,1,None),
-           ('unsupported',['-nic','none','-netdev','user,id=n1','-device','virtio-net-pci,netdev=n1'],1,0,'unsupported_or_invalid_bar'),
-           ('duplicate',['-nic','none','-netdev','user,id=n1','-device','e1000e,netdev=n1','-netdev','user,id=n2','-device','e1000e,netdev=n2'],2,1,'slot_occupied')]
- if a.preparation:variants.append(('legacy',['-nic','none','-netdev','user,id=n1','-device','e1000,netdev=n1'],1,1,None))
+ variants=[('single',['-nic','none','-netdev','user,id=n1','-device','e1000e,netdev=n1'],1,1,None,False),
+           ('virtio_net',['-nic','none','-netdev','user,id=n1','-device','virtio-net-pci,netdev=n1,disable-legacy=on'],1,1,None,True),
+           ('unsupported',['-nic','none','-netdev','user,id=n1','-device','rtl8139,netdev=n1'],1,0,'unsupported_or_invalid_bar',False),
+           ('duplicate',['-nic','none','-netdev','user,id=n1','-device','e1000e,netdev=n1','-netdev','user,id=n2','-device','e1000e,netdev=n2'],2,1,'slot_occupied',False)]
+ if a.preparation:variants.append(('legacy',['-nic','none','-netdev','user,id=n1','-device','e1000,netdev=n1'],1,1,None,False))
  results=[]
- for name,network,count,leases,skip in variants:
+ for name,network,count,leases,skip,virtio in variants:
   folder=out/name;folder.mkdir();disk=folder/'nvme.img';shutil.copyfile(src,disk);log=folder/'serial.log'
   cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku','-m','512M','-cdrom',str(iso),'-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm','-serial',f'file:{log}','-display','none','-no-reboot','-no-shutdown',*network]
   manifest=dict(iso_sha256=hashlib.sha256(iso.read_bytes()).hexdigest(),input_disk_sha256=hashlib.sha256(src.read_bytes()).hexdigest(),command=cmd)
@@ -35,13 +48,16 @@ def main():
     text=log.read_text(errors='replace')if log.exists()else''
     if proc.poll()is not None:raise RuntimeError('guest exited')
     if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at',text):raise RuntimeError('guest fault')
-    prepared=not a.preparation or (('[sexnet.ether.ready]'in text if a.ethernet else 'to=Quiescent'in text)if leases else '[sexnet.nic.prepare.unavailable]'in text)
+    if virtio:
+     prepared='[sexnet.ether.ready] model=Virtio'in text
+    else:
+     prepared=not a.preparation or (('[sexnet.ether.ready]'in text if a.ethernet else 'to=Quiescent'in text)if leases else '[sexnet.nic.prepare.unavailable]'in text)
     if '[app.surface.presented] target=15 surface=300'in text and '[sexnet.passive.ready.fast]'in text and prepared:
      if ready is None:ready=time.monotonic()
      if time.monotonic()-ready>=2:break
     time.sleep(.1)
-   result=validate(text,count,leases,skip)
-   if a.preparation:
+   result=validate(text,count,leases,skip,virtio=virtio)
+   if a.preparation and not virtio:
     from check_nic_command import inspect as command_inspect
     command=command_inspect(text,leases,True,a.ethernet);result['preparation']=command
     result['errors'].extend(command['errors']);result['ok']=not result['errors']

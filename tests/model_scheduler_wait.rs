@@ -54,6 +54,9 @@ resume_resolved_fault: state.complete_fault .admit_task
 seal_self_wait_inventory: SELF_WAIT_TASKS.register SELF_WAIT_TASKS.seal
 finish_current_task: interrupts::disable wait_deadline.cancel state.exit yield_and_switch
 yield_and_switch: interrupts::disable wait_for_local_resume_or_switch
+purge_handoff_for_task: state.begin_dispatch
+purge_handoff_for_pd: state.begin_dispatch
+take_handoff: state.begin_dispatch
 ";
 
 const CORES: [u32; 2] = [0, 1];
@@ -383,4 +386,21 @@ fn the_protocol_table_names_each_function_once() {
         assert!(!calls.trim().is_empty(), "{name} lists no calls");
     }
     assert!(names.contains("wait_for_message_ticks") && names.contains("wake_owned_thread"));
+}
+
+/// A handoff slot holds a run token like the queue does. Purging a stale slot (exit,
+/// crash, retirement) or the dispatcher refusing one consumes that token with
+/// `begin_dispatch`, exactly as `tick` does for an exited task found in the queue:
+/// the task ends Dead and nothing runs it.
+#[test]
+fn purging_an_exited_tasks_handoff_token_ends_it_dead_without_dispatch() {
+    let t = TaskOwnership::new();
+    assert!(t.activate());
+    assert_eq!(t.try_admit(|| Ok::<(), ()>(())), Admission::Published);
+    assert_eq!(t.snapshot().phase, Phase::Queued);
+    t.exit();
+    let s = t.snapshot();
+    assert!(s.exited && s.phase == Phase::Queued);
+    assert!(!t.begin_dispatch(0), "an exited token is retired, never dispatched");
+    assert_eq!(t.snapshot().phase, Phase::Dead);
 }

@@ -30,6 +30,8 @@ pub const PRESETS: &[(&str, Mode, Mode)] = &[
 
 impl Mode {
     pub fn port(&self) -> u16 { match self { Mode::Plain => 53, Mode::Tls { .. } => 853, Mode::Https { .. } => 443 } }
+    /// The IPv4 resolver address for encrypted modes, or `None` for plain DNS.
+    pub fn address(&self) -> Option<[u8; 4]> { match self { Mode::Plain => None, Mode::Tls { address, .. } | Mode::Https { address, .. } => Some(*address) } }
     /// The name the TLS certificate must carry.
     pub fn server_name(&self) -> Option<&'static str> { match self { Mode::Plain => None, Mode::Tls { name, .. } => Some(name), Mode::Https { host, .. } => Some(host) } }
 }
@@ -49,6 +51,9 @@ impl Lookup {
         let id = if matches!(mode, Mode::Https { .. }) { 1 } else { id | 1 };
         Ok(Self { mode, name, len, id, six, input: Vec::new(), v4: None, v6: if six { None } else { Some(None) }, ttl: u32::MAX })
     }
+
+    pub fn mode(&self) -> Mode { self.mode }
+    pub fn six(&self) -> bool { self.six }
 
     fn question(&self, kind: u16) -> Vec<u8> {
         let mut q = [0u8; dns_wire::MAX_BYTES];

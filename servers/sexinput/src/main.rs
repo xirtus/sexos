@@ -531,6 +531,8 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Declare low-latency input deadline class explicitly from userspace (syscall 104).
+    let _ = sex_pdx::sched::deadline(4_000);
     serial_println!("[sexinput.init.start]");
     sex_pdx::serial_record!("[input.payload.mode] component=sexinput mode={}",sex_pdx::input_diagnostics::mode());
     sex_rt::heap_init();

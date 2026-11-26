@@ -18,19 +18,25 @@ struct Engine<'a>{closed:Vec<(u8,usize)>,_l:core::marker::PhantomData<&'a ()>}
 impl Engine<'_>{fn open_udp_close(&mut self,index:usize){self.closed.push((1,index));}}
 struct Slot{owner:Option<(Identity,u8)>}
 impl Slot{fn free(&mut self,index:usize,engine:Option<&mut Engine<'static>>){self.owner=None;if let Some(e)=engine{e.closed.push((0,index));}}}
-struct Service{bound:[u32;2],slots:Vec<Slot>,sockets:Vec<Option<(Identity,u8)>>,resolving:Option<(Identity,u64)>}
+struct SecureResolve{who:Identity,flow:usize}
+struct Service{bound:[u32;2],slots:Vec<Slot>,sockets:Vec<Option<(Identity,u8)>>,resolving:Option<(Identity,u64)>,secure_resolve:Option<SecureResolve>}
 fn program_index(pd:u32)->Option<usize>{match pd{43=>Some(0),44=>Some(1),_=>None}}
 impl Service {
 ''' + function(source, 'pub fn quarantine(') + r'''
 }
 #[test]fn all_target_tasks_closed_foreign_owners_untouched(){
  let own=Identity{pd:43,task:1};let stale=Identity{pd:43,task:2};let foreign=Identity{pd:44,task:3};
- let mut state=Service{bound:[2,3],slots:vec![Slot{owner:Some((own,0))},Slot{owner:Some((stale,0))},Slot{owner:Some((foreign,0))}],sockets:vec![Some((own,0)),Some((stale,0)),Some((foreign,0))],resolving:Some((stale,1))};
+ let mut state=Service{bound:[2,3],slots:vec![Slot{owner:Some((own,0))},Slot{owner:Some((stale,0))},Slot{owner:Some((foreign,0))}],sockets:vec![Some((own,0)),Some((stale,0)),Some((foreign,0))],resolving:Some((stale,1)),secure_resolve:None};
  let mut engine=Engine{closed:Vec::new(),_l:core::marker::PhantomData};state.quarantine(43,Some(&mut engine));
  assert_eq!(state.bound,[0,3]);assert!(state.slots[0].owner.is_none()&&state.slots[1].owner.is_none());assert!(state.slots[2].owner.is_some());
  assert!(state.sockets[0].is_none()&&state.sockets[1].is_none()&&state.sockets[2].is_some());assert!(state.resolving.is_none());assert_eq!(engine.closed,vec![(0,0),(0,1),(1,0),(1,1)]);
  state.quarantine(43,Some(&mut engine));assert_eq!(engine.closed.len(),4);
  state.resolving=Some((foreign,1));state.quarantine(43,None);assert!(state.resolving.is_some());
+ // A DoH/DoT lookup the row started is ended with its flow; a foreign one stays.
+ state.slots[0].owner=Some((own,0));state.secure_resolve=Some(SecureResolve{who:own,flow:0});state.quarantine(43,None);
+ assert!(state.secure_resolve.is_none()&&state.slots[0].owner.is_none());
+ state.slots[2].owner=Some((foreign,0));state.secure_resolve=Some(SecureResolve{who:foreign,flow:2});state.quarantine(43,None);
+ assert!(state.secure_resolve.is_some()&&state.slots[2].owner.is_some());
 }
 '''
         with tempfile.TemporaryDirectory() as d:

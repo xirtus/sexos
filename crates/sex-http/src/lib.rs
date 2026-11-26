@@ -10,4 +10,5 @@ extern crate alloc;
 extern crate std;
 mod codec;
 pub mod h2;
+pub mod h3;
 pub use codec::*;
