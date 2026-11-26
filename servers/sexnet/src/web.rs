@@ -469,24 +469,36 @@ impl Service {
                 w::reply(seq, w::OK, stats.entries as u32)
             }
             w::RESOLVE | w::RESOLVE_ALL => {
-                // One question at a time: another caller's waits until it is answered.
-                // sexnet's own question for the time server steps aside for a program's.
-                if self.resolving.is_some_and(|(o, at)| o != who && o != crate::clock_sync::SELF && now.saturating_sub(at) < RESOLVE_HOLD_TICKS) { return w::reply(seq, w::BUSY, 0); }
                 let mode = engine.open_dns_mode();
                 // value 0 asks for the next answer to the question already sent.
                 if value != 0 {
-                    if let Some(old) = self.secure_resolve.take() {
-                        self.slots[old.flow].free(old.flow, Some(engine));
-                    }
-                    self.resolving = Some((who, now));
                     let len = value as usize;
                     if len > 253 { return w::reply(seq, w::INVALID, 0); }
                     let mut name = [0u8; 253];
                     name[..len].copy_from_slice(&region[..len]);
                     // Test builds only: a name that makes the service fall over, to show it comes back.
                     if option_env!("SEXOS_NET_CRASH_PROBE").is_some() && &name[..len] == b"crash.invalid" { sex_pdx::serial_record!("[sexnet.crash.probe]"); unsafe { core::ptr::write_volatile(8 as *mut u8, 1) }; }
+                    // Answer cache hits immediately without contending for the single-flight resolver.
+                    let six = kind == w::RESOLVE_ALL && engine.open_global6().is_some();
+                    if let Ok(Some(found)) = engine.open_cache_lookup(&name[..len], six) {
+                        if kind == w::RESOLVE_ALL {
+                            let mut n = 0;
+                            for a in [found.v6.map(Address::V6), found.v4.map(Address::V4)].into_iter().flatten() { put(&mut region[n * w::ADDRESS_BYTES..], a); n += 1; }
+                            return if n > 0 { w::reply(seq, w::OK, n as u32) } else { w::reply(seq, w::NO_NAME, 0) };
+                        }
+                        return match found.v4 {
+                            Some(a) => { region[..4].copy_from_slice(&a); w::reply(seq, w::OK, 0) }
+                            None => w::reply(seq, w::NO_NAME, 0),
+                        };
+                    }
+                    // One network question at a time: another caller waits until it is answered.
+                    // sexnet's own question for the time server steps aside for a program's.
+                    if self.resolving.is_some_and(|(o, at)| o != who && o != crate::clock_sync::SELF && now.saturating_sub(at) < RESOLVE_HOLD_TICKS) { return w::reply(seq, w::BUSY, 0); }
+                    if let Some(old) = self.secure_resolve.take() {
+                        self.slots[old.flow].free(old.flow, Some(engine));
+                    }
+                    self.resolving = Some((who, now));
                     if mode != dns_secure::Mode::Plain {
-                        let six = kind == w::RESOLVE_ALL && engine.open_global6().is_some();
                         match engine.open_cache_lookup(&name[..len], six) {
                             Ok(Some(found)) => {
                                 self.resolving = None;

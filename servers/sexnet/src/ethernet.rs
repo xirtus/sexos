@@ -208,7 +208,7 @@ impl<H:Hardware> Driver<H>{
     pub fn advance_with_receive(&mut self,now:u64,receive:bool)->Option<Event>{
         if !self.active(){return None;}
         if now<self.last{self.fail(Failure::Clock);return None;}self.last=now;
-        if self.phase!=Phase::Running{
+        if !matches!(self.phase,Phase::Running|Phase::Link){
             self.turns+=1;if now-self.started>=WAIT_TICKS||self.turns>=WAIT_TURNS{self.fail(Failure::Deadline);return None;}
         }
         match self.phase{

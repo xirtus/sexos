@@ -378,6 +378,10 @@ impl Web {
             else { self.phase = Phase::Idle; if self.message_len == 0 || self.message.starts_with(b"Loading") { self.say(b"The site closed without answering."); } }
             return true;
         }
+        if status == w::BUSY && self.phase == Phase::ResolveAsk {
+            self.next_at = now + POLL * 10;
+            return true;
+        }
         if !matches!(status, w::OK | w::WAIT) {
             self.fail(match status { w::OFFLINE => b"No network.", w::NO_NAME => b"Can't find that site.", w::BUSY => b"The network is busy. Try again.", w::DENIED => b"Not allowed.", _ => b"Network error." });
             return true;

@@ -48,8 +48,10 @@ pub const RX_CONFIG: u32 = 0x44;
 pub const CFG9346: u32 = 0x50;
 const CFG_UNLOCK: u8 = 0xc0;
 const CFG_LOCK: u8 = 0x00;
+/// PHYstatus is at 0x6c on both r8168/r8169 and r8125/r8126 (including 10ec:3000 Killer E3000);
+/// 0x80 is EPHYAR (extended PHY access), not link status.
 pub const PHY_STATUS_8168: u32 = 0x6c;
-pub const PHY_STATUS_8125: u32 = 0x80;
+pub const PHY_STATUS_8125: u32 = 0x6c;
 const LINK_STATUS: u8 = 1 << 1;
 /// r8125 transmit poll (word, bit 0).
 pub const TX_POLL_8125: u32 = 0x90;
