@@ -23,8 +23,9 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 - Fault recovery: every exit, fault, retirement and restart path purges per-core
   handoff slots naming the dead task (`scheduler::purge_handoff_for_task/_pd`) and
   tears down its IPC v2 state (`ipc_v2::syscall::teardown_task/_pd`), waking blocked
-  clients with `E_RESTARTED` or `E_CLOSED`. Clients retry idempotent calls across a
-  restart (`sex_pdx::ipc_recv::retry_on_peer_restart_with`, used by `sex-app`).
+  clients with `E_RESTARTED` or `E_CLOSED`. A client retry helper for idempotent calls
+  across a restart (`sex_pdx::ipc_recv::retry_on_peer_restart_with`) is in place;
+  `sex-app` does not use it yet (see review changes).
 - One-hop window open: Shell and Display serve `OP_WINDOW_OPEN_COMBINED` (create, clear
   and present in one request). `Window::open` does not use it yet (see review changes).
 - Bell replies with syscall 103 where it already blocked in listen; Display, Input and
@@ -49,11 +50,14 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 - Gemini's program-store directory cache (`DIRECTORY_SECTORS`) was dropped: it kept
   serving a directory after it was deleted or found corrupt, which the recording image
   loader test catches. Files reads the directory from disk on each load, as before.
-- Files does not use the page cache yet. With it in, a running program lost its Files
-  binding partway through (every request denied with `bound=0`) and a Polyamour save
-  never finished, on Gemini's run and on the re-land. The likely cause: Files' heap is
-  128 KiB (`sex-rt` `HEAP_BYTES`), and the cache's smallest fallback takes about half of
-  it. The cache needs its own memory grant before Files uses it.
+- `sex-app`'s Files and Network calls are back to master's: they wait as long as the
+  service is busy. With the retry helper they give up after 8 "not ready" refusals,
+  which also come from a service that is only busy. That is the likely cause of
+  Polyamour's save never reporting and Splicy's export failing on its write (both on
+  Gemini's run and on the re-land; taking the page cache out did not fix them). The
+  helper needs to tell "busy" from "restarted" before `sex-app` uses it.
+- Files does not use the page cache yet: its smallest fallback takes about half of
+  Files' 128 KiB heap (`sex-rt` `HEAP_BYTES`). It needs its own memory grant first.
 - Drive's reply-and-receive loop, Files' block calls through syscall 102 and the wider
   reply-and-receive use in Files' trampoline were taken back out. With them in, Drive
   restarted during boot (a second `[sexdrive.init.start]` in the app-resource proof).
