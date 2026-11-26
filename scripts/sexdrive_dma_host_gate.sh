@@ -56,7 +56,7 @@ for name in ['service_next_request','fill_initial_frame','device_sleep']:
  parts.append(s[a:i])
 entry=s[s.index('pub extern "C" fn _start()'):]
 assert entry.index('fill_initial_frame(shared_addr);')<entry.index('pdx_call(SLOT_SHELL, OP_SHELL_BIND_BUFFER, shared_addr, 0, 0);')
-assert 'loop { service_next_request(); }' in entry
+assert 'let mut next: Option<sex_pdx::PdxMessage> = None;' in entry and 'loop { service_next_request(&mut next); }' in entry
 assert 'pdx_try_listen_raw'not in s and '0..2_000_000'not in entry
 Path(sys.argv[2]).write_text('\n'.join(parts))
 abi=(Path(sys.argv[1])/'crates/sex-pdx/src/lib.rs').read_text()

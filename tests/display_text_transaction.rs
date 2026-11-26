@@ -820,3 +820,34 @@ fn fill_copies_the_region_once_and_commit_verifies_that_copy() {
     s.receive(9,90,156,Request::Select{sequence:7,start:0,end:5});
     assert!(s.receive(9,90,156,Request::Commit{sequence:7,hash:text_batch::selected_hash(text,0,5).unwrap()}).is_some());
 }
+
+#[test]
+fn combined_open_stages_initial_empty_text_and_allows_seq2_show() {
+    // Models sexdisplay's OP_WINDOW_OPEN_COMBINED staging of empty text (seq=1)
+    // for a Program row (e.g. Jot: PD 41, task 410, surface 358) followed by
+    // publication release and the app's first Window::show() at sequence 2.
+    let (owner, task, sid) = (41u32, 410u32, 358u64);
+    let mut s = Stage::EMPTY;
+    let begin1 = Request::Begin { sequence: 1, len: 0, color: 0x00E0E8F0 };
+    let commit1 = Request::Commit { sequence: 1, hash: text_batch::hash(b"") };
+    assert!(s.receive(owner, task, sid, begin1).is_none());
+    let (len, color, _) = s.receive(owner, task, sid, commit1).expect("empty combined-open commit must seal");
+    assert_eq!((len, color), (0, 0x00E0E8F0));
+    assert!(s.needs_publication());
+    let ctx1 = s.pending().expect("pending empty text").context();
+    assert_eq!((ctx1.owner(), ctx1.task(), ctx1.surface(), ctx1.sequence()), (owner, task, sid, 1));
+    assert!(s.release_matching(ctx1));
+    let mut replies = Vec::new();
+    s.poll_reply(|to, val| { replies.push((to, val)); 0 });
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].0, owner);
+    assert_eq!(text_batch::Applied::decode(1, replies[0].1), Some(text_batch::Applied { surface: sid as u16, sequence: 1 }));
+    // Next Window::show() starts at sequence 2 and commits cleanly.
+    let body = b"hello from jot";
+    let mut region = [0u8; 64];
+    region[..body.len()].copy_from_slice(body);
+    assert!(s.receive(owner, task, sid, Request::Begin { sequence: 2, len: body.len(), color: 0x00E0E8F0 }).is_none());
+    s.fill(owner, task, sid, 2, &region);
+    let (len2, _, bytes2) = s.receive(owner, task, sid, Request::Commit { sequence: 2, hash: text_batch::hash(body) }).expect("seq=2 show must seal");
+    assert_eq!(&bytes2[..len2], body);
+}

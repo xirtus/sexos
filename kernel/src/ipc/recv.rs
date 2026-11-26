@@ -109,6 +109,7 @@ unsafe fn wait_and_take_from(regs: &mut crate::interrupts::SyscallRegs, partner:
     let task = crate::scheduler::SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
     let pd = core.current_pd_ref();
     if !task.is_null() && task == pd.main_task.load(Ordering::Acquire) {
+        if reply { crate::service_restart::inbox(pd.id, false); }
         regs.rax = 0;
         if !(partner.is_some_and(away) && spin_for_partner(task, pd, reply)) {
             (*task).deliver.store(true, Ordering::Relaxed);

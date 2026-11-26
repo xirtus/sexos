@@ -5591,10 +5591,25 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             for child in SURFACES.iter_mut().filter(|s| s.active) { recompute_text_lines(child); }
-                            if let Some(surface) = SURFACES.iter_mut().find(|s| s.active && s.surface_id == surface_id) {
+                            if let Some((index, surface)) = SURFACES.iter_mut().enumerate().find(|(_, s)| s.active && s.surface_id == surface_id) {
                                 if combined_open {
                                     surface.text_len = 0;
                                     surface.text_color = sex_pdx::desktop_style::TEXT;
+                                    if owner != 0 {
+                                        if let Some(task) = lifecycle.task_for(owner, surface_id) {
+                                            let stage = &mut TEXT_STAGES[index];
+                                            let begin = sex_pdx::text_batch::Request::Begin { sequence: 1, len: 0, color: sex_pdx::desktop_style::TEXT };
+                                            let commit = sex_pdx::text_batch::Request::Commit { sequence: 1, hash: sex_pdx::text_batch::hash(b"") };
+                                            let _ = stage.receive(owner, task, surface_id, begin);
+                                            if stage.receive(owner, task, surface_id, commit).is_some() {
+                                                if let Some(pending) = stage.pending() {
+                                                    let context = pending.context();
+                                                    sex_pdx::serial_record!("[display.text.prepared] target={} task={} surface={} paint={} bytes={} pixels=unconfirmed",
+                                                        context.owner(), context.task(), context.surface(), context.sequence(), pending.len());
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 recompute_text_lines(surface);
                                 if let Some(parent)=FRAME_GROUPS.awaiting_parent(surface) {
@@ -5616,7 +5631,7 @@ pub extern "C" fn _start() -> ! {
                             if combined_open && owner != 0 {
                                 if app_catalog::by_surface(owner, surface_id).is_some_and(|row| row.app == app_catalog::App::Program) {
                                     set_program_title(surface_id, None);
-                                    if let Some(k) = sex_pdx::pixel_region::index_of(owner) { PIXEL_SIZE[k] = (0, 0); }
+                                    if let Some(k) = sex_pdx::pixel_region::index_of(owner) { PIXEL_SIZE[k] = (0, 0); PIXEL_PAGE[k] = 0; PIXEL_SHOWN[k] = (0, 0); }
                                 }
                                 if lifecycle.request_present(owner, surface_id, 1, 0) {
                                     sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request=1", owner, surface_id);
