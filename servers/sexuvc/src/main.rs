@@ -402,6 +402,13 @@ pub extern "C" fn _start() -> ! {
                 None => {}
             }
         }
-        let _ = sex_pdx::sys_wait_self_ticks(if streaming { 1 } else { 100 });
+        if streaming {
+            let _ = sex_pdx::sys_wait_self_ticks(1);
+        } else {
+            let msg = sex_pdx::pdx_listen_raw(0);
+            if msg.type_id == sex_pdx::usb_uvc::OP_LINK && msg.caller_pd != 0 {
+                sex_pdx::pdx_reply(msg.caller_pd, 0);
+            }
+        }
     }
 }
