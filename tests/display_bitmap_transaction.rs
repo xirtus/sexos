@@ -240,7 +240,7 @@ fn movement_resize_and_clear_damage_cover_every_changed_pixel() {
 #[test]
 fn production_uses_owned_live_route_both_paint_branches_and_terminal_cleanup() {
     let source=include_str!("../servers/sexdisplay/src/main.rs");
-    for branch in ["c = fill_rect_color(surf, x, y, surf.color);\n        c = bitmap_color(surf, x, y, c, scene);", "c = fill_rect_color(content, x, y, content.color);\n            c = bitmap_color(content, x, y, c, scene);"] {assert!(source.contains(branch));}
+    for branch in ["c = fill_rect_color(surf, x, y, surf.color);\n        c = bitmap_color(surf, x, y, c, scene);", "c = fill_rect_color(content, x, y, base_col);\n            c = bitmap_color(content, x, y, c, scene);"] {assert!(source.contains(branch));}
     let shader=&source[source.find("fn bitmap_color(").unwrap()..source.find("fn bitmap_surface_damage(").unwrap()];
     assert!(shader.contains("scene.bitmaps.matches_surface(surf.owner_pd, surf.surface_id)"));
     assert!(shader.contains("scene.bitmaps.sample(surf.owner_pd, surf.surface_id, x, y)"));
