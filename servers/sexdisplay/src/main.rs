@@ -6458,6 +6458,7 @@ pub extern "C" fn _start() -> ! {
             }
         } else if motion_damage.is_some() {
             motion.clear_finished(motion_now);
+            needs_full_redraw = true;
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
         // Frame cost: from here to the completed publication.
