@@ -17,9 +17,9 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
   The Wi-Fi driver and tether code are untouched.
 
 ## Microkernel servers
-- Files: IPC v2 endpoint serving (`ipc_v2.rs`). A CLOCK page cache with 8-stream
-  read-ahead (`page_cache.rs`) is in the tree with its host gate
-  (`scripts/sexfiles_page_cache_host_gate.sh`) but Files does not use it yet.
+- Files: IPC v2 endpoint serving (`ipc_v2.rs`) and a CLOCK page cache with 8-stream
+  read-ahead (`page_cache.rs`) are in the tree with their host gate
+  (`scripts/sexfiles_page_cache_host_gate.sh`); Files does not start either yet.
 - Fault recovery: every exit, fault, retirement and restart path purges per-core
   handoff slots naming the dead task (`scheduler::purge_handoff_for_task/_pd`) and
   tears down its IPC v2 state (`ipc_v2::syscall::teardown_task/_pd`), waking blocked
@@ -61,7 +61,12 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 - Drive's reply-and-receive loop, Files' block calls through syscall 102 and the wider
   reply-and-receive use in Files' trampoline were taken back out. With them in, Drive
   restarted during boot (a second `[sexdrive.init.start]` in the app-resource proof).
-  Files keeps master's reply-and-receive for `fs::OP` and serves the IPC v2 bind request.
+  Files keeps master's reply-and-receive for `fs::OP`.
+- Files does not create its IPC v2 endpoint at start or serve `OP_BIND_ENDPOINT` yet.
+  With every other Files change taken out, a program still lost its Files binding
+  partway through its run (requests denied with `bound=0`, then Polyamour's save failed
+  with Permission denied), which looks like Files restarting with its boot state. This
+  is the last Files change; if the failure stays, the cause is in the kernel changes.
 - `Window::open` is back to its separate calls. With the combined open, Display never
   admitted the program as its surface's owner (no `[display.app.admitted]`), its first
   text was never committed (the Jot gate timed out), and a program replaced by a new

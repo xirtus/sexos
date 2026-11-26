@@ -28,6 +28,7 @@ mod restricted_data;
 mod fs_service;
 #[allow(dead_code)]
 mod page_cache;
+#[allow(dead_code)]
 mod ipc_v2;
 mod organize;
 mod recording_role;

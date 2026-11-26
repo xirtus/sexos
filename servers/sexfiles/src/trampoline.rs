@@ -244,7 +244,6 @@ pub extern "C" fn trampoline_main() {
     crash_keeper.load(&mut crate::history_disk::DiskIo);
     crash_keeper.sync(&mut crate::history_disk::DiskIo);
     crate::gate_ping::prove();
-    let _ipc_v2_slot = crate::ipc_v2::init_endpoint();
     // The next request, when a reply that waited brought it back in registers.
     let mut next:Option<sex_pdx::PdxMessage>=None;
     loop {
@@ -335,15 +334,6 @@ pub extern "C" fn trampoline_main() {
         }
         if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
         if crate::recording_runtime::message(&msg){continue;}
-        // IPC v2 bootstrap: grant a badged, call-only endpoint capability when asked.
-        if msg.type_id == sex_pdx::endpoint::OP_BIND_ENDPOINT {
-            let reply = match crate::ipc_v2::grant_to_domain(msg.arg0 as u32, caller, msg.caller_task) {
-                Ok(slot) => slot as u64,
-                Err(err) => err,
-            };
-            crate::fs_service::reply_later(caller, reply);
-            continue;
-        }
         if msg.type_id==sex_config::secret::OP{if let Some(word)=crate::password_store::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
         if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
         if msg.type_id==sex_pdx::bt_bonds::OP{if let Some(word)=crate::bt_bonds::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
