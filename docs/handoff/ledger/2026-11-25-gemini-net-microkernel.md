@@ -71,11 +71,11 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
 - Files does not create its IPC v2 endpoint at start or serve `OP_BIND_ENDPOINT` yet
   (taken out while finding the cause above).
 - `Window::open` is back to its separate calls. With the combined open, Display never
-  admitted the program as its surface's owner (no `[display.app.admitted]`), its first
-  text was never committed (the Jot gate timed out), and a program replaced by a new
-  run of itself kept running, so five Qupid runs used up program memory (the Kodi gate
-  failed with `no_memory`). Both failed on Gemini's run too. The combined open needs the
-  app's own admission to Display before it can replace the calls.
+  admitted the program as its surface's owner (no `[display.app.admitted]`) and its
+  first text was never committed (the Jot gate timed out, on Gemini's run too). The
+  combined open needs the app's own admission to Display before it can replace the calls.
+- The Kodi gate keeps five Qupid runs open at once and the fifth can be refused with
+  `no_memory`; it fails that way on other branches too, so it is not from this work.
 
 ## ABI
 - New: `sex_pdx::endpoint::E_RESTARTED = 0xFFFF_FFFF_FFFF_FFF7`, `OP_BIND_ENDPOINT =
