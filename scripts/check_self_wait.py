@@ -359,7 +359,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '7f9e3f565051eac895c851e0e58ea8f3c7934e326aa0ff096a0dc4ffa75afb30',  # retire purges handoff slots + IPC v2 teardown (no observer change), 2026-11-25
- 'kernel/src/service_restart.rs': 'c07f37e5821c73132ceabea804042d752f0e66eb3d3e19afd2c1ff3186cdfa97',  # restart tears down IPC v2 state, named hang limits (no observer change), 2026-11-25
+ 'kernel/src/service_restart.rs': '555bb544fde987179952f7f83e8fea945ce91f804996938e209e3f5ce4dfeaa8',  # restart tears down IPC v2 state, named hang limits (no observer change), 2026-11-25
  'kernel/src/crash_log.rs': '9a34837711796f87b9d53de4be81116561eec80b7920866af1ef4723683dacee',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 

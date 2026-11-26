@@ -52,21 +52,24 @@ Gemini's six branches, combined (PR #819) and landed after a Claude review.
   loader test catches. Files reads the directory from disk on each load, as before.
 - `sex-app`'s Files and Network calls are back to master's: they wait as long as the
   service is busy. With the retry helper they give up after 8 "not ready" refusals,
-  which also come from a service that is only busy. That is the likely cause of
-  Polyamour's save never reporting and Splicy's export failing on its write (both on
-  Gemini's run and on the re-land; taking the page cache out did not fix them). The
-  helper needs to tell "busy" from "restarted" before `sex-app` uses it.
+  which also come from a service that is only busy, so a program's write could fail
+  under load. The helper needs to tell "busy" from "restarted" before `sex-app` uses it.
 - Files does not use the page cache yet: its smallest fallback takes about half of
   Files' 128 KiB heap (`sex-rt` `HEAP_BYTES`). It needs its own memory grant first.
 - Drive's reply-and-receive loop, Files' block calls through syscall 102 and the wider
   reply-and-receive use in Files' trampoline were taken back out. With them in, Drive
   restarted during boot (a second `[sexdrive.init.start]` in the app-resource proof).
   Files keeps master's reply-and-receive for `fs::OP`.
-- Files does not create its IPC v2 endpoint at start or serve `OP_BIND_ENDPOINT` yet.
-  With every other Files change taken out, a program still lost its Files binding
-  partway through its run (requests denied with `bound=0`, then Polyamour's save failed
-  with Permission denied), which looks like Files restarting with its boot state. This
-  is the last Files change; if the failure stays, the cause is in the kernel changes.
+- The service watchdog is back to master's scope: Files, Display and Shell are not
+  killed for holding one message (Gemini gave them 60 s), and only Drive and USB count
+  as answering every call they take (Files, Display and Shell defer replies). With
+  Files watched, a running program lost its Files binding partway through (requests
+  denied with `bound=0`): Polyamour's save failed with Permission denied and Splicy's
+  export failed on its write, on Gemini's run and on the re-land, with every Files
+  change taken out. The likely cause is the watchdog restarting a busy Files, which
+  starts again with its boot state. The `fault_recovery` host test checks this scope.
+- Files does not create its IPC v2 endpoint at start or serve `OP_BIND_ENDPOINT` yet
+  (taken out while finding the cause above).
 - `Window::open` is back to its separate calls. With the combined open, Display never
   admitted the program as its surface's owner (no `[display.app.admitted]`), its first
   text was never committed (the Jot gate timed out), and a program replaced by a new

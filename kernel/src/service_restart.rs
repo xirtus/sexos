@@ -49,25 +49,20 @@ const SHELL_PD: u32 = 3;
 const INPUT_PD: u32 = 4;
 const USB_PD: u32 = 5;
 const BELL_PD: u32 = 10;
-const FILES_PD: u32 = 11;
 const NET_PD: u32 = 13;
 /// `sex_pdx::pci_command::SADDLE_PD` (init.rs asserts they match).
 pub(crate) const SADDLE_PD: u32 = 54;
 /// How long a service may hold one message before it counts as hung, in ticks; 0: not
-/// watched. Drive's own command deadline is 30 s, so it gets longer than that; Files,
-/// Display, and Shell get 60_000 ticks so heavy TCG/compositor work never false-trips.
+/// watched. Drive's own command deadline is 30 s, so it gets longer than that.
 pub(crate) fn hang_limit(pd: u32) -> u64 {
     match pd {
         DRIVE_PD => 45_000,
         INPUT_PD | USB_PD | BELL_PD | NET_PD => 10_000,
-        FILES_PD | DISPLAY_PD | SHELL_PD => 60_000,
         _ => 0,
     }
 }
 /// Services that answer every call they take, so every owed reply was really awaited.
-pub(crate) fn answers_every_call(pd: u32) -> bool {
-    matches!(pd, DISPLAY_PD | DRIVE_PD | SHELL_PD | USB_PD | BELL_PD | FILES_PD | NET_PD)
-}
+pub(crate) fn answers_every_call(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD) }
 /// Drivers whose devices get a function-level reset before they run again (Saddle too,
 /// for the outside drivers it hosts; not Display: that would drop the firmware's screen).
 fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | BELL_PD | NET_PD | SADDLE_PD) }

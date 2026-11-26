@@ -358,27 +358,29 @@ fn ipc_v2_endpoint_teardown_detaches_server_and_wakes_clients_with_e_restarted()
 }
 
 #[test]
-fn service_restart_notifies_24_concurrent_callers_and_covers_all_system_servers() {
-    // Verify expanded watchdog and answers_every_call coverage directly.
-    for pd in [1u32, 2, 3, 5, 10, 11, 13] {
+fn service_restart_notifies_24_concurrent_callers_and_keeps_watchdog_scope() {
+    // Only services that answer every call they take are owed-reply services; Files,
+    // Display and Shell defer replies and are not watched for holding a message.
+    for pd in [2u32, 5] {
         assert!(service_restart::answers_every_call(pd), "pd={pd} must answer every call");
     }
-    assert_eq!(service_restart::hang_limit(11), 60_000);
-    assert_eq!(service_restart::hang_limit(1), 60_000);
-    assert_eq!(service_restart::hang_limit(3), 60_000);
+    for pd in [1u32, 3, 11] {
+        assert!(!service_restart::answers_every_call(pd), "pd={pd} defers replies");
+        assert_eq!(service_restart::hang_limit(pd), 0, "pd={pd} is not watched");
+    }
     assert_eq!(service_restart::hang_limit(2), 45_000);
     assert_eq!(service_restart::hang_limit(13), 10_000);
 
-    // Register sexfiles (PD 11) and 24 concurrent callers (PDs 100..124).
-    let files = capability::ProtectionDomain::new(11, 110);
-    service_restart::capture(11, 11);
+    // Register USB (PD 5) and 24 concurrent callers (PDs 100..124).
+    let files = capability::ProtectionDomain::new(5, 50);
+    service_restart::capture(5, 5);
     let mut callers = Vec::new();
     for c in 100u32..124 {
         callers.push(capability::ProtectionDomain::new(c, 1000 + c));
         files.reply_credits.lock().push(c);
     }
 
-    // Simulate sexfiles crashing (exited + Dead).
+    // Simulate the service crashing (exited + Dead).
     let main = files.main_task.load(Ordering::Acquire);
     unsafe {
         assert!((*main).state.exit());
@@ -398,12 +400,12 @@ fn service_restart_notifies_24_concurrent_callers_and_covers_all_system_servers(
     interrupts::TICKS.fetch_add(10, Ordering::AcqRel);
     let _ = service_restart::poll();
 
-    assert_eq!(service_restart::restarts_of(11), 1);
-    assert!(!service_restart::down(11));
+    assert_eq!(service_restart::restarts_of(5), 1);
+    assert!(!service_restart::down(5));
     for (idx, caller) in callers.iter().enumerate() {
         let mut q = caller.incoming_replies.lock();
         let reply = q.pop_front().unwrap_or_else(|| panic!("caller {idx} was stranded without PEER_RESTARTED"));
-        assert_eq!(reply.caller_pd, 11);
+        assert_eq!(reply.caller_pd, 5);
         assert_eq!(reply.value, crash_log::PEER_RESTARTED);
     }
 }
