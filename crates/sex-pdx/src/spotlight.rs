@@ -21,13 +21,13 @@ pub const OP_SPOTLIGHT_QUERY: u64 = 0x2FE;
 /// Maximum ASCII characters kept in the Spotlight search input.
 pub const QUERY_MAX: usize = 24;
 
-/// Logical overlay dimensions at 1x scale (`~640x440`).
+/// Logical overlay dimensions at 1x scale (`~640x490`).
 pub const PANEL_W: usize = 640;
-pub const PANEL_H: usize = 440;
+pub const PANEL_H: usize = 490;
 
-/// Grid dimensions: 5 columns x 2 rows = 10 prominent SexOS apps.
-pub const GRID_COLS: usize = 5;
-pub const GRID_ROWS: usize = 2;
+/// Grid dimensions: 4 columns x 3 rows = 12 prominent SexOS apps.
+pub const GRID_COLS: usize = 4;
+pub const GRID_ROWS: usize = 3;
 
 /// Search bar placeholder text.
 pub const PLACEHOLDER: &str = "Search apps, calculate, or run...";
@@ -130,19 +130,23 @@ pub enum LaunchTarget {
 pub struct SpotlightApp {
     pub id: &'static str,
     pub name: &'static str,
+    /// Exact `sex_icons` (`Kind::App`) icon name from `assets/icons/icons.txt`.
+    pub icon: &'static str,
+    /// Fallback 2-letter monogram used only if `sex_icons::find` returns `None`.
     pub monogram: &'static str,
     pub category: Category,
-    /// Distinct vibrant/pastel Candy icon badge RGB color (`0x00RRGGBB`).
+    /// Fallback rounded Candy icon badge RGB color (`0x00RRGGBB`).
     pub badge_rgb: u32,
     pub keywords: &'static str,
     pub target: LaunchTarget,
 }
 
 /// Curated SexOS Spotlight catalog — every tile launches a real catalog app.
-pub const CATALOG: [SpotlightApp; 10] = [
+pub const CATALOG: [SpotlightApp; 12] = [
     SpotlightApp {
         id: "tailor",
         name: "Tailor AI",
+        icon: "flirt",
         monogram: "AI",
         category: Category::AiDev,
         badge_rgb: 0x008B_5CF6,
@@ -152,6 +156,7 @@ pub const CATALOG: [SpotlightApp; 10] = [
     SpotlightApp {
         id: "kaleidoscope",
         name: "Kaleidoscope",
+        icon: "kaleidoscope",
         monogram: "KB",
         category: Category::Apps,
         badge_rgb: 0x000E_A5E9,
@@ -161,15 +166,17 @@ pub const CATALOG: [SpotlightApp; 10] = [
     SpotlightApp {
         id: "flash",
         name: "Flash",
+        icon: "mirror",
         monogram: "FL",
         category: Category::Media,
         badge_rgb: 0x00F4_3F5E,
-        keywords: "flash webcam camera video photo capture",
+        keywords: "flash webcam camera video photo capture mirror",
         target: LaunchTarget::Program("flash"),
     },
     SpotlightApp {
         id: "spindle",
         name: "Spindle",
+        icon: "spindle",
         monogram: ">_",
         category: Category::AiDev,
         badge_rgb: 0x0010_B981,
@@ -179,6 +186,7 @@ pub const CATALOG: [SpotlightApp; 10] = [
     SpotlightApp {
         id: "files",
         name: "Files",
+        icon: "loom",
         monogram: "FS",
         category: Category::Apps,
         badge_rgb: 0x00F5_9E0B,
@@ -188,6 +196,7 @@ pub const CATALOG: [SpotlightApp; 10] = [
     SpotlightApp {
         id: "quil",
         name: "Quil",
+        icon: "quil",
         monogram: "QL",
         category: Category::Apps,
         badge_rgb: 0x0063_66F1,
@@ -197,15 +206,17 @@ pub const CATALOG: [SpotlightApp; 10] = [
     SpotlightApp {
         id: "settings",
         name: "Settings",
+        icon: "tatami",
         monogram: "ST",
         category: Category::System,
         badge_rgb: 0x007C_6A9A,
-        keywords: "settings preferences display theme config",
+        keywords: "settings tatami preferences display theme config",
         target: LaunchTarget::Settings,
     },
     SpotlightApp {
         id: "pd-graph",
         name: "PD Graph",
+        icon: "mesh",
         monogram: "PD",
         category: Category::System,
         badge_rgb: 0x00A8_55F7,
@@ -215,20 +226,42 @@ pub const CATALOG: [SpotlightApp; 10] = [
     SpotlightApp {
         id: "audio",
         name: "Audio",
+        icon: "qupid",
         monogram: "AU",
         category: Category::Media,
         badge_rgb: 0x00EC_4899,
-        keywords: "audio sound mixer volume music play quid",
+        keywords: "audio sound mixer volume music play qupid",
         target: LaunchTarget::Audio,
     },
     SpotlightApp {
         id: "store",
         name: "Store",
+        icon: "sexshop",
         monogram: "SR",
         category: Category::System,
         badge_rgb: 0x0014_B8A6,
-        keywords: "store shop packages install apps software",
+        keywords: "store sexshop shop packages install apps software",
         target: LaunchTarget::Program("store"),
+    },
+    SpotlightApp {
+        id: "moan",
+        name: "Moan",
+        icon: "moan",
+        monogram: "MN",
+        category: Category::Media,
+        badge_rgb: 0x00E1_1D48,
+        keywords: "moan daw synth audio music studio midi",
+        target: LaunchTarget::Program("moan"),
+    },
+    SpotlightApp {
+        id: "polyamour",
+        name: "Polyamour",
+        icon: "polyamour",
+        monogram: "3D",
+        category: Category::Apps,
+        badge_rgb: 0x0038_BDF8,
+        keywords: "polyamour 3d modeler sculpt cad mesh",
+        target: LaunchTarget::Program("polyamour"),
     },
 ];
 
@@ -738,7 +771,7 @@ pub enum Hit {
 }
 
 impl Layout {
-    /// Computes the centered, screen-clamped `~640x440` logical px Spotlight layout.
+    /// Computes the centered, screen-clamped `~640x490` logical px Spotlight layout.
     pub fn new(screen_w: usize, screen_h: usize, bar_h: usize, scale: u32) -> Option<Self> {
         let sc = scale.clamp(1, 3);
         let s = sc as usize;
@@ -784,12 +817,12 @@ impl Layout {
         let footer_h = 34 * s;
         let footer = (px + pad, py + ph - footer_h, inner_w, footer_h);
 
-        // 4. App Icon Grid (5 columns x 2 rows)
+        // 4. App Icon Grid (4 columns x 3 rows)
         let grid_y = pill_y + pill_h + 14 * s;
         let grid_h = footer.1.saturating_sub(grid_y + 10 * s);
         let grid_area = (inner_x, grid_y, inner_w, grid_h);
         let tile_gap_x = 12 * s;
-        let tile_gap_y = 12 * s;
+        let tile_gap_y = 10 * s;
         let tile_w = grid_area.2.saturating_sub(tile_gap_x * (GRID_COLS - 1)) / GRID_COLS;
         let tile_h = grid_area.3.saturating_sub(tile_gap_y * (GRID_ROWS - 1)) / GRID_ROWS;
 

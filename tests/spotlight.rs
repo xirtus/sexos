@@ -61,6 +61,21 @@ fn live_search_filtering_and_backspace() {
     assert_eq!(n, 1);
     assert_eq!(CATALOG[order[0]].id, "files");
 
+    // Search "moan" -> Moan DAW.
+    let (order, n) = filter_catalog(Category::All, "moan");
+    assert_eq!(n, 1);
+    assert_eq!(CATALOG[order[0]].id, "moan");
+    assert_eq!(CATALOG[order[0]].target, LaunchTarget::Program("moan"));
+
+    // Search "polyamour" and "3d" -> Polyamour.
+    let (order, n) = filter_catalog(Category::All, "polyamour");
+    assert_eq!(n, 1);
+    assert_eq!(CATALOG[order[0]].id, "polyamour");
+    assert_eq!(CATALOG[order[0]].target, LaunchTarget::Program("polyamour"));
+    let (order, n) = filter_catalog(Category::All, "3d");
+    assert_eq!(n, 1);
+    assert_eq!(CATALOG[order[0]].id, "polyamour");
+
     // Live typing + Backspace in Controller.
     assert_eq!(ctrl.handle_key(0x21, 1, false, false), KeyOutcome::Redraw); // 'f'
     assert_eq!(ctrl.handle_key(0x26, 1, false, false), KeyOutcome::Redraw); // 'l'
@@ -72,6 +87,27 @@ fn live_search_filtering_and_backspace() {
     // Backspace pops 'l'.
     assert_eq!(ctrl.handle_key(0x0E, 1, false, false), KeyOutcome::Redraw);
     assert_eq!(ctrl.state().query.as_str(), "f");
+}
+
+#[test]
+fn every_catalog_app_maps_to_real_sex_icons_app_icon() {
+    let icons_txt = include_str!("../assets/icons/icons.txt");
+    for app in &CATALOG {
+        let found = icons_txt.lines().any(|line| {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("app ") {
+                rest.split_once(' ').map(|(name, _)| name == app.icon).unwrap_or(false)
+            } else {
+                false
+            }
+        });
+        assert!(
+            found,
+            "Spotlight app '{}' icon '{}' missing from assets/icons/icons.txt",
+            app.id, app.icon
+        );
+    }
+    assert_eq!(CATALOG_LEN, GRID_COLS * GRID_ROWS);
 }
 
 #[test]

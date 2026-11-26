@@ -14,6 +14,104 @@ use crate::desk_theme::current as desk;
 
 const SHELL_PD: u32 = 3;
 
+/// Largest cached Spotlight app icon side (`48` logical px at max scale `3`).
+const ICON_CAP: usize = 144;
+
+struct IconCache {
+    /// Cached pixel side per `CATALOG` index (`0` = not yet rasterized).
+    sides: [usize; spotlight::CATALOG_LEN],
+    /// True if `sex_icons::draw` succeeded for this slot at `sides[idx]`.
+    valid: [bool; spotlight::CATALOG_LEN],
+    /// Non-premultiplied `0xAARRGGBB` rasterized brand icons.
+    pixels: [[u32; ICON_CAP * ICON_CAP]; spotlight::CATALOG_LEN],
+    /// Reusable `sex_icons` rasterizer scratch buffers.
+    acc: [i32; sex_font::raster::scratch_len(ICON_CAP, ICON_CAP)],
+    mask: [u8; ICON_CAP * ICON_CAP],
+}
+
+static mut ICON_CACHE: IconCache = IconCache {
+    sides: [0; spotlight::CATALOG_LEN],
+    valid: [false; spotlight::CATALOG_LEN],
+    pixels: [[0; ICON_CAP * ICON_CAP]; spotlight::CATALOG_LEN],
+    acc: [0; sex_font::raster::scratch_len(ICON_CAP, ICON_CAP)],
+    mask: [0; ICON_CAP * ICON_CAP],
+};
+
+/// Returns the cached `side x side` non-premultiplied `0xAARRGGBB` SexOS vector
+/// brand icon for `CATALOG[cat_idx]`, rasterizing it once per `(cat_idx, side)`.
+#[allow(static_mut_refs)]
+fn cached_app_icon(cat_idx: usize, icon_name: &str, side: usize) -> Option<(&'static [u32], usize)> {
+    let side = side.min(ICON_CAP);
+    if cat_idx >= spotlight::CATALOG_LEN || side == 0 {
+        return None;
+    }
+    let c = unsafe { &mut ICON_CACHE };
+    if c.sides[cat_idx] != side {
+        let ok = sex_icons::find(sex_icons::Kind::App, icon_name).is_some()
+            && sex_icons::draw(
+                sex_icons::Kind::App,
+                icon_name,
+                side,
+                &sex_icons::Palette::BRAND,
+                &mut c.acc,
+                &mut c.mask[..side * side],
+                &mut c.pixels[cat_idx][..side * side],
+            );
+        c.sides[cat_idx] = side;
+        c.valid[cat_idx] = ok;
+    }
+    if c.valid[cat_idx] {
+        Some((&c.pixels[cat_idx][..side * side], side))
+    } else {
+        None
+    }
+}
+
+/// Alpha-composites a `side x side` non-premultiplied `0xAARRGGBB` icon onto `fb`.
+fn blit_icon(
+    fb: *mut u32,
+    w: usize,
+    h: usize,
+    total: usize,
+    bx: usize,
+    by: usize,
+    side: usize,
+    pixels: &[u32],
+) {
+    for iy in 0..side {
+        let y = by + iy;
+        if y >= h {
+            break;
+        }
+        let row = iy * side;
+        for ix in 0..side {
+            let x = bx + ix;
+            if x >= w {
+                break;
+            }
+            let px = pixels[row + ix];
+            let a = (px >> 24) as u8;
+            if a == 0 {
+                continue;
+            }
+            let at = y * w + x;
+            if at >= total {
+                return;
+            }
+            let fg = px & 0x00FF_FFFF;
+            unsafe {
+                let p = fb.add(at);
+                if a == 255 {
+                    core::ptr::write_volatile(p, fg);
+                } else {
+                    let under = core::ptr::read_volatile(p);
+                    core::ptr::write_volatile(p, super::coverage_blend(fg, under, a));
+                }
+            }
+        }
+    }
+}
+
 static mut QUERY_WORDS: (u64, u64, u64) = (0, 0, 0);
 static mut STATE: SpotlightState = SpotlightState::closed();
 
@@ -414,7 +512,8 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         let sel_idx = (st.selected as usize).min(shown - 1);
         for i in 0..shown {
             let Some(tr) = l.tile_rect(i) else { break };
-            let app = &CATALOG[order[i]];
+            let cat_idx = order[i];
+            let app = &CATALOG[cat_idx];
             let is_sel = i == sel_idx;
             let is_hov = st.hover_tile == Some(i as u8);
 
@@ -435,32 +534,41 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
                 stroke_rounded(fb, w, h, total, tr, 12 * s, s, p.divider);
             }
 
-            // Distinct rounded Candy icon badge (48x48 logical px)
-            let badge_sz = (48 * s).min(tr.2.saturating_sub(16 * s)).min(tr.3.saturating_sub(line_h + 18 * s));
+            // Real SexOS vector brand icon (48x48 logical px, cached per catalog index & size)
+            let icon_gap = 8 * s;
+            let badge_sz = (48 * s)
+                .min(tr.2.saturating_sub(16 * s))
+                .min(tr.3.saturating_sub(line_h + icon_gap + 12 * s));
+            let content_h = badge_sz + icon_gap + line_h;
             let bx = tr.0 + tr.2.saturating_sub(badge_sz) / 2;
-            let by = tr.1 + 14 * s;
-            let badge_rect = (bx, by, badge_sz, badge_sz);
-            fill_rounded(fb, w, h, total, badge_rect, 12 * s, app.badge_rgb);
-            // Subtle glossy top highlight inside the icon badge
-            if desk().mode != Mode::HighContrast && badge_sz > 10 * s {
-                tint_glass(fb, w, h, total, (bx + 4 * s, by + 2 * s, badge_sz.saturating_sub(8 * s), 3 * s), 0x00FF_FFFF, 70);
+            let by = tr.1 + tr.3.saturating_sub(content_h) / 2;
+
+            if let Some((pixels, side)) = cached_app_icon(cat_idx, app.icon, badge_sz) {
+                let ix = bx + badge_sz.saturating_sub(side) / 2;
+                let iy = by + badge_sz.saturating_sub(side) / 2;
+                blit_icon(fb, w, h, total, ix, iy, side, pixels);
+            } else {
+                // Fallback rounded Candy badge + white monogram if sex_icons::find returned None.
+                let badge_rect = (bx, by, badge_sz, badge_sz);
+                fill_rounded(fb, w, h, total, badge_rect, 12 * s, app.badge_rgb);
+                if desk().mode != Mode::HighContrast && badge_sz > 10 * s {
+                    tint_glass(fb, w, h, total, (bx + 4 * s, by + 2 * s, badge_sz.saturating_sub(8 * s), 3 * s), 0x00FF_FFFF, 70);
+                }
+                let mono = app.monogram.as_bytes();
+                let mono_sc = (sc * 2).min(3);
+                let mw = super::glyphs::ui_width(mono, mono_sc).unwrap_or(0);
+                let mh = super::glyphs::UI_H * mono_sc as usize;
+                let mx = bx + badge_sz.saturating_sub(mw) / 2;
+                let my = by + badge_sz.saturating_sub(mh) / 2;
+                draw_text(fb, w, h, total, mono, mx, my, 0x00FF_FFFF, mono_sc, badge_sz);
             }
 
-            // Crisp white monogram centered inside the icon badge
-            let mono = app.monogram.as_bytes();
-            let mono_sc = (sc * 2).min(3);
-            let mw = super::glyphs::ui_width(mono, mono_sc).unwrap_or(0);
-            let mh = super::glyphs::UI_H * mono_sc as usize;
-            let mx = bx + badge_sz.saturating_sub(mw) / 2;
-            let my = by + badge_sz.saturating_sub(mh) / 2;
-            draw_text(fb, w, h, total, mono, mx, my, 0x00FF_FFFF, mono_sc, badge_sz);
-
-            // Crisp app label centered beneath the badge
+            // Crisp app label centered beneath the icon
             let name = app.name.as_bytes();
             let nw = super::glyphs::ui_width(name, sc).unwrap_or(0);
             let max_nw = tr.2.saturating_sub(8 * s);
             let nx = tr.0 + tr.2.saturating_sub(nw.min(max_nw)) / 2;
-            let ny = by + badge_sz + 10 * s;
+            let ny = by + badge_sz + icon_gap;
             draw_text(fb, w, h, total, name, nx, ny, p.ink, sc, max_nw);
         }
     }
