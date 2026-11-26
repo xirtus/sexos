@@ -1140,7 +1140,7 @@ pub fn init() {
         assert!(shell.find_capability(sex_pdx::web::SHELL_SLOT as u32).is_none(),"BOOT_SHELL_NETWORK_COLLISION");
         shell.grant_capability(sex_pdx::web::SHELL_SLOT,crate::capability::CapabilityData::Domain(sexnet_id));
     }
-    if recorder_source.is_some(){
+    {
         let files=crate::ipc::DOMAIN_REGISTRY.get(sexfiles_id).expect("BOOT_RECORD_FILES");
         assert!(files.find_capability(6).is_none(),"BOOT_RECORD_FILES_SHELL_COLLISION");
         files.grant_capability(6,crate::capability::CapabilityData::Domain(silkshell_id));

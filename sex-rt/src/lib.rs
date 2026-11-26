@@ -20,11 +20,17 @@ pub fn sys_exit(status: usize) -> ! {
     sex_pdx::task_finish(status as u64)
 }
 
+pub use heap::Usage as HeapUsage;
+
 pub fn heap_init() {
     ALLOCATOR.init();
     if !HEAP_INIT_REPORTED.swap(true, Ordering::AcqRel) {
         sex_pdx::serial_record!("[runtime.heap.ready] backing=elf_owned bytes={} runtime_mapping=0", heap::HEAP_BYTES);
     }
+}
+
+pub fn heap_usage() -> heap::Usage {
+    ALLOCATOR.usage()
 }
 
 #[no_mangle]

@@ -18,10 +18,76 @@ use alloc::vec::Vec;
 pub const BLOCK_SIZE: usize = 4096;
 
 /// Default page cache budget: 1024 blocks = 4 MiB.
+#[allow(dead_code)]
 pub const DEFAULT_CAPACITY: usize = 1024;
 
 /// Graceful fallback capacities when `sexfiles`'s heap cannot satisfy 4 MiB.
+#[allow(dead_code)]
 pub const FALLBACK_CAPACITIES: [usize; 4] = [1024, 256, 64, 16];
+
+/// Fixed ELF heap threshold (`sex-rt` `HEAP_BYTES = 128 KiB`).
+pub const FIXED_HEAP_BYTES: usize = 128 * 1024;
+
+/// Maximum cache blocks when `sexfiles` is on its fixed 128 KiB ELF heap (16 KiB max).
+pub const TIGHT_HEAP_MAX_BLOCKS: usize = 4;
+
+/// Minimum free heap bytes required before allocating even a tiny cache in a fixed 128 KiB heap.
+pub const TIGHT_HEAP_MIN_FREE: usize = 64 * 1024;
+
+/// Base cache capacity when `sexfiles`'s service arena grew (64 blocks = 256 KiB).
+/// Exceeds `FIXED_HEAP_BYTES` so `data` allocates from the grown service arena rather than
+/// eating the 128 KiB fixed ELF heap, while staying small enough for tight QEMU gates.
+pub const GROWN_HEAP_BASE_CAPACITY: usize = 64;
+
+/// Medium cache capacity when grown heap already exceeds 16 MiB (256 blocks = 1 MiB).
+pub const GROWN_HEAP_MID_CAPACITY: usize = 256;
+
+/// High cache capacity when grown heap already exceeds 64 MiB (512 blocks = 2 MiB).
+pub const GROWN_HEAP_HIGH_CAPACITY: usize = 512;
+
+/// Heap snapshot used to size the lazy page cache without starving `sexfiles`'s 128 KiB
+/// fixed ELF heap or tight QEMU `program_frames`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeapBudget {
+    /// Total heap bytes currently owned by `sexfiles` (fixed + grown arena).
+    pub heap_total_bytes: usize,
+    /// Free heap bytes currently available without growing.
+    pub heap_free_bytes: usize,
+    /// Whether `sexfiles`'s service arena successfully grew during mount (`place()`).
+    pub arena_grown: bool,
+    /// Machine memory pressure (`0` = normal, `> 0` = low/critical).
+    pub pressure: u64,
+}
+
+/// Computes a safe page-cache capacity (in 4 KiB blocks) for the given heap snapshot.
+///
+/// - Under any memory pressure (`pressure > 0`), returns `0` (pass-through, 0 heap bytes).
+/// - On an ungrown 128 KiB fixed heap, returns `0` if free space is below `TIGHT_HEAP_MIN_FREE`,
+///   otherwise caps at `min(free / 4 / BLOCK_SIZE, TIGHT_HEAP_MAX_BLOCKS)` (at most 16 KiB).
+/// - When the service arena grew, scales `64 -> 256 -> 512` blocks (256 KiB -> 1 MiB -> 2 MiB)
+///   so `data` always lives in the grown arena and never eats the 128 KiB fixed heap.
+pub const fn budget_for_heap(budget: HeapBudget) -> usize {
+    if budget.pressure > 0 {
+        return 0;
+    }
+    if !budget.arena_grown || budget.heap_total_bytes <= FIXED_HEAP_BYTES {
+        if budget.heap_free_bytes < TIGHT_HEAP_MIN_FREE {
+            return 0;
+        }
+        let quarter_blocks = (budget.heap_free_bytes / 4) / BLOCK_SIZE;
+        if quarter_blocks > TIGHT_HEAP_MAX_BLOCKS {
+            TIGHT_HEAP_MAX_BLOCKS
+        } else {
+            quarter_blocks
+        }
+    } else if budget.heap_total_bytes >= 64 * 1024 * 1024 {
+        GROWN_HEAP_HIGH_CAPACITY
+    } else if budget.heap_total_bytes >= 16 * 1024 * 1024 {
+        GROWN_HEAP_MID_CAPACITY
+    } else {
+        GROWN_HEAP_BASE_CAPACITY
+    }
+}
 
 /// Concurrent sequential streams tracked for adaptive read-ahead.
 pub const MAX_STREAMS: usize = 8;
@@ -140,6 +206,7 @@ impl PageCache {
     }
 
     /// Allocates `preferred` blocks, falling back to smaller budgets on tight memory.
+    #[allow(dead_code)]
     pub fn new_with_fallback(preferred: usize) -> Self {
         if let Some(cache) = Self::try_new(preferred) {
             return cache;
@@ -152,6 +219,42 @@ impl PageCache {
             }
         }
         Self::empty()
+    }
+
+    /// Allocates a page cache sized safely to `budget`.
+    ///
+    /// Never exceeds `budget_for_heap(budget)` and never falls back to a mid-sized tier
+    /// (such as 16 blocks = 64 KiB) that would consume half of `sexfiles`'s 128 KiB fixed heap.
+    pub fn new_for_budget(budget: HeapBudget) -> Self {
+        let target = budget_for_heap(budget);
+        if target == 0 {
+            return Self::empty();
+        }
+        if let Some(cache) = Self::try_new(target) {
+            return cache;
+        }
+        if budget.arena_grown {
+            for &tier in &[
+                GROWN_HEAP_MID_CAPACITY,
+                GROWN_HEAP_BASE_CAPACITY,
+            ] {
+                if tier < target {
+                    if let Some(cache) = Self::try_new(tier) {
+                        return cache;
+                    }
+                }
+            }
+        }
+        Self::empty()
+    }
+
+    /// Approximate heap bytes currently owned by this cache (`0` for `PageCache::empty()`).
+    #[inline]
+    #[allow(dead_code)]
+    pub fn heap_bytes(&self) -> usize {
+        self.data.capacity() * BLOCK_SIZE
+            + self.entries.capacity() * core::mem::size_of::<CacheEntry>()
+            + self.table.capacity() * core::mem::size_of::<u32>()
     }
 
     #[inline]
@@ -325,6 +428,7 @@ impl PageCache {
 
     /// Write-through update: updates cached blocks (and populates the cache)
     /// for a contiguous write starting at `first`.
+    #[allow(dead_code)]
     pub fn write_through(&mut self, first: u64, data: &[u8]) {
         if self.cap == 0 || data.len() % BLOCK_SIZE != 0 {
             return;

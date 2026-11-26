@@ -358,8 +358,8 @@ impl DiskFs {
     /// Returns block status code (BLOCK_OK on success, error code on failure).
     #[allow(dead_code)]
     pub fn diskfs_block_read(offset: u64, size: u64, buffer_cap: u64) -> u64 {
-        // The buffer is about to be overwritten: blocks read ahead into it are gone.
-        crate::fs_service::ahead::forget();
+        // Read-ahead pages live in PageCache rather than SLOT_BUF_LEND, so
+        // unrelated reads no longer wipe buffered read-ahead streams.
         if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.call] cmd=BLOCK_READ offset={:#x} size={} buf_cap={:#x}",
             offset, size, buffer_cap
@@ -427,9 +427,10 @@ impl DiskFs {
     /// Typed block write: send BLOCK_WRITE command to sexdrive.
     #[allow(dead_code)]
     pub fn diskfs_block_write(offset: u64, size: u64, buffer_cap: u64) -> u64 {
-        // Every write path (the store, the bridge, history) reuses the buffer that holds
-        // blocks read ahead.
-        crate::fs_service::ahead::forget();
+        // Coherently invalidate any page-cache blocks overlapping this write before
+        // submitting to sexdrive (covers fs_service, history, volumes, and bridge writes).
+        // No-op if the lazy page cache has not been allocated yet.
+        crate::fs_service::ahead::invalidate_byte_range(offset, size);
         if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.call] cmd=BLOCK_WRITE offset={:#x} size={} buf_cap={:#x}",
             offset, size, buffer_cap
