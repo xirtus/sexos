@@ -8,9 +8,12 @@ description = "Annotations, form filling and incremental saving for Vellum, the 
 [dependencies]
 # Pure Rust deflate/inflate (MIT OR Zlib OR Apache-2.0); already in the tree via hayro/flate2.
 miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa"] }
 
 [dev-dependencies]
 # The renderer Vellum (apps/pdf) uses (Apache-2.0 OR MIT): proves annotations and fields draw.
 hayro = "=0.9.0"
 # An independent parser (MIT) to reopen what we write. Host tests only.
 lopdf = { version = "=0.47.0", default-features = false }
+shibari = { path = "../shibari" }

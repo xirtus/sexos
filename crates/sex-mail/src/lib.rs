@@ -11,14 +11,19 @@
 extern crate alloc;
 
 pub mod b64;
+pub mod draft;
 pub mod fixture;
 pub mod imap;
+pub mod inbox;
+pub mod local_folders;
+pub mod local_attachments;
 pub mod message;
 pub mod smtp;
 pub mod thread;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -31,6 +36,10 @@ pub enum Error {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
+
+/// One in-memory IMAP message/attachment. Larger mail needs a streamed Files
+/// path before the online account service can expose it to Valentine.
+pub const MAX_IMAP_LITERAL: usize = 64 << 20;
 
 /// A byte stream: a TLS flow on SexOS, an in-memory server in tests.
 pub trait Conn {
@@ -68,6 +77,7 @@ impl<C: Conn> Lines<C> {
 
     /// Exactly `n` bytes (an IMAP literal).
     pub fn bytes(&mut self, n: usize) -> Result<Vec<u8>> {
+        if n > MAX_IMAP_LITERAL { return Err(Error::Protocol("IMAP literal too large".into())); }
         while self.buf.len() < n { self.fill()?; }
         Ok(self.buf.drain(..n).collect())
     }
@@ -83,14 +93,17 @@ pub enum Auth<'a> {
 }
 
 impl Auth<'_> {
-    pub(crate) fn sasl(&self) -> (&'static str, String) {
+    pub(crate) fn sasl(&self) -> (&'static str, Zeroizing<String>) {
         match self {
             Auth::Plain { user, password } => {
-                let mut raw = Vec::new();
+                let mut raw = Zeroizing::new(Vec::new());
                 raw.push(0); raw.extend_from_slice(user.as_bytes()); raw.push(0); raw.extend_from_slice(password.as_bytes());
-                ("PLAIN", b64::encode(&raw))
+                ("PLAIN", Zeroizing::new(b64::encode(&raw)))
             }
-            Auth::XOAuth2 { user, token } => ("XOAUTH2", b64::encode(alloc::format!("user={user}\x01auth=Bearer {token}\x01\x01").as_bytes())),
+            Auth::XOAuth2 { user, token } => {
+                let raw = Zeroizing::new(alloc::format!("user={user}\x01auth=Bearer {token}\x01\x01"));
+                ("XOAUTH2", Zeroizing::new(b64::encode(raw.as_bytes())))
+            }
         }
     }
 }

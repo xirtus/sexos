@@ -1,0 +1,7 @@
+# Vellum signed PDF content integrity
+
+- Added bounded verification for the P-256/SHA-256 detached CMS form produced by Vellum's signature-slot builder. The verifier checks the exact two PDF `/ByteRange` slices, signed content digest, DER signed attributes, and ECDSA signature using the embedded certificate's public key. The excluded slot must exactly match `/Contents`, and the range must reach the current file end, before Vellum reports content intact.
+- Ctrl+Shift+V now reports intact, changed, or unsupported signed content. It always labels signer trust unverified; this work does not validate certificate chains, revocation, identity, or document permissions. Unsupported CMS shapes do not become positive results.
+- The focused host test signs a fixture through Shibari, checks intact content, changes a covered PDF whitespace byte while retaining a parseable PDF, and checks the changed result. It also refuses an appended revision as unsupported. The existing independent OpenSSL check still verifies the original envelope.
+- The Documents QEMU gate expects `content_intact=1 content_changed=0 unsupported=0` for the fetched signed fixture and captures `pdf-cms-content-intact.ppm`. Full build and guest testing run on GitHub CI only; this screenshot is pending that run.
+- Vellum still needs a booted Shibari signing service, user certificate workflow, signing UI, PDF permission and field-lock policy, and trust evaluation before usable digital signing can be claimed.

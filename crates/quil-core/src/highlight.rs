@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Syntax colouring until tree-sitter arrives (slice O4): a small lexer per language
 //! family that marks keywords, types, strings, numbers and comments line by line. A line
-//! can start inside a block comment; the caller carries that state between lines.
+//! can start inside a block comment or Rust raw string; the caller carries that state.
 
 use alloc::vec::Vec;
 
@@ -10,6 +10,9 @@ pub enum Kind { Plain, Keyword, Type, String, Number, Comment, Punct, Function }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang { Plain, Rust, C, Js, Python, Shell, Toml, Markdown, Go, Zig }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum State { #[default] Normal, BlockComment, RustRawString(u8) }
 
 impl Lang {
     pub fn from_path(path: &[u8]) -> Lang {
@@ -45,34 +48,178 @@ impl Lang {
     fn block_comments(self) -> bool { matches!(self, Lang::Rust | Lang::C | Lang::Js | Lang::Go) }
 }
 
-/// Colours one line. `in_comment` says whether it starts inside a block comment; the
-/// return value says whether the next line does.
-pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usize, Kind)>) -> bool {
+/// Return the first content byte and the number of delimiter hashes.
+fn rust_raw_string_start(text: &[u8], start: usize) -> Option<(usize, u8)> {
+    let mut at = start;
+    if text.get(at) == Some(&b'b') { at += 1; }
+    if text.get(at) != Some(&b'r') { return None; }
+    at += 1;
+    let marks = at;
+    while text.get(at) == Some(&b'#') && at - marks < 255 { at += 1; }
+    if text.get(at) != Some(&b'"') { return None; }
+    Some((at + 1, (at - marks) as u8))
+}
+
+fn rust_raw_string_end(text: &[u8], start: usize, hashes: u8) -> Option<usize> {
+    let mut at = start;
+    while at < text.len() {
+        if text[at] == b'"' && text.get(at + 1..at + 1 + hashes as usize)
+            .is_some_and(|suffix| suffix.iter().all(|b| *b == b'#')) {
+            return Some(at + 1 + hashes as usize);
+        }
+        at += 1;
+    }
+    None
+}
+
+/// End of a complete one-line Python f-string, including `f`, `fr`, or `rf`.
+/// Triple-quoted and multiline strings need cross-line lexer state.
+fn python_f_string_end(text: &[u8], start: usize) -> Option<usize> {
+    let first = text.get(start)?.to_ascii_lowercase();
+    let mut at = start + 1;
+    match first {
+        b'f' => { if text.get(at).is_some_and(|b| b.to_ascii_lowercase() == b'r') { at += 1; } }
+        b'r' => { if text.get(at).is_some_and(|b| b.to_ascii_lowercase() == b'f') { at += 1; } else { return None; } }
+        _ => return None,
+    }
+    let quote = *text.get(at)?;
+    if !matches!(quote, b'\'' | b'"') || text.get(at + 1) == Some(&quote) && text.get(at + 2) == Some(&quote) {
+        return None;
+    }
+    at += 1;
+    while at < text.len() {
+        if text[at] == b'\\' { at = (at + 2).min(text.len()); continue; }
+        if text[at] == quote { return Some(at + 1); }
+        at += 1;
+    }
+    None
+}
+
+/// Color simple references in a complete, one-line f-string. Escaped braces
+/// and expressions needing Python parsing stay within the string span.
+fn python_inline_f_string(text: &[u8], start: usize, end: usize, out: &mut Vec<(usize, usize, Kind)>) {
+    let quote = (start..end).find(|&at| matches!(text[at], b'\'' | b'"')).unwrap();
+    let (mut at, mut segment) = (quote + 1, start);
+    while at + 1 < end {
+        if text[at] == b'\\' { at = (at + 2).min(end - 1); continue; }
+        if text[at..].starts_with(b"{{") { at += 2; continue; }
+        if text[at] == b'{' {
+            let begin = at + 1;
+            let mut after = begin;
+            if text.get(after).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_') {
+                after += 1;
+                while text.get(after).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_') { after += 1; }
+                if after < end - 1 && text[after] == b'}' {
+                    if at > segment { out.push((segment, at, Kind::String)); }
+                    out.push((at, begin, Kind::Punct));
+                    let word = core::str::from_utf8(&text[begin..after]).unwrap_or("");
+                    let kind = if Lang::Python.keywords().contains(&word) { Kind::Keyword }
+                        else if text[begin].is_ascii_uppercase() { Kind::Type } else { Kind::Plain };
+                    out.push((begin, after, kind));
+                    out.push((after, after + 1, Kind::Punct));
+                    segment = after + 1;
+                    at = segment;
+                    continue;
+                }
+            }
+        }
+        at += 1;
+    }
+    out.push((segment, end, Kind::String));
+}
+
+/// Split only simple `${identifier}` substitutions in a complete one-line JS
+/// template. Complex expressions stay string-colored until a parser is used.
+fn js_inline_template(text: &[u8], start: usize, out: &mut Vec<(usize, usize, Kind)>) -> Option<usize> {
+    let mut end = start + 1;
+    while end < text.len() {
+        if text[end] == b'\\' { end = (end + 2).min(text.len()); continue; }
+        if text[end] == b'`' { break; }
+        end += 1;
+    }
+    if end == text.len() { return None; }
+    let (mut i, mut segment) = (start + 1, start);
+    while i < end {
+        if text[i] == b'\\' { i = (i + 2).min(end); continue; }
+        if text[i..end].starts_with(b"${") {
+            let begin = i + 2;
+            let mut after = begin;
+            if text.get(after).is_some_and(|b| b.is_ascii_alphabetic() || matches!(*b, b'_' | b'$')) {
+                after += 1;
+                while text.get(after).is_some_and(|b| b.is_ascii_alphanumeric() || matches!(*b, b'_' | b'$')) { after += 1; }
+                if after < end && text[after] == b'}' {
+                    if i > segment { out.push((segment, i, Kind::String)); }
+                    out.push((i, begin, Kind::Punct));
+                    let word = core::str::from_utf8(&text[begin..after]).unwrap_or("");
+                    let kind = if Lang::Js.keywords().contains(&word) { Kind::Keyword }
+                        else if text[begin].is_ascii_uppercase() { Kind::Type } else { Kind::Plain };
+                    out.push((begin, after, kind));
+                    out.push((after, after + 1, Kind::Punct));
+                    segment = after + 1;
+                    i = segment;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push((segment, end + 1, Kind::String));
+    Some(end + 1)
+}
+
+/// Colours one line and returns the state carried into the next line.
+pub fn line_state(lang: Lang, text: &[u8], state: State, out: &mut Vec<(usize, usize, Kind)>) -> State {
     out.clear();
     let n = text.len();
     let mut i = 0;
-    let mut in_c = in_comment;
+    let mut state = state;
     let kws = lang.keywords();
     let push = |out: &mut Vec<(usize, usize, Kind)>, a: usize, b: usize, k: Kind| if b > a { out.push((a, b, k)) };
     if lang == Lang::Markdown {
         let k = if text.starts_with(b"#") { Kind::Keyword } else if text.starts_with(b"```") || text.starts_with(b"    ") { Kind::String } else if text.starts_with(b"> ") { Kind::Comment } else { Kind::Plain };
         push(out, 0, n, k);
-        return false;
+        return State::Normal;
     }
     while i < n {
-        if in_c {
+        if let State::RustRawString(hashes) = state {
+            match rust_raw_string_end(text, i, hashes) {
+                Some(end) => { push(out, i, end, Kind::String); i = end; state = State::Normal; }
+                None => { push(out, i, n, Kind::String); return state; }
+            }
+            continue;
+        }
+        if state == State::BlockComment {
             let end = text[i..].windows(2).position(|w| w == b"*/").map(|p| i + p + 2);
-            match end { Some(e) => { push(out, i, e, Kind::Comment); i = e; in_c = false; } None => { push(out, i, n, Kind::Comment); return true; } }
+            match end { Some(e) => { push(out, i, e, Kind::Comment); i = e; state = State::Normal; } None => { push(out, i, n, Kind::Comment); return state; } }
             continue;
         }
         let c = text[i];
+        if lang == Lang::Rust {
+            if let Some((body, hashes)) = rust_raw_string_start(text, i) {
+                match rust_raw_string_end(text, body, hashes) {
+                    Some(end) => { push(out, i, end, Kind::String); i = end; }
+                    None => { push(out, i, n, Kind::String); return State::RustRawString(hashes); }
+                }
+                continue;
+            }
+        }
+        if lang == Lang::Python {
+            if let Some(end) = python_f_string_end(text, i) {
+                python_inline_f_string(text, i, end, out);
+                i = end;
+                continue;
+            }
+        }
+        if lang == Lang::Js && c == b'`' {
+            if let Some(end) = js_inline_template(text, i, out) { i = end; continue; }
+        }
         let line_comment = match lang {
             Lang::Python | Lang::Shell | Lang::Toml => c == b'#',
             Lang::Plain => false,
             _ => text[i..].starts_with(b"//"),
         };
-        if line_comment { push(out, i, n, Kind::Comment); return false; }
-        if lang.block_comments() && text[i..].starts_with(b"/*") { let s = i; i += 2; let end = text[i..].windows(2).position(|w| w == b"*/").map(|p| i + p + 2); match end { Some(e) => { push(out, s, e, Kind::Comment); i = e; in_c = false; } None => { push(out, s, n, Kind::Comment); return true; } } continue; }
+        if line_comment { push(out, i, n, Kind::Comment); return State::Normal; }
+        if lang.block_comments() && text[i..].starts_with(b"/*") { let s = i; i += 2; let end = text[i..].windows(2).position(|w| w == b"*/").map(|p| i + p + 2); match end { Some(e) => { push(out, s, e, Kind::Comment); i = e; } None => { push(out, s, n, Kind::Comment); return State::BlockComment; } } continue; }
         if lang != Lang::Plain && (c == b'"' || c == b'\'' || c == b'`') {
             // A Rust lifetime ('a) is not a string.
             if lang == Lang::Rust && c == b'\'' && text.get(i + 2).is_some_and(|b| *b != b'\'') && text.get(i + 1).is_some_and(|b| b.is_ascii_alphabetic()) {
@@ -106,5 +253,10 @@ pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usi
         if lang != Lang::Plain && c.is_ascii_punctuation() { push(out, i, i + 1, Kind::Punct); }
         i += 1;
     }
-    in_c
+    state
+}
+
+/// Compatibility entry point for callers that only track block comments.
+pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usize, Kind)>) -> bool {
+    line_state(lang, text, if in_comment { State::BlockComment } else { State::Normal }, out) == State::BlockComment
 }

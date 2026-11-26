@@ -11,6 +11,10 @@
 extern crate alloc;
 
 pub mod clock;
+pub mod conflicts;
+pub mod history;
+pub mod notice_cursor;
+pub mod storage;
 pub mod ics;
 pub mod tz;
 
@@ -391,13 +395,17 @@ pub struct Event {
     pub href: String,
     pub etag: String,
     pub state: SyncState,
+    /// Original CalDAV identity of a retained conflict note; absent on old notes.
+    pub conflict_source_calendar: Option<u16>,
+    pub conflict_source_href: String,
 }
 
 impl Default for Event {
     fn default() -> Event {
         Event { start: Date { year: 1970, month: 1, day: 1 }, time: None, utc: false, span: 1, title: String::new(), location: String::new(), rule: None,
             uid: String::new(), calendar: 0, exdates: Vec::new(), rdates: Vec::new(), recurrence_id: None, alarms: Vec::new(), description: String::new(),
-            organizer: String::new(), attendees: Vec::new(), invitation: false, sequence: 0, href: String::new(), etag: String::new(), state: SyncState::Clean }
+            organizer: String::new(), attendees: Vec::new(), invitation: false, sequence: 0, href: String::new(), etag: String::new(), state: SyncState::Clean,
+            conflict_source_calendar: None, conflict_source_href: String::new() }
     }
 }
 
@@ -405,8 +413,89 @@ impl Default for Event {
 const MAX_STEPS: u32 = 100_000;
 
 impl Event {
+    fn personal_editable(&self) -> Result<(), &'static str> {
+        if self.rule.is_some() || !self.exdates.is_empty() || !self.rdates.is_empty() || self.recurrence_id.is_some() {
+            return Err("Choose how to edit a recurring event first.");
+        }
+        if self.invitation || !self.organizer.is_empty() || !self.attendees.is_empty() {
+            return Err("An invitation needs the organizer's update.");
+        }
+        if self.uid.ends_with("-conflict") || self.conflict_source_calendar.is_some() || !self.conflict_source_href.is_empty() {
+            return Err("Resolve this conflict note before editing it.");
+        }
+        Ok(())
+    }
     pub fn all_day(start: Date, title: &str) -> Event {
         Event { start, title: title.into(), ..Event::default() }
+    }
+    /// Copy one displayed occurrence as an independent personal event. Server and
+    /// invitation identities belong to the source and must never follow the copy.
+    pub fn copy_occurrence_to(&self, day: Date, uid: String, linked: bool) -> Event {
+        let mut copy = self.clone();
+        copy.start = day;
+        copy.uid = uid;
+        copy.rule = None;
+        copy.exdates.clear();
+        copy.rdates.clear();
+        copy.recurrence_id = None;
+        copy.organizer.clear();
+        copy.attendees.clear();
+        copy.invitation = false;
+        copy.sequence = 0;
+        copy.href.clear();
+        copy.etag.clear();
+        copy.state = if linked { SyncState::New } else { SyncState::Clean };
+        copy.conflict_source_calendar = None;
+        copy.conflict_source_href.clear();
+        copy
+    }
+
+    /// Move one personal event, preserving its UID and server resource identity.
+    /// A recurring instance or an invitation needs an explicit series/attendee
+    /// decision, so Date does not silently change one on the person's behalf.
+    pub fn moved_personal_to(&self, day: Date, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        let mut moved = self.clone();
+        moved.start = day;
+        if !moved.href.is_empty() { moved.state = SyncState::Modified; }
+        else if linked { moved.state = SyncState::New; }
+        Ok(moved)
+    }
+    /// Change the title of one personal event without replacing its calendar
+    /// identity, time, reminders, or server resource.
+    pub fn retitled_personal(&self, title: &str, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 120 { return Err("Enter a title of 1–120 characters."); }
+        let mut edited = self.clone();
+        edited.title = String::from(title);
+        if !edited.href.is_empty() { edited.state = SyncState::Modified; }
+        else if linked { edited.state = SyncState::New; }
+        Ok(edited)
+    }
+    /// Set or clear the place of one personal event without changing its identity.
+    pub fn located_personal(&self, location: &str, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        let location = location.trim();
+        if location.chars().count() > 120 { return Err("Enter a location of at most 120 characters."); }
+        let mut edited = self.clone();
+        edited.location = String::from(location);
+        if !edited.href.is_empty() { edited.state = SyncState::Modified; }
+        else if linked { edited.state = SyncState::New; }
+        Ok(edited)
+    }
+    /// Set a same-day time range or make one personal event all day.
+    pub fn timed_personal(&self, time: Option<(u16, u16)>, linked: bool) -> Result<Event, &'static str> {
+        self.personal_editable()?;
+        if self.span != 1 { return Err("Choose how to time a multi-day event first."); }
+        if time.is_some_and(|(start, end)| start >= end || end >= 24 * 60) {
+            return Err("End time must be after start on the same day.");
+        }
+        let mut edited = self.clone();
+        edited.time = time;
+        if !edited.href.is_empty() { edited.state = SyncState::Modified; }
+        else if linked { edited.state = SyncState::New; }
+        Ok(edited)
     }
     /// Calls `f` with each occurrence's first day that lies in `from..=to`, in order.
     /// RFC 5545: DTSTART is the first occurrence, COUNT counts before EXDATE removes
@@ -506,7 +595,8 @@ pub const PALETTE: [u32; 8] = [0x7FB8FF, 0xF2A65A, 0x8BD17C, 0xE57BA5, 0xC59BF2,
 ///
 /// Event fields: first day, time or `-` for all day, `Z` or `-`, days covered, rule or
 /// `-`, title, location, then any number of `key=value` fields (uid, cal, ex, rdate,
-/// rid, alarm, desc, org, att, inv, seq, href, etag, state). Tabs, newlines and
+/// rid, alarm, desc, org, att, inv, seq, href, etag, state, source_cal,
+/// source_href). Tabs, newlines and
 /// backslashes in text are escaped as `\t` `\n` `\\`. A `!cal` line is one calendar:
 /// id, name, colour, shown, collection address, ctag, sync token.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -591,6 +681,8 @@ impl Calendar {
                     "href" => e.href = unescape(value),
                     "etag" => e.etag = unescape(value),
                     "state" => e.state = match value { "new" => SyncState::New, "mod" => SyncState::Modified, "del" => SyncState::Deleted, _ => SyncState::Clean },
+                    "source_cal" => e.conflict_source_calendar = value.parse().ok(),
+                    "source_href" => e.conflict_source_href = unescape(value),
                     _ => {}
                 }
             }
@@ -645,6 +737,8 @@ impl Calendar {
             if e.sequence != 0 { let _ = write!(out, "\tseq={}", e.sequence); }
             put_text(&mut out, "href", &e.href);
             put_text(&mut out, "etag", &e.etag);
+            if let Some(id) = e.conflict_source_calendar { let _ = write!(out, "\tsource_cal={id}"); }
+            put_text(&mut out, "source_href", &e.conflict_source_href);
             match e.state { SyncState::Clean => {}, SyncState::New => out.push_str("\tstate=new"), SyncState::Modified => out.push_str("\tstate=mod"), SyncState::Deleted => out.push_str("\tstate=del") }
             out.push('\n');
         }

@@ -18,7 +18,7 @@ use alloc::vec;
 use sex_crypt::{Cost, Xts, HEADER, KEY};
 use sex_pdx::fs as w;
 use sex_pdx::home_lock as h;
-use sexfs::{Device, Error, Fs, Memory, Slot, BLOCK};
+use sexfs::{Device, Error, Fs, Kind, Memory, Slot, BLOCK};
 
 /// The system filesystem, lent for the length of one request on `/home`.
 static mut MAIN: *mut Fs<'static, FsDisk> = core::ptr::null_mut();
@@ -194,7 +194,8 @@ fn setup(main: &mut Fs<'static, FsDisk>, mib: u64, password: &[u8]) -> Result<u3
     let dev = HomeDev { id, blocks, xts: Xts::new(&master) };
     let formatted = lend(main, || Fs::format(dev, memory(blocks)).and_then(|mut fs| { fs.commit()?; Ok(fs) }));
     match formatted {
-        Ok(fs) => {
+        Ok(mut fs) => {
+            lend(main, || crate::staged_export::recover(&mut fs, crate::staged_export::Volume::Home));
             *home() = Some(fs);
             sex_pdx::serial_record!("[files.home.setup] mib={} kdf_ms={} cost_kib={}", mib, sex_pdx::get_ticks().saturating_sub(start), Cost::SMALL.memory_kib);
             Ok(0)
@@ -220,8 +221,9 @@ fn unlock(main: &mut Fs<'static, FsDisk>, password: &[u8]) -> Result<u32, u8> {
     let blocks = (st.size / BLOCK as u64).saturating_sub(1);
     let dev = HomeDev { id: st.id, blocks, xts: Xts::new(&master) };
     match lend(main, || Fs::mount(dev, memory(blocks))) {
-        Ok(fs) => {
+        Ok(mut fs) => {
             let s = fs.statfs();
+            lend(main, || crate::staged_export::recover(&mut fs, crate::staged_export::Volume::Home));
             *home() = Some(fs);
             sex_pdx::serial_record!("[files.home.unlocked] ms={} total={} free={} generation={}", sex_pdx::get_ticks().saturating_sub(start), s.total, s.free, s.generation);
             Ok(0)
@@ -260,6 +262,7 @@ fn lock(main: &mut Fs<'static, FsDisk>) -> Result<u32, u8> {
     let r = lend(main, || fs.commit());
     if let Err(e) = r { *home() = Some(fs); sex_pdx::serial_record!("[files.home.lock.failed] error={:?}", e); return Err(crate::fs_service::status(e)); }
     drop(fs);
+    crate::staged_export::invalidate(crate::staged_export::Volume::Home);
     crate::fs_service::revoke_under(h::HOME);
     sex_pdx::serial_record!("[files.home.locked]");
     Ok(0)
@@ -269,14 +272,87 @@ fn crypt_status(e: sex_crypt::Error) -> u8 {
 }
 
 /// A request on `/home` or under it; `inner` is the path inside the volume.
+/// Vellum's staged file lives in its primary-filesystem folder while the chosen
+/// PDF can live in the encrypted home. Files owns this one request: it copies
+/// the complete staged bytes to a home-private staging name, then compares and
+/// replaces the home destination in the same home commit. The internal stage
+/// is never a durable name on its own, including after a power cut.
+pub fn replace_from_main_if_sha256(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<u32, u8> {
+    deep(|| replace_from_main_here(main, from, to, expected))
+}
+fn replace_from_main_here(main: &mut Fs<'static, FsDisk>, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<u32, u8> {
+    let source = main.open(from).map_err(crate::fs_service::status)?;
+    if source.kind != Kind::File { return Err(w::IS_DIR); }
+    let Some(inner) = to.strip_prefix(h::HOME) else { return Err(w::OTHER_DISK) };
+    if inner.is_empty() || inner == b"/" { return Err(w::DENIED); }
+    let Some(fs) = home().as_mut() else { return Err(h::LOCKED); };
+    static mut NEXT_STAGE: u64 = 0;
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
+    let mut stage = None;
+    for _ in 0..16 {
+        let n = unsafe { NEXT_STAGE = NEXT_STAGE.wrapping_add(1); NEXT_STAGE };
+        let candidate = alloc::format!("/.vellum-conditional-{n:016x}.tmp").into_bytes();
+        match lend(main, || fs.create(&candidate, now)) {
+            Ok(id) => { stage = Some((candidate, id)); break; }
+            Err(Error::Exists) => continue,
+            Err(e) => return Err(crate::fs_service::status(e)),
+        }
+    }
+    let Some((stage, id)) = stage else { return Err(w::EXISTS) };
+    let copied = (|| -> Result<(), Error> {
+        let mut at = 0u64;
+        let mut chunk = [0u8; BLOCK];
+        while at < source.size {
+            let n = main.read(source.id, at, &mut chunk[..((source.size - at) as usize).min(BLOCK)])?;
+            if n == 0 { return Err(Error::Corrupt); }
+            let mut written = 0;
+            while written < n {
+                let count = lend(main, || fs.write(id, at + written as u64, &chunk[written..n], now))?;
+                if count == 0 { return Err(Error::NoSpace); }
+                written += count;
+            }
+            at += n as u64;
+        }
+        Ok(())
+    })();
+    if let Err(e) = copied {
+        let _ = lend(main, || fs.rollback());
+        return Err(crate::fs_service::status(e));
+    }
+    let promoted = lend(main, || fs.rename_if_sha256(&stage, inner, expected).and_then(|_| fs.commit()));
+    if let Err(e) = promoted {
+        // The stage and destination change are one transaction. On mismatch
+        // neither was committed; rollback also drops the stage's name.
+        let _ = lend(main, || fs.rollback());
+        return Err(crate::fs_service::status(e));
+    }
+    Ok(0)
+}
+
 pub fn run(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
     deep(|| run_here(main, r, path, data))
+}
+/// A staged request uses the same encrypted SexFS and deep stack as ordinary home
+/// I/O. The Files ticket is bound to the resolved destination, not a client path.
+pub fn staged(main: &mut Fs<'static, FsDisk>, row: usize, target: u32, task: u32,
+    r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
+    deep(|| {
+        let Some(fs) = home().as_mut() else { return Err(h::LOCKED); };
+        let inner = &path[h::HOME.len()..];
+        let destination = if inner.is_empty() { b"/".as_slice() } else { inner };
+        let result = lend(main, || crate::staged_export::request(fs,
+            crate::staged_export::Volume::Home, row, target, task, r, destination, data));
+        if let Err(status) = result {
+            if !matches!(status, w::IO | w::CORRUPT) { let _ = lend(main, || fs.rollback()); }
+        }
+        result
+    })
 }
 fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &mut [u8]) -> Result<u32, u8> {
     let strip = |p: &[u8]| -> alloc::vec::Vec<u8> { let i = &p[h::HOME.len().min(p.len())..]; if i.is_empty() { b"/".to_vec() } else { i.to_vec() } };
     // A rename's two halves both lose the prefix.
     let inner = match path.iter().position(|b| *b == 0) {
-        Some(i) if r.kind == w::RENAME => { let mut v = strip(&path[..i]); v.push(0); v.extend_from_slice(&strip(&path[i + 1..])); v }
+        Some(i) if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::REPLACE_IF_SHA256) => { let mut v = strip(&path[..i]); v.push(0); v.extend_from_slice(&strip(&path[i + 1..])); v }
         _ => strip(path),
     };
     let inner = &inner[..];
@@ -288,14 +364,17 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
             _ => Err(h::LOCKED),
         };
     };
-    if matches!(r.kind, w::REMOVE | w::RENAME) && inner == b"/" { return Err(w::DENIED); }
+    if matches!(r.kind, w::REMOVE | w::RENAME | w::MOVE_IF_ID) && inner == b"/" { return Err(w::DENIED); }
     let read_only = matches!(r.kind, w::STAT | w::LIST | w::READ | w::STATFS);
+    // Files batches both write forms. A refused chunk has not changed this
+    // request's file; rollback would discard other accepted home writes.
+    let batched = matches!(r.kind, w::WRITE | w::WRITE_IF_ID);
     let result = lend(main, || crate::fs_service::run_on(fs, r, inner, data));
     match result {
         // Writes wait for home's next commit, which the system's batching drives.
         Ok(v) => Ok(v),
         Err(e) => {
-            if !read_only && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = lend(main, || fs.rollback()); }
+            if !read_only && !batched && !matches!(e, Error::Io | Error::Corrupt | Error::Poisoned) { let _ = lend(main, || fs.rollback()); }
             Err(crate::fs_service::status(e))
         }
     }
@@ -303,9 +382,15 @@ fn run_here(main: &mut Fs<'static, FsDisk>, r: w::Request, path: &[u8], data: &m
 /// A rename with one half in `/home` and the other outside: another disk.
 pub fn crosses(a: &[u8], b: &[u8]) -> bool { owns(a) != owns(b) }
 /// SYNC with no path: home is written out too.
-pub fn sync(main: &mut Fs<'static, FsDisk>) {
-    if home().is_some() { deep(|| sync_here(main)) }
+pub fn sync(main: &mut Fs<'static, FsDisk>) -> Result<(), u8> {
+    if home().is_some() { deep(|| sync_here(main)) } else { Ok(()) }
 }
-fn sync_here(main: &mut Fs<'static, FsDisk>) {
-    if let Some(fs) = home().as_mut() { if let Err(e) = lend(main, || fs.commit()) { sex_pdx::serial_record!("[files.home.sync.failed] error={:?}", e); } }
+fn sync_here(main: &mut Fs<'static, FsDisk>) -> Result<(), u8> {
+    if let Some(fs) = home().as_mut() {
+        return lend(main, || fs.commit()).map_err(|e| {
+            sex_pdx::serial_record!("[files.home.sync.failed] error={:?}", e);
+            crate::fs_service::status(e)
+        });
+    }
+    Ok(())
 }

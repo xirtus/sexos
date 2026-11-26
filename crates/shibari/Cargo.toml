@@ -7,3 +7,4 @@ description = "Shibari, SexOS's RAM-only secret keeper: secrets are tied to an o
 
 [dependencies]
 zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa"] }

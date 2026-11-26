@@ -93,7 +93,7 @@ def main():
    g['wait'](r'\[sexinput.pointer.(recv|raw|forward)',r,60);result['rounds']['usb']='ok'
   if 'input' in want:
    s=crash('input',4,'busy');tablet();keys('x');restarted(4,s,120);g['wait'](r'\[sexinput.restarted\]',s,60);time.sleep(2)
-   q.key('backspace');line('echo still-typing',r'still-typing',60);result['rounds']['input']='ok'
+   q.key('backspace');line('echo still-typing',r'\[spindle\.instance\.command\] [^\n]*name=echo ok=1',60);result['rounds']['input']='ok'
   if 'bell' in want:
    s=crash('bell',10,'busy');line('beep 440 300',r'\[spindle.beep\]',60);restarted(10,s,120);g['wait'](r'\[sexbell.restarted\]',s,60);time.sleep(2)
    m=line('beep 880 200',r'\[spindle.beep\] hz=880 ms=200 volume=\d+ status=(\d+)',60);assert m[1]=='0',m[0];result['rounds']['bell']='ok'

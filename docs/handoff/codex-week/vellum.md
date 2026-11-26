@@ -1,0 +1,71 @@
+# Vellum gap list
+
+Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked against `apps/pdf` and `crates/vellum-edit` at `d48bcc919`.
+
+- **Already present:** native page rendering, zoom and thumbnails, full-document search, outline navigation, highlights and notes, AcroForm text/checkbox filling, incremental PDF updates, and signature field inspection. CI has host tests and QEMU viewer/edit gates.
+- **Choice fields:** the viewer now includes noneditable combo boxes and single-select lists in form focus order. Up/Down chooses a displayed option, Enter commits its PDF export value, and incremental save/reopen keeps it. Editable combos and multi-select lists still need distinct controls.
+- **Advanced choices:** editable combo boxes now accept custom text or an Up/Down option (Ctrl+A clears the current text). Multi-select lists show each option's selected state; Up/Down moves and Space toggles it. Both use the editor's PDF export values and incremental save path. A real-PDF host test and guest save/reopen gate cover both; richer pointer controls remain open.
+- **Radio buttons:** Vellum now includes radio groups with known widget on-states in the form focus order. Up/Down chooses an option and Space sets it; clicking a specific widget sets that widget's PDF state. Guest save/reopen and host tests check the group value and per-widget appearances. Radio widgets without a discoverable on-state remain unavailable rather than guessing one.
+- **Choice pointer menu:** the next slice gives a focused choice field a bounded pointer menu in Vellum's own chrome. A click on its value opens the options, a click chooses or toggles the displayed export value, and the wheel reaches longer lists. PDF widget hit testing and other pointer form controls remain separate gaps.
+- **Widget pointer focus:** PDF form widgets still require Ctrl+E and keyboard field traversal before editing. The next slice maps a click through the current page zoom, scroll, crop and rotation to the editable widget, focuses it, opens a choice menu where appropriate, and toggles a checkbox directly. It keeps read-only/password widgets inaccessible. Drag selection and richer text controls remain open.
+- **Form text caret:** text fields and editable combo boxes now show a caret in Vellum's form bar. Left/Right and Home/End move it; Backspace/Delete and typing edit at that position, including Unicode character boundaries.
+- **Form text selection:** Shift+Left/Right and Shift+Home/End extend a text selection. Ctrl+A selects an entire text field; typing or deletion replaces the selected span. Vellum highlights the range in its form bar. Pointer drag now selects a text-field span in the bar and typing replaces it. Editable-combo drag selection remains open.
+- **Form text pointer caret:** a click on the focused text field's value in the form bar places the caret at the nearest character boundary and clears a keyboard selection. The guest gate inserts text at that position. Drag selection and editable-combo text pointer placement remain open.
+- **Annotation region drag:** after Ctrl+R enters region mode, dragging on the rendered page defines a bounded rectangle in shown page coordinates. Enter turns it into a PDF highlight through the existing edit/save path. The QEMU gate captures the dragged outline before the highlight and checks the saved annotation count. Direct drag initiation without choosing the region tool and richer markup appearance controls remain open.
+- **Highlight colors:** Ctrl+Shift+H cycles yellow, green, pink, and blue before Ctrl+H or Enter marks found text or a selected region. The color is written into the PDF annotation and its appearance; the QEMU gate captures a green highlight and checks its color after guest save. Other markup appearance controls remain open.
+- **Highlight opacity:** Ctrl+Shift+O cycles 100%, 75%, 50%, and 25% before placing a highlight. The PDF annotation stores `/CA` and the generated appearance applies the same alpha. A focused test compares opaque and translucent renders; the QEMU gate captures a green 75% highlight and checks its guest-saved opacity. Other markup appearance controls remain open.
+- **Highlight comments:** Ctrl+L lists annotations; Enter on a highlight edits its comment in the top bar, with Ctrl+Z/Ctrl+Shift+Z before save. The edit updates only `/Contents`, retaining the highlight's geometry and appearance. A host round trip and QEMU save/reopen gate check the text; comments on other annotation kinds and richer metadata editing remain open.
+- **Sticky note text:** Enter on a selected note in Ctrl+L edits its existing text with the same bounded input and undo/redo path. The editor updates `/Contents` while keeping the note icon and placement. A focused PDF test and QEMU save/reopen gate check the changed note; other annotation kinds and richer metadata editing remain open.
+- **Search across layout breaks:** Find collapses extracted whitespace runs, so
+  a phrase typed with a space matches adjacent visible lines while its highlight
+  keeps the source span. Find also matches both `international` and
+  `inter-national` when the PDF prints `inter-` then `national` on the next line.
+  Both queries retain that full source span; same-line hyphens remain literal.
+  The fixture, pure search tests, and QEMU gate cover both forms.
+  Multi-column reading order remains separate.
+- **Match Case:** Find now offers Ctrl+Shift+M while its bar is open. The bar
+  shows the mode, and changing it reruns the existing query against the same
+  source character spans. The default still ignores case; the guest gate
+  captures the uppercase-only fixture returning no hits in Match Case mode.
+- **Unicode Find entry:** Find now accepts Shell's layout and input-method
+  characters, including dead-key accents. Backspace removes one displayed
+  grapheme. The PDF guest gate types café through the German layout and
+  captures its hit. Text normalization across different Unicode compositions
+  remains open.
+- **Save safety:** edited PDF saves overwrite the destination directly; thumbnail output can delete an existing destination on a partial write. First slice: stage and sync complete bytes, then replace through Files' rename.
+  Form and markup saves now require Files' final sync after the staged rename;
+  a failed sync retains unsaved edits and the recovery copy and reports the
+  save as unconfirmed instead of falsely clearing the form's edit state.
+- **Signing:** Ctrl+Shift+G places an explicitly labelled typed visual signature. Ctrl+Shift+V inspects stored digital signature fields and checks exact covered bytes for the supported P-256/SHA-256 detached CMS shape. Ctrl+Shift+B selects a saved empty field and requires Enter in Vellum plus per-request Y approval in the separate Shibari window; Escape also cancels while waiting for approval. Shibari imports a public DER certificate, accepts a matching private scalar only in its own protection view, and returns bounded DER signatures through Shell; Vellum constructs CMS and verifies content before and after saving. The QEMU gate signs a PDF in the guest and an independent OpenSSL host check validates its saved bytes. Certificate-chain trust, signer identity, other CMS algorithms, DocMDP/FieldMDP permissions, and multiple signatures still need implementation. Vellum refuses an already signed PDF until those permission rules exist.
+- **Signing save conflict:** a newly signed PDF is staged, then Files compares the full SHA-256 of the saved destination and promotes in one request. Primary SexFS replaces the name in one commit; encrypted home copies into its own uncommitted stage and checks and replaces in that same home commit. A changed or missing source leaves the newer file intact, and a power cut before commit leaves no hidden stage. Removable volumes explicitly refuse this signed replacement until their backends can preserve the old file during a conditional commit. Focused host tests cover a same-size concurrent writer, stale home-style rollback, and a pre-commit power cut. The PDF guest gate signs and reopens a file in encrypted home; that guest evidence and screenshot await exact-head CI.
+- **Signed markup guard:** annotation add, remove, and restore refuse edits when a signature field is signed or the catalog carries `/Perms /DocMDP`, until DocMDP/FieldMDP policy is evaluated. The editor leaves the PDF unchanged; QEMU gates attempt highlights after signing and on a catalog-only permission fixture. This is a fail-closed guard, not permission support.
+- **Signed form guard:** field filling, placement of another signature field, and adding another digital signature now use the same signed-revision check, including catalog-only `/Perms /DocMDP`, `/UR`, and `/UR3` references. Malformed or unsupported-depth AcroForm field trees fail closed, so a signed child hidden from the field list cannot be bypassed. Vellum refuses form entry and keeps the PDF unchanged until DocMDP/FieldMDP permissions can be evaluated. The guest gate checks refusal after signing and on the catalog-only fixture.
+- **Signature field placement:** Ctrl+Shift+D places a visible, empty PDF signature widget at the selected region (or a default location). It persists through incremental save and can be signed after reopening. Adding a field to an already signed PDF is refused until DocMDP and FieldMDP permissions can be evaluated.
+- **Editing depth:** committed form-field edits and added or deleted highlights,
+  notes, and visual signatures now have bounded Ctrl+Z / Ctrl+Shift+Z histories until
+  save. A deleted annotation restores its original PDF object and appearance.
+  Clicking visible markup on the page now opens the annotation list with that
+  item selected and outlined; multi-line highlights use their individual
+  quads for hit testing. Appearance controls remain.
+- **Mixed edit undo:** form edits and markup previously cleared each other's
+  history. They now share one bounded, chronological Ctrl+Z / Ctrl+Shift+Z
+  timeline until save. A new edit after undo drops redo for both kinds. The
+  host regression checks PDF values and annotation identity; the guest gate
+  captures a form edit followed by undo of an earlier note edit.
+- **Performance and polish:** the viewer chrome now follows Settings' light,
+  dark and high-contrast colors. This slice retains up to two retired rendered
+  pages under a 48 MiB cache cap, so a same-zoom revisit avoids Hayro rendering.
+  Document the cold-render latency target with a fixture. Vellum now keeps
+  complete unsaved markup/form edits in a staged recovery PDF and checks the
+  source prefix before restoring it after a crash. The QEMU gate cuts power,
+  reboots the same disk and commits a restored note. Ctrl+Shift+/ opens an in-app shortcut
+  reference; `docs/apps/vellum-shortcuts.md` lists the active keys.
+  Thumbnail pairs now share Hayro's glyph/interpreter cache within one panel
+  draw; the QEMU fixture records cold-batch milliseconds without a runner-speed
+  threshold. A representative cold full-page latency target remains open.
+
+Each remaining feature needs a focused host test and CI guest evidence before being called complete.
+
+- **Signing request identity:** Files certifies only an exact SHA-256 match to the Vellum ELF staged in the release build, and Shell binds that result to the live row and task before allowing `BEGIN`. A replaced binary at `/bin/vellum` or another program row cannot start a signing request.
+- **Document consent plumbing:** the native Files picker offers a nonblocking begin/poll path. Shibari uses it to receive its own document grant while continuing to answer the signing broker.
+- **Document-bound signing consent:** Shibari now asks the person to choose the exact saved PDF through Loom, reads it under its own Files grant, and independently reproduces the Vellum CMS signed attributes for the named field. It displays the path, field, PDF SHA-256, and certificate SHA-256 before approval, then rereads and rechecks on Y. A mismatch or mutation refuses the request. Focused host checks pass; the guest picker/signing path and screenshot still need exact-head CI evidence.

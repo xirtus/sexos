@@ -50,3 +50,64 @@ fn links_and_emphasis_stay_and_text_is_escaped() {
     let a = reader::article(&dom, "https://x.example/doc/").unwrap();
     assert!(a.html.contains(r#"Read the <a href="https://x.example/spec">spec</a> with <em>care</em>: a &lt; b, and c &amp; d"#), "{}", a.html);
 }
+
+#[test]
+fn article_data_table_keeps_rows_cells_and_safe_links() {
+    let body = format!(
+        "<article><h1>Observation log</h1>{}<table class=\"article-data\" onclick=\"track()\"><caption>Count by place</caption>\
+         <thead><tr><th>Site</th><th colspan=\"2\">Observed moths</th></tr></thead>\
+         <tbody><tr><td><a href=\"/places/river\">River</a></td><td>Twenty</td><td>at dusk</td></tr>\
+         <tr hidden><td>Secret row</td><td>zero</td></tr>\
+         <tr><td>Forest</td><td colspan=\"999\">Thirty</td><td>at night</td></tr></tbody></table></article>",
+        "<p>Careful observations of these insects across several quiet nights reveal different counts at the river and forest.</p>".repeat(4)
+    );
+    let dom = sex_web::sex_html::parse::parse(&body);
+    let article = reader::article(&dom, "https://news.example/story").unwrap();
+    assert!(article.html.contains("<tr><th>Site</th><th colspan=\"2\">Observed moths</th></tr>"), "{}", article.html);
+    assert!(article.html.contains("<caption>Count by place</caption>"), "{}", article.html);
+    assert!(article.html.contains("<a href=\"https://news.example/places/river\">River</a>"), "{}", article.html);
+    assert!(article.html.contains("<tr><td>Forest</td><td>Thirty</td><td>at night</td></tr>"), "{}", article.html);
+    assert!(!article.html.contains("Secret row") && !article.html.contains("onclick") && !article.html.contains("colspan=\"999\""));
+    assert!(reader::page(&article, "https://news.example/story").contains("border-collapse:collapse"));
+}
+
+#[test]
+fn article_data_table_keeps_empty_cells_in_their_columns() {
+    let body = format!(
+        "<article><h1>Survey</h1>{}<table><thead><tr><th>Place</th><th>Count</th></tr></thead>\
+         <tbody><tr><td></td><td>Three<span hidden> hidden words do not count</span></td></tr><tr><td>Hill</td><td></td></tr></tbody></table></article>",
+        "<p>The survey followed the same route each evening and recorded the weather and the count at every stop.</p>".repeat(4)
+    );
+    let dom = sex_web::sex_html::parse::parse(&body);
+    let article = reader::article(&dom, "https://news.example/survey").unwrap();
+    assert!(article.html.contains("<tr><td></td><td>Three</td></tr>"), "{}", article.html);
+    assert!(article.html.contains("<tr><td>Hill</td><td></td></tr>"), "{}", article.html);
+    assert!(!article.html.contains("hidden words"));
+    let without_hidden = body.replace("<span hidden> hidden words do not count</span>", "");
+    let plain = sex_web::sex_html::parse::parse(&without_hidden);
+    assert_eq!(article.words, reader::article(&plain, "https://news.example/survey").unwrap().words);
+}
+
+#[test]
+fn article_data_table_keeps_bounded_row_spans_and_nested_tables() {
+    let body = format!(
+        "<article><h1>Night survey</h1>{}<table><caption>Visits</caption>\
+         <tr><th>Place</th><th>Visits</th></tr>\
+         <tr><td rowspan='2' colspan='2'>River</td><td><table><tr><th>Time</th><th>Count</th></tr>\
+         <tr><td>Dusk</td><td>Twenty</td></tr></table></td></tr>\
+         <tr><td>Later</td></tr><tr><td rowspan='999' onclick='track()'>Forest</td><td>Thirty</td></tr></table></article>",
+        "<p>The survey followed the same route each evening and recorded the weather and the count at every stop.</p>".repeat(4)
+    );
+    let dom = sex_web::sex_html::parse::parse(&body);
+    let article = reader::article(&dom, "https://news.example/survey").unwrap();
+    assert!(article.html.contains("<td colspan=\"2\" rowspan=\"2\">River</td>"), "{}", article.html);
+    assert!(article.html.contains("<td><table><tr><th>Time</th><th>Count</th></tr><tr><td>Dusk</td><td>Twenty</td></tr></table></td>"), "{}", article.html);
+    assert!(article.html.contains("<td>Forest</td>") && !article.html.contains("rowspan=\"999\""));
+    assert!(!article.html.contains("onclick") && article.html.matches("Twenty").count() == 1);
+    let flat = body.replace(
+        "<table><tr><th>Time</th><th>Count</th></tr><tr><td>Dusk</td><td>Twenty</td></tr></table>",
+        "Time Count Dusk Twenty",
+    );
+    let flat = sex_web::sex_html::parse::parse(&flat);
+    assert_eq!(article.words, reader::article(&flat, "https://news.example/survey").unwrap().words);
+}

@@ -14,12 +14,23 @@
 
 extern crate alloc;
 
+static PRIVATE_DIAGNOSTICS: sex_web::private_diagnostics::Policy = sex_web::private_diagnostics::Policy::new();
+
+/// Content-bearing browser diagnostics stop for this process after a private
+/// tab opens. A deferred callback can outlive its tab and run after a switch.
+macro_rules! web_record {
+    ($($arg:tt)*) => {
+        if crate::PRIVATE_DIAGNOSTICS.allow_content() { sex_pdx::serial_record!($($arg)*); }
+    };
+}
+
 mod download;
 mod webfont;
 mod media;
 mod mse;
 mod keys;
 mod profile;
+mod state_file;
 mod shields;
 mod extensions;
 mod tabs;
@@ -28,6 +39,8 @@ mod session;
 mod viewport;
 mod websocket;
 mod code_store;
+mod site_settings;
+mod passwords;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -48,6 +61,7 @@ const WELCOME: &str = include_str!("welcome.html");
 /// JavaScript on Canvas 2D, so they exercise the same engine as any web page.
 const BUILT_IN: &[(&str, &str)] = &[
     ("about:welcome", WELCOME),
+    ("about:shortcuts", include_str!("shortcuts.html")),
     ("about:blank", "<title></title>"),
     ("about:games", include_str!("games/index.html")),
     ("about:solitaire", include_str!("games/solitaire.html")),
@@ -87,7 +101,7 @@ const ANIMATION_FRAME_MS: u64 = 33;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    sex_pdx::serial_record!("[web.fatal] {}", info);
+    web_record!("[web.fatal] {}", info);
     sex_pdx::task_finish(1);
 }
 
@@ -167,6 +181,8 @@ const CODE_CACHE_BYTES: usize = 48 << 20;
 struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool, world: u8 }
 
 struct Browser {
+    autofill: Option<passwords::Pending>,
+    password_save: Option<passwords::PendingSave>,
     #[cfg(feature = "baseline-jit")]
     jit_enabled: bool,
     /// Compiled scripts and modules, shared by every page and frame this session
@@ -232,6 +248,11 @@ struct Browser {
     frame_dirty: bool,
     /// The page the next `open` comes from (its `Referer`).
     referrer_next: Option<String>,
+    /// A reader page made from the live document, consumed by the next navigation.
+    reader_pending: Option<(String, String)>,
+    /// Appearance of Kaleidoscope's own tabs and controls, never site content.
+    chrome_palette: sex_web::ChromePalette,
+    theme_generation: u64,
     /// While a page loads (`Some`): the page it was opened from, for its requests'
     /// `Referer`, or `None` when it has none (a typed address, `no-referrer`).
     nav_from: Option<Option<String>>,
@@ -262,11 +283,19 @@ struct Browser {
     sockets: Vec<websocket::Conn>,
     /// This window's finished downloads, and the one running (for the bar).
     downloads: Vec<download::Done>,
+    /// Strongly validated hidden parts that can survive a failed transfer.
+    download_resumes: Vec<sex_web::download_resume::Record>,
+    /// Failed transfers shown in the downloads panel with a retry link.
+    download_failures: Vec<download::Failure>,
+    /// Input received while a streaming download owns this task.
+    download_events: Vec<Event>,
     /// Web font files loaded, by address, with their font number (None: unreadable).
     web_fonts: Vec<(String, Option<u8>)>,
     download_status: Option<String>,
     /// Ad and tracker blocking.
     shields: shields::Shields,
+    /// Person-chosen exact-origin JavaScript setting.
+    site_scripts: sex_web::site_scripts::Policy,
     /// Tabs down the left side instead of across the bar (Ctrl+Shift+,).
     vertical: bool,
     /// Tab groups; each tab slot names its own.
@@ -391,7 +420,7 @@ impl Browser {
         self.reported_size = (width, height);
         let capacity = self.window.room();
         let Some(surface) = viewport::Surface::checked(width, height, capacity) else {
-            sex_pdx::serial_record!("[web.viewport.rejected] w={} h={} capacity={}", width, height, capacity);
+            web_record!("[web.viewport.rejected] w={} h={} capacity={}", width, height, capacity);
             return;
         };
         if self.surface == surface { return; }
@@ -408,7 +437,7 @@ impl Browser {
         self.timers_changed();
         self.frame_dirty = true;
         self.settle();
-        sex_pdx::serial_record!("[web.viewport] target={} task={} w={} h={} view_w={} view_h={} capacity={} applied=1",
+        web_record!("[web.viewport] target={} task={} w={} h={} view_w={} view_h={} capacity={} applied=1",
             self.window.target, self.window.task, surface.w, surface.h, self.view.0, self.view.1, capacity);
     }
     /// Swaps frame `i`'s page with the current one.
@@ -441,7 +470,7 @@ impl Browser {
     /// Stops a frame's downloads as it goes.
     fn close_frame(&mut self, mut f: Frame) {
         for mut l in core::mem::take(&mut f.media_loads) { l.ex.cancel(&mut self.window); }
-        sex_pdx::serial_record!("[web.frame.closed] node={}", f.node);
+        web_record!("[web.frame.closed] node={}", f.node);
     }
 
     fn drop_frames(&mut self) {
@@ -502,14 +531,14 @@ impl Browser {
                 images: Vec::new(), svgs: Vec::new(), moving: Vec::new(), frames_shown: 0,
             });
             let i = self.frames.len() - 1;
-            sex_pdx::serial_record!("[web.frame] node={} w={} h={} url={}", node, b[2], b[3], src);
+            web_record!("[web.frame] node={} w={} h={} url={}", node, b[2], b[3], src);
             self.enter(i);
             // The iframe's request comes from the page around it.
             self.referrer_next = if no_referrer { None } else { Some(base.clone()) };
             self.open(&src, false);
             let (items, scripted, referrer) = (self.page.items.len(), matches!(self.doc, Doc::Scripted(_)), self.doc.get().referrer.clone());
             self.leave(i);
-            sex_pdx::serial_record!("[web.frame.loaded] node={} items={} scripted={} referrer={}", node, items, scripted as u8, if referrer.is_empty() { "-" } else { &referrer });
+            web_record!("[web.frame.loaded] node={} items={} scripted={} referrer={}", node, items, scripted as u8, if referrer.is_empty() { "-" } else { &referrer });
             self.frame_dirty = true;
             if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("frameload\t{node}")); }
             // Its handler may have sent the page elsewhere, taking its frames.
@@ -530,12 +559,12 @@ impl Browser {
             for (to, data, target) in out {
                 let Some(i) = self.frames.iter().position(|f| f.node as i64 == to) else { continue };
                 let origin = origin_of(&self.frames[i].url).unwrap_or_else(|| String::from("null"));
-                if !fits(&target, &origin) { sex_pdx::serial_record!("[web.message] dropped to={} target={}", origin, target); continue; }
+                if !fits(&target, &origin) { web_record!("[web.message] dropped to={} target={}", origin, target); continue; }
                 self.enter(i);
                 if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("message\tparent\t{top_origin}\t{data}")); }
                 self.after_script(true);
                 self.leave(i);
-                sex_pdx::serial_record!("[web.message] down node={} bytes={}", to, data.len());
+                web_record!("[web.message] down node={} bytes={}", to, data.len());
                 any = true;
             }
             let mut i = 0;
@@ -546,7 +575,7 @@ impl Browser {
                 for (to, data, target) in out {
                     if to != -1 || !fits(&target, &top_origin) { continue; }
                     if let Some(script) = self.doc.script() { let _ = script.dispatch(&alloc::format!("message\t{node}\t{origin}\t{data}")); }
-                    sex_pdx::serial_record!("[web.message] up node={} bytes={}", node, data.len());
+                    web_record!("[web.message] up node={} bytes={}", node, data.len());
                     any = true;
                     // The page may have gone elsewhere, taking its frames.
                     if self.after_script(true) && self.url != top_url { return; }
@@ -666,7 +695,7 @@ impl Browser {
         // The side panel makes way for a split view.
         if self.panel { self.close_panel(); }
         if self.split.take().is_some() {
-            sex_pdx::serial_record!("[web.split] on=0 shown={}", self.active);
+            web_record!("[web.split] on=0 shown={}", self.active);
             return self.refit();
         }
         if self.tabs.len() < 2 { return; }
@@ -678,14 +707,14 @@ impl Browser {
         self.refit();
         self.show_tab(other);
         self.show_tab(back);
-        sex_pdx::serial_record!("[web.split] on=1 left={} right={} shown={} w={}", back.min(other), back.max(other), self.active, self.view.0);
+        web_record!("[web.split] on=1 left={} right={} shown={} w={}", back.min(other), back.max(other), self.active, self.view.0);
     }
 
     /// Ctrl+Shift+,: tabs down the side, or back across the bar. Kept for next time.
     fn set_vertical(&mut self, on: bool) {
         self.vertical = on;
         profile::set_vertical_tabs(&mut self.window, on);
-        sex_pdx::serial_record!("[web.tabs.vertical] on={} side={}", on as u8, self.side());
+        web_record!("[web.tabs.vertical] on={} side={}", on as u8, self.side());
         // In a split, the half that waits lays out again when it shows.
         self.refit();
     }
@@ -728,13 +757,13 @@ impl Browser {
             shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
             side: self.side(),
             pane: if self.split_pair().is_some() { self.pane() } else { (0, 0) },
-            group_of: &group_of, groups: &self.groups,
+            group_of: &group_of, groups: &self.groups, palette: self.chrome_palette,
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
         self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
         self.full_redraw = false;
-        sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
+        web_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start);
     }
 
     /// Fetches `url` into `self.buf`, following redirects. Returns the final address
@@ -839,7 +868,7 @@ impl Browser {
             let mut jar = self.jar.borrow_mut();
             for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
         }
-        sex_pdx::serial_record!("[web.http] method={} status={} bytes={} encoding={} chunked={} cookies={} ticks={} url={}", p.method, r.head.status, r.body.len(),
+        web_record!("[web.http] method={} status={} bytes={} encoding={} chunked={} cookies={} ticks={} url={}", p.method, r.head.status, r.body.len(),
             r.head.get("content-encoding").unwrap_or("none"), r.head.get("transfer-encoding").is_some_and(|t| t.contains("chunked")) as u8, self.jar.borrow().len(), sex_pdx::get_ticks() - p.begun, p.url);
         if r.head.is_redirect() {
             if let Some(next) = r.head.get("location").and_then(|l| sex_fetch::join(&p.url, l)) {
@@ -853,7 +882,7 @@ impl Browser {
         if let Some(o) = cross {
             let allowed = r.head.get("access-control-allow-origin").map(str::trim);
             if allowed != Some("*") && allowed != Some(o.as_str()) {
-                sex_pdx::serial_record!("[web.cors] blocked origin={} url={}", o, p.url);
+                web_record!("[web.cors] blocked origin={} url={}", o, p.url);
                 return Some(Err(b"The site doesn't let this page read it."));
             }
         }
@@ -862,12 +891,19 @@ impl Browser {
     }
 
     fn open(&mut self, url: &str, remember: bool) {
+        self.cancel_autofill();
+        self.cancel_password_save();
+        if self.in_frame.is_none() && self.url == "about:downloads" {
+            if let Some(index) = url.strip_prefix("about:downloads?forget=").and_then(|s| s.parse::<usize>().ok()) {
+                return self.forget_download(index);
+            }
+        }
         // "Continue to the site" on the HTTPS-only page: this host may use plain HTTP
         // for the rest of the run.
         if let Some(target) = url.strip_prefix("about:http?url=") {
             let target = extensions::decode(target);
             if let Ok(u) = sex_fetch::Url::parse(&target) { if !self.http_ok.contains(&u.host) { self.http_ok.push(u.host.clone()); } }
-            sex_pdx::serial_record!("[web.https.allowed] url={}", target);
+            web_record!("[web.https.allowed] url={}", target);
             return self.open(&target, false);
         }
         // The side panel's address opens it (or changes what it shows) instead.
@@ -892,22 +928,22 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         if let Doc::Scripted(script) = &mut self.doc {
             if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
-                sex_pdx::serial_record!("[web.object-cache.departure] hits={} misses={} concat={} compare={} url={}", hits, misses, concat, compare, self.url);
+                web_record!("[web.object-cache.departure] hits={} misses={} concat={} compare={} url={}", hits, misses, concat, compare, self.url);
             }
             #[cfg(feature = "jit-profile")]
             {
                 for (selector, calls, ns) in &script.page().query_profile {
-                    sex_pdx::serial_record!("[web.profile.query] calls={} elapsed_ns={} selector={:?}", calls, ns, selector);
+                    web_record!("[web.profile.query] calls={} elapsed_ns={} selector={:?}", calls, ns, selector);
                 }
                 let p = script.execution_profile();
                 let host_ns: u64 = p.host_ns.iter().copied().sum();
-                sex_pdx::serial_record!("[web.profile] vm_ns={} host_ns={} jit_ns={} jit_calls={} url={}", script.execution_ns(), host_ns, p.jit_ns, p.jit_calls, self.url);
+                web_record!("[web.profile] vm_ns={} host_ns={} jit_ns={} jit_calls={} url={}", script.execution_ns(), host_ns, p.jit_ns, p.jit_calls, self.url);
                 for i in 0..128 {
-                    if p.calls[i] != 0 { sex_pdx::serial_record!("[web.profile.host] op={} calls={} elapsed_ns={}", i, p.calls[i], p.host_ns[i]); }
+                    if p.calls[i] != 0 { web_record!("[web.profile.host] op={} calls={} elapsed_ns={}", i, p.calls[i], p.host_ns[i]); }
                 }
             }
             let s = script.jit_stats();
-            sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
+            web_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
         }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
@@ -925,6 +961,8 @@ impl Browser {
         if self.in_frame.is_none() { self.blocked = 0; }
         let (html, base) = if url == "about:downloads" {
             (self.downloads_page(), String::from(url))
+        } else if url.starts_with("about:site?") {
+            (self.site_settings_page(url), String::from("about:site"))
         } else if url == "about:shields" || url == "about:shields?update" {
             (self.shields_page(url), String::from("about:shields"))
         } else if url == panel::BOOKMARKS {
@@ -942,22 +980,27 @@ impl Browser {
         } else if let Some(target) = url.strip_prefix("about:reader?url=") {
             // Reader view: the page's article on a quiet page of its own.
             let target = extensions::decode(target);
-            let got = if target.starts_with("http://") || target.starts_with("https://") { self.fetch(&target).map(|(u, body)| (u, text_of(&self.buf[body]))) } else { Err(&b"Reader view needs a web address."[..]) };
-            match got {
-                Ok((final_url, html)) => {
-                    let dom = sex_html::parse::parse(&html);
-                    match sex_web::reader::article(&dom, &final_url) {
-                        Some(a) => {
-                            sex_pdx::serial_record!("[web.reader] words={} title={} url={}", a.words, a.title, final_url);
-                            (sex_web::reader::page(&a, &final_url), String::from("about:reader"))
-                        }
-                        None => {
-                            sex_pdx::serial_record!("[web.reader] words=0 url={}", final_url);
-                            (message_page("No reader view", "This page has no article to show on its own.", &final_url), String::from("about:reader"))
+            if let Some((source, page)) = self.reader_pending.take().filter(|(source, _)| source == &target) {
+                web_record!("[web.reader.current] url={}", source);
+                (page, String::from("about:reader"))
+            } else {
+                let got = if target.starts_with("http://") || target.starts_with("https://") { self.fetch(&target).map(|(u, body)| (u, text_of(&self.buf[body]))) } else { Err(&b"Reader view needs a web address."[..]) };
+                match got {
+                    Ok((final_url, html)) => {
+                        let dom = sex_html::parse::parse(&html);
+                        match sex_web::reader::article(&dom, &final_url) {
+                            Some(a) => {
+                                web_record!("[web.reader] words={} title={} url={}", a.words, a.title, final_url);
+                                (sex_web::reader::page(&a, &final_url), String::from("about:reader"))
+                            }
+                            None => {
+                                web_record!("[web.reader] words=0 url={}", final_url);
+                                (message_page("No reader view", "This page has no article to show on its own.", &final_url), String::from("about:reader"))
+                            }
                         }
                     }
+                    Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), &target), String::from("about:reader")),
                 }
-                Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), &target), String::from("about:reader")),
             }
         } else if url.starts_with(extensions::SCHEME) {
             // An extension's own page (its popup or options page), while it is on.
@@ -974,10 +1017,10 @@ impl Browser {
                 None if self.in_frame.is_none() && self.https_first(url).is_some() => {
                     let secure = self.https_first(url).unwrap_or_default();
                     match self.fetch_or_download(&secure) {
-                        Ok(r) => { sex_pdx::serial_record!("[web.https.upgraded] url={}", secure); self.url = secure.clone(); Ok(r.unwrap_or_else(|| (String::from("about:downloads"), 0..0))) }
+                        Ok(r) => { web_record!("[web.https.upgraded] url={}", secure); self.url = secure.clone(); Ok(r.unwrap_or_else(|| (String::from("about:downloads"), 0..0))) }
                         Err(why) if why == shields::BLOCKED => Err(why),
                         Err(_) => {
-                            sex_pdx::serial_record!("[web.https.unavailable] url={}", url);
+                            web_record!("[web.https.unavailable] url={}", url);
                             self.buf = https_only_page(url).into_bytes();
                             Ok((String::from(url), 0..self.buf.len()))
                         }
@@ -1053,11 +1096,11 @@ impl Browser {
         // Like other browsers, extensions stay out of private tabs.
         let (ext_css, early, late) = if self.jarbox == profile::Jarbox::Private { Default::default() } else { self.extensions.content(&mut self.window, &base, self.in_frame.is_some()) };
         sheets.extend(ext_css);
-        let mut scripts = early;
-        scripts.extend(self.scripts(&dom, &base));
-        scripts.extend(late);
+        let scripts_enabled = self.site_scripts.enabled(&base);
+        let mut scripts = if scripts_enabled { early } else { Vec::new() };
+        if scripts_enabled { scripts.extend(self.scripts(&dom, &base)); scripts.extend(late); }
         // Inline handlers (`onclick="..."`), `javascript:` links and forms need the engine too.
-        let handlers = dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
+        let handlers = scripts_enabled && dom.descendants(sex_html::dom::Dom::ROOT).into_iter().any(|n| match &dom.nodes[n].kind {
             sex_html::dom::Kind::Element { tag, attrs, .. } => matches!(tag.as_str(), "input" | "textarea" | "select" | "form")
                 || attrs.iter().any(|(k, v)| k.starts_with("on") || (k == "href" && v.trim_start().starts_with("javascript:"))),
             _ => false,
@@ -1078,11 +1121,12 @@ impl Browser {
         self.doc = Doc::Plain(doc);
         self.canvases = sex_web::canvas::Canvases::new();
         let script_begun = sex_pdx::get_ticks();
+        if !scripts_enabled { web_record!("[web.site.script.blocked] origin={}", sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_default()); }
         if !scripts.is_empty() || handlers { self.run_scripts(scripts); }
         let laid = sex_pdx::get_ticks();
         self.media_scan();
         if !self.fonts.moving.is_empty() { self.timer = Some(sex_pdx::get_ticks()); }
-        sex_pdx::serial_record!("[web.pictures] count={} moving={}", self.fonts.images.len(), self.fonts.moving.len());
+        web_record!("[web.pictures] count={} moving={}", self.fonts.images.len(), self.fonts.moving.len());
         self.relayout();
         sex_pdx::serial_record!("[web.loaded] bytes_ok=1 items={} links={} height={} sheets={} images={} fetch_ticks={} layout_ticks={} script_ticks={} scripted={}",
             self.page.items.len(), self.page.links.len(), self.page.height, self.sheets.len(), self.fonts.images.len(), script_begun - begun,
@@ -1156,6 +1200,9 @@ impl Browser {
 
     #[inline(never)]
     fn run_scripts(&mut self, scripts: Vec<PageScript>) {
+        // A single admission point also covers later explicit injection into
+        // a plain page, not just the scripts gathered during navigation.
+        if !self.site_scripts.enabled(&self.url) { return; }
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
@@ -1171,13 +1218,13 @@ impl Browser {
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,
             Err(e) => {
-                sex_pdx::serial_record!("[web.script] engine={:?}", e);
+                web_record!("[web.script] engine={:?}", e);
                 return;
             }
         };
         #[cfg(feature = "baseline-jit")]
         script.set_jit_enabled(self.jit_enabled);
-        sex_pdx::serial_record!("[web.script] engine_ticks={} memory={}", sex_pdx::get_ticks() - started, script.memory_bytes());
+        web_record!("[web.script] engine_ticks={} memory={}", sex_pdx::get_ticks() - started, script.memory_bytes());
         #[cfg(feature = "baseline-jit")]
         let scripts_started = sex_pdx::get_ticks();
         for s in scripts.iter() {
@@ -1203,20 +1250,20 @@ impl Browser {
                 }
                 r
             };
-            if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+            if let Err(sex_js::Error::Trapped(why)) = &r { web_record!("[web.script] trapped={}", why); break; }
         }
         let _ = script.dispatch("ready");
         self.code_store.later(&self.code_cache.borrow());
         #[cfg(feature = "baseline-jit")]
         {
             if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
-                sex_pdx::serial_record!("[web.object-cache] hits={} misses={} concat={} compare={}", hits, misses, concat, compare);
+                web_record!("[web.object-cache] hits={} misses={} concat={} compare={}", hits, misses, concat, compare);
             }
             let stats = script.jit_stats();
             if self.jit_enabled {
-                sex_pdx::serial_record!("[web.jit.admission] considered={} non_scalar={} cache_full={} unsupported={} hottest={} rejected_len={} prefix={:?}", stats.considered, stats.non_scalar, stats.cache_full, stats.unsupported, stats.hottest, stats.rejected_len, stats.rejected_prefix);
+                web_record!("[web.jit.admission] considered={} non_scalar={} cache_full={} unsupported={} hottest={} rejected_len={} prefix={:?}", stats.considered, stats.non_scalar, stats.cache_full, stats.unsupported, stats.hottest, stats.rejected_len, stats.rejected_prefix);
             }
-            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
+            web_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
         }
         self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
@@ -1242,7 +1289,7 @@ impl Browser {
                     })
                 } else if url.starts_with(extensions::SCHEME) { self.extension_file(&url).map(|b| text_of(&b)) } else { None };
                 self.buf = Vec::new();
-                sex_pdx::serial_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
+                web_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 // A failed one is still recorded, so it is not asked for again.
                 script.page_mut().modules.insert(url.clone(), body.unwrap_or_else(|| sex_js::document::failed_module(&url)));
             }
@@ -1256,7 +1303,7 @@ impl Browser {
         self.media_requests();
         let doc = self.doc.get();
         for (level, text) in doc.log.drain(..) {
-            for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
+            for line in text.lines().take(8) { web_record!("[web.console] level={} {}", level, line); }
         }
         if let Some(url) = doc.navigate.take() {
             self.post = doc.navigate_post.take().map(|b| (b, core::mem::take(&mut doc.navigate_type)));
@@ -1283,7 +1330,7 @@ impl Browser {
             let pixels = &mut self.window.pixels()[..self.surface.pixels];
             if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, px, pw, &names) {
                 self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
-                sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
+                web_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
                 return true;
             }
         }
@@ -1333,7 +1380,7 @@ impl Browser {
         let media_next = self.media_tick();
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
         if moved && !self.animating { self.draw(); }
-        if moved && self.fonts.frames_shown <= 8 { sex_pdx::serial_record!("[web.picture.frames] n={}", self.fonts.frames_shown); }
+        if moved && self.fonts.frames_shown <= 8 { web_record!("[web.picture.frames] n={}", self.fonts.frames_shown); }
         if self.animating {
             self.timer = None;
             self.relayout();
@@ -1343,7 +1390,7 @@ impl Browser {
             let next = script.dispatch("tick");
             self.timer = match next { Ok(ms) if ms >= 0 => Some(sex_pdx::get_ticks() + ms as u64), _ => None };
             self.next_frame();
-            if let Err(sex_js::Error::Trapped(why)) = next { sex_pdx::serial_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock)); }
+            if let Err(sex_js::Error::Trapped(why)) = next { web_record!("[web.script] trapped={}", why); self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock)); }
             self.after_script(true);
         } else {
             self.timer = None;
@@ -1424,7 +1471,7 @@ impl Browser {
             match self.local(&ask) {
                 // Built-in pages and files are here at once.
                 Ok(r) => {
-                    sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} src={}", node, r.status, r.body.len(), sex_pdx::get_ticks() - begun, src);
+                    web_record!("[web.media.load] node={} status={} bytes={} ticks={} src={}", node, r.status, r.body.len(), sex_pdx::get_ticks() - begun, src);
                     relayout |= self.media_loaded(i, r.status, r.body);
                 }
                 Err(mut p) => {
@@ -1477,7 +1524,7 @@ impl Browser {
         if !reports.is_empty() {
             if let Some(script) = self.doc.script() {
                 for r in &reports {
-                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(r) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(r) { web_record!("[web.script] trapped={}", why); break; }
                 }
                 self.after_script(true);
             }
@@ -1506,7 +1553,7 @@ impl Browser {
             0x26 => m.seek_by(dom, 5000),
             _ => return false,
         }
-        sex_pdx::serial_record!("[web.media.key] code={} node={}", code, m.node);
+        web_record!("[web.media.key] code={} node={}", code, m.node);
         self.timer = Some(sex_pdx::get_ticks());
         true
     }
@@ -1524,13 +1571,13 @@ impl Browser {
                 self.next_kind = Some(sex_shields::Kind::Script);
                 let body = if url.starts_with("http") && !full { self.fetch_up_to(&url, SCRIPT_MAX).ok().map(|(_, b)| text_of(&self.buf[b])) } else { None };
                 self.buf = Vec::new();
-                sex_pdx::serial_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
+                web_record!("[web.module] import=1 ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 let Doc::Scripted(s) = &mut self.doc else { return };
                 s.page_mut().modules.insert(url.clone(), body.unwrap_or_else(|| sex_js::document::failed_module(&url)));
             }
             let Doc::Scripted(s) = &mut self.doc else { return };
             if let Err(sex_js::Error::Trapped(why)) = s.modules_ready() {
-                sex_pdx::serial_record!("[web.script] trapped={}", why);
+                web_record!("[web.script] trapped={}", why);
                 self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock));
                 return;
             }
@@ -1562,7 +1609,7 @@ impl Browser {
             // the owning document/node token, even on a same-URL reload.
             if self.url != base || !self.doc.get().classic_script_current(&ask) { return; }
             let ok = loaded.is_some();
-            sex_pdx::serial_record!("[web.script.source] node={} ok={} url={}", ask.node, ok as u8, abs);
+            web_record!("[web.script.source] node={} ok={} url={}", ask.node, ok as u8, abs);
             let Some(script) = self.doc.script() else { return };
             if let Some(r) = loaded {
                 let _ = script.dispatch(&alloc::format!("script\t{}", ask.node));
@@ -1571,7 +1618,7 @@ impl Browser {
                 });
                 let result = script.eval_resource(&text_of(&r.body), &r.url, muted);
                 let _ = script.dispatch("script\t");
-                if let Err(sex_js::Error::Trapped(why)) = result { sex_pdx::serial_record!("[web.script] trapped={}", why); return; }
+                if let Err(sex_js::Error::Trapped(why)) = result { web_record!("[web.script] trapped={}", why); return; }
             }
             let _ = script.dispatch(&alloc::format!("scriptend\t{}\t{}", ask.node, ok as u8));
             self.after_script(true);
@@ -1668,7 +1715,7 @@ impl Browser {
                 l.p.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("range"));
                 l.p.headers.push((String::from("Range"), alloc::format!("bytes={}-", at)));
                 l.p.since = sex_pdx::get_ticks();
-                sex_pdx::serial_record!("[web.media.range] node={} from={} url={}", l.node, at, l.p.url);
+                web_record!("[web.media.range] node={} from={} url={}", l.node, at, l.p.url);
                 let mut p = core::mem::replace(&mut l.p, Pending::new(0, "", "", &[], &[], 0, None));
                 let sent = self.send(&mut p, false);
                 let l = &mut self.media_loads[k];
@@ -1696,7 +1743,7 @@ impl Browser {
                     // not do pieces after all, and the stream ends where it got.
                     let piece = head.get("content-range").and_then(sex_fetch::pieces::content_range);
                     if let Some(at) = l.from.filter(|at| head.status != 206 || piece.is_none_or(|p| p.0 != *at)) {
-                        sex_pdx::serial_record!("[web.media.range.refused] node={} from={} status={}", l.node, at, head.status);
+                        web_record!("[web.media.range.refused] node={} from={} status={}", l.node, at, head.status);
                         l.ex.cancel(&mut self.window);
                         let mut g = l.body.borrow_mut();
                         (g.ranges, g.done) = (false, true);
@@ -1713,7 +1760,7 @@ impl Browser {
                             }
                             l.streaming = true;
                             drop(g);
-                            sex_pdx::serial_record!("[web.media.stream] node={} total={} url={}", l.node, total.map_or(-1, |t| t as i64), l.p.url);
+                            web_record!("[web.media.stream] node={} total={} url={}", l.node, total.map_or(-1, |t| t as i64), l.p.url);
                             if let Some(target) = sex_fetch::Url::parse(&l.p.url).ok().filter(|t| cookie_ok(&self.shields, &self.url, t, sex_shields::Kind::Media)) {
                                 let mut jar = self.jar.borrow_mut();
                                 for c in head.all("set-cookie") { jar.store(&target, c, wall()); }
@@ -1730,7 +1777,7 @@ impl Browser {
                 if !l.opened { l.body.borrow_mut().want = None; }
                 if done {
                     l.body.borrow_mut().done = true;
-                    sex_pdx::serial_record!("[web.media.load] node={} status=200 bytes={} ticks={} streamed=1 ok={} shown={} src={}", l.node, have, sex_pdx::get_ticks() - l.p.since, (polled.is_ok() && ok) as u8, self.media[i].frames, l.p.url);
+                    web_record!("[web.media.load] node={} status=200 bytes={} ticks={} streamed=1 ok={} shown={} src={}", l.node, have, sex_pdx::get_ticks() - l.p.since, (polled.is_ok() && ok) as u8, self.media[i].frames, l.p.url);
                 }
                 let opened = l.opened;
                 let ready = done || have >= sex_media::AHEAD + 64 * 1024 || l.body.borrow().total.is_some_and(|t| have >= t);
@@ -1742,7 +1789,7 @@ impl Browser {
                     let l = &mut self.media_loads[k];
                     if self.media[i].state == media::State::Ready {
                         l.opened = true;
-                        sex_pdx::serial_record!("[web.media.early] node={} have={} done={}", l.node, have, done as u8);
+                        web_record!("[web.media.early] node={} have={} done={}", l.node, have, done as u8);
                     } else if !last {
                         // Not enough at the front (an MP4 indexed at its end): wait for all.
                         l.retry_at_end = true;
@@ -1759,7 +1806,7 @@ impl Browser {
                 Ok(false) => { k += 1; }
                 Err(e) => {
                     let l = self.media_loads.remove(k);
-                    sex_pdx::serial_record!("[web.media.load] node={} status=0 bytes=0 ticks={} why={} src={}", l.node, sex_pdx::get_ticks() - l.p.since, core::str::from_utf8(net::message(e)).unwrap_or("?"), l.p.url);
+                    web_record!("[web.media.load] node={} status=0 bytes=0 ticks={} why={} src={}", l.node, sex_pdx::get_ticks() - l.p.since, core::str::from_utf8(net::message(e)).unwrap_or("?"), l.p.url);
                     self.media[i].state = media::State::Failed; self.media[i].events.push("error");
                 }
                 Ok(true) => {
@@ -1772,7 +1819,7 @@ impl Browser {
                             Err(_) => { self.media[i].state = media::State::Failed; self.media[i].events.push("error"); }
                         },
                         Some(Ok(done)) => {
-                            sex_pdx::serial_record!("[web.media.load] node={} status={} bytes={} ticks={} streamed=0 src={}", l.node, done.status, done.body.len(), sex_pdx::get_ticks() - l.p.since, l.p.url);
+                            web_record!("[web.media.load] node={} status={} bytes={} ticks={} streamed=0 src={}", l.node, done.status, done.body.len(), sex_pdx::get_ticks() - l.p.since, l.p.url);
                             self.media[i].state = media::State::Waiting;
                             relayout |= self.media_loaded(i, done.status, done.body);
                         }
@@ -1801,12 +1848,12 @@ impl Browser {
     /// Tells the page one request's answer. False when the page's script fell over.
     fn answer(&mut self, id: &u32, method: &str, url: &str, since: u64, r: Loaded) -> bool {
         let n = r.body.len();
-        sex_pdx::serial_record!("[web.fetch] id={} status={} bytes={} ticks={} method={} url={}", id, r.status, n, sex_pdx::get_ticks() - since, if method.is_empty() { "GET" } else { method }, url);
+        web_record!("[web.fetch] id={} status={} bytes={} ticks={} method={} url={}", id, r.status, n, sex_pdx::get_ticks() - since, if method.is_empty() { "GET" } else { method }, url);
         let Doc::Scripted(s) = &mut self.doc else { return false };
         s.page_mut().keep_head(*id, &r.url, &r.headers);
         s.page_mut().keep_body(*id, r.status, r.body);
         if let Err(sex_js::Error::Trapped(why)) = s.dispatch(&alloc::format!("fetched\t{}\t{}\t{}", id, r.status, n)) {
-            sex_pdx::serial_record!("[web.script] trapped={}", why);
+            web_record!("[web.script] trapped={}", why);
             self.doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock));
             return false;
         }
@@ -1944,7 +1991,7 @@ impl Browser {
             if let (Some((l, r)), Kind::Down { .. }) = (self.split_pair(), p.kind) {
                 let other = if self.active == l { r } else { l };
                 self.show_tab(other);
-                sex_pdx::serial_record!("[web.split.focus] shown={}", self.active);
+                web_record!("[web.split.focus] shown={}", self.active);
             }
             return;
         }
@@ -2096,7 +2143,7 @@ impl Browser {
                 let t = self.editing.clone().unwrap_or_default();
                 self.suggestions = self.profile.suggest(&t, 6);
                 self.chosen = None;
-                sex_pdx::serial_record!("[web.suggest] typed={} count={} first={}", t, self.suggestions.len(), self.suggestions.first().map_or("-", |s| s.as_str()));
+                web_record!("[web.suggest] typed={} count={} first={}", t, self.suggestions.len(), self.suggestions.first().map_or("-", |s| s.as_str()));
             }
             self.draw();
             return;
@@ -2146,11 +2193,11 @@ impl Browser {
                 Some(if fits { r.with(&[vs::ACTION_COPY]) } else { r })
             }).collect();
             let sent = vs::answer(ticket, &records);
-            sex_pdx::serial_record!("[web.voyeur.answer] ticket={} query={} results={} first={} sent={}", ticket, query, records.len(), records.first().map_or("-", |r| r.title()), sent as u8);
+            web_record!("[web.voyeur.answer] ticket={} query={} results={} first={} sent={}", ticket, query, records.len(), records.first().map_or("-", |r| r.title()), sent as u8);
         }
         while let Some((action, key)) = vs::activated() {
             let url = self.profile.address_for(key);
-            sex_pdx::serial_record!("[web.voyeur] action={} url={}", action, url.as_deref().unwrap_or("-"));
+            web_record!("[web.voyeur] action={} url={}", action, url.as_deref().unwrap_or("-"));
             if let (vs::ACTION_OPEN, Some(url)) = (action, url) { self.open(&url, true); }
         }
     }
@@ -2172,18 +2219,27 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let theme = sex_app::settings::theme();
+    let chrome_palette = sex_web::ChromePalette::from_tokens(theme);
+    let theme_generation = sex_app::settings::generation().unwrap_or(0);
+    web_record!("[web.theme] mode={:?} generation={}", theme.mode, theme_generation);
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, password_save: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, chrome_palette, theme_generation, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
-        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
+        find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_resumes: Vec::new(), download_failures: Vec::new(), download_events: Vec::new(), download_status: None, web_fonts: Vec::new(),
+        shields: shields::Shields::empty(), site_scripts: Default::default(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
     b.doc.get().viewport = b.view;
     // `--private` makes the window's first tab private (a private window).
-    if given.split_ascii_whitespace().any(|a| a == "--private") { b.jarbox = profile::Jarbox::Private; }
+    if given.split_ascii_whitespace().any(|a| a == "--private") {
+        b.jarbox = profile::Jarbox::Private;
+        PRIVATE_DIAGNOSTICS.note_private();
+    }
     (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());
+    if b.jarbox != profile::Jarbox::Private { b.load_downloads(); }
     b.shields = shields::Shields::load(&mut b.window);
+    b.site_scripts = site_settings::load_scripts(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
@@ -2191,7 +2247,7 @@ pub extern "C" fn _start() -> ! {
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
-    sex_pdx::serial_record!("[web.cores] cores={}", cores);
+    web_record!("[web.cores] cores={}", cores);
     // Started without an address, Kaleidoscope opens the tabs it had last time.
     let address = given.split_ascii_whitespace().find(|a| !a.starts_with("--"));
     if address.is_some() || !b.keep_session || b.jarbox == profile::Jarbox::Private || !b.restore_session() {
@@ -2200,9 +2256,26 @@ pub extern "C" fn _start() -> ! {
     }
     let registered = sex_app::search::register("kaleidoscope", &[sex_app::search::KIND_HISTORY, sex_app::search::KIND_BOOKMARK]);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
-    sex_pdx::serial_record!("[web.voyeur.register] sent={}", registered as u8);
+    web_record!("[web.voyeur.register] sent={}", registered as u8);
     let mut queued: Option<Event> = None;
+    let mut next_theme_poll = 0u64;
     loop {
+        let now = sex_pdx::get_ticks();
+        if now >= next_theme_poll {
+            next_theme_poll = now.saturating_add(500);
+            if let Ok(generation) = sex_app::settings::generation() {
+                if generation != b.theme_generation {
+                    let theme = sex_app::settings::theme();
+                    b.chrome_palette = sex_web::ChromePalette::from_tokens(theme);
+                    b.theme_generation = generation;
+                    b.full_redraw = true;
+                    b.draw();
+                    web_record!("[web.theme] mode={:?} generation={}", theme.mode, generation);
+                }
+            }
+        }
+        b.poll_autofill();
+        b.poll_password_save();
         b.settle();
         // Blocking resource calls can fill the bounded held-event queue. Window
         // still tracks the latest authenticated size even when a resize event
@@ -2210,16 +2283,17 @@ pub extern "C" fn _start() -> ! {
         let (width, height) = b.window.size();
         b.resize(width, height);
         b.voyeur();
-        let event = if let Some(e) = queued.take() { e } else { match b.next_due() {
+        let autofill_wait = if b.autofill.is_some() || b.password_save.is_some() { 1 } else { SEARCH_LOOK_MS };
+        let event = if let Some(e) = queued.take().or_else(|| if b.download_events.is_empty() { None } else { Some(b.download_events.remove(0)) }) { e } else { match b.next_due() {
             Some(due) => {
                 let now = sex_pdx::get_ticks();
-                match if due > now { b.window.next_within(due - now) } else { b.window.poll() } {
+                match if due > now { b.window.next_within((due - now).min(autofill_wait)) } else { b.window.poll() } {
                     Some(e) => e,
-                    None => { b.tick_all(); continue; }
+                    None => { if sex_pdx::get_ticks() >= due { b.tick_all(); } continue; }
                 }
             }
             // Idle: wake now and then for Voyeur's questions.
-            None => match b.window.next_within(SEARCH_LOOK_MS) { Some(e) => e, None => continue },
+            None => match b.window.next_within(autofill_wait) { Some(e) => e, None => continue },
         } };
         match event {
             Event::Close => b.quit(),

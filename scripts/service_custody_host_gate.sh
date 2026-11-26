@@ -26,7 +26,7 @@ assert 'msg.type_id==1 && msg.caller_pd==11' in s
 assert 'spindle_storage_sync' not in s and 'spindle_storage_settle' not in s
 assert 'STORAGE_PROBE.step(' in s and 'STORAGE_PROBE.close()' in s
 assert 'HISTORY_IO.step_at(hist,sex_pdx::get_ticks(),' in s and 'HISTORY_IO.receive(msg.arg0,hist)' in s
-assert 'if !control{unsafe{HISTORY_IO.mark_dirty();}}' in s
+assert 'if !control && !private_launch{unsafe{HISTORY_IO.mark_dirty();}}' in s
 assert 'b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"' in s
 tr=Path('servers/sexfiles/src/trampoline.rs').read_text()
 assert tr.index('history.retire(notice.target_pd)')<tr.index('vfs::retire_app_subject(notice.target_pd)')

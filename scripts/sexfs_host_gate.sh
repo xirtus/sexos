@@ -9,7 +9,8 @@ rustc --edition=2021 --test -O -C overflow-checks=on -A dead_code "$ROOT_DIR/tes
 # A volume laid out by the allocator sexfs had before tree blocks moved to the top of
 # the disk (2026-11-19): the same on-disk format, tree blocks between data. Written by
 # this test file built against that allocator, then mounted, read and grown by today's.
-mkdir -p "$TEST_DIR/legacy/tests" "$TEST_DIR/legacy/crates/sexfs/src"
+mkdir -p "$TEST_DIR/legacy/tests" "$TEST_DIR/legacy/crates/sexfs/src" "$TEST_DIR/legacy/scripts"
+cp "$ROOT_DIR/scripts/sha256_shim.rs" "$TEST_DIR/legacy/scripts/"
 cp "$ROOT_DIR/tests/sexfs.rs" "$TEST_DIR/legacy/tests/"
 # Every other sexfs module as it is; only lib.rs gets the old allocator below.
 cp "$ROOT_DIR"/crates/sexfs/src/*.rs "$TEST_DIR/legacy/crates/sexfs/src/"
@@ -29,7 +30,8 @@ SEXFS_LEGACY_IMAGE="$TEST_DIR/legacy.img" "$TEST_DIR/tests" --exact a_volume_lai
 SEXFS_LEGACY_IMAGE="$TEST_DIR/legacy.img" "$TEST_DIR/tests" --exact a_volume_laid_out_the_old_way_mounts_reads_and_grows >/dev/null
 # Negative controls: each broken ordering must be caught by the power-cut test.
 mutant() {
-  mkdir -p "$TEST_DIR/$1/tests" "$TEST_DIR/$1/crates/sexfs/src"
+  mkdir -p "$TEST_DIR/$1/tests" "$TEST_DIR/$1/crates/sexfs/src" "$TEST_DIR/$1/scripts"
+  cp "$ROOT_DIR/scripts/sha256_shim.rs" "$TEST_DIR/$1/scripts/"
   cp "$ROOT_DIR/tests/sexfs.rs" "$TEST_DIR/$1/tests/"
   cp "$ROOT_DIR"/crates/sexfs/src/*.rs "$TEST_DIR/$1/crates/sexfs/src/"
   python3 - "$ROOT_DIR/crates/sexfs/src/lib.rs" "$TEST_DIR/$1/crates/sexfs/src/lib.rs" "$2" "$3" <<'PY'

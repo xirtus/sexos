@@ -46,7 +46,7 @@ impl Browser {
                         Err(_) => None,
                     };
                     self.buf = Vec::new();
-                    sex_pdx::serial_record!("[web.font] family={} loaded={} url={}", face.family, n.is_some() as u8, url);
+                    web_record!("[web.font] family={} loaded={} url={}", face.family, n.is_some() as u8, url);
                     self.web_fonts.push((url, n));
                     n
                 }

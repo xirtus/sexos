@@ -42,7 +42,8 @@ for name in ['loaded','loaded_from_store','loaded_from','read_program','read_nam
  parts.append(text[a:i])
 (out/'image_loader.rs').write_text('\n'.join(parts))
 PY_IMAGE
-RECORDING_IMAGE_LOADER_SOURCE="$TEST_DIR/image_loader.rs" rustc --test --edition=2021 "$ROOT_DIR/tests/recording_image_loader.rs" -o "$TEST_DIR/image-loader"
+printf 'pub const LENGTH: usize = 0;\npub const SHA256: [u8; 32] = [0; 32];\n' > "$TEST_DIR/vellum_pin.rs"
+OUT_DIR="$TEST_DIR" RECORDING_IMAGE_LOADER_SOURCE="$TEST_DIR/image_loader.rs" rustc --test --edition=2021 "$ROOT_DIR/tests/recording_image_loader.rs" -o "$TEST_DIR/image-loader"
 "$TEST_DIR/image-loader" --test-threads=1
 
 python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY_RUNTIME'

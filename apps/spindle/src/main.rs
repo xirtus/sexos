@@ -206,6 +206,19 @@ impl CmdLine {
 
     fn clear(&mut self) { self.len = 0; self.cur = 0; }
 
+    /// A private browser launch must not be recalled through vi undo or a
+    /// pending history-navigation snapshot after Enter.
+    fn clear_private(&mut self) {
+        self.buf.fill(0);
+        self.prev_buf.fill(0);
+        self.nav_saved.fill(0);
+        self.len = 0;
+        self.cur = 0;
+        self.prev_len = 0;
+        self.nav_saved_len = 0;
+        self.hist_nav = None;
+    }
+
     fn as_bytes(&self) -> &[u8] { &self.buf[..self.len] }
 
     fn insert_at(&mut self, pos: usize, b: u8) {
@@ -663,6 +676,35 @@ unsafe fn render_scrollback(fb: &mut WindowBuffer, sb: &Scrollback) {
 }
 
 // ── Command tokenizer ──────────────────────────────────────────────────────
+
+/// Only fixed built-in command words may appear in a receipt. An unknown token
+/// can be a pasted address or other private text, so it is recorded as "other".
+const RECEIPT_NAMES: &[&str] = &[
+    "about", "app-info", "app-state", "app-status", "append", "apps", "atlas",
+    "authority-status", "beep", "bell", "bell-launch-events", "bell-status", "bell-test",
+    "blockers", "browser", "browser-localdoc", "browser-localdoc-status", "browser-roadmap",
+    "browser-status", "browser-surface", "calc", "capture", "capture-cancel", "cat", "catdoc",
+    "catdocx", "cd", "clear", "close", "collar", "collar-grants", "collar-status", "crash",
+    "crashes", "daily", "df", "disk", "disk-stat", "echo", "edit", "edit-help", "edit-status",
+    "editor", "events", "faults", "fetch", "files", "files-status", "filldoc", "filldocx",
+    "focus-help", "frame-chrome", "frame-lights", "frame-lights-keys", "frame-rim", "help",
+    "history", "history-cancel", "history-retry", "history-status", "hw", "input", "install",
+    "kaleidoscope", "keys", "launch", "launch-outcomes", "lifecycle", "linen", "linen-list",
+    "linen-open", "linen-search", "linen-status", "load", "loom", "ls", "mesh", "mesh-graph",
+    "mesh-graph-status", "mkdir", "mkdoc", "mount", "mv", "mvdoc", "net-cancel", "net-probe",
+    "net-retry", "net-status", "notify", "object-new", "object-search", "object-tag",
+    "organize", "pd", "pkg", "probe-cancel", "probe-help", "probe-retry", "probe-status",
+    "project-scene-link", "project-scene-status", "proof", "pwd", "quil", "record",
+    "record-stop", "records", "rm", "rmdoc", "route", "run", "save", "scene-keys",
+    "scene-lifecycle", "scene-lifecycle-status", "scene-status", "scene-switch-status",
+    "search", "servers", "service-state", "session", "sexshop", "sextime", "silk", "spawn",
+    "spindle", "status", "stopall", "store", "sum", "tether", "touch", "truncdoc", "unmount",
+    "update", "url", "url-status", "volume", "web", "webstub", "wifi", "window-keys",
+    "windows", "winreset", "write",
+];
+fn command_receipt_name(word: &[u8]) -> &'static str {
+    RECEIPT_NAMES.iter().copied().find(|n| n.as_bytes() == word).unwrap_or("other")
+}
 
 /// Split a command line into (command_name, args_rest).
 /// Command name is the first whitespace-delimited token.
@@ -2990,8 +3032,8 @@ pub extern "C" fn _start() -> ! {
             }
         }
         if msg.type_id == 0x202 {
-            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} key={}",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8,msg.arg0);
-            sex_pdx::serial_record!("[spindle.probe.input] target={} pending={} key={} down={}",instance_pd(),unsafe{STORAGE_PROBE.busy()}as u8,msg.arg0,msg.arg1);
+            sex_pdx::serial_record!("[spindle.input.progress] target={} display_pending={} payload=redacted",instance_pd(),unsafe{DISPLAY_IO.pending()}as u8);
+            sex_pdx::serial_record!("[spindle.probe.input] target={} pending={} payload=redacted",instance_pd(),unsafe{STORAGE_PROBE.busy()}as u8);
             let scancode = msg.arg0 as u8;
             let shift = (msg.arg0 >> 8) & 1 == 1;
             let value = msg.arg1;
@@ -2999,7 +3041,7 @@ pub extern "C" fn _start() -> ! {
                 static mut SPINDLE_KEY_RECV_BUDGET: u32 = 64;
                 if SPINDLE_KEY_RECV_BUDGET > 0 {
                     SPINDLE_KEY_RECV_BUDGET -= 1;
-                    serial_println!("[spindle.key.recv] code={} down={} mod=0", scancode, value);
+                    serial_println!("[spindle.key.recv] payload=redacted");
                 }
             }
             if value != 1 { continue; }
@@ -3013,29 +3055,31 @@ pub extern "C" fn _start() -> ! {
             }
 
             // On Enter, record command, persist, dispatch, and optionally Bell-notify.
+            let private_launch = scancode == 0x1C && line.len > 0
+                && sex_pdx::private_launch::is_private_browser_launch(line.as_bytes());
             if scancode == 0x1C && line.len > 0 {
                 serial_println!("[spindle.cmd.recv] line_len={}", line.len);
                 let cmd_name = tokenize(line.as_bytes()).0;
                 let control=matches!(cmd_name,b"save"|b"load"|b"history-status"|b"history-cancel"|b"history-retry"|b"probe-status"|b"probe-cancel"|b"probe-retry");
-                if !control{let idx=hist.push(wifi_command::without_passphrase(line.as_bytes()));serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
+                if !control && !private_launch{let idx=hist.push(wifi_command::without_passphrase(line.as_bytes()));serial_println!("[spindle.history.push] idx={} len={}",idx,line.len);}
                 let lines_before = sb.total_lines;
                 let recognized = dispatch(line.as_bytes(), sb, hist, &mut ev);
-                if !control{unsafe{HISTORY_IO.mark_dirty();}}
+                if !control && !private_launch{unsafe{HISTORY_IO.mark_dirty();}}
                 let lines_after = sb.total_lines;
                 let output_lines = lines_after.saturating_sub(lines_before);
                 // Approximate output bytes: each line up to 80 bytes + overhead
                 let output_bytes = (output_lines as u32).saturating_mul(84);
                 serial_println!("[spindle.stargate.segment] kind=status ok={}", recognized as u8);
-                sex_pdx::serial_record!("[spindle.instance.command] target={} task={} name={} ok={}",instance_pd(),catalog.task_id,core::str::from_utf8(cmd_name).unwrap_or("?"),recognized as u8);
+                sex_pdx::serial_record!("[spindle.instance.command] target={} task={} name={} ok={}",instance_pd(),catalog.task_id,command_receipt_name(cmd_name),recognized as u8);
                 serial_println!(
                     "[spindle.cmd.exec] name={} ok={} reason={}",
-                    core::str::from_utf8(cmd_name).unwrap_or("?"),
+                    command_receipt_name(cmd_name),
                     recognized as u8,
                     if recognized { "ok" } else { "unknown_command" }
                 );
                 serial_println!(
                     "[spindle.cmd.output] name={} bytes={}",
-                    core::str::from_utf8(cmd_name).unwrap_or("?"),
+                    command_receipt_name(cmd_name),
                     output_bytes
                 );
                 if recognized {
@@ -3045,11 +3089,15 @@ pub extern "C" fn _start() -> ! {
                 line.hist_nav = None;
             }
             handle_key(scancode, shift, &mut line, hist);
+            if private_launch {
+                line.clear_private();
+                serial_println!("[spindle.private.input.scrubbed] undo=0 nav=0");
+            }
             unsafe {
                 static mut SPINDLE_ECHO_BUDGET: u32 = 16;
                 if SPINDLE_ECHO_BUDGET > 0 {
                     SPINDLE_ECHO_BUDGET -= 1;
-                    serial_println!("[spindle.input.echo.ok] key={}", scancode);
+                    serial_println!("[spindle.input.echo.ok] payload=redacted");
                 }
                 content_render(&line, sb);
             }
@@ -3074,8 +3122,7 @@ fn handle_key(scancode: u8, shift: bool, line: &mut CmdLine, hist: &History) {
 fn handle_key_insert(scancode: u8, shift: bool, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — caller handles dispatch; just clear
-            serial_println!("[spindle.line.enter] len={} mode=insert text={:?}",
-                line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.line.enter] len={} mode=insert payload=redacted", line.len);
             serial_println!("[spindle.key.enter]");
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();
@@ -3115,11 +3162,11 @@ fn handle_key_insert(scancode: u8, shift: bool, line: &mut CmdLine, hist: &Histo
             if let Some(ch) = scancode_to_ascii(scancode).map(|c| if shift { shifted(c) } else { c }) {
                 line.insert_at(line.cur, ch);
                 line.hist_nav = None;
-                serial_println!("[spindle.line.append] ch={} len={}", ch as char, line.len);
-                serial_println!("[spindle.text.append] ch={}", ch);
-                serial_println!("[spindle.input.recv] key=printable ch={} len={}", ch as char, line.len);
+                serial_println!("[spindle.line.append] payload=redacted len={}", line.len);
+                serial_println!("[spindle.text.append] payload=redacted");
+                serial_println!("[spindle.input.recv] key=printable payload=redacted len={}", line.len);
                 serial_println!("[spindle.line.cursor] pos={} len={}", line.cur, line.len);
-                serial_println!("[spindle.line.edit.ok] op=insert ch={}", ch as char);
+                serial_println!("[spindle.line.edit.ok] op=insert payload=redacted");
             }
         }
     }
@@ -3140,8 +3187,7 @@ fn scrollback_page(up: bool) {
 fn handle_key_normal(scancode: u8, line: &mut CmdLine, hist: &History) {
     match scancode {
         0x1C => { // Enter — clear (dispatch handled by caller)
-            serial_println!("[spindle.line.enter] len={} mode=normal text={:?}",
-                line.len, core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+            serial_println!("[spindle.line.enter] len={} mode=normal payload=redacted", line.len);
             serial_println!("[spindle.key.enter]");
             serial_println!("[spindle.input.recv] key=enter len={}", line.len);
             line.clear();

@@ -102,6 +102,12 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=THUMBS format=FAT32 [^\n]*source=usb',s,120)
   for run in ('first','again'):
    target,surface=open_files('/media/THUMBS',N+3)
+   if run=='first':
+    s=len(t());q.key('f3')
+    g['wait'](r'\[files.app.picture.preview.opened\] path=/media/THUMBS/IMG00.PNG w=\d+ h=\d+',s,30)
+    time.sleep(1);preview=a.out/'image-preview.ppm';q.cmd('screendump',{'filename':str(preview)})
+    assert colour(0) in seen(preview,{colour(0):0}),'the full-size preview did not show the selected picture'
+    s=len(t());q.key('esc');g['wait'](r'\[files.app.picture.preview.closed\]',s,10)
    s=len(t());ctrl('g')
    g['wait'](r'\[files.app.grid\] on=1 dir=/media/THUMBS',s,30)
    m=g['wait'](r'\[files.app.thumbs\] dir=/media/THUMBS pictures=(\d+) made=(\d+) cached=(\d+) failed=(\d+) ms=(\d+) documents=(\d+) drawn=(\d+) from_cache=(\d+)',s,budget/1000+120)
@@ -120,6 +126,9 @@ def main():
    else:
     assert cached==N and made==0 and ms<result['first']['ms'],m[0]
     assert drawn==0 and from_cache==helpers,(m[0],drawn_pdf,drawn_raw)
+   # Loom's session keeps each folder's cursor, and the first run ended on End:
+   # go back to the first tiles before looking for them.
+   q.key('home');time.sleep(.5)
    g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w=\d+ h=\d+',s,30)
    time.sleep(2);shot=a.out/f'thumbs-{run}.ppm';q.cmd('screendump',{'filename':str(shot)})
    found=seen(shot,colours);result[run]['colours_on_screen']=sorted(colours[c] for c in found)

@@ -19,9 +19,6 @@ use crate::{at, human, join, shown, App, BACKSPACE, ENTER, ESC};
 
 const HEAD: usize = 34;
 const FOOT: usize = 40;
-const BG: u32 = 0x1B1D22;
-const TEXT: u32 = 0xE6E8EC;
-const DIM: u32 = 0x9AA0AA;
 /// One colour per top-level item, in turn.
 const PALETTE: [u32; 8] = [0x3D6FD6, 0xD6803D, 0x4FA35B, 0xB04FB0, 0xC9B23A, 0x3AA6B9, 0xC9504F, 0x7A7FD6];
 
@@ -179,21 +176,24 @@ impl App {
     }
     /// Draws the map into the window's pixels.
     pub(crate) fn usage_render(&mut self, window: &mut Window) -> bool {
+        let theme = sex_app::settings::theme();
+        let (bg, text, dim, focus) = (theme.window & 0xFF_FFFF, theme.text & 0xFF_FFFF,
+                                      theme.text_dim & 0xFF_FFFF, theme.focus & 0xFF_FFFF);
         let status = self.status.clone();
         let crate::loom::Mode::Usage(st) = &mut self.loom.mode else { return false };
         let (width, height) = window.size();
         let (width, height) = (width.max(320), height.max(HEAD + FOOT + 120));
         let px = window.pixels();
         let px = &mut px[..width * height];
-        px.fill(BG);
+        px.fill(bg);
         let path = st.tree.path(st.view);
         if st.scanning {
             let n = st.tree.nodes.len();
-            st.text(px, width, 10, 8, width - 20, &format!("Measuring {}: {} items so far.  Esc stops.", shown(&st.base), n), TEXT);
+            st.text(px, width, 10, 8, width - 20, &format!("Measuring {}: {} items so far.  Esc stops.", shown(&st.base), n), text);
         } else {
             let (total, files_n, picked) = { let v = &st.tree.nodes[st.view]; (v.total, v.files, v.children.get(st.pick).copied()) };
             let head = format!("Disk usage  {}/{}   {} in {} files", shown(&st.base), shown(&path), human(total), files_n);
-            st.text(px, width, 10, 8, width - 20, &head, TEXT);
+            st.text(px, width, 10, 8, width - 20, &head, text);
             let tiles = st.tiles(width, height);
             for t in tiles.iter().skip(1) {
                 let Some(top) = st.top_of(t.node) else { continue };
@@ -201,23 +201,23 @@ impl App {
                 // Deeper is lighter; folders frame what is inside them.
                 let c = blend(base, 0xFFFFFF, 40 * (t.depth - 1).min(4));
                 fill(px, width, t.rect, if st.tree.nodes[t.node].dir { blend(c, 0x000000, 60) } else { c });
-                if !st.tree.nodes[t.node].dir || t.depth == 3 { frame(px, width, t.rect, 1, BG); }
+                if !st.tree.nodes[t.node].dir || t.depth == 3 { frame(px, width, t.rect, 1, bg); }
             }
             // Labels on the biggest, then the frame of the picked one.
             for t in tiles.iter().skip(1).filter(|t| t.depth == 1) {
                 if t.rect.w >= 60 && t.rect.h >= 22 {
                     let label = { let n = &st.tree.nodes[t.node]; format!("{}{}  {}", shown(&n.name), if n.dir { "/" } else { "" }, human(n.total)) };
-                    fill(px, width, Rect { x: t.rect.x + 3, y: t.rect.y + 3, w: (t.rect.w - 6).min(label.len() as i32 * 8 + 8), h: 18 }, BG);
-                    st.text(px, width, t.rect.x as usize + 6, t.rect.y as usize + 2, (t.rect.w - 10) as usize, &label, TEXT);
+                    fill(px, width, Rect { x: t.rect.x + 3, y: t.rect.y + 3, w: (t.rect.w - 6).min(label.len() as i32 * 8 + 8), h: 18 }, bg);
+                    st.text(px, width, t.rect.x as usize + 6, t.rect.y as usize + 2, (t.rect.w - 10) as usize, &label, text);
                 }
             }
             if let Some(c) = picked {
-                if let Some(t) = tiles.iter().find(|t| t.node == c) { frame(px, width, t.rect, 3, 0xFFFFFF); }
+                if let Some(t) = tiles.iter().find(|t| t.node == c) { frame(px, width, t.rect, 3, focus); }
                 let n = &st.tree.nodes[c];
                 let foot = format!("{}{}  {} ({} files)   Arrows pick  Enter opens a folder  Backspace up  Esc list  {}", shown(&n.name), if n.dir { "/" } else { "" }, human(n.total), n.files, status);
-                st.text(px, width, 10, height - FOOT + 12, width - 20, &foot, DIM);
+                st.text(px, width, 10, height - FOOT + 12, width - 20, &foot, dim);
             } else {
-                st.text(px, width, 10, height - FOOT + 12, width - 20, "Nothing takes room here.   Backspace up  Esc list", DIM);
+                st.text(px, width, 10, height - FOOT + 12, width - 20, "Nothing takes room here.   Backspace up  Esc list", dim);
             }
         }
         window.show_pixels(width, height);

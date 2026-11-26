@@ -74,6 +74,43 @@ pub const ORGANIZE_RULE: u8 = 50;
 /// The post-commit event log: files that arrived in organized folders since sequence
 /// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
 pub const ORGANIZE_LOG: u8 = 51;
+/// Create without replacing a name; on success data[0..8] is the new SexFS object ID.
+/// Supported on the primary and encrypted home filesystems.
+pub const CREATE_WITH_ID: u8 = 52;
+/// Write only while path still names the ID in data[0..8]. `length` includes
+/// that prefix; the remaining bytes are written at `offset`.
+pub const WRITE_IF_ID: u8 = 53;
+/// Remove only while path still names the object ID in `offset`.
+pub const REMOVE_IF_ID: u8 = 54;
+/// Files-owned, primary-SexFS-only staged save. The path is the exact destination
+/// granted to this run. BEGIN receives expected size in `offset` and SHA-256
+/// in data[0..32], returning a ticket in data[0..8]. CHUNK carries the ticket
+/// in data[0..8] and bytes thereafter, with the sequential byte offset in `offset`.
+/// PUBLISH and ABORT carry the ticket in `offset` and no data. No stage path is
+/// granted to the client. Primary SexFS and unlocked encrypted home support it;
+/// removable volumes answer UNSUPPORTED.
+pub const STAGE_BEGIN: u8 = 55;
+pub const STAGE_CHUNK: u8 = 56;
+pub const STAGE_PUBLISH: u8 = 57;
+pub const STAGE_ABORT: u8 = 58;
+/// Snapshot one client chunk before Files writes or hashes it. A second task
+/// may change the shared PDX region after this copy; both operations must use
+/// the same private bytes. The caller supplies Files-owned storage.
+pub fn snapshot_stage_chunk<'a>(shared: &[u8], owned: &'a mut [u8]) -> Option<&'a [u8]> {
+    let dst = owned.get_mut(..shared.len())?;
+    dst.copy_from_slice(shared);
+    Some(dst)
+}
+/// Replace one saved file with a durable staged file only if the destination's
+/// complete current bytes still have the supplied SHA-256 digest. `source\0destination`
+/// is scoped on both halves, and the 32-byte digest occupies the data region.
+/// Files checks and promotes within one request. Removable volumes refuse this
+/// operation until their replacement transactions can preserve the old file.
+pub const REPLACE_IF_SHA256: u8 = 59;
+/// Create a new file with the complete bytes in the data region and commit it
+/// in one Files request. On success data[0..8] contains the new object ID.
+/// Mounted formats return ID 0: the note is synced but cannot be removed by ID.
+pub const CREATE_WITH_DATA: u8 = 60;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;

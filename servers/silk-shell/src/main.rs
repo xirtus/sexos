@@ -24,6 +24,7 @@ mod restricted_routes;
 #[cfg(sexos_input_payload_proof)]
 mod wait_observer;
 mod app_input;
+mod pdf_sign;
 mod wm;
 mod launcher_search;
 mod voyeur;
@@ -10832,9 +10833,11 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                 if let Some(destination)=focused_program_participant(){
                     let wants=program_keys(destination.subject);
                     let keypad=KEY_KEYPAD&&wants&sex_pdx::app_key::KEYPAD!=0;
-                    // F11 always stays Shell's way out of a program that takes the rest.
+                    // F11 always stays Shell's way out of a program that takes the rest,
+                    // and Scroll Lock always reaches Spindle (a program asking for F3
+                    // must not trap the person away from their terminal).
                     let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59)
-                        &&(code==0x57||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
+                        &&(code==0x57||code==0x46||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
                     // A key going up, a modifier's too, reaches the program as the press's
                     // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
                     if value==0 && !desktop_key{
@@ -15682,7 +15685,7 @@ unsafe fn yarn_cmd_clear() {
 /// Yarn built-in: echo — echo arguments back.
 unsafe fn yarn_cmd_echo(args: &[u8]) {
     let trimmed = trim_ascii(args);
-    serial_println!("[spindle.command.echo] args={:?}", trimmed);
+    serial_println!("[spindle.command.echo] args_bytes={} payload=redacted", trimmed.len());
     if trimmed.is_empty() {
         yarn_append_output(b"");
     } else {
@@ -16310,8 +16313,13 @@ unsafe fn spindle_dispatch() {
     if len == 0 {
         return;
     }
+    // Yarn cannot run apps, but a private launch pasted here must not enter
+    // session history or scrollback just because it is an unknown command.
+    let private_launch = sex_pdx::private_launch::is_private_browser_launch(&cmd[..len]);
     // Save to history.
-    if yarn.history_count < YARN_HISTORY_CAP {
+    if private_launch {
+        // No history entry.
+    } else if yarn.history_count < YARN_HISTORY_CAP {
         yarn.history[yarn.history_count] = cmd;
         yarn.history_count += 1;
     } else {
@@ -16325,11 +16333,11 @@ unsafe fn spindle_dispatch() {
 
     // Echo command to output.
     let mut echo_buf = [0u8; YARN_OUTPUT_LINE_CAP];
-    if len > 0 {
+    if len > 0 && !private_launch {
         let copy_len = len.min(YARN_OUTPUT_LINE_CAP - 1);
         echo_buf[..copy_len].copy_from_slice(&cmd[..copy_len]);
     }
-    yarn_append_output(&echo_buf[..len.min(YARN_OUTPUT_LINE_CAP - 1)]);
+    if !private_launch { yarn_append_output(&echo_buf[..len.min(YARN_OUTPUT_LINE_CAP - 1)]); }
 
     // Match first whitespace-delimited token.
     let args = trim_ascii(&cmd[..len]);
@@ -16337,7 +16345,7 @@ unsafe fn spindle_dispatch() {
     let token = &args[..first_space];
     let rest = if first_space < args.len() { &args[first_space + 1..] } else { &[] };
 
-    serial_println!("[spindle.structured.dispatch] cmd={:?}", token);
+    serial_println!("[spindle.structured.dispatch] token_bytes={} payload=redacted", token.len());
     SPINDLE_LAST_CMD_OK = match token {
         b"help"    => { yarn_cmd_help();                                   true }
         b"clear"   => { yarn_cmd_clear();                                  true }
@@ -16364,6 +16372,11 @@ unsafe fn spindle_dispatch() {
     // Clear command buffer after dispatch.
     yarn.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
     yarn.cmd_len = 0;
+    if private_launch {
+        SPINDLE_VI_PREV_BUF = [0u8; YARN_CMD_BUF_CAP];
+        SPINDLE_VI_PREV_LEN = 0;
+        serial_println!("[spindle.private.input.scrubbed] undo=0 nav=0");
+    }
     SPINDLE_VI_CUR = 0;
     SPINDLE_VI_NORMAL = false; // return to insert mode for next command
     SPINDLE_VI_PENDING_D = false;
@@ -16379,13 +16392,23 @@ unsafe fn spindle_session_save(idx: usize) {
     if idx >= SPINDLE_SESSION_COUNT { return; }
     let s = &mut SPINDLE_SESSIONS[idx];
     let yarn = &YARN;
-    s.cmd_buf = yarn.cmd_buf;
-    s.cmd_len = yarn.cmd_len;
+    if sex_pdx::private_launch::is_browser_launch_candidate(&yarn.cmd_buf[..yarn.cmd_len]) {
+        s.cmd_buf = [0u8; YARN_CMD_BUF_CAP];
+        s.cmd_len = 0;
+    } else {
+        s.cmd_buf = yarn.cmd_buf;
+        s.cmd_len = yarn.cmd_len;
+    }
     s.vi_normal = SPINDLE_VI_NORMAL;
     s.vi_cur = SPINDLE_VI_CUR;
     s.vi_pending_d = SPINDLE_VI_PENDING_D;
-    s.vi_prev_buf = SPINDLE_VI_PREV_BUF;
-    s.vi_prev_len = SPINDLE_VI_PREV_LEN;
+    if sex_pdx::private_launch::is_browser_launch_candidate(&SPINDLE_VI_PREV_BUF[..SPINDLE_VI_PREV_LEN]) {
+        s.vi_prev_buf = [0u8; YARN_CMD_BUF_CAP];
+        s.vi_prev_len = 0;
+    } else {
+        s.vi_prev_buf = SPINDLE_VI_PREV_BUF;
+        s.vi_prev_len = SPINDLE_VI_PREV_LEN;
+    }
     s.output_lines = [[0u8; YARN_OUTPUT_LINE_CAP]; YARN_OUTPUT_LINES];
     for i in 0..YARN_OUTPUT_LINES { s.output_lines[i] = yarn.output_lines[i]; }
     s.output_count = yarn.output_count;
@@ -16874,6 +16897,12 @@ const NOTIFY_HISTORY: usize = 32;
 /// How long the panel shows a new notification, in ticks (ms).
 const NOTIFY_SHOW_TICKS: u64 = 5_000;
 static mut NOTIFY_ASSEMBLER: sex_pdx::notify::Assembler = sex_pdx::notify::Assembler::new();
+#[derive(Clone, Copy)]
+struct PendingNoticePresentation {
+    identity: sex_pdx::notify::Presentation, since: u64,
+    key_required: bool, key: Option<(u64, u64)>,
+}
+static mut NOTIFY_PRESENTATION: Option<PendingNoticePresentation> = None;
 static mut NOTIFY_RING: [sex_pdx::notify::Text; NOTIFY_HISTORY] = [sex_pdx::notify::Text::EMPTY; NOTIFY_HISTORY];
 static mut NOTIFY_TOTAL: usize = 0;
 /// Tick at which the panel notice ends; 0 when none is showing.
@@ -17000,7 +17029,37 @@ unsafe fn shell_memory_poll() {
     shell_notice(&text[..k], 2);
     sex_pdx::serial_record!("[shell.oom.end] target={} task={} pages={} ok={}", e.target, e.task, pages, ok as u8);
 }
+/// Bell's incarnation, the identity a confirmed notice is bound to. Services
+/// have no app task row, so the kernel's restart epoch for the Bell route names
+/// this Bell run (0 while Bell is down or unknown).
+fn notify_bell_epoch() -> u32 {
+    sex_pdx::crash_log::peer_state(SLOT_BELL).ok().filter(|p| p.live()).map_or(0, |p| p.epoch.min(u32::MAX as u64) as u32)
+}
 unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id == sex_pdx::notify::OP_NOTIFICATION_BEGIN {
+        if msg.caller_pd != NOTIFY_BELL_PD { return true; }
+        let live_bell = notify_bell_epoch();
+        let sender = sex_pdx::notify::decode_begin_sender(msg.arg2);
+        let key_required = sender.is_some_and(|(_, keyed)| keyed);
+        let identity = sender.and_then(|(sender, _)| sex_pdx::notify::Presentation::new(
+            msg.arg0, msg.arg1 as u32, sender, live_bell));
+        if live_bell != 0
+            && msg.arg1 <= u32::MAX as u64 {
+            NOTIFY_PRESENTATION = identity.map(|identity| PendingNoticePresentation {
+                identity, since: sex_pdx::get_ticks(), key_required, key: None });
+        }
+        return true;
+    }
+    if msg.type_id == sex_pdx::notify::OP_NOTIFICATION_KEY {
+        if msg.caller_pd == NOTIFY_BELL_PD {
+            if let Some(pending) = NOTIFY_PRESENTATION.as_mut() {
+                if pending.identity.matches_key(msg.arg0, notify_bell_epoch()) {
+                    pending.key = Some((msg.arg1, msg.arg2));
+                }
+            }
+        }
+        return true;
+    }
     if msg.type_id != sex_pdx::notify::OP_NOTIFICATION { return false; }
     if msg.caller_pd != NOTIFY_BELL_PD {
         sex_pdx::serial_record!("[shell.notify.reject] caller_pd={} reason=not_bell", msg.caller_pd);
@@ -17008,11 +17067,35 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     }
     let assembler = &mut *core::ptr::addr_of_mut!(NOTIFY_ASSEMBLER);
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
-    if program_notify::hidden(text.sender) { sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender); return true; }
-    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
-    NOTIFY_TOTAL += 1;
-    // Buttons and a reply field its program gave for it (slice S2).
-    tray_items_glue::notification(&text);
+    let presentation = NOTIFY_PRESENTATION.filter(|pending|
+        sex_pdx::get_ticks().saturating_sub(pending.since) < 5_000
+            && pending.identity.matches_text(&text, notify_bell_epoch()));
+    NOTIFY_PRESENTATION = None;
+    let acknowledge = |disposition: sex_pdx::notify::Disposition| {
+        if let Some(presentation) = presentation {
+            let (a, b, c) = presentation.identity.ack_words(disposition);
+            let queued = pdx_call(SLOT_BELL, sex_pdx::notify::OP_NOTIFICATION_HANDLED, a, b, c).0 == 0;
+            sex_pdx::serial_record!("[shell.notify.handled] event_id={} ticket={} queued={} shown={} muted={}",
+                presentation.identity.event_id, presentation.identity.ticket, queued as u8,
+                (disposition == sex_pdx::notify::Disposition::Accepted) as u8,
+                (disposition == sex_pdx::notify::Disposition::Muted) as u8);
+        }
+    };
+    if presentation.is_some_and(|p| p.key_required && p.key.is_none()) {
+        acknowledge(sex_pdx::notify::Disposition::Retry);
+        return true;
+    }
+    if let Some(p) = presentation {
+        if let Some((low, high)) = p.key {
+            sex_pdx::serial_record!("[shell.notify.semantic] event_id={} key_low={} key_high={}",
+                p.identity.event_id, low, high);
+        }
+    }
+    if program_notify::hidden(text.sender) {
+        sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender);
+        acknowledge(sex_pdx::notify::Disposition::Muted);
+        return true;
+    }
     // Panel line: "Sender: summary".
     let name = notify_sender_name(text.sender);
     let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
@@ -17020,11 +17103,20 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     for &b in name.as_bytes().iter().chain(b": ").chain(text.summary()) {
         if n < line.len() { line[n] = b; n += 1; }
     }
-    notify_panel(&line[..n]);
+    let panel_queued = notify_panel(&line[..n]);
+    if presentation.is_some() && !panel_queued {
+        acknowledge(sex_pdx::notify::Disposition::Retry);
+        return true;
+    }
+    NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
+    NOTIFY_TOTAL += 1;
+    // Buttons and a reply field its program gave for it (slice S2).
+    tray_items_glue::notification(&text);
     NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
     sex_pdx::serial_record!("[shell.notify.show] id={} sender={} app={} urgency={} summary={} body_len={} history={}",
         text.id, text.sender, name, text.urgency, core::str::from_utf8(text.summary()).unwrap_or("?"),
         text.body().len(), NOTIFY_TOTAL.min(NOTIFY_HISTORY));
+    acknowledge(sex_pdx::notify::Disposition::Accepted);
     if bell_frame_id().is_some() { bell_render_lane_text(); }
     true
 }
@@ -17772,10 +17864,54 @@ fn program_free_row()->Option<(&'static app_catalog::Incarnation,usize,u64)>{
     program_rows().find(|(_,_,state)|*state==a::ACTIVATION_REUSABLE).or_else(||program_rows().find(|(_,_,state)|*state==a::ACTIVATION_READY))
 }
 static mut PROGRAM_READING: bool = false;
+/// Files certified the bytes in the image region for this pending load only.
+static mut PROGRAM_APPROVED_VELLUM: bool = false;
+/// The Files incarnation present before this load was requested.
+static mut PROGRAM_FILES_EPOCH: u64 = 0;
+fn program_files_epoch() -> u64 {
+    sex_pdx::crash_log::peer_state(sex_pdx::program_store::SHELL_ROUTE_SLOT).ok()
+        .filter(|peer| peer.live()).map_or(0, |peer| peer.epoch)
+}
+fn image_approval_after_copy(certified:bool,generation:u32,requested_epoch:u64,copied_epoch:u64)->bool {
+    certified && generation!=0 && requested_epoch!=0 && copied_epoch==requested_epoch
+}
+/// A transiently unavailable post-copy observation must not strand Files' image lease.
+/// Files validates its own epoch, so this fallback cannot release a restarted Files.
+fn image_consume_epoch(requested_epoch:u64,copied_epoch:u64)->u64 {
+    if copied_epoch==0 { requested_epoch } else { copied_epoch }
+}
+#[cfg(test)]
+mod image_approval_tests {
+    use super::{image_approval_after_copy,image_consume_epoch};
+    #[test]
+    fn files_restart_between_reply_and_copy_cannot_certify_run() {
+        assert!(image_approval_after_copy(true,7,20,20));
+        assert!(!image_approval_after_copy(true,7,20,21));
+        assert!(!image_approval_after_copy(true,7,20,0));
+        assert!(!image_approval_after_copy(true,0,20,20));
+        assert!(!image_approval_after_copy(false,7,20,20));
+    }
+    #[test]
+    fn transient_unknown_uses_request_epoch_only_for_lease_receipt() {
+        assert_eq!(image_consume_epoch(20,0),20);
+        assert!(!image_approval_after_copy(true,7,20,0));
+        assert_eq!(image_consume_epoch(20,21),21);
+        assert!(!image_approval_after_copy(true,7,20,21));
+        assert_eq!(image_consume_epoch(0,0),0);
+    }
+}
+fn program_image_consumed(generation:u32,files_epoch:u64) {
+    if generation != 0 && files_epoch != 0 {
+        let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,
+            sex_pdx::program_store::OP_IMAGE_CONSUMED,generation as u64,files_epoch,0);
+    }
+}
 /// Background copies still to start from the file Files last read, and its length.
 static mut RECORD_SPAWN_LEFT: u64 = 0;
 static mut RECORD_SPAWN_WANTED: u64 = 0;
 static mut RECORD_SPAWN_LEN: u64 = 0;
+static mut RECORD_SPAWN_GENERATION: u32 = 0;
+static mut RECORD_SPAWN_FILES_EPOCH: u64 = 0;
 /// A few at a time, so starting thousands never stalls the desktop.
 unsafe fn record_spawn_poll(){
     use sex_pdx::program_store as store;
@@ -17784,10 +17920,15 @@ unsafe fn record_spawn_poll(){
     if status!=0||made==0{
         sex_pdx::serial_record!("[shell.records.spawn.ended] left={} status={} live={}",RECORD_SPAWN_LEFT,status,live);
         program_refused(if status==0{store::NO_MORE_RECORDS}else{store::NOT_A_PROGRAM});
-        RECORD_SPAWN_LEFT=0;return;
+        RECORD_SPAWN_LEFT=0;
+        program_image_consumed(core::mem::take(&mut RECORD_SPAWN_GENERATION),core::mem::take(&mut RECORD_SPAWN_FILES_EPOCH));
+        return;
     }
     RECORD_SPAWN_LEFT-=made;
-    if RECORD_SPAWN_LEFT==0{sex_pdx::serial_record!("[shell.records.spawned] live={}",live);}
+    if RECORD_SPAWN_LEFT==0{
+        program_image_consumed(core::mem::take(&mut RECORD_SPAWN_GENERATION),core::mem::take(&mut RECORD_SPAWN_FILES_EPOCH));
+        sex_pdx::serial_record!("[shell.records.spawned] live={}",live);
+    }
 }
 /// A run started from a file, waiting to tell Files where it runs.
 static mut PROGRAM_BIND_PENDING: bool = false;
@@ -17796,6 +17937,8 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    let approved=unsafe{core::mem::take(&mut PROGRAM_APPROVED_VELLUM)};
+    unsafe{pdf_sign::bind_approved(target,task,approved);}
     unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
@@ -17890,6 +18033,7 @@ unsafe fn launch_started(target:u32,task:u32,network:bool){
 /// A run ended: what it started is no longer its to end, and its starter hears how it
 /// ended once its status is in, or the grace for it has passed.
 unsafe fn launch_ended(target:u32,task:u32){
+    pdf_sign::retire(target,task);
     for slot in NETWORK_RUNS.iter_mut().chain(HIDDEN_RUNS.iter_mut()){if *slot==Some((target,task)){*slot=None;}}
     for slot in PLACED_RUNS.iter_mut(){if slot.is_some_and(|p|p.0==target&&p.1==task){*slot=None;}}
     session_tell(sex_pdx::session_restore::ENDED,target,task,0);
@@ -17977,6 +18121,8 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
             if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
             // Files loads a program's ticket only for the program that prepared it.
+            PROGRAM_FILES_EPOCH=program_files_epoch();
+            if PROGRAM_FILES_EPOCH==0{refuse(store::IMAGE_BUSY,"files_unavailable");return true}
             let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,caller as u64);
             if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
             PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));LAUNCH_HIDDEN=flags&store::RUN_HIDDEN!=0;
@@ -18020,6 +18166,8 @@ unsafe fn attached_stop(caller:u32,target:u64){
 unsafe fn program_start_own(name:[u64;2])->bool{
     use sex_pdx::program_store as store;
     if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||LAUNCH_ASKER.is_some()||RECORD_SPAWN_WANTED!=0||program_free_row().is_none(){return false}
+    PROGRAM_FILES_EPOCH=program_files_epoch();
+    if PROGRAM_FILES_EPOCH==0{return false}
     PROGRAM_READING=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,name[0],name[1],0).0==0;
     PROGRAM_NETWORK=false;PROGRAM_LAUNCHER=None;PROGRAM_TICKET=0;PROGRAM_SCENE=None;
     PROGRAM_READING
@@ -18029,13 +18177,19 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
     if matches!(msg.type_id,store::OP_RECORDS_STOP|store::OP_RECORDS_CENSUS){
         if !app_catalog::is_spindle(msg.caller_pd){return true}
-        if msg.type_id==store::OP_RECORDS_STOP{RECORD_SPAWN_LEFT=0;let _=store::record_call(store::RECORD_STOP,msg.arg0,0);}
+        if msg.type_id==store::OP_RECORDS_STOP{
+            RECORD_SPAWN_LEFT=0;
+            let _=store::record_call(store::RECORD_STOP,msg.arg0,0);
+            program_image_consumed(core::mem::take(&mut RECORD_SPAWN_GENERATION),core::mem::take(&mut RECORD_SPAWN_FILES_EPOCH));
+        }
         else{let _=store::record_call(store::RECORD_CENSUS,0,0);}
         return true;
     }
     if msg.type_id==store::OP_SPAWN {
         if !app_catalog::is_spindle(msg.caller_pd){return true}
         if PROGRAM_READING||restricted_routes::busy()||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
+        PROGRAM_FILES_EPOCH=program_files_epoch();
+        if PROGRAM_FILES_EPOCH==0{sex_pdx::serial_record!("[shell.records.denied] reason=files_unavailable");return true}
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
@@ -18053,6 +18207,8 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
+        PROGRAM_FILES_EPOCH=program_files_epoch();
+        if PROGRAM_FILES_EPOCH==0{reader_glue::refuse_other(store::IMAGE_BUSY);return true}
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
         // A terminal's run reaches the network only when the terminal asks (`ssh`) and the
@@ -18065,23 +18221,34 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         return true;
     }
     if !PROGRAM_READING||msg.caller_pd!=11||msg.type_id!=1{return false}
-    let Some(result)=store::decode_reply(msg.arg0)else{return false};
+    let Some(result)=store::decode_attested_reply(msg.arg0)else{return false};
     PROGRAM_READING=false;
+    PROGRAM_APPROVED_VELLUM=false;
+    let requested_epoch=core::mem::take(&mut PROGRAM_FILES_EPOCH);
     if RECORD_SPAWN_WANTED!=0{
         match result{
-            Ok(len)=>{RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;},
+            Ok((len,_,generation))=>{
+                RECORD_SPAWN_LEN=len as u64;RECORD_SPAWN_LEFT=RECORD_SPAWN_WANTED;
+                RECORD_SPAWN_GENERATION=generation;RECORD_SPAWN_FILES_EPOCH=image_consume_epoch(requested_epoch,program_files_epoch());
+            },
             Err(error)=>{sex_pdx::serial_record!("[shell.records.denied] reason=store error={}",error);program_refused(error);},
         }
         RECORD_SPAWN_WANTED=0;
         return true;
     }
-    let len=match result{Ok(len)=>len,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
-    let Some((row,slot,state))=program_free_row()else{sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true};
+    let (len,approved,generation)=match result{Ok(v)=>v,Err(error)=>{sex_pdx::serial_record!("[shell.program.denied] reason=store error={}",error);program_refused(error);return true}};
+    let Some((row,slot,state))=program_free_row()else{
+        program_image_consumed(generation,image_consume_epoch(requested_epoch,program_files_epoch()));
+        sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true
+    };
     launcher_focus_discard();
     let loaded=a::load_program(slot,len);
+    let copied_epoch=program_files_epoch();
+    program_image_consumed(generation,image_consume_epoch(requested_epoch,copied_epoch));
     if let Err(status)=loaded{sex_pdx::serial_record!("[shell.program.denied] reason=rejected status={}",status);program_refused(store::NOT_A_PROGRAM);return true}
+    PROGRAM_APPROVED_VELLUM=image_approval_after_copy(approved,generation,requested_epoch,copied_epoch);
     if state==a::ACTIVATION_READY{
-        let Ok(active)=a::activation(slot,true)else{sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
+        let Ok(active)=a::activation(slot,true)else{PROGRAM_APPROVED_VELLUM=false;sex_pdx::serial_record!("[shell.program.denied] reason=commit");if LAUNCH_ASKER.is_some(){program_refused(store::NOT_A_PROGRAM);}return true};
         sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
         program_bind(active.successor,active.task);
         launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
@@ -18096,13 +18263,13 @@ unsafe fn program_rebirth_poll(){
     match a::rebirth(slot){
         Ok(active) if active.state==a::ACTIVATION_ACTIVE=>{
             PROGRAM_REBIRTH=None;
-            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{return};
+            let Some(row)=app_catalog::by_surface(active.successor,active.surface)else{PROGRAM_BIND_PENDING=false;PROGRAM_APPROVED_VELLUM=false;return};
             sex_pdx::serial_record!("[shell.program.launch] target={} task={} surface={}",active.successor,active.task,active.surface);
             if core::mem::take(&mut PROGRAM_BIND_PENDING){program_bind(active.successor,active.task);}
             launcher_action_record(active.successor,row.frame(),launcher::LiveAction::Open,ACTIVE_SCENE_IDX,true,true);
         },
         Ok(_)|Err(a::RETRY)=>{},
-        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
+        Err(status)=>{PROGRAM_REBIRTH=None;PROGRAM_BIND_PENDING=false;PROGRAM_APPROVED_VELLUM=false;sex_pdx::serial_record!("[shell.program.rebirth.denied] slot={} status={}",slot,status);if LAUNCH_ASKER.is_some(){program_refused(sex_pdx::program_store::NO_FREE_ROW);}},
     }
 }
 unsafe fn open_browser_in_active_scene()->bool{
@@ -27193,6 +27360,9 @@ pub extern "C" fn _start() -> ! {
         if unsafe { denim_notice::receive(&msg) } { continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            // Signer replies carry arbitrary certificate/signature words. Give the
+            // exact pending signer run first refusal before generic reply decoders.
+            if pdf_sign::receive(&msg) { continue; }
             if restricted_routes::receive(&msg){continue;}
             if restricted_pool::blocks(&msg){continue;}
             if DESKTOP_RECORDING.receive(&msg,sex_pdx::get_ticks(),PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0) {continue;}
@@ -27802,7 +27972,7 @@ pub extern "C" fn _start() -> ! {
                                 static mut MAIN_DISPATCH_SPINDLE_REACH_BUDGET: u32 = 32;
                                 if MAIN_DISPATCH_SPINDLE_REACH_BUDGET > 0 {
                                     MAIN_DISPATCH_SPINDLE_REACH_BUDGET -= 1;
-                                    serial_println!("[silk-shell.main_dispatch.spindle.reach] scancode={:#x}", scancode);
+                                    serial_println!("[silk-shell.main_dispatch.spindle.reach] payload=redacted");
                                 }
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), 1, EV_KEY);
@@ -27875,8 +28045,8 @@ pub extern "C" fn _start() -> ! {
                                             if ch != b' ' || scancode == 0x39 {
                                                 YARN.history_pos = -1;
                                                 spindle_vi_insert_at(SPINDLE_VI_CUR, ch);
-                                                serial_println!("[spindle.key.char] ch={}", ch as char);
-                                                serial_println!("[spindle.line.edit] op=push ch={} len={}", ch as char, YARN.cmd_len);
+                                                serial_println!("[spindle.key.char] payload=redacted");
+                                                serial_println!("[spindle.line.edit] op=push payload=redacted len={}", YARN.cmd_len);
                                                 serial_println!("[spindle.line.cursor] pos={} len={}", SPINDLE_VI_CUR, YARN.cmd_len);
                                             }
                                         }

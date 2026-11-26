@@ -54,6 +54,8 @@ def main():
   s=len(t());q.key('f11');g['wait'](rf'\[calendar.closed\] target={target} task={task}',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
  def press(k,pattern,timeout=60):
   s=len(t());keys(k) if len(k)==1 else q.key(k);return g['wait'](pattern,s,timeout)
+ def chord(*names):
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':name}for name in names],'hold-time':80})
  def shot(name):time.sleep(1);q.cmd('screendump',{'filename':str(a.out/f'{name}.ppm')});time.sleep(.5)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
@@ -93,7 +95,12 @@ def main():
   s=len(t());q.key('ret');g['wait'](rf'\[calendar.day\] date={invite_day} events=\d+\n',s,30)
   g['wait'](rf'\[calendar.event\] date={invite_day} when=15:00-16:00 UTC title=Design review\n',s,30)
   # Gym (17:00) may share the day; the review at 15:00 sorts first.
-  m=press('a',r'\[date.invite.answered\] uid=review-invite@example.org partstat=ACCEPTED reply=(\S+) bytes=(\d+)\n')
+  press('a',r'\[date.invite.preview\] uid=review-invite@example.org partstat=ACCEPTED\n')
+  shot('date-invitation-preview')
+  s=len(t());chord('ctrl','z');g['wait'](r'\[date.invite.preview.undo\]\n',s,30)
+  s=len(t());chord('ctrl','y');g['wait'](r'\[date.invite.preview.redo\]\n',s,30)
+  s=len(t());q.key('ret')
+  m=g['wait'](r'\[date.invite.answered\] uid=review-invite@example.org partstat=ACCEPTED reply=(\S+) bytes=(\d+)\n',s,60)
   shot('date-invitation');q.key('esc');time.sleep(.3)
   # Week and day views, mouse on a tab too.
   press('w',r'\[date.view\] view=Week');shot('date-week')
@@ -114,6 +121,36 @@ def main():
   s0=len(t());target,task,sid,s=start('')
   g['wait'](r'\[calendar.loaded\] events=5\n',s0,60)
   s=len(t());keys('s');g['wait'](r'\[date.sync\] calendar=Home unchanged=1 ',s,120)
+  # A local invitation reply races with a newer server version. Date must keep
+  # the losing local copy and show both versions in its read-only review view.
+  conflict_day=today+datetime.timedelta(days=3)
+  conflict_start=f'{conflict_day:%Y%m%d}T080000Z'
+  conflict_end=f'{conflict_day:%Y%m%d}T090000Z'
+  attendee='ATTENDEE;CN=Alice;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:alice@example.org\r\n'
+  dav.put('conflict.ics',ics('conflict@fixture',conflict_start,conflict_end,'Local invitation',attendee))
+  s=len(t());keys('s')
+  g['wait'](r'\[date.sync\] calendar=Home .*pulled=1 .*conflicts=0 failed=0\n',s,120)
+  for _ in range(3):q.key('right');time.sleep(.15)
+  s=len(t());q.key('ret')
+  g['wait'](rf'\[calendar.day\] date={conflict_day} events=\d+\n',s,30)
+  press('a',r'\[date.invite.preview\] uid=conflict@fixture partstat=ACCEPTED\n')
+  s=len(t());q.key('ret');g['wait'](r'\[date.invite.answered\] uid=conflict@fixture partstat=ACCEPTED reply=\S+ bytes=\d+\n',s,60)
+  q.key('esc');time.sleep(.3)
+  dav.put('conflict.ics',ics('conflict@fixture',conflict_start,conflict_end,'Server revised',attendee))
+  s=len(t());keys('s')
+  g['wait'](r'\[date.sync\] calendar=Home .*conflicts=1 failed=0\n',s,120)
+  g['wait'](rf'\[date.conflict.source\] calendar=1 href={re.escape(COLLECTION)}conflict\.ics\n',s,60)
+  g['wait'](r'\[date.sync.done\] events=\d+ pulled=\d+ pushed=\d+ conflicts=1\n',s,60)
+  press('v',r'\[date.conflict.review\] item=1 total=1 local=1 server=1\n')
+  shot('date-conflict-review')
+  press('l',r'\[date.conflict.choice\] local\n')
+  shot('date-conflict-local-choice')
+  s=len(t());q.key('ret')
+  g['wait'](r'\[date.conflict.resolved\] choice=local events=\d+\n',s,60)
+  g['wait'](r'\[date.save.committed\] file=events.txt bytes=\d+\n',s,60)
+  s=len(t());keys('s')
+  g['wait'](r'\[date.sync\] calendar=Home .*pushed=1 .*conflicts=0 failed=0\n',s,120)
+  assert 'SUMMARY:Local invitation' in dav.items[COLLECTION+'conflict.ics'][1],'local conflict choice was not sent to CalDAV'
   close(target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[calendar.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'requests':len(dav.requests),'today':str(today)})

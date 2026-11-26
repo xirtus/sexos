@@ -20,8 +20,9 @@ edition = "2021"
 [dependencies]
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
 spin = "0.9.8"
+sex_pdx = { package = "sex-pdx", path = "@PDX@" }
 [workspace]
-''')
+'''.replace('@PDX@', str(ROOT / 'crates/sex-pdx')))
             (tmp / 'moanplug_pin.rs').write_text('pub const LENGTH:usize=0; pub const SHA256:[u8;32]=[0;32];')
             (tmp / 'src/lib.rs').write_text(f'''#[path={str(ROOT / 'servers/sexfiles/build/helper_pin.rs')!r}]
 mod pin;

@@ -56,6 +56,13 @@ pub struct Report {
     pub failed: usize,
     /// Our copies of items the server's copy replaced: keep them as notes.
     pub conflicts: Vec<String>,
+    /// Resource address for each retained copy, in the same order as `conflicts`.
+    pub conflict_hrefs: Vec<String>,
+}
+
+fn retain_conflict(report: &mut Report, href: String, data: String) {
+    report.conflict_hrefs.push(href);
+    report.conflicts.push(data);
 }
 
 /// The UID property of an iCalendar or vCard text, folded lines joined.
@@ -103,7 +110,7 @@ fn take_server(items: &mut Vec<Item>, at: Option<usize>, href: &str, etag: Strin
     let item = Item { href: href.into(), etag, uid: find_uid(&data), data, state: State::Clean };
     match at {
         Some(i) => {
-            if items[i].state == State::Modified || items[i].state == State::New { report.conflicts.push(core::mem::take(&mut items[i].data)); }
+            if items[i].state == State::Modified || items[i].state == State::New { retain_conflict(report, href.into(), core::mem::take(&mut items[i].data)); }
             items[i] = item;
         }
         None => items.push(item),
@@ -146,7 +153,7 @@ pub fn sync(t: &mut dyn DavTransport, kind: Kind, col: &mut Collection, items: &
             if r.status == 404 {
                 if let Some(i) = at {
                     let gone = items.remove(i);
-                    if gone.state == State::Modified { report.conflicts.push(gone.data); }
+                    if gone.state == State::Modified { retain_conflict(&mut report, gone.href, gone.data); }
                     report.removed += 1;
                 }
                 continue;
@@ -167,7 +174,7 @@ pub fn sync(t: &mut dyn DavTransport, kind: Kind, col: &mut Collection, items: &
             let mut kept = Vec::with_capacity(before);
             for i in items.drain(..) {
                 if i.href.is_empty() || i.state == State::New || seen.iter().any(|s| same(s, &i.href)) { kept.push(i); continue; }
-                if i.state == State::Modified { report.conflicts.push(i.data); }
+                if i.state == State::Modified { retain_conflict(&mut report, i.href, i.data); }
                 report.removed += 1;
             }
             *items = kept;
@@ -207,7 +214,7 @@ pub fn sync(t: &mut dyn DavTransport, kind: Kind, col: &mut Collection, items: &
                 items[i].etag = r.etag.unwrap_or_default();
                 report.pushed += 1;
             }
-            (State::Modified, 404 | 410) => { let gone = items.remove(i); report.conflicts.push(gone.data); continue; }
+            (State::Modified, 404 | 410) => { let gone = items.remove(i); retain_conflict(&mut report, gone.href, gone.data); continue; }
             (_, 412) => {
                 // Changed on the server meanwhile: its copy wins.
                 match get(t, &href)? {
@@ -216,7 +223,7 @@ pub fn sync(t: &mut dyn DavTransport, kind: Kind, col: &mut Collection, items: &
                         if state == State::Deleted { items[i].state = State::Clean; }
                         take_server(items, at, &href, e, d, &mut report);
                     }
-                    None => { let gone = items.remove(i); if state != State::Deleted { report.conflicts.push(gone.data); } continue; }
+                    None => { let gone = items.remove(i); if state != State::Deleted { retain_conflict(&mut report, gone.href, gone.data); } continue; }
                 }
             }
             _ => report.failed += 1,

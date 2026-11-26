@@ -2,12 +2,33 @@
 """Quil, the code editor program: installed as a file, it opens a large file lazily, jumps to
 its end, edits both ends and saves it byte for byte; finds a file with Go to File; types with
 three cursors; deletes a line with Vim's dd and saves with :w; and searches the project folder."""
-import argparse,http.server,os,re,shutil,threading,time
+import argparse,hashlib,http.server,os,re,shutil,threading,time,zlib
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DEMO=b'fn main() {\n    let needle = 1;\n    println!("{}", needle);\n}\n'
 OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER}
+BROKEN=b'fn main() {\n    let value = 1;\n'
+COMPLETE=b'ret'
+REFERENCE=b'fn helper() {}\nfn main() { helper(); }\n'
+CROSS_DEF=b'fn cross_helper() {}\n'
+CROSS_USE=b'fn main() { cross_helper(); }\n'
+IDENTIFIER=b'fn helper() {}\nhel'
+IDENTIFIER_DONE=b'fn helper() {}\nhelper'
+OCCURRENCES=b'foo foo foo foo\n'
+OCCURRENCES_DONE=b'bar bar bar bar\n'
+RAW=b'fn main() { let a = r#"// not a comment"#; let b = br##"/* literal */"##; }\n'
+RAW_MULTILINE=b'fn main() {\n let text = br##"// raw\n fn fake() { /* raw */\n ending"##; fn real() {}\n}\n'
+RAW_SCROLL=b'fn main() { let text = br##"begin\n'+b'raw line // still string\n'*110+b'end"##; fn real() {} }\n'
+PY_FSTRING=b'label = f"#{value}"; path = rf"//{name}"\n'
+PY_INTERP=b'name = "Quil"; label = f"Hello {name}!"\n'
+JS_TEMPLATE=b'const name = "Quil"; const greeting = `Hello ${name}!`;\n'
+INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
+GIT_BLOB=b'blob '+str(len(DEMO)).encode()+b'\0'+DEMO
+GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
+GIT_HEAD=b'ref: refs/heads/quil/demo\n'
+UNTRACKED=b'Quil work note\n'
+assert bytes.fromhex(GIT_ID)==INDEX[52:72]
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/cross-def.rs':CROSS_DEF,'/cross-use.rs':CROSS_USE,'/identifier.rs':IDENTIFIER,'/occurrences.rs':OCCURRENCES,'/raw.rs':RAW,'/raw-multiline.rs':RAW_MULTILINE,'/raw-scroll.rs':RAW_SCROLL,'/fstring.py':PY_FSTRING,'/interpolation.py':PY_INTERP,'/template.js':JS_TEMPLATE,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -51,17 +72,34 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   m=expect(f'fetch http://10.0.2.2:{PORT}/quil /bin/quil',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/quil-ls /bin/quil-ls',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   # The first run makes Quil's folder; the fixtures go into it for the second.
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs'):
+  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','cross-def.rs','cross-use.rs','identifier.rs','occurrences.rs','raw.rs','fstring.py','interpolation.py','template.js'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
+  m=expect(f'fetch http://10.0.2.2:{PORT}/untracked /data/quil/notes.txt',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  line('mkdir /data/quil/.git')
+  m=expect(f'fetch http://10.0.2.2:{PORT}/git-head /data/quil/.git/HEAD',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/git-index /data/quil/.git/index',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  line('mkdir /data/quil/.git/objects')
+  line(f'mkdir /data/quil/.git/objects/{GIT_ID[:2]}')
+  m=expect(f'fetch http://10.0.2.2:{PORT}/git-blob /data/quil/.git/objects/{GIT_ID[:2]}/{GIT_ID[2:]}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   target,task,sid=m[1],m[2],int(m[3])
+  g['wait'](r'\[quil.theme\] mode=Light accent=d6336c',s,60)
   g['wait'](r'\[quil.code.ready\] .*keymap=vscode',s,60);g['wait'](rf'\[display.app.title\] target={target} surface={sid}',s,60);time.sleep(2)
+  q.cmd('screendump',{'filename':str(a.out/'quil-light.ppm')});time.sleep(.5)
+  shot=(a.out/'quil-light.ppm').read_bytes()
+  assert shot.startswith(b'P6\n') and shot.count(bytes((0xF6,0xF5,0xF7)))>10000,'Quil did not paint the light theme background'
   g['focus'](sid);time.sleep(.5)
+  # Help is a real Quil overlay, reachable with the same chord in every keymap.
+  s=len(t());send('ctrl','shift','slash');g['wait'](r'\[quil.code.shortcuts\] open=1',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-shortcuts.ppm')});time.sleep(.5)
+  assert (a.out/'quil-shortcuts.ppm').stat().st_size>100000,'Quil help screenshot is empty'
+  s=len(t());send('ctrl','shift','slash');g['wait'](r'\[quil.code.shortcuts\] open=0',s,30)
   # Go to File finds demo.rs among the folder's files.
   s=len(t());ctrl('p');g['wait'](r'\[quil.code.quickopen\] files=(\d+)',s,60);keys('demo');q.key('ret')
   g['wait'](rf'\[quil.code.opened\] path=demo.rs bytes={len(DEMO)} lazy=0',s,60);time.sleep(.5)
@@ -69,6 +107,36 @@ def main():
   s=len(t());ctrl('home');send('ctrl','shift','down');send('ctrl','shift','down');keys('// ');ctrl('s')
   want=b''.join(b'// '+l+b'\n' if i<3 else l+b'\n' for i,l in enumerate(DEMO.rstrip(b'\n').split(b'\n')))
   g['wait'](rf'\[quil.code.saved\] path=demo.rs bytes={len(want)} hash={fnv(want):016x}',s,60)
+  g['wait'](rf'\[quil.code.save.committed\] path=demo.rs bytes={len(want)}',s,60)
+  s=len(t());send('ctrl','shift','v')
+  g['wait'](r'\[quil.code.git\] tracked_changes=1 note=\n',s,60)
+  g['wait'](r'\[quil.code.git.head\] label=quil/demo\n',s,60)
+  found=g['wait'](r'\[quil.code.git.candidates\] count=(\d+)\n',s,60)
+  assert int(found[1])>=1,found[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-untracked-candidates.ppm')})
+  assert (a.out/'quil-git-untracked-candidates.ppm').stat().st_size>100000
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-branch.ppm')})
+  assert (a.out/'quil-git-branch.ppm').stat().st_size>100000
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-status.ppm')})
+  assert (a.out/'quil-git-status.ppm').stat().st_size>100000
+  s=len(t());q.key('right')
+  g['wait'](r'\[quil.code.git.diff\] path=demo.rs lines=\d+ note=\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-diff.ppm')})
+  assert (a.out/'quil-git-diff.ppm').stat().st_size>100000
+  q.key('esc')
+  s=len(t());send('ctrl','shift','v');g['wait'](r'\[quil.code.git\] tracked_changes=1 note=\n',s,60)
+  s=len(t());q.key('s');g['wait'](r'\[quil.code.git.staged\] path=demo.rs tracked_changes=0\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-staged.ppm')})
+  s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=1\n',s,60)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-unstaged.ppm')})
+  # N chooses an explicit file outside the index; S writes a loose blob and
+  # sorted index entry. Undo restores the earlier index without removing text.
+  s=len(t());q.key('n');q.key('s')
+  staged=g['wait'](r'\[quil.code.git.staged\] path=([^\s]+) tracked_changes=1\n',s,60)
+  assert staged[1] not in ('demo.rs','other.rs'),staged[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-new-staged.ppm')})
+  assert (a.out/'quil-git-new-staged.ppm').stat().st_size>100000
+  s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=1\n',s,60)
   # Vim mode from the command palette; dd deletes the first line, :w saves.
   s=len(t());q.key('esc');send('ctrl','shift','p');time.sleep(.3);keys('vim mode');q.key('ret');g['wait'](r'\[quil.code.keymap\] vim',s,30)
   s=len(t());keys('gg');keys('dd');keys(':w');q.key('ret')
@@ -81,14 +149,167 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-search.ppm')});time.sleep(.5);q.key('esc')
   # Back to VS Code keys, then the large-file check from the palette.
   s=len(t());send('ctrl','shift','p');time.sleep(.3);keys('vs code');q.key('ret');g['wait'](r'\[quil.code.keymap\] vscode',s,30)
+  # A real hidden language-service child receives JSON-RPC and publishes a
+  # diagnostic for this file's unclosed Rust block.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('broken');q.key('ret');time.sleep(.5)
+  s=len(t());send('ctrl','shift','j')
+  g['wait'](r'\[quil.lsp.diagnostics\] language=rust count=1 first_line=1',s,90)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostics.ppm')})
+  assert (a.out/'quil-lsp-diagnostics.ppm').stat().st_size>100000
+  s=len(t());q.key('ret')
+  g['wait'](r'\[quil.lsp.diagnostic.jump\] line=1 character=10 at=10',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostic-jump.ppm')})
+  assert (a.out/'quil-lsp-diagnostic-jump.ppm').stat().st_size>100000
+  # The same child serves documentSymbol. The picker jumps to helper on line 2.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('other');q.key('ret');time.sleep(.5)
+  s=len(t());send('ctrl','shift','m')
+  g['wait'](r'\[quil.lsp.symbols\] language=rust count=1',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-symbols.ppm')})
+  assert (a.out/'quil-lsp-symbols.ppm').stat().st_size>100000
+  s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.symbol.jump\] line=2 name=helper',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-symbol-jump.ppm')})
+  assert (a.out/'quil-lsp-symbol-jump.ppm').stat().st_size>100000
+  # Definition stays in the open snapshot and jumps from a use to the unique
+  # declaration returned by Quil Language Service.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('reference');q.key('ret');time.sleep(.5)
+  ctrl('home');q.key('down')
+  for _ in range(15):q.key('right')
+  s=len(t());send('ctrl','shift','h')
+  g['wait'](r'\[quil.lsp.hover\] language=rust text=Function helper at line 1',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-hover.ppm')})
+  assert (a.out/'quil-lsp-hover.ppm').stat().st_size>100000
+  s=len(t());send('ctrl','shift','g')
+  g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-definition.ppm')})
+  assert (a.out/'quil-lsp-definition.ppm').stat().st_size>100000
+  # Earlier tabs already declare `helper`; only this peer declares
+  # `cross_helper`, so the jump must use its mapped open-tab URI.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('cross-def');q.key('ret')
+  g['wait'](r'\[quil.code.opened\] path=cross-def.rs ',s,60)
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('cross-use');q.key('ret')
+  g['wait'](r'\[quil.code.opened\] path=cross-use.rs ',s,60)
+  ctrl('home')
+  for _ in range(15):q.key('right')
+  s=len(t());send('ctrl','shift','g')
+  g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3 tab=\d+ target=[^\n]*cross-def.rs',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-cross-file-definition.ppm')})
+  assert (a.out/'quil-lsp-cross-file-definition.ppm').stat().st_size>100000
+  # Completion is a second request over the same native LSP pipe, and Enter
+  # replaces the prefix in the editor's undoable document.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('complete');q.key('ret');time.sleep(.5)
+  ctrl('end');s=len(t());send('ctrl','shift','spc')
+  g['wait'](r'\[quil.lsp.completion\] language=rust count=1 prefix=ret',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-completion.ppm')})
+  assert (a.out/'quil-lsp-completion.ppm').stat().st_size>100000
+  s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.inserted\] label=return version=\d+',s,30)
+  s=len(t());ctrl('s');g['wait'](rf'\[quil.code.saved\] path=complete.rs bytes=6 hash={fnv(b"return"):016x}',s,60)
+  # The bundled language service also offers declarations from this exact file.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('identifier');q.key('ret');time.sleep(.5)
+  ctrl('end');s=len(t());send('ctrl','shift','spc')
+  g['wait'](r'\[quil.lsp.completion\] language=rust count=1 prefix=hel',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-identifier-completion.ppm')})
+  assert (a.out/'quil-lsp-identifier-completion.ppm').stat().st_size>100000
+  s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.inserted\] label=helper version=\d+',s,30)
+  s=len(t());ctrl('s');g['wait'](rf'\[quil.code.saved\] path=identifier.rs bytes={len(IDENTIFIER_DONE)} hash={fnv(IDENTIFIER_DONE):016x}',s,60)
+  # Starting at the third word, Ctrl+D must skip previously selected hits
+  # after wrapping and still reach the second word.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('occurrences');q.key('ret');time.sleep(.5)
+  ctrl('home')
+  for _ in range(8):q.key('right')
+  s=len(t())
+  for _ in range(4):ctrl('d')
+  g['wait'](r'\[quil.code.multicursor\] action=next added=1 count=4',s,30)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-multicursor-wrap.ppm')})
+  assert (a.out/'quil-multicursor-wrap.ppm').stat().st_size>100000
+  keys('bar');s=len(t());ctrl('s')
+  g['wait'](rf'\[quil.code.saved\] path=occurrences.rs bytes={len(OCCURRENCES_DONE)} hash={fnv(OCCURRENCES_DONE):016x}',s,60)
+  # Raw-string delimiters, including byte strings, stay one syntax span even
+  # when their contents look like comments.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('raw');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=raw.rs bytes={len(RAW)} lazy=0',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-rust-raw-string.ppm')})
+  assert (a.out/'quil-rust-raw-string.ppm').stat().st_size>100000
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('raw-multiline');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=raw-multiline.rs bytes={len(RAW_MULTILINE)} lazy=0',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-rust-multiline-raw.ppm')})
+  assert (a.out/'quil-rust-multiline-raw.ppm').stat().st_size>100000
+  # Go far enough down that the opener is outside the viewport; the visible
+  # comment-like text must still use the raw-string syntax state.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('raw-scroll');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=raw-scroll.rs bytes={len(RAW_SCROLL)} lazy=0',s,60)
+  send('ctrl','l');keys('90');q.key('ret')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-rust-raw-scrolled.ppm')})
+  assert (a.out/'quil-rust-raw-scrolled.ppm').stat().st_size>100000
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('fstring');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=fstring.py bytes={len(PY_FSTRING)} lazy=0',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-python-fstring.ppm')})
+  assert (a.out/'quil-python-fstring.ppm').stat().st_size>100000
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('interpolation');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=interpolation.py bytes={len(PY_INTERP)} lazy=0',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-python-interpolation.ppm')})
+  assert (a.out/'quil-python-interpolation.ppm').stat().st_size>100000
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('template');q.key('ret')
+  g['wait'](rf'\[quil.code.opened\] path=template.js bytes={len(JS_TEMPLATE)} lazy=0',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-js-template-interpolation.ppm')})
+  assert (a.out/'quil-js-template-interpolation.ppm').stat().st_size>100000
   s=len(t());send('ctrl','shift','p');time.sleep(.3);keys(f'large {a.large_mb}');q.key('ret')
   big=large_expected(a.large_mb)
   m=g['wait'](rf'\[quil.code.large\] mb={a.large_mb} write_ms=(\d+) open_ms=(\d+) pieces=(\d+)',s,1200)
   print('large',m[0],flush=True)
   assert int(m[2])<5000,f'opening took {m[2]} ms'
   g['wait'](rf'\[quil.code.saved\] path=large-check.txt bytes={len(big)} hash={fnv(big):016x}',s,1200)
+  g['wait'](rf'\[quil.code.save.committed\] path=large-check.txt bytes={len(big)}',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-large.ppm')});time.sleep(.5)
+  # Leave a named file modified, close the program, and reopen it from its
+  # already granted folder. Recovery must restore the draft, not the disk file.
+  send('ctrl','p');time.sleep(.3);keys('demo');q.key('ret');time.sleep(.5)
+  s=len(t());q.key('x')
+  saved=g['wait'](r'\[quil.code.draft.saved\] path=demo.rs bytes=(\d+)',s,90)
+  assert int(saved[1])>len(want2),saved[0]
   s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={target} task={task}',s,60)
+  g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
+  s=len(t());line('run quil demo.rs')
+  recovered=g['wait'](r'\[quil.code.draft.recovered\] path=demo.rs bytes=(\d+)',s,120)
+  assert recovered[1]==saved[1],(saved[0],recovered[0])
+  relaunched=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(relaunched[3]));time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'quil-draft-recovered.ppm')})
+  assert (a.out/'quil-draft-recovered.ppm').stat().st_size>100000
+  s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={relaunched[1]} task={relaunched[2]}',s,60)
+  g['wait'](rf'\[app.private.retired\] target={relaunched[1]} task={relaunched[2]} ',s,90)
+  # Stage an actual missing tracked path, then undo the index edit. The file
+  # is removed through Spindle's Files command after Quil has closed it.
+  expect('rm /data/quil/other.rs',r'\[spindle.fs.line\] ok',60)
+  s=len(t());line('run quil');deleted=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(deleted[3]));time.sleep(.5)
+  s=len(t());send('ctrl','shift','v')
+  g['wait'](r'\[quil.code.git\] tracked_changes=2 note=\n',s,60)
+  q.key('down');s=len(t());q.key('s')
+  g['wait'](r'\[quil.code.git.staged\] path=other.rs tracked_changes=1\n',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-deletion-staged.ppm')})
+  assert (a.out/'quil-git-deletion-staged.ppm').stat().st_size>100000
+  s=len(t());q.key('u');g['wait'](r'\[quil.code.git.unstaged\] tracked_changes=2\n',s,60)
+  s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={deleted[1]} task={deleted[2]}',s,60)
+  g['wait'](rf'\[app.private.retired\] target={deleted[1]} task={deleted[2]} ',s,90)
+  # A nameless tab has its own checked recovery identity. Cut power after the
+  # draft receipt, then reboot the same disk and recover it without a file name.
+  s=len(t());line('run quil')
+  unnamed=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(unnamed[3]));time.sleep(.5)
+  s=len(t());q.key('u')
+  kept=g['wait'](r'\[quil.code.draft.saved\] untitled=(\d+) bytes=(\d+)',s,90)
+  assert kept[2]=='1',kept[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-untitled-before-powercut.ppm')})
+  g['stop']()
+  g=boot(a.iso,disk,a.out,'quil-untitled-reboot',a.resolution);t=g['text'];q=g['q']
+  g['wait'](r'\[app.private.retired\] target=41 ',0,120)
+  s=len(t());line('run quil')
+  restored=g['wait'](rf'\[quil.code.draft.recovered\] untitled={kept[1]} bytes=1',s,120)
+  relaunched=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(relaunched[3]));time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'quil-untitled-recovered.ppm')})
+  assert (a.out/'quil-untitled-recovered.ppm').stat().st_size>100000
+  s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={relaunched[1]} task={relaunched[2]}',s,60)
   assert 'KERNEL PANIC'not in t() and 'panicked' not in t() and '[quil.code.fatal]' not in t()
  finally:g['stop']()
  print({'ok':True,'large_mb':a.large_mb})

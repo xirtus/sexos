@@ -184,6 +184,13 @@ impl Service {
         let seq = (a & 0xFF_FFFF) as u32;
         let kind = (a >> 32) as u8;
         let number = w::flow_of(a);
+        if w::is_mail_kind(kind) {
+            let bound = program_index(who.pd).map(|k| self.bound[k]);
+            let reply = sex_pdx::mail_broker::unavailable_reply(who.pd, who.task, bound, a, value)
+                .expect("known mail kind");
+            sex_pdx::serial_record!("[net.mail.route] caller={} task={} kind={} status={} account=0", who.pd, who.task, kind, ((reply >> 24) & 0xff) as u8);
+            return reply;
+        }
         let Some(engine) = engine else { return w::reply(seq, w::OFFLINE, 0) };
         let spindles = sex_pdx::app_catalog::SPINDLE_TARGETS;
         let program = program_index(who.pd);

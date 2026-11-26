@@ -479,6 +479,25 @@ mod tests {
     }
 
     #[test]
+    fn batch_rename_redo_restores_chain_and_cycle_order() {
+        let original = names(&["a", "b", "c", "x", "y"]);
+        // The chain needs a free terminal name; the swap needs a temporary.
+        let pairs = vec![(b"a".to_vec(), b"new".to_vec()),
+            (b"b".to_vec(), b"a".to_vec()),
+            (b"x".to_vec(), b"y".to_vec()),
+            (b"y".to_vec(), b"x".to_vec())];
+        let forward = order_moves(&pairs, &original);
+        let mut folder: BTreeSet<Vec<u8>> = original.iter().cloned().collect();
+        apply(&mut folder, &forward);
+        let renamed = folder.clone();
+        let back = undo(&forward);
+        apply(&mut folder, &back);
+        assert_eq!(folder, original.iter().cloned().collect());
+        apply(&mut folder, &undo(&back));
+        assert_eq!(folder, renamed);
+    }
+
+    #[test]
     fn tokens() {
         let r = rules("[N]", "[E]");
         assert_eq!(one(&r, "photo.jpg", 0, 0), "photo.jpg");
@@ -621,6 +640,18 @@ mod tests {
         }
         assert_eq!(content[&b"a".to_vec()], "B");
         assert_eq!(content[&b"b".to_vec()], "A");
+        let renamed = content.clone();
+        let undo_moves = undo(&moves);
+        for m in &undo_moves {
+            let value = content.remove(&m.from).unwrap();
+            assert!(content.insert(m.to.clone(), value).is_none());
+        }
+        assert_eq!(content, marked, "undo restores each file, not just the names");
+        for m in undo(&undo_moves) {
+            let value = content.remove(&m.from).unwrap();
+            assert!(content.insert(m.to, value).is_none());
+        }
+        assert_eq!(content, renamed, "redo replays a cycle without overwriting");
         apply(&mut folder, &moves);
         assert_eq!(folder, existing.iter().cloned().collect());
     }

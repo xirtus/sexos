@@ -15,6 +15,9 @@ impl Endpoint {
     pub fn provider(self) -> bool {
         self.name == *b"chastity\0\0\0\0\0\0\0\0"
     }
+    pub fn browser(self) -> bool {
+        self.name == *b"kaleidoscope\0\0\0\0"
+    }
 }
 #[derive(Clone, Copy)]
 struct Provider {
@@ -29,6 +32,8 @@ enum Phase {
     Data,
     Finishing,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode { Fill, Save }
 struct Transaction {
     client: Endpoint,
     provider: Provider,
@@ -39,6 +44,7 @@ struct Transaction {
     data_len: usize,
     data_at: usize,
     phase: Phase,
+    mode: Mode,
     waiting: bool,
     deadline: u64,
     last: u64,
@@ -49,6 +55,7 @@ enum Effect {
     Origin(usize),
     Header,
     Data(usize),
+    SaveComplete,
     Done,
 }
 struct Pending {
@@ -291,7 +298,7 @@ impl Broker {
         };
         let a = p.args[0];
         let b = p.args[1];
-        let c = if p.opcode == DATA || p.opcode == ORIGIN {
+        let c = if matches!(p.opcode, DATA | ORIGIN | SAVE_DATA) {
             0
         } else {
             p.args[2]
@@ -342,8 +349,12 @@ impl Broker {
             self.cancel_receipt(e, id, epoch);
             return Status::Ok;
         }
-        if p.opcode == BEGIN {
+        if matches!(p.opcode, BEGIN | SAVE_BEGIN) {
             if !focused {
+                self.status(e, a as u32, 0, Status::Denied);
+                return Status::Denied;
+            }
+            if p.opcode == SAVE_BEGIN && !e.browser() {
                 self.status(e, a as u32, 0, Status::Denied);
                 return Status::Denied;
             }
@@ -375,6 +386,7 @@ impl Broker {
                 data_len: 0,
                 data_at: 0,
                 phase: Phase::Origin,
+                mode: if p.opcode == SAVE_BEGIN { Mode::Save } else { Mode::Fill },
                 waiting: false,
                 deadline: now.saturating_add(CONSENT_TICKS),
                 last: now,
@@ -386,7 +398,7 @@ impl Broker {
             );
             self.put(
                 provider.endpoint,
-                Packet::new(OFFER, token as u64 | b << 32, s.word(), provider.epoch),
+                Packet::new(if p.opcode == SAVE_BEGIN { SAVE_OFFER } else { OFFER }, token as u64 | b << 32, s.word(), provider.epoch),
                 Effect::None,
             );
             for part in 0..2 {
@@ -454,7 +466,7 @@ impl Broker {
             self.transaction.as_mut().unwrap().waiting = true;
             return Status::Ok;
         }
-        if p.opcode == ALLOW && s == provider.endpoint.subject {
+        if p.opcode == ALLOW && s == provider.endpoint.subject && t.mode == Mode::Fill {
             if self.queued >= OUTBOX - 1 {
                 return Status::Busy;
             }
@@ -480,7 +492,7 @@ impl Broker {
             );
             return Status::Ok;
         }
-        if p.opcode == DATA && s == provider.endpoint.subject {
+        if p.opcode == DATA && s == provider.endpoint.subject && t.mode == Mode::Fill {
             let Some((id, epoch, offset, count)) = chunk_meta(p) else {
                 return Status::Invalid;
             };
@@ -505,6 +517,7 @@ impl Broker {
         }
         if p.opcode == FINISH
             && s == provider.endpoint.subject
+            && t.mode == Mode::Fill
             && a == token as u64
             && b == provider.epoch
             && c == 0
@@ -518,6 +531,52 @@ impl Broker {
                 Packet::new(FINISH, token as u64, provider.epoch, 0),
                 Effect::Done,
             );
+            return Status::Ok;
+        }
+        if p.opcode == SAVE_HEADER && s == client.subject && t.mode == Mode::Save {
+            let Some((user, password)) = lengths(c) else { return Status::Invalid };
+            if a != token as u64 || b != provider.epoch || t.phase != Phase::Header || t.waiting {
+                return Status::Denied;
+            }
+            if !self.put(provider.endpoint, Packet::new(SAVE_HEADER, a, b, c), Effect::Header) {
+                return Status::Busy;
+            }
+            let t = self.transaction.as_mut().unwrap();
+            t.data_len = user + password;
+            t.waiting = true;
+            t.deadline = now.saturating_add(TRANSFER_TICKS);
+            return Status::Ok;
+        }
+        if p.opcode == SAVE_DATA && s == client.subject && t.mode == Mode::Save {
+            let Some((id, epoch, offset, count)) = chunk_meta(p) else { return Status::Invalid };
+            if id != token || epoch != provider.epoch || t.phase != Phase::Data
+                || t.waiting || offset != t.data_at || offset + count > t.data_len
+            { return Status::Denied; }
+            if !self.put(provider.endpoint, Packet::new(SAVE_DATA, p.args[0], p.args[1], p.args[2]), Effect::Data(offset + count)) {
+                return Status::Busy;
+            }
+            self.transaction.as_mut().unwrap().waiting = true;
+            return Status::Ok;
+        }
+        if p.opcode == SAVE_FINISH && s == client.subject && t.mode == Mode::Save
+            && a == token as u64 && b == provider.epoch && c == 0
+            && t.phase == Phase::Data && !t.waiting && t.data_at == t.data_len
+        {
+            if !self.put(provider.endpoint, Packet::new(SAVE_COMPLETE, a, b, 0), Effect::SaveComplete) {
+                return Status::Busy;
+            }
+            self.transaction.as_mut().unwrap().waiting = true;
+            return Status::Ok;
+        }
+        if p.opcode == SAVE_ALLOW && s == provider.endpoint.subject && t.mode == Mode::Save
+            && a == token as u64 && b == provider.epoch && c == 0
+            && t.phase == Phase::Consent && !t.waiting
+        {
+            if !focused { self.stop(Status::Denied); return Status::Denied; }
+            if !self.put(client, Packet::new(SAVE_APPROVED, a, b, 0), Effect::Done) {
+                return Status::Busy;
+            }
+            self.transaction.as_mut().unwrap().waiting = true;
             return Status::Ok;
         }
         Status::Denied
@@ -592,19 +651,25 @@ impl Broker {
                 t.origin_at = next;
                 t.waiting = false;
                 if next == t.origin_len {
-                    t.phase = Phase::Consent;
+                    t.phase = if t.mode == Mode::Save { Phase::Header } else { Phase::Consent };
                 }
                 t.client
             }
             Effect::Header => {
                 t.phase = Phase::Data;
                 t.waiting = false;
-                t.provider.endpoint
+                if t.mode == Mode::Save { t.client } else { t.provider.endpoint }
             }
             Effect::Data(next) => {
                 t.data_at = next;
                 t.waiting = false;
-                t.provider.endpoint
+                if t.mode == Mode::Save { t.client } else { t.provider.endpoint }
+            }
+            Effect::SaveComplete => {
+                t.phase = Phase::Consent;
+                t.waiting = false;
+                t.deadline = now.saturating_add(CONSENT_TICKS);
+                return;
             }
             Effect::Done => {
                 let e = t.provider.endpoint;

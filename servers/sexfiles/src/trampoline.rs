@@ -247,6 +247,7 @@ pub extern "C" fn trampoline_main() {
     // The next request, when a reply that waited brought it back in registers.
     let mut next:Option<sex_pdx::PdxMessage>=None;
     loop {
+        crate::restricted_image::recover_ordinary();
         crate::restricted_runtime::poll();
         crate::restricted_io::poll();
         history.poll(pdx_reply);probes.poll(pdx_reply);documents.poll(pdx_reply);crate::fs_service::poll_replies();
@@ -357,6 +358,13 @@ pub extern "C" fn trampoline_main() {
         }
         if msg.type_id==sex_pdx::program_store::OP_BIND{
             if caller==3{crate::fs_service::bind(msg.arg0 as u32,msg.arg1 as u32);}
+            continue;
+        }
+        if msg.type_id==sex_pdx::program_store::OP_IMAGE_CONSUMED {
+            if caller==3 && msg.arg0<=sex_pdx::program_store::MAX_IMAGE_GENERATION as u64 {
+                let released=crate::restricted_image::ordinary_consumed(msg.arg0 as u32,msg.arg1);
+                sex_pdx::serial_record!("[files.image.consumed] generation={} released={}",msg.arg0,released as u8);
+            }
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP{

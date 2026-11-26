@@ -11,6 +11,8 @@ pub mod thread;
 pub mod tls;
 pub mod sound;
 pub mod mailbox;
+pub mod pdf_sign;
+pub mod notify;
 pub mod autofill;
 pub mod settings;
 
@@ -1301,6 +1303,19 @@ pub mod files {
             both.extend_from_slice(to);
             simple(w::RENAME, &both, 0)
         }
+        /// Promote a staged file only while `to` still contains the bytes whose
+        /// SHA-256 the caller saved. The comparison and replacement are one Files
+        /// request; a changed destination answers `STALE` and stays intact.
+        pub fn replace_if_sha256(from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<(), Error> {
+            if from.is_empty() || to.is_empty() || from.contains(&0) || to.contains(&0)
+                || from.len() + 1 + to.len() > w::PATH_BYTES { return Err(w::NAME); }
+            let mut both = alloc::vec::Vec::with_capacity(from.len() + 1 + to.len());
+            both.extend_from_slice(from);
+            both.push(0);
+            both.extend_from_slice(to);
+            exchange(None, w::REPLACE_IF_SHA256, &both, 0, 32,
+                |data| data[..32].copy_from_slice(expected), |_, _| ())
+        }
         /// Makes everything written so far durable.
         pub fn sync() -> Result<(), Error> { simple(w::SYNC, b"", 0) }
         /// Asks Files to hold a run of the program file `path` with argument line `args`,
@@ -1394,8 +1409,57 @@ pub mod files {
     /// Writes `/home` out and forgets its key.
     pub fn home_lock(window: &mut Window) -> Result<(), Error> { request(window, sex_pdx::home_lock::LOCK, b"", 0, 0).map(|_| ()) }
     pub fn create(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::CREATE, path, 0, 0).map(|_| ()) }
+    /// Create and fill one small file in a single Files request, returning its ID.
+    pub fn create_with_data(window: &mut Window, path: &[u8], bytes: &[u8]) -> Result<u64, Error> {
+        if bytes.is_empty() || bytes.len() > w::DATA_MAX { return Err(w::NAME); }
+        exchange(Some(window), w::CREATE_WITH_DATA, path, 0, bytes.len() as u64,
+            |d| d[..bytes.len()].copy_from_slice(bytes),
+            |value, d| if value == 8 { u64::from_le_bytes(d[..8].try_into().unwrap()) } else { 0 })
+    }
+    /// Create a new file and receive its identity from the same Files request.
+    /// Removable formats without stable IDs answer UNSUPPORTED before creating.
+    pub fn create_with_id(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        exchange(Some(window), w::CREATE_WITH_ID, path, 0, 0, |_| {}, |_, d| u64::from_le_bytes(d[..8].try_into().unwrap()))
+    }
     /// A file, or an empty folder.
     pub fn remove(window: &mut Window, path: &[u8]) -> Result<(), Error> { request(window, w::REMOVE, path, 0, 0).map(|_| ()) }
+    /// Remove only the object ID returned by a checked create.
+    pub fn remove_if_id(window: &mut Window, path: &[u8], expected_id: u64) -> Result<(), Error> {
+        if expected_id == 0 { return Err(w::NAME); }
+        request(window, w::REMOVE_IF_ID, path, expected_id, 0).map(|_| ())
+    }
+    /// Start a Files-owned staged save for this exact granted destination.
+    /// The returned ticket is bound to this run and path; no destination is
+    /// visible until `stage_publish` has durably committed every byte.
+    pub fn stage_begin(window: &mut Window, path: &[u8], size: u64, sha256: &[u8; 32]) -> Result<u64, Error> {
+        exchange(Some(window), w::STAGE_BEGIN, path, size, 32,
+            |d| d[..32].copy_from_slice(sha256),
+            |_, d| u64::from_le_bytes(d[..8].try_into().unwrap()))
+    }
+    /// Send sequential bytes to Files' private stage, never to the final name.
+    pub fn stage_chunk(window: &mut Window, path: &[u8], ticket: u64, data: &[u8]) -> Result<usize, Error> {
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::IO_MAX - 8);
+            let piece = &data[done..done + n];
+            let wrote = exchange(Some(&mut *window), w::STAGE_CHUNK, path, done as u64, (n + 8) as u64,
+                |d| { d[..8].copy_from_slice(&ticket.to_le_bytes()); d[8..8 + n].copy_from_slice(piece); },
+                |value, _| value as usize)?;
+            done += wrote;
+            if wrote != n { return Err(w::NO_SPACE); }
+        }
+        Ok(done)
+    }
+    /// Publish only when Files has the declared length and SHA-256, refusing any
+    /// existing destination in the same checked SexFS commit.
+    pub fn stage_publish(window: &mut Window, path: &[u8], ticket: u64) -> Result<(), Error> {
+        request(window, w::STAGE_PUBLISH, path, ticket, 0).map(|_| ())
+    }
+    /// Discard only this run's stage. Files also removes abandoned stages at mount
+    /// or home unlock after a crash.
+    pub fn stage_abort(window: &mut Window, path: &[u8], ticket: u64) -> Result<(), Error> {
+        request(window, w::STAGE_ABORT, path, ticket, 0).map(|_| ())
+    }
     pub fn truncate(window: &mut Window, path: &[u8], len: u64) -> Result<(), Error> { request(window, w::TRUNCATE, path, len, 0).map(|_| ()) }
     /// Moves or renames. Between two disks Files answers `OTHER_DISK`: copy, then remove.
     pub fn rename(window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), Error> {
@@ -1438,6 +1502,22 @@ pub mod files {
         }
         Ok(done)
     }
+    /// Write each chunk only if the same path still names `expected_id` when
+    /// Files processes that chunk. A replacement gets no bytes from this call.
+    pub fn write_if_id(window: &mut Window, path: &[u8], expected_id: u64, offset: u64, data: &[u8]) -> Result<usize, Error> {
+        if expected_id == 0 { return Err(w::NAME); }
+        let mut done = 0;
+        while done < data.len() {
+            let n = (data.len() - done).min(w::IO_MAX - 8);
+            let piece = &data[done..done + n];
+            let wrote = exchange(Some(&mut *window), w::WRITE_IF_ID, path, offset + done as u64, (n + 8) as u64,
+                |d| { d[..8].copy_from_slice(&expected_id.to_le_bytes()); d[8..8 + n].copy_from_slice(piece); },
+                |value, _| value as usize)?;
+            done += wrote;
+            if wrote < n { return Err(w::NO_SPACE); }
+        }
+        Ok(done)
+    }
     /// (total, free) bytes of the disk holding `path`.
     pub fn space(window: &mut Window, path: &[u8]) -> Result<(u64, u64), Error> {
         exchange(Some(window), w::STATFS, path, 0, 0, |_| {}, |_, d| (word(d, 0) * 4096, word(d, 1) * 4096))
@@ -1446,6 +1526,62 @@ pub mod files {
     /// What the picker asks the person for.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Pick { Open, Save, Folder }
+    /// One pending picker question, scoped by Files to this run. A second
+    /// `pick_begin` replaces the first question for the same run.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct PickTicket(u32);
+
+    fn pick_progress(reply: Result<usize, Error>, out: &[u8]) -> Result<Option<usize>, Error> {
+        match reply {
+            Ok(len) if len >= 2 && len <= out.len() && out.starts_with(b"@/") => Ok(Some(len)),
+            Ok(_) => Err(w::INVALID),
+            Err(w::PENDING) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(test)]
+    mod pick_progress_tests {
+        use super::*;
+
+        #[test]
+        fn pending_question_stays_pending_and_a_grant_completes_it() {
+            assert_eq!(pick_progress(Err(w::PENDING), b""), Ok(None));
+            assert_eq!(pick_progress(Ok(10), b"@/home/a.pdf"), Ok(Some(10)));
+        }
+
+        #[test]
+        fn cancelled_or_malformed_answers_never_look_like_grants() {
+            assert_eq!(pick_progress(Err(w::DENIED), b""), Err(w::DENIED));
+            assert_eq!(pick_progress(Ok(0), b""), Err(w::INVALID));
+            assert_eq!(pick_progress(Ok(5), b"/home/a.pdf"), Err(w::INVALID));
+            assert_eq!(pick_progress(Ok(50), b"@/home/a.pdf"), Err(w::INVALID));
+        }
+    }
+
+    /// Starts an open/save/folder question without waiting for the person.
+    /// The caller may continue handling its own messages, then call `pick_poll`.
+    pub fn pick_begin(window: &mut Window, mode: Pick, suggestion: &[u8]) -> Result<PickTicket, Error> {
+        let n = suggestion.len().min(w::PICK_HINT_MAX);
+        let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
+        exchange(Some(window), w::PICK, b"", 0, n as u64, |r| {
+            r[0] = code;
+            r[1..1 + n].copy_from_slice(&suggestion[..n]);
+        }, |ticket, _| PickTicket(ticket))
+    }
+
+    /// Checks one question without waiting. `Ok(None)` means the picker is
+    /// still open; `Ok(Some(path))` is a new `@/path` grant for this run. A
+    /// cancelled question returns `DENIED`. A completed ticket is consumed.
+    pub fn pick_poll<'a>(window: &mut Window, ticket: PickTicket, out: &'a mut [u8; w::PATH_BYTES]) -> Result<Option<&'a [u8]>, Error> {
+        let reply = exchange(Some(window), w::PICKED, b"", ticket.0 as u64, 0, |_| {}, |len, d| {
+            let len = (len as usize).min(w::PATH_BYTES).min(d.len());
+            out[..len].copy_from_slice(&d[..len]);
+            len
+        });
+        pick_progress(reply, out).map(|len| len.map(|len| &out[..len]))
+    }
+
     /// Asks the person to choose a file (or a folder, or where to save) in the Files
     /// app, and waits. The answer is a path this run may now use, `@/...`, kept in `out`.
     /// Closing the window meanwhile cancels. Errors: DENIED when the person cancelled.
@@ -1459,14 +1595,9 @@ pub mod files {
         })
     }
     pub fn pick<'a>(window: &mut Window, mode: Pick, suggestion: &[u8], out: &'a mut [u8; w::PATH_BYTES]) -> Result<&'a [u8], Error> {
-        let n = suggestion.len().min(w::PICK_HINT_MAX);
-        let code = match mode { Pick::Open => w::PICK_OPEN, Pick::Save => w::PICK_SAVE, Pick::Folder => w::PICK_FOLDER };
-        let ticket = exchange(Some(&mut *window), w::PICK, b"", 0, n as u64, |r| {
-            r[0] = code;
-            r[1..1 + n].copy_from_slice(&suggestion[..n]);
-        }, |ticket, _| ticket)?;
+        let ticket = pick_begin(window, mode, suggestion)?;
         loop {
-            let picked = exchange(Some(&mut *window), w::PICKED, b"", ticket as u64, 0, |_| {}, |len, d| {
+            let picked = exchange(Some(&mut *window), w::PICKED, b"", ticket.0 as u64, 0, |_| {}, |len, d| {
                 let len = (len as usize).min(w::PATH_BYTES).min(d.len());
                 out[..len].copy_from_slice(&d[..len]);
                 len
@@ -1672,6 +1803,11 @@ pub mod net {
         release(flow);
     }
     fn call(window: &mut Window, kind: u8, value: u64) -> Result<(u8, u32), Error> { call_on(window, Flow(0), kind, value) }
+    /// Ask the account broker on this run's Shell-approved network route.
+    /// No account credential or message body is supplied by the app.
+    pub fn mail_status(window: &mut Window) -> Result<u8, Error> {
+        call(window, w::MAIL_STATUS, 0).map(|(status, _)| status)
+    }
     fn call_on(window: &mut Window, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
         let _turn = Turn::take();
         call_held(Some(window), flow, kind, value)
@@ -2498,6 +2634,9 @@ pub mod net {
             self.idle += 1;
             Ok(false)
         }
+        /// A person's explicit pause stops RECEIVE calls. Exclude that time
+        /// from the 60-second no-byte deadline when the same flow resumes.
+        pub fn resume_after_pause(&mut self) { self.began = sex_pdx::get_ticks(); }
         fn end(&mut self, window: &mut Window) {
             self.whole = true;
             // Keep the connection when the reply ended exactly where its framing said and

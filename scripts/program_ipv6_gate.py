@@ -194,6 +194,7 @@ def main():
   g['focus'](153);time.sleep(.5);s=len(t())
   keys(f'run +net flirt check {text6(PEER)} 7');q.key('ret')
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,120)
+  g['wait'](r'\[flirt.ui\] title=Flirt',s,60)
   address=g['wait'](r'\[talk.address\] (fd00:5e:0:1:[0-9a-f:]+)/64',s,120)[1]
   assert address==text6(GUEST),f'SLAAC address {address}, wanted {text6(GUEST)}'
   r=g['wait'](r'\[talk.(tcp\] [^\n]*|failed\] [^\n]*)',s,120)[0];assert 'match=1' in r and 'echoed=30' in r,r
@@ -206,7 +207,7 @@ def main():
   g['wait'](r'\[talk.done\]',s,60)
   assert re.search(r'\[net.ipv6.slaac\] address='+re.escape(text6(GUEST)),t()),'sexnet did not report its SLAAC address'
   assert any(c['got']==b'hello over the network, by TCP' for c in peer.tcp.values()),peer.tcp
-  q.cmd('screendump',{'filename':str(a.out/'talk.ppm')});time.sleep(.5)
+  q.cmd('screendump',{'filename':str(a.out/'flirt.ppm')});time.sleep(.5)
   # The HTTP path programs and the browser use (sex_app::net's exchanges), to a bracketed IPv6 URL.
   g['focus'](int(m[3]));time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,90)
   g['focus'](153);time.sleep(.5);s=len(t())

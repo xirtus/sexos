@@ -42,7 +42,7 @@ def main():
  g=boot(a.iso,disk,a.out,'session',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
-   if k in SHIFTED:q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED[k]}],'hold-time':80})
+   if k in SHIFTED or k.isupper():q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED.get(k,k.lower())}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
  def chord(*ks):
@@ -72,14 +72,27 @@ def main():
    keys(f'{base}/p/{n}');q.key('ret');g['wait'](rf'\[web.console\] level=0 vt {n} ready',s,300)
    if n=='b':s=chord('ctrl','shift','g');g['wait'](r'\[web.group\] group=0 tab=1 ',s,60)
   s=chord('ctrl','shift','p');g['wait'](r'\[web.tab.opened\] index=3 count=4 box=private',s,60);time.sleep(.5)
-  keys(f'{base}/p/d');q.key('ret');g['wait'](r'\[web.console\] level=0 vt d ready',s,300)
+  s=len(t());keys(f'{base}/p/d');q.key('ret');g['wait'](r'\[web.loaded\] bytes_ok=1 ',s,300)
+  assert 'vt d ready' not in t()[s:],'private page console reached serial diagnostics'
   # B shown last: the private tab is not kept.
   s=chord('ctrl','2');g['wait'](r'\[web.tab.shown\] index=1 count=4 ',s,60)
   g['wait'](r'\[web.session.saved\] tabs=3 ',s,60)
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60);time.sleep(2)
+  # Reproduce the durable-save interruption after the live names moved to their
+  # previous copies. Partial staged files must not be promoted on next launch.
+  def spindle(command, answer=None):
+   g['focus'](153);time.sleep(.4);s=len(t());keys(command);q.key('ret')
+   if answer:g['wait'](answer,s,60)
+   else:time.sleep(2)
+  spindle('mv Kaleidoscope/session.tsv Kaleidoscope/session.tsv.previous',r'\[spindle.fs.line\] ok')
+  spindle('mv Kaleidoscope/history.tsv Kaleidoscope/history.tsv.previous',r'\[spindle.fs.line\] ok')
+  spindle('write Kaleidoscope/session.tsv.next interrupted',r'\[spindle.fs.result\] kind=8 status=0 ')
+  spindle('write Kaleidoscope/history.tsv.next interrupted',r'\[spindle.fs.result\] kind=8 status=0 ')
   # Started again without an address: the three tabs, B shown and loaded, A and C waiting.
   s,target,task=launch(None)
   g['wait'](r'\[web.session.restored\] tabs=3 groups=1 shown=1\n',s,60)
+  history=g['wait'](r'\[web.profile.loaded\] history=(\d+) ',s,60)
+  assert int(history[1])>=3,'history did not recover from previous copy'
   time.sleep(3);later=t()[s:]
   assert 'vt a ready' not in later and 'vt c ready' not in later and 'vt d ready' not in later,'a waiting tab loaded'
   shot=a.out/'restored.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(1)

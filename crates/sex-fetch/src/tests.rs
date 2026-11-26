@@ -24,6 +24,28 @@ fn urls() {
 }
 
 #[test]
+fn site_cookie_count_matches_what_clear_removes() {
+    let child = Url::parse("https://news.example.test/").unwrap();
+    let parent = Url::parse("https://example.test/").unwrap();
+    let other = Url::parse("https://other.test/").unwrap();
+    let mut jar = Jar::new();
+    jar.store(&child, "one=1; Domain=example.test; Path=/", 1);
+    jar.store(&child, "two=2; Path=/", 1);
+    // The parent's host-only cookie cannot reach the child; clearing the
+    // child's cookies must not sign the person out of the parent site.
+    jar.store(&parent, "parent=4; Path=/", 1);
+    jar.store(&other, "keep=3; Path=/", 1);
+    assert_eq!(jar.count_site("news.example.test"), 2);
+    assert_eq!(jar.count_site("example.test"), 2);
+    assert_eq!(jar.count_site("other.test"), 1);
+    jar.clear_site("news.example.test");
+    assert_eq!(jar.count_site("news.example.test"), 0);
+    assert_eq!(jar.count_site("example.test"), 1);
+    assert_eq!(jar.header(&parent, 1).as_deref(), Some("parent=4"));
+    assert_eq!(jar.count_site("other.test"), 1);
+}
+
+#[test]
 fn requests() {
     let u = Url::parse("https://www.youtube.com/youtubei/v1/next?prettyPrint=false").unwrap();
     let body = br#"{"videoId":"x"}"#;

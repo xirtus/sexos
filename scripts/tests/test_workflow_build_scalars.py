@@ -53,7 +53,17 @@ class WorkflowBuildScalars(unittest.TestCase):
                 self.assertIn(name,jobs['build']['needs'])
                 uses=[s.get('uses') for s in job['steps']]
                 self.assertEqual(uses.count('./.github/actions/image'),1)
-                runs='\n'.join(s.get('run','') for s in job['steps'])
+                rebuilds=[s for s in job['steps'] if 'entrypoint_build.sh' in s.get('run','')]
+                if name == 'web':
+                    self.assertEqual(len(rebuilds),1)
+                    fixture=rebuilds[0]
+                    self.assertEqual(fixture.get('name'),'Browser test image with a temporary TLS fixture root')
+                    self.assertIn('program_web_tls_gate.py --make-root "$RUNNER_TEMP/browser-ca"',fixture['run'])
+                    self.assertIn('SEXOS_TLS_GATE_ROOT=',fixture['run'])
+                    self.assertIn('./scripts/entrypoint_build.sh',fixture['run'])
+                else:
+                    self.assertFalse(rebuilds)
+                runs='\n'.join(s.get('run','') for s in job['steps'] if s not in rebuilds)
                 self.assertNotIn('entrypoint_build.sh',runs)
                 self.assertNotIn('master_runtime_gate.sh',runs)
         # Jobs master keeps informational (such as the long leak gate) may stay out.

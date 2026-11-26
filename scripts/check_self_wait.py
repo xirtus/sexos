@@ -354,7 +354,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
  'crates/sex-pdx/src/crash_log.rs': '3104eb235e1e1d2d3840a5ea43ef39d5aa8cc95358a9d104494d9f14ba480997',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
- 'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
+ 'crates/sex-pdx/src/web.rs': 'eaa26a2a4ae52682c16f1cd609f07813d40680edaaa6dd0635c6007afad10b0a',  # Valentine mail-broker kind constants (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',

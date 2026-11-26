@@ -373,6 +373,7 @@ dependencies = [
  "serde_json",
  "sex-office",
  "sex-std",
+ "sex-theme",
  "sha2 0.10.9",
  "wordcraft-engine",
 ]
@@ -907,6 +908,7 @@ dependencies = [
  "sex-fetch",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -5940,6 +5942,9 @@ dependencies = [
  "sex-font",
  "sex-image",
  "sex-std",
+ "sex-theme",
+ "sha2 0.10.9",
+ "unicode-segmentation",
  "vellum-edit",
 ]
 
@@ -6444,9 +6449,11 @@ name = "quil-app"
 version = "0.1.0"
 dependencies = [
  "quil-core",
+ "serde_json",
  "sex-app",
  "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -6454,6 +6461,17 @@ name = "quil-core"
 version = "0.1.0"
 dependencies = [
  "memchr",
+ "miniz_oxide 0.9.1",
+ "sha1 0.10.7",
+]
+
+[[package]]
+name = "quil-ls"
+version = "0.1.0"
+dependencies = [
+ "quil-core",
+ "serde_json",
+ "sex-std",
 ]
 
 [[package]]
@@ -7717,6 +7735,9 @@ dependencies = [
 [[package]]
 name = "sex-mail"
 version = "0.1.0"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "sex-map"
@@ -7753,6 +7774,7 @@ dependencies = [
  "p256",
  "serde",
  "serde_json",
+ "sex-mail",
  "sha2 0.10.9",
  "shibari",
 ]
@@ -8004,6 +8026,8 @@ dependencies = [
  "sex-html",
  "sex-image",
  "sex-js",
+ "sex-theme",
+ "zeroize",
 ]
 
 [[package]]
@@ -8099,6 +8123,9 @@ dependencies = [
 [[package]]
 name = "sexfs"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "sexgpu-nv"
@@ -8244,6 +8271,18 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 name = "shibari"
 version = "0.1.0"
 dependencies = [
+ "p256",
+ "zeroize",
+]
+
+[[package]]
+name = "shibari-sign"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+ "sha2 0.10.9",
+ "shibari",
+ "vellum-edit",
  "zeroize",
 ]
 
@@ -8596,6 +8635,7 @@ dependencies = [
  "serde_json",
  "sex-office",
  "sex-std",
+ "sex-theme",
  "zip 3.0.0",
 ]
 
@@ -9967,6 +10007,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "valentine"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-font",
+ "sex-mail",
+ "sex-pdx",
+ "sex-theme",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "vectorcraft-affinity"
 version = "0.24.1"
 source = "git+https://github.com/storytold/vectorcraft?rev=0995c130d1f5b5c8b57d22b80e1b2fc55b0b2248#0995c130d1f5b5c8b57d22b80e1b2fc55b0b2248"
@@ -10453,6 +10505,9 @@ dependencies = [
  "hayro",
  "lopdf",
  "miniz_oxide 0.9.1",
+ "p256",
+ "sha2 0.10.9",
+ "shibari",
 ]
 
 [[package]]

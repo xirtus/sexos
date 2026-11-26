@@ -1,0 +1,6 @@
+# Kaleidoscope explicit password save request
+
+- Added Ctrl+Shift+U to request saving the current visible, unambiguous HTTPS login. The browser captures only current control values from a same-origin POST form, checks tab, document, origin, visibility and unchanged values before every transfer poll, and cancels on navigation, tab change, quit or form change. Fill and save share one request slot.
+- Added the bounded, zeroizing browser SDK client for the Shell save relay. It waits for ordered token and epoch acknowledgments, sends one credential chunk at a time, and reports success only after Chastity's final approval. The Shell restarts the consent deadline after full receipt.
+- Production-code host transport tests cover completed transfer, no success on receipt alone, provider-only approval, and immediate pre-send cancellation. The GitHub CI browser QEMU gate now captures `browser-password-save-request.ppm` and verifies navigation cancels a request. Full image build and QEMU run belong to GitHub CI, not local runs.
+- Chastity still needs a visible save consent prompt, add or replace decision, and durable encrypted vault commit before this command can actually save a password. No success claim is made for this PR.

@@ -2,6 +2,18 @@
 //! Actual Files/store loaders, with explicit finite host disk, FS and Region doubles.
 #![allow(dead_code, static_mut_refs)]
 extern crate self as sex_pdx;
+extern crate self as sha2;
+// Files' crash-log view: a live Shell and Files at epoch 1.
+pub mod crash_log {
+    pub struct PeerState { pub epoch: u64 }
+    impl PeerState { pub fn live(&self) -> bool { true } }
+    pub fn peer_state(_: u64) -> Result<PeerState, u64> { Ok(PeerState { epoch: 1 }) }
+    pub fn self_epoch() -> Result<u64, u64> { Ok(1) }
+}
+// A real SHA-256 so program_store's pin test keeps its meaning without the crate.
+#[path = "../scripts/sha256_shim.rs"]
+mod sha256_shim;
+pub use sha256_shim::{Digest, Sha256};
 use std::sync::Mutex;
 #[path = "../servers/sexfiles/src/program_store.rs"]
 mod production_store;
@@ -11,6 +23,9 @@ pub mod program_store;
 mod restricted_image {
     pub struct Writer;
     pub fn writer() -> Option<Writer> { Some(Writer) }
+    impl Writer { pub fn seal_ordinary(&mut self, _: u64, _: u64) -> Option<u32> { Some(1) } }
+    pub fn release_unobserved_before_load() {}
+    pub fn shell_epoch() -> u64 { 1 }
 }
 #[macro_export]
 macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}

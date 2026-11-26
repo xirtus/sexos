@@ -448,7 +448,7 @@ impl App {
             End::Done => {
                 sex_pdx::serial_record!("[files.app.image.copied] image={} member={} to={} files={} bytes={}", shown(&inside.file), member, shown(&to), files_n, done);
                 self.status = format!("Copied out {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), files_n, crate::human(done));
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
             End::Stopped => {
                 let _ = self.remove_all(window, &part_path);

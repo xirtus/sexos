@@ -87,7 +87,18 @@ impl App {
     /// After a rename or move from `from` to `to`.
     pub(crate) fn meta_moved(&mut self, window: &mut Window, from: &[u8], to: &[u8]) {
         let (Some(f), Some(t)) = (key(&self.root, from), key(&self.root, to)) else { return };
+        let tracked = self.loom.meta.store.get(&f).is_some();
         self.loom.meta.store.moved(&f, &t);
+        if tracked { sex_pdx::serial_record!("[files.app.meta.moved] from={} to={}", shown(&f), shown(&t)); }
+        self.meta_save(window);
+    }
+    /// Copy Loom's ratings and tags for an item and its children only once
+    /// the entire batch reached its destination.
+    pub(crate) fn meta_copied(&mut self, window: &mut Window, from: &[u8], to: &[u8]) {
+        let (Some(f), Some(t)) = (key(&self.root, from), key(&self.root, to)) else { return };
+        let tracked = self.loom.meta.store.get(&f).is_some();
+        self.loom.meta.store.copied(&f, &t);
+        if tracked { sex_pdx::serial_record!("[files.app.meta.copied] from={} to={}", shown(&f), shown(&t)); }
         self.meta_save(window);
     }
     /// After `path` was deleted for good.
@@ -99,12 +110,27 @@ impl App {
     /// After Ctrl+Z took `step` back.
     pub(crate) fn meta_undone(&mut self, window: &mut Window, step: &Undo) {
         match step {
-            Undo::Moved { from, to } | Undo::Trashed { from, to, .. } => self.meta_moved(window, to, from),
+            Undo::Moved { from, to } | Undo::MovedSame { from, to } | Undo::RenamedOne { from, to } | Undo::Trashed { from, to, .. } => self.meta_moved(window, to, from),
+            Undo::TrashedBatch(items) => for (from, to, _) in items { self.meta_moved(window, to, from); },
+            Undo::MovedBatch(items) => for (from, to) in items { self.meta_moved(window, to, from); },
             Undo::Copied { to } => self.meta_removed(window, to),
+            Undo::CopiedBatch(items) => for (_, to) in items { self.meta_removed(window, to); },
             Undo::Renamed { dir, moves } => {
-                for (f, t) in moves.iter() { self.meta_moved(window, &join(dir, f), &join(dir, t)); }
+                for m in moves.iter() { self.meta_moved(window, &join(dir, &m.from), &join(dir, &m.to)); }
             }
             Undo::Made { .. } => {}
+        }
+    }
+    /// After Ctrl+Y replayed a rename or trash move.
+    pub(crate) fn meta_redone(&mut self, window: &mut Window, step: &Undo) {
+        match step {
+            Undo::Moved { from, to } | Undo::Trashed { from, to, .. } | Undo::MovedSame { from, to } | Undo::RenamedOne { from, to } => self.meta_moved(window, from, to),
+            Undo::Renamed { dir, moves } => {
+                for m in moves.iter().rev() {
+                    self.meta_moved(window, &join(dir, &m.to), &join(dir, &m.from));
+                }
+            }
+            _ => {}
         }
     }
     /// What the row of `name` in the current folder shows after it: stars and tags.

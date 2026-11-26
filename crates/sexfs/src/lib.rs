@@ -754,6 +754,15 @@ impl<'a, D: Device> Fs<'a, D> {
         Ok(id)
     }
     pub fn create(&mut self, path: &[u8], now: u64) -> Result<u64> { self.guarded(|f| f.create_at(path, Kind::File, now)) }
+    /// Prepare a complete new file without replacing an existing name. The
+    /// caller commits on success or rolls back on error.
+    pub fn create_with_data(&mut self, path: &[u8], data: &[u8], now: u64) -> Result<u64> {
+        self.guarded(|f| {
+            let id = f.create_at(path, Kind::File, now)?;
+            if f.write_inner(id, 0, data, now)? != data.len() { return Err(Error::NoSpace); }
+            Ok(id)
+        })
+    }
     pub fn mkdir(&mut self, path: &[u8], now: u64) -> Result<u64> { self.guarded(|f| f.create_at(path, Kind::Dir, now)) }
     pub fn open(&mut self, path: &[u8]) -> Result<Stat> {
         self.guarded(|f| { let id = f.walk(path)?; let (kind, size, mtime) = f.inode(id)?; Ok(Stat { id, kind, size, mtime }) })
@@ -763,6 +772,14 @@ impl<'a, D: Device> Fs<'a, D> {
     }
     pub fn write(&mut self, id: u64, offset: u64, data: &[u8], now: u64) -> Result<usize> {
         self.guarded(|f| f.write_inner(id, offset, data, now))
+    }
+    /// Resolve the path and write only the object the caller created. Files runs
+    /// one request at a time, so no other request can replace it between these steps.
+    pub fn write_path_if_id(&mut self, path: &[u8], expected_id: u64, offset: u64, data: &[u8], now: u64) -> Result<usize> {
+        if expected_id == 0 { return Err(Error::Name); }
+        let st = self.open(path)?;
+        if st.id != expected_id { return Err(Error::Stale); }
+        self.write(st.id, offset, data, now)
     }
     fn write_inner(&mut self, id: u64, offset: u64, data: &[u8], now: u64) -> Result<usize> {
         let (kind, size, _) = self.inode(id)?;
@@ -951,6 +968,12 @@ impl<'a, D: Device> Fs<'a, D> {
             f.remove(Key { id, kind: K_INODE, off: 0 })
         })
     }
+    /// Remove only while the name still denotes `expected_id`.
+    pub fn remove_path_if_id(&mut self, path: &[u8], expected_id: u64) -> Result<()> {
+        if expected_id == 0 { return Err(Error::Name); }
+        if self.open(path)?.id != expected_id { return Err(Error::Stale); }
+        self.remove_path(path)
+    }
     /// Atomic at the next commit. A file already at `to` is replaced.
     pub fn rename(&mut self, from: &[u8], to: &[u8]) -> Result<()> {
         self.guarded(|f| {
@@ -981,6 +1004,30 @@ impl<'a, D: Device> Fs<'a, D> {
             let _ = src_off;
             f.drop_entry(src_dir, src_off2)?;
             f.add_entry(dst_dir, dst_name, id, kind)
+        })
+    }
+    /// Replace `to` only while its complete saved bytes still match `expected`.
+    /// The comparison and namespace change use one exclusive filesystem turn;
+    /// the caller commits on success or rolls back on error.
+    pub fn rename_if_sha256(&mut self, from: &[u8], to: &[u8], expected: &[u8; 32]) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        self.guarded(|f| {
+            if from == to { return Err(Error::Name); }
+            if f.open(from)?.kind != Kind::File { return Err(Error::IsDir); }
+            let dest = f.open(to)?;
+            if dest.kind != Kind::File { return Err(Error::IsDir); }
+            let mut hash = Sha256::new();
+            let mut block = [0u8; BLOCK];
+            let mut at = 0u64;
+            while at < dest.size {
+                let n = f.read(dest.id, at, &mut block[..((dest.size - at) as usize).min(BLOCK)])?;
+                if n == 0 { return Err(Error::Corrupt); }
+                hash.update(&block[..n]);
+                at += n as u64;
+            }
+            let actual: [u8; 32] = hash.finalize().into();
+            if &actual != expected { return Err(Error::Stale); }
+            f.rename(from, to)
         })
     }
     /// Move one file only if `from` still names the object the caller inspected.

@@ -10,6 +10,7 @@ pub const DISKFS_V2_MAX_READ:usize=6;pub const ERR_SERVICE_NOT_READY:u64=u64::MA
 pub struct RwLock<T>(std::sync::RwLock<T>);impl<T> RwLock<T>{pub const fn new(v:T)->Self{Self(std::sync::RwLock::new(v))}pub fn read(&self)->std::sync::RwLockReadGuard<'_,T>{self.0.read().unwrap()}pub fn write(&self)->std::sync::RwLockWriteGuard<'_,T>{self.0.write().unwrap()}}
 mod backends{pub use crate::ramfs;include!(concat!(env!("APP_RESOURCE_TEST_DIR"),"/backend_trait.rs"));}
 #[path="../crates/sex-pdx/src/spindle_history.rs"]pub mod spindle_history;
+#[path="../crates/sex-pdx/src/private_launch.rs"]pub mod private_launch;
 #[path="../servers/sexfiles/src/messages.rs"]mod messages;
 #[path="../servers/sexfiles/src/backends/ramfs.rs"]pub mod ramfs;
 #[path="../servers/sexfiles/src/spindle_history.rs"]mod service;

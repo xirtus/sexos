@@ -16,10 +16,11 @@ use loom_core::rename::{self as rn, Item, Problem, Rules};
 use sex_app::files::{self, direct};
 use sex_app::Window;
 
-use crate::{at, join, shown, App, Undo, BACKSPACE, ENTER, ESC};
+use crate::{at, join, shown, App, RenameMove, Undo, BACKSPACE, ENTER, ESC};
 
 /// Rows of the preview shown.
 const SHOWN: usize = 14;
+pub(crate) const ROLLBACK_UNCONFIRMED: u8 = 255;
 
 pub struct State {
     pub dir: Vec<u8>,
@@ -52,6 +53,19 @@ fn problem(p: &Problem) -> String {
 }
 
 impl App {
+    fn rename_checked(window: &mut Window, from: &[u8], to: &[u8], id: u64) -> Result<(), u8> {
+        if id != 0 { files::move_if_id(window, &at(from), &at(to), id) }
+        else {
+            // Mounted volumes expose no stable object ID. Refuse a known
+            // collision; Files cannot make this check atomic on those disks.
+            match files::stat(window, &at(to)) {
+                Ok(_) => return Err(sex_pdx::fs::EXISTS),
+                Err(sex_pdx::fs::NOT_FOUND) => {},
+                Err(e) => return Err(e),
+            }
+            files::rename(window, &at(from), &at(to))
+        }
+    }
     /// Ctrl+Shift+R: starts the mask prompt over the files of this folder.
     pub(crate) fn rename_start(&mut self, window: &mut Window) {
         if self.found.is_some() { self.status = "Batch rename works on a folder: Esc leaves the search results first.".into(); return; }
@@ -88,39 +102,76 @@ impl App {
         let mask = st.mask.clone();
         self.loom.mode = crate::loom::Mode::None;
         if moves.is_empty() { self.status = "The mask gives every file its own name: nothing to rename.".into(); return; }
-        let mut done: Vec<rn::Move> = Vec::new();
+        let mut done: Vec<RenameMove> = Vec::new();
         for m in &moves {
-            match files::rename(window, &at(&join(&dir, &m.from)), &at(&join(&dir, &m.to))) {
-                Ok(()) => done.push(m.clone()),
+            let from = join(&dir, &m.from);
+            let to = join(&dir, &m.to);
+            let result = files::file_id(window, &at(&from))
+                .and_then(|id| Self::rename_checked(window, &from, &to, id).map(|()| id));
+            match result {
+                Ok(id) => done.push(RenameMove { from: m.from.clone(), to: m.to.clone(), id }),
                 Err(e) => {
                     // Put back what already moved, so the folder is as it was.
-                    for u in rn::undo(&done) { let _ = files::rename(window, &at(&join(&dir, &u.from)), &at(&join(&dir, &u.to))); }
+                    let mut rollback_ok = true;
+                    for u in done.iter().rev() { rollback_ok &= Self::rename_checked(window, &join(&dir, &u.to), &join(&dir, &u.from), u.id).is_ok(); }
                     let _ = files::sync(window);
                     sex_pdx::serial_record!("[files.app.rename.failed] dir={} at={} error={}", shown(&dir), shown(&m.from), e);
-                    self.status = format!("Couldn't rename {}: {}. Nothing was renamed.", shown(&m.from), shown(files::message(e)));
+                    self.status = format!("Couldn't rename {}: {}. {}", shown(&m.from), shown(files::message(e)),
+                        if rollback_ok { "Earlier moves were rolled back." } else { "Check the folder; rollback was not confirmed." });
                     self.load(window);
                     return;
                 }
             }
         }
-        let _ = files::sync(window);
+        if let Err(e) = files::sync(window) {
+            for u in done.iter().rev() { let _ = Self::rename_checked(window, &join(&dir, &u.to), &join(&dir, &u.from), u.id); }
+            let _ = files::sync(window);
+            self.status = format!("Storage could not confirm the rename: {}. Check the folder before retrying.", shown(files::message(e)));
+            self.load(window);
+            return;
+        }
         for m in &done { self.meta_moved(window, &join(&dir, &m.from), &join(&dir, &m.to)); }
         let changed = preview.changes();
         sex_pdx::serial_record!("[files.app.renamed] dir={} mask={} files={} moves={}", shown(&dir), shown(&mask), changed, done.len());
         for l in preview.lines.iter().filter(|l| l.changed()).take(20) { sex_pdx::serial_record!("[files.app.renamed.file] from={} to={}", shown(&l.from), shown(&l.to)); }
-        let undo: Vec<(Vec<u8>, Vec<u8>)> = rn::undo(&done).into_iter().map(|m| (m.from, m.to)).collect();
-        self.undo.push(Undo::Renamed { dir, moves: undo });
+        let undo = crate::inverse_moves(&done);
+        self.record_undo(Undo::Renamed { dir, moves: undo });
         self.load(window);
         self.status = format!("Renamed {} files. Ctrl+Z takes them all back.", changed);
     }
     /// Ctrl+Z after a batch rename: every move back, in an order that never overwrites.
-    pub(crate) fn rename_undo(&mut self, window: &mut Window, dir: &[u8], moves: &[(Vec<u8>, Vec<u8>)]) -> Result<(), u8> {
-        for (i, (f, t)) in moves.iter().enumerate() {
-            if let Err(e) = files::rename(window, &at(&join(dir, f)), &at(&join(dir, t))) {
-                // Redo what was already undone, so the batch stays whole either way.
-                for (f2, t2) in moves[..i].iter().rev() { let _ = files::rename(window, &at(&join(dir, t2)), &at(&join(dir, f2))); }
-                return Err(e);
+    pub(crate) fn rename_undo(&mut self, window: &mut Window, dir: &[u8], moves: &[RenameMove], redo: bool) -> Result<(), u8> {
+        // Mounted disks have no stable object IDs. Undo remains available, but
+        // redo must not replay a path-only plan after another actor changed it.
+        if redo && moves.iter().any(|m| m.id == 0) { return Err(sex_pdx::fs::UNSUPPORTED); }
+        if redo {
+            // Check every source that already exists before the first move. A
+            // later stale source must not cause an earlier move to run at all.
+            for (i, m) in moves.iter().enumerate() {
+                if moves[..i].iter().any(|prior| prior.to == m.from) { continue; }
+                if files::file_id(window, &at(&join(dir, &m.from)))? != m.id {
+                    return Err(sex_pdx::fs::STALE);
+                }
             }
+        }
+        for (i, m) in moves.iter().enumerate() {
+            if let Err(e) = Self::rename_checked(window, &join(dir, &m.from), &join(dir, &m.to), m.id) {
+                // Redo what was already undone, so the batch stays whole either way.
+                let mut restored = true;
+                for prior in moves[..i].iter().rev() {
+                    restored &= Self::rename_checked(window, &join(dir, &prior.to), &join(dir, &prior.from), prior.id).is_ok();
+                }
+                restored &= files::sync(window).is_ok();
+                return Err(if restored { e } else { ROLLBACK_UNCONFIRMED });
+            }
+        }
+        if let Err(e) = files::sync(window) {
+            let mut restored = true;
+            for m in moves.iter().rev() {
+                restored &= Self::rename_checked(window, &join(dir, &m.to), &join(dir, &m.from), m.id).is_ok();
+            }
+            restored &= files::sync(window).is_ok();
+            return Err(if restored { e } else { ROLLBACK_UNCONFIRMED });
         }
         Ok(())
     }
