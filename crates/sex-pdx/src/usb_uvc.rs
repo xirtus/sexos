@@ -399,14 +399,14 @@ pub const FRAME_WRITER_SLOT: u64 = 1012;
 pub const FRAME_CLIENT_SLOT: u64 = 263;
 /// Region ID for the SexUVC -> Program live webcam frame bank.
 pub const FRAME_REGION_ID: u32 = 0x4408;
-/// Total live frame bank size (1 MiB, one physical allocation shared read-only across program rows).
-pub const FRAME_BYTES: u64 = 1024 * 1024;
+/// Total live frame bank size (512 KiB, one physical allocation shared read-only across program rows).
+pub const FRAME_BYTES: u64 = 512 * 1024;
 /// Frame bank header size (4 KiB).
 pub const FRAME_HEADER: usize = 4096;
 /// Number of ping-pong frame slots in the live frame bank.
 pub const FRAME_SLOTS: usize = 2;
-/// Maximum payload bytes per published frame (510 KiB; 4 KiB + 2 * 510 KiB == 1 MiB).
-pub const FRAME_SLOT_BYTES: usize = 510 * 1024;
+/// Maximum payload bytes per published frame (254 KiB; 4 KiB + 2 * 254 KiB == 512 KiB).
+pub const FRAME_SLOT_BYTES: usize = 254 * 1024;
 const _: () = assert!(FRAME_HEADER + FRAME_SLOTS * FRAME_SLOT_BYTES <= FRAME_BYTES as usize);
 
 const FB_MAGIC_VAL: u32 = 0x5556_4346; // "UVCF"
