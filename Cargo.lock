@@ -3051,6 +3051,8 @@ dependencies = [
  "serenade-core",
  "sex-app",
  "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
  "taffy",
  "weft",
 ]
@@ -5038,6 +5040,10 @@ version = "0.1.0"
 
 [[package]]
 name = "sex-vmd"
+version = "0.1.0"
+
+[[package]]
+name = "sex-voice"
 version = "0.1.0"
 
 [[package]]

@@ -12,6 +12,7 @@ pub mod project_io;
 pub mod step;
 pub mod track_colors;
 pub mod waveform;
+pub mod voice;
 use alloc::{format, sync::Arc, vec, vec::Vec};
 use moan_core::{Clip, Frame, Track, RATE};
 use weft::{Column, Command, Id, Layout, Menu, Response, Rows, TextStyle, Ui};
@@ -26,6 +27,7 @@ struct Snapshot {
     to: usize,
     tracks: Vec<ArchivedTrack>,
     selected: usize,
+    generated: Vec<Option<voice::Provenance>>,
 }
 #[derive(Clone)]
 struct ArchivedTrack {
@@ -93,6 +95,7 @@ pub struct Session {
     saved_revision: u64,
     master_volume: u16,
     pub tracks: Vec<Track<'static>>,
+    pub generated: Vec<Option<voice::Provenance>>,
     pub selected: usize,
     pub cursor: usize,
     pub from: usize,
@@ -108,6 +111,7 @@ impl Default for Session {
             saved_revision: 0,
             master_volume: 100,
             tracks: Vec::new(),
+            generated: Vec::new(),
             selected: 0,
             cursor: 0,
             from: 0,
@@ -202,6 +206,7 @@ impl Session {
             to: self.to,
             tracks,
             selected: self.selected,
+            generated: self.generated.clone(),
         }
     }
     fn remember(&mut self) {
@@ -230,6 +235,7 @@ impl Session {
         self.from = s.from;
         self.to = s.to;
         self.tracks = tracks;
+        self.generated = s.generated;
         self.selected = s.selected;
         true
     }
@@ -249,6 +255,7 @@ impl Session {
         self.from = s.from;
         self.to = s.to;
         self.tracks = tracks;
+        self.generated = s.generated;
         self.selected = s.selected;
         true
     }
@@ -278,9 +285,17 @@ impl Session {
         t.clips
             .push(Clip::buffer(Arc::new(pcm), self.cursor).map_err(|_| "Timeline overflow")?);
         self.tracks.push(t);
+        self.generated.push(None);
         self.selected = self.tracks.len() - 1;
         self.from = self.cursor;
         self.to = self.duration();
+        Ok(())
+    }
+    /// Add an immutable generated take as a new track. The source PCM remains
+    /// embedded in the project; metadata only explains how it was produced.
+    pub fn add_generated(&mut self, pcm: Vec<Frame>, provenance: voice::Provenance) -> Result<(), &'static str> {
+        self.add(pcm)?;
+        self.generated[self.selected] = Some(provenance);
         Ok(())
     }
     pub fn add_midi(&mut self, pattern: moan_core::midi::Pattern) -> Result<(), &'static str> {
@@ -296,6 +311,7 @@ impl Session {
         let mut track = Track::new();
         track.clips.push(clip);
         self.tracks.push(track);
+        self.generated.push(None);
         self.selected = self.tracks.len() - 1;
         self.from = self.cursor;
         self.to = self.duration();
@@ -547,6 +563,9 @@ pub enum Action {
     Stop,
     Record,
     Import,
+    GenerateVoice,
+    RetryVoice,
+    CancelVoice,
     Export,
     OpenProject,
     SaveProject,
@@ -635,6 +654,10 @@ pub struct Studio {
     pub session: Session,
     pub timeline: Id,
     pub status: Id,
+    pub voice_prompt: Id,
+    pub voice_endpoint: Id,
+    voice_row: Id,
+    voice_panel_open: bool,
     pub position: Id,
     pub from: Id,
     pub to: Id,
@@ -755,6 +778,7 @@ impl Studio {
             "Instruments",
             "Library",
             "Region controls",
+            "Voice",
         ] {
             buttons.push((ui.button(navigation, name), name));
         }
@@ -773,6 +797,16 @@ impl Studio {
             "Original instruments, audio tracks and editable MIDI regions",
             TextStyle::Caption,
         );
+        let voice_row = ui.group(root, Layout::row().gap(4.0).padding(4.0).wrap().shrink(0.0));
+        let voice_prompt = ui.field(voice_row, "", "Voice text (MOSSlanding)");
+        let voice_endpoint = ui.field(voice_row, "http://10.0.2.2:8875", "Voice worker URL");
+        for name in ["Generate Voice", "Retry Voice", "Cancel Voice"] {
+            buttons.push((ui.button(voice_row, name), name));
+        }
+        ui.set_visible(voice_row, false);
+        let mut hidden_voice = Layout::row().gap(4.0).padding(4.0).wrap().shrink(0.0);
+        hidden_voice.style().display = taffy::Display::None;
+        ui.set_layout(voice_row, hidden_voice);
         let scroll = ui.scroll(root);
         ui.set_layout(scroll, Layout::column().fill());
         let body = ui.group(
@@ -1116,6 +1150,10 @@ impl Studio {
             session: Session::default(),
             timeline,
             status,
+            voice_prompt,
+            voice_endpoint,
+            voice_row,
+            voice_panel_open: false,
             position,
             from,
             to,
@@ -1413,8 +1451,10 @@ impl Studio {
                 .shrink(0.0),
         );
         Self::visible_layout(ui, self.status, !short, Layout::default());
+        Self::visible_layout(ui, self.voice_row, self.voice_panel_open,
+            Layout::row().gap(4.0).padding(4.0).wrap().shrink(0.0));
         for (id, name) in &self.buttons {
-            if ["Tone", "Import WAV", "Export WAV"].contains(name) {
+            if ["Tone", "Import WAV", "Generate Voice", "Retry Voice", "Cancel Voice", "Export WAV"].contains(name) {
                 Self::visible_layout(ui, *id, !short, Layout::default());
             }
         }
@@ -2459,6 +2499,12 @@ impl Studio {
                 self.show_workspace(ui, Workspace::Arrange);
                 None
             }
+            "Voice" => {
+                self.voice_panel_open = !self.voice_panel_open;
+                Self::visible_layout(ui, self.voice_row, self.voice_panel_open,
+                    Layout::row().gap(4.0).padding(4.0).wrap().shrink(0.0));
+                None
+            }
             "Master" => {
                 ui.focus(Some(if self.busy {
                     self.master_meter
@@ -2585,6 +2631,9 @@ impl Studio {
             "Stop" => Some(Action::Stop),
             "Record" => Some(Action::Record),
             "Import WAV" => Some(Action::Import),
+            "Generate Voice" => Some(Action::GenerateVoice),
+            "Retry Voice" => Some(Action::RetryVoice),
+            "Cancel Voice" => Some(Action::CancelVoice),
             "Export WAV" => Some(Action::Export),
             "Open Project" => self.guard_action(ui, Action::OpenProject),
             "New Project" => self.guard_action(ui, Action::NewProject),
