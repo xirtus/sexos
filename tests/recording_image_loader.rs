@@ -135,6 +135,9 @@ mod fs_service {
     fn bring_up() -> State {
         State::Ready(FakeFs)
     }
+    pub fn read_media_program(_: &[u8], _: &mut [u8], _: bool) -> Program {
+        Program::Absent
+    }
     include!(env!("RECORDING_IMAGE_LOADER_SOURCE"));
     pub fn seed() {
         unsafe {
