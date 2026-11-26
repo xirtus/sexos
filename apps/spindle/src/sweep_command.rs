@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Real-hardware microkernel & NVMe sweep benchmarks (`sweep sched|ipc|nvme|all`).
 //!
-//! All scratch buffers (sample arrays, read buffers) are allocated on the **heap**
-//! only while the command runs and dropped immediately before returning. Zero static
-//! buffers are used, preserving Spindle's multi-instance memory budget in QEMU gates.
+//! All scratch buffers (sample arrays, path buffer) live on the **stack** only while
+//! the command runs, with zero static BSS buffers and zero heap allocations (Spindle
+//! runs with `DummyAllocator` and a bounded memory budget).
 
 use crate::sweep_math::{
     compute_percentiles, cycles_to_ns, parse_sweep_args, throughput_kib_s, throughput_mib_tenths,
     Percentiles, SweepKind,
 };
 use crate::Scrollback;
-use alloc::vec::Vec;
 use sex_pdx::endpoint::{self as ep, OP_CREATE, OP_DESTROY, OP_POLL, OP_SIGNAL, OP_STATS};
 use sex_pdx::fs as w;
 use sex_pdx::ipc_recv::pdx_call_recv;
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 
 const WARMUP: usize = 8;
+const SAMPLE_CAP: usize = 256;
 const FS_TIMEOUT_MS: u64 = 5_000;
 
 struct Text {
@@ -89,21 +89,23 @@ fn calibrate_khz() -> u64 {
     }
 }
 
-fn measure<F: FnMut()>(n: usize, mut f: F) -> Option<Percentiles> {
-    let mut samples: Vec<u64> = Vec::new();
-    samples.try_reserve_exact(n).ok()?;
+fn measure<F: FnMut()>(n: usize, mut f: F) -> Percentiles {
+    let mut samples = [0u64; SAMPLE_CAP];
+    let stride = (n / SAMPLE_CAP).max(1);
+    let mut count = 0usize;
     for _ in 0..WARMUP {
         f();
     }
-    for _ in 0..n {
+    for i in 0..n {
         let t0 = rdtsc();
         f();
         let t1 = rdtsc();
-        samples.push(t1.saturating_sub(t0));
+        if i % stride == 0 && count < SAMPLE_CAP {
+            samples[count] = t1.saturating_sub(t0);
+            count += 1;
+        }
     }
-    let stats = compute_percentiles(&mut samples);
-    drop(samples);
-    Some(stats)
+    compute_percentiles(&mut samples[..count])
 }
 
 fn show_stats(sb: &mut Scrollback, label: &str, s: Percentiles, khz: u64) {
@@ -130,22 +132,13 @@ struct SchedSummary {
 
 fn run_sched(n: usize, khz: u64, sb: &mut Scrollback) -> SchedSummary {
     say!(sb, "sweep sched (N={}, tsc~{} MHz):", n, khz / 1000);
-    let Some(null_s) = measure(n, null_syscall) else {
-        sb.push(b"sweep sched: out of heap memory.");
-        return SchedSummary::default();
-    };
+    let null_s = measure(n, null_syscall);
     show_stats(sb, "null_sys", null_s, khz);
-    let Some(tick_s) = measure(n, || {
+    let tick_s = measure(n, || {
         let _ = core::hint::black_box(sex_pdx::get_ticks());
-    }) else {
-        sb.push(b"sweep sched: out of heap memory.");
-        return SchedSummary::default();
-    };
+    });
     show_stats(sb, "get_ticks", tick_s, khz);
-    let Some(yield_s) = measure(n, sex_pdx::sys_yield) else {
-        sb.push(b"sweep sched: out of heap memory.");
-        return SchedSummary::default();
-    };
+    let yield_s = measure(n, sex_pdx::sys_yield);
     show_stats(sb, "sys_yield", yield_s, khz);
     sex_pdx::serial_record!(
         "[spindle.sweep.sched] n={} khz={} null_p50={} null_p99={} yield_p50={} yield_p99={}",
@@ -234,13 +227,12 @@ fn run_ipc(n: usize, khz: u64, sb: &mut Scrollback) -> IpcSummary {
         match ep::notify(OP_CREATE, 0, 0) {
             Ok(slot) => {
                 let note = slot as u32;
-                if let Some(s) = measure(n, || {
+                let s = measure(n, || {
                     let _ = ep::notify(OP_SIGNAL, note, 1);
                     let _ = ep::notify(OP_POLL, note, 0);
-                }) {
-                    show_stats(sb, "notify106", s, khz);
-                    out.notify_p50 = s.p50;
-                }
+                });
+                show_stats(sb, "notify106", s, khz);
+                out.notify_p50 = s.p50;
                 let _ = ep::notify(OP_DESTROY, note, 0);
             }
             Err(e) => say!(sb, "  notify106  unavailable ({:#x})", e),
@@ -249,12 +241,11 @@ fn run_ipc(n: usize, khz: u64, sb: &mut Scrollback) -> IpcSummary {
         // 2. IPC v2 SYS_ENDPOINT (105): create + stats query
         match ep::create_endpoint() {
             Ok(ep_slot) => {
-                if let Some(s) = measure(n, || {
+                let s = measure(n, || {
                     let _ = ep::endpoint(OP_STATS, 0, [0; 4]);
-                }) {
-                    show_stats(sb, "endpt105", s, khz);
-                    out.endpoint_p50 = s.p50;
-                }
+                });
+                show_stats(sb, "endpt105", s, khz);
+                out.endpoint_p50 = s.p50;
                 let _ = ep::destroy(ep_slot);
             }
             Err(e) => say!(sb, "  endpt105   unavailable ({:#x})", e),
@@ -265,38 +256,40 @@ fn run_ipc(n: usize, khz: u64, sb: &mut Scrollback) -> IpcSummary {
     if unsafe { crate::fs_commands::FS.busy() } {
         sb.push(b"  pdx102     skipped (disk busy)");
     } else {
-        let mut samples: Vec<u64> = Vec::new();
-        if samples.try_reserve_exact(n).is_ok() {
-            let mut seq = 0x00E0_0000u32;
-            let mut ok = true;
-            for _ in 0..WARMUP {
+        let mut samples = [0u64; SAMPLE_CAP];
+        let stride = (n / SAMPLE_CAP).max(1);
+        let mut count = 0usize;
+        let mut seq = 0x00E0_0000u32;
+        let mut ok = true;
+        for _ in 0..WARMUP {
+            seq = (seq + 1) & 0x00FF_FFFF;
+            if fs_sync_call(seq, w::PING, 0, 0, 0, sb).is_none() {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            for i in 0..n {
                 seq = (seq + 1) & 0x00FF_FFFF;
-                if fs_sync_call(seq, w::PING, 0, 0, 0, sb).is_none() {
+                let t0 = rdtsc();
+                let res = fs_sync_call(seq, w::PING, 0, 0, 0, sb);
+                let t1 = rdtsc();
+                if res.is_none() {
                     ok = false;
                     break;
                 }
-            }
-            if ok {
-                for _ in 0..n {
-                    seq = (seq + 1) & 0x00FF_FFFF;
-                    let t0 = rdtsc();
-                    let res = fs_sync_call(seq, w::PING, 0, 0, 0, sb);
-                    let t1 = rdtsc();
-                    if res.is_none() {
-                        ok = false;
-                        break;
-                    }
-                    samples.push(t1.saturating_sub(t0));
+                if i % stride == 0 && count < SAMPLE_CAP {
+                    samples[count] = t1.saturating_sub(t0);
+                    count += 1;
                 }
             }
-            if ok && !samples.is_empty() {
-                let s = compute_percentiles(&mut samples);
-                show_stats(sb, "pdx102", s, khz);
-                out.pdx_p50 = s.p50;
-            } else {
-                sb.push(b"  pdx102     Files PING timed out or refused");
-            }
-            drop(samples);
+        }
+        if ok && count > 0 {
+            let s = compute_percentiles(&mut samples[..count]);
+            show_stats(sb, "pdx102", s, khz);
+            out.pdx_p50 = s.p50;
+        } else {
+            sb.push(b"  pdx102     Files PING timed out or refused");
         }
     }
 
@@ -310,10 +303,33 @@ fn run_ipc(n: usize, khz: u64, sb: &mut Scrollback) -> IpcSummary {
     out
 }
 
+/// Probes a single file via `STAT`, returning its size if it is a non-empty regular file.
+fn stat_regular_file(path: &[u8], sb: &mut Scrollback, seq: &mut u32) -> Option<u64> {
+    if path.is_empty() || path.len() > w::PATH_BYTES {
+        return None;
+    }
+    let region = fs_region()?;
+    region[..path.len()].copy_from_slice(path);
+    *seq = (*seq + 1) & 0x00FF_FFFF;
+    let (status, _) = fs_sync_call(*seq, w::STAT, path.len(), 0, 0, sb)?;
+    if status != w::OK {
+        return None;
+    }
+    let data = &region[w::PATH_BYTES..];
+    let is_dir = u64::from_le_bytes(data[..8].try_into().unwrap_or([0; 8])) == 1;
+    let sz = u64::from_le_bytes(data[8..16].try_into().unwrap_or([0; 8]));
+    if is_dir || sz == 0 {
+        None
+    } else {
+        Some(sz)
+    }
+}
+
 /// Finds a readable file on `/media/Ventoy`, `/media/windows`, or `/` when no path was supplied.
-fn auto_pick_file(sb: &mut Scrollback, seq: &mut u32) -> Option<(Vec<u8>, u64)> {
+fn auto_pick_file(sb: &mut Scrollback, seq: &mut u32) -> Option<([u8; w::PATH_BYTES], usize, u64)> {
     let dirs: &[&[u8]] = &[b"/media/Ventoy", b"/media/windows", b"/"];
-    let mut best_path: Vec<u8> = Vec::new();
+    let mut best_path = [0u8; w::PATH_BYTES];
+    let mut best_len: usize = 0;
     let mut best_size: u64 = 0;
 
     for &dir in dirs {
@@ -334,14 +350,15 @@ fn auto_pick_file(sb: &mut Scrollback, seq: &mut u32) -> Option<(Vec<u8>, u64)> 
             let size = u64::from_le_bytes(data[at + 2..at + 10].try_into().unwrap_or([0; 8]));
             if !is_dir && len > 0 && at + w::ENTRY_HEAD + len <= data.len() && size > best_size {
                 let name = &data[at + w::ENTRY_HEAD..at + w::ENTRY_HEAD + len];
-                best_path.clear();
-                let need = dir.len() + 1 + name.len();
-                if best_path.try_reserve_exact(need).is_ok() {
-                    best_path.extend_from_slice(dir);
-                    if dir != b"/" {
-                        best_path.push(b'/');
+                let sep = usize::from(dir != b"/");
+                let need = dir.len() + sep + name.len();
+                if need <= w::PATH_BYTES {
+                    best_path[..dir.len()].copy_from_slice(dir);
+                    if sep == 1 {
+                        best_path[dir.len()] = b'/';
                     }
-                    best_path.extend_from_slice(name);
+                    best_path[dir.len() + sep..need].copy_from_slice(name);
+                    best_len = need;
                     best_size = size;
                 }
             }
@@ -351,8 +368,25 @@ fn auto_pick_file(sb: &mut Scrollback, seq: &mut u32) -> Option<(Vec<u8>, u64)> 
             break;
         }
     }
-    if best_size > 0 && !best_path.is_empty() {
-        Some((best_path, best_size))
+
+    if best_size == 0 {
+        let fallbacks: &[&[u8]] = &[
+            b"/media/Ventoy/sexos-x17-c28152a0.iso",
+            b"/media/Ventoy/wifi-sweep.txt",
+            b"/media/windows/Windows/win.ini",
+        ];
+        for &candidate in fallbacks {
+            if let Some(sz) = stat_regular_file(candidate, sb, seq) {
+                best_path[..candidate.len()].copy_from_slice(candidate);
+                best_len = candidate.len();
+                best_size = sz;
+                break;
+            }
+        }
+    }
+
+    if best_size > 0 && best_len > 0 {
+        Some((best_path, best_len, best_size))
     } else {
         None
     }
@@ -361,8 +395,8 @@ fn auto_pick_file(sb: &mut Scrollback, seq: &mut u32) -> Option<(Vec<u8>, u64)> 
 #[derive(Clone, Copy, Default)]
 struct NvmeSummary {
     kib_s_4k: u64,
-    kib_s_128k: u64,
-    kib_s_1m: u64,
+    kib_s_16k: u64,
+    kib_s_64k: u64,
 }
 
 fn bench_read_chunk(
@@ -379,17 +413,9 @@ fn bench_read_chunk(
     if target == 0 {
         return 0;
     }
-    let mut buf: Vec<u8> = Vec::new();
-    let alloc_len = chunk.min(w::IO_MAX);
-    if buf.try_reserve_exact(alloc_len).is_err() {
-        say!(sb, "  {:<8} skipped (out of heap)", label);
-        return 0;
-    }
-    buf.resize(alloc_len, 0);
 
-    let max_ops = ((target + chunk as u64 - 1) / chunk as u64).min(512) as usize;
-    let mut latencies: Vec<u64> = Vec::new();
-    let _ = latencies.try_reserve_exact(max_ops);
+    let mut latencies = [0u64; SAMPLE_CAP];
+    let mut lat_count = 0usize;
 
     let mut offset = 0u64;
     let mut total_bytes = 0u64;
@@ -401,26 +427,27 @@ fn bench_read_chunk(
         let op_t0 = rdtsc();
         let mut sub_done = 0u64;
         while sub_done < want {
-            let step = ((want - sub_done) as usize).min(w::IO_MAX);
+            let step = ((want - sub_done) as usize).min(w::IO_MAX).min(64 * 1024);
             let Some(region) = fs_region() else {
-                drop(buf);
-                drop(latencies);
                 return 0;
             };
             region[..path.len()].copy_from_slice(path);
             *seq = (*seq + 1) & 0x00FF_FFFF;
             let Some((status, got)) = fs_sync_call(*seq, w::READ, path.len(), offset + sub_done, step as u64, sb) else {
                 say!(sb, "  {:<8} read timed out at offset {}", label, offset + sub_done);
-                drop(buf);
-                drop(latencies);
                 return 0;
             };
             if status != w::OK || got == 0 {
                 break;
             }
-            let n = (got as usize).min(buf.len());
-            buf[..n].copy_from_slice(&region[w::PATH_BYTES..w::PATH_BYTES + n]);
-            core::hint::black_box(buf[0]);
+            let n = (got as usize).min(region.len().saturating_sub(w::PATH_BYTES));
+            // Touch one byte per 4 KiB page directly in the Files shared region (zero heap copy).
+            let data = &region[w::PATH_BYTES..w::PATH_BYTES + n];
+            let mut p = 0usize;
+            while p < data.len() {
+                core::hint::black_box(data[p]);
+                p += 4096;
+            }
             sub_done += got as u64;
             if (got as usize) < step {
                 break;
@@ -430,8 +457,9 @@ fn bench_read_chunk(
         if sub_done == 0 {
             break;
         }
-        if latencies.len() < latencies.capacity() {
-            latencies.push(op_t1.saturating_sub(op_t0));
+        if lat_count < SAMPLE_CAP {
+            latencies[lat_count] = op_t1.saturating_sub(op_t0);
+            lat_count += 1;
         }
         offset += sub_done;
         total_bytes += sub_done;
@@ -444,7 +472,7 @@ fn bench_read_chunk(
     }
     let kib_s = throughput_kib_s(total_bytes, ms);
     let (mib_w, mib_t) = throughput_mib_tenths(total_bytes, ms);
-    let stats = compute_percentiles(&mut latencies);
+    let stats = compute_percentiles(&mut latencies[..lat_count]);
     let p50_us = cycles_to_ns(stats.p50, khz) / 1000;
     let p99_us = cycles_to_ns(stats.p99, khz) / 1000;
     say!(
@@ -459,8 +487,6 @@ fn bench_read_chunk(
         p50_us,
         p99_us
     );
-    drop(buf);
-    drop(latencies);
     kib_s
 }
 
@@ -470,7 +496,7 @@ fn run_nvme(path_arg: Option<&[u8]>, khz: u64, sb: &mut Scrollback) -> NvmeSumma
         return NvmeSummary::default();
     }
     let mut seq = 0x00D0_0000u32;
-    let (path, size) = match path_arg {
+    let (path_buf, path_len, size) = match path_arg {
         Some(p) => {
             let mut full = [0u8; w::PATH_BYTES];
             let Some(n) = (unsafe { crate::fs_commands::FS.join(p, &mut full) }) else {
@@ -498,13 +524,7 @@ fn run_nvme(path_arg: Option<&[u8]>, khz: u64, sb: &mut Scrollback) -> NvmeSumma
                 sb.push(b"sweep nvme: give a non-empty file path (not a directory).");
                 return NvmeSummary::default();
             }
-            let mut v = Vec::new();
-            if v.try_reserve_exact(n).is_err() {
-                sb.push(b"sweep nvme: out of heap.");
-                return NvmeSummary::default();
-            }
-            v.extend_from_slice(&full[..n]);
-            (v, sz)
+            (full, n, sz)
         }
         None => match auto_pick_file(sb, &mut seq) {
             Some(found) => found,
@@ -515,39 +535,37 @@ fn run_nvme(path_arg: Option<&[u8]>, khz: u64, sb: &mut Scrollback) -> NvmeSumma
             }
         },
     };
+    let path = &path_buf[..path_len];
 
     say!(
         sb,
         "sweep nvme: {} ({} KiB, read-only):",
-        core::str::from_utf8(&path).unwrap_or("?"),
+        core::str::from_utf8(path).unwrap_or("?"),
         size / 1024
     );
-    let kib_s_4k = bench_read_chunk(&path, size, 4 * 1024, 512 * 1024, khz, &mut seq, sb, "4KiB");
-    let kib_s_128k = bench_read_chunk(&path, size, 128 * 1024, 4 * 1024 * 1024, khz, &mut seq, sb, "128KiB");
-    let big_chunk = if size >= 2 * 1024 * 1024 { 2 * 1024 * 1024 } else { 1024 * 1024 };
-    let big_label = if big_chunk >= 2 * 1024 * 1024 { "2MiB" } else { "1MiB" };
-    let kib_s_1m = bench_read_chunk(&path, size, big_chunk, 8 * 1024 * 1024, khz, &mut seq, sb, big_label);
-    drop(path);
+    let kib_s_4k = bench_read_chunk(path, size, 4 * 1024, 256 * 1024, khz, &mut seq, sb, "4KiB");
+    let kib_s_16k = bench_read_chunk(path, size, 16 * 1024, 1024 * 1024, khz, &mut seq, sb, "16KiB");
+    let kib_s_64k = bench_read_chunk(path, size, 64 * 1024, 4 * 1024 * 1024, khz, &mut seq, sb, "64KiB");
 
     sex_pdx::serial_record!(
-        "[spindle.sweep.nvme] kib_s_4k={} kib_s_128k={} kib_s_big={}",
+        "[spindle.sweep.nvme] kib_s_4k={} kib_s_16k={} kib_s_64k={}",
         kib_s_4k,
-        kib_s_128k,
-        kib_s_1m
+        kib_s_16k,
+        kib_s_64k
     );
     NvmeSummary {
         kib_s_4k,
-        kib_s_128k,
-        kib_s_1m,
+        kib_s_16k,
+        kib_s_64k,
     }
 }
 
 pub fn command(args: &[u8], sb: &mut Scrollback) {
     let Some(kind) = parse_sweep_args(args) else {
         sb.push(b"Usage: sweep sched [N] | sweep ipc [N] | sweep nvme [PATH] | sweep all [PATH]");
-        sb.push(b"  sched: null syscall + get_ticks + sys_yield cycles/ns (N: 1..10000, default 500)");
+        sb.push(b"  sched: null syscall + get_ticks + sys_yield cycles/ns (N: 1..10000, default 64)");
         sb.push(b"  ipc:   IPC v2 notify(106) + endpoint(105) + pdx_call_recv(102) latency");
-        sb.push(b"  nvme:  read-only sequential 4KiB / 128KiB / 1-2MiB throughput");
+        sb.push(b"  nvme:  read-only sequential 4KiB / 16KiB / 64KiB throughput");
         return;
     };
     let khz = calibrate_khz();
@@ -582,21 +600,21 @@ pub fn command(args: &[u8], sb: &mut Scrollback) {
             );
             say!(
                 sb,
-                "  nvme:  4KiB={} KiB/s  128KiB={} KiB/s  big={} KiB/s",
+                "  nvme:  4KiB={} KiB/s  16KiB={} KiB/s  64KiB={} KiB/s",
                 n.kib_s_4k,
-                n.kib_s_128k,
-                n.kib_s_1m
+                n.kib_s_16k,
+                n.kib_s_64k
             );
             sex_pdx::serial_record!(
-                "[spindle.sweep.all] null_p50={} yield_p50={} notify_p50={} endpt_p50={} pdx_p50={} nvme_4k={} nvme_128k={} nvme_big={}",
+                "[spindle.sweep.all] null_p50={} yield_p50={} notify_p50={} endpt_p50={} pdx_p50={} nvme_4k={} nvme_16k={} nvme_64k={}",
                 s.null_p50,
                 s.yield_p50,
                 i.notify_p50,
                 i.endpoint_p50,
                 i.pdx_p50,
                 n.kib_s_4k,
-                n.kib_s_128k,
-                n.kib_s_1m
+                n.kib_s_16k,
+                n.kib_s_64k
             );
         }
     }

@@ -178,32 +178,33 @@ impl Object {
     }
 
     pub fn as_integer(&self) -> Result<u64, AmlError> {
-        if let Object::Integer(value) = self {
-            Ok(*value)
-        } else {
-            Err(AmlError::ObjectNotOfExpectedType { expected: ObjectType::Integer, got: self.typ() })
+        match self {
+            Object::Integer(value) => Ok(*value),
+            Object::Reference { inner, .. } => inner.as_integer(),
+            _ => Err(AmlError::ObjectNotOfExpectedType { expected: ObjectType::Integer, got: self.typ() }),
         }
     }
 
     pub fn as_string(&self) -> Result<Cow<'_, str>, AmlError> {
-        if let Object::String(value) = self {
-            Ok(Cow::from(value))
-        } else {
-            Err(AmlError::ObjectNotOfExpectedType { expected: ObjectType::String, got: self.typ() })
+        match self {
+            Object::String(value) => Ok(Cow::from(value)),
+            Object::Reference { inner, .. } => inner.as_string(),
+            _ => Err(AmlError::ObjectNotOfExpectedType { expected: ObjectType::String, got: self.typ() }),
         }
     }
 
     pub fn as_buffer(&self) -> Result<&[u8], AmlError> {
-        if let Object::Buffer(bytes) = self {
-            Ok(bytes)
-        } else {
-            Err(AmlError::ObjectNotOfExpectedType { expected: ObjectType::Buffer, got: self.typ() })
+        match self {
+            Object::Buffer(bytes) => Ok(bytes),
+            Object::Reference { inner, .. } => inner.as_buffer(),
+            _ => Err(AmlError::ObjectNotOfExpectedType { expected: ObjectType::Buffer, got: self.typ() }),
         }
     }
 
     pub fn to_integer(&self, allowed_bytes: usize) -> Result<u64, AmlError> {
         match self {
             Object::Integer(value) => Ok(*value),
+            Object::Reference { inner, .. } => inner.to_integer(allowed_bytes),
             Object::Buffer(value) => {
                 let length = usize::min(value.len(), allowed_bytes);
                 let mut bytes = [0u8; 8];
@@ -219,6 +220,7 @@ impl Object {
     pub fn to_buffer(&self, allowed_bytes: usize) -> Result<Vec<u8>, AmlError> {
         match self {
             Object::Buffer(bytes) => Ok(bytes.clone()),
+            Object::Reference { inner, .. } => inner.to_buffer(allowed_bytes),
             Object::Integer(value) => match allowed_bytes {
                 4 => Ok((*value as u32).to_le_bytes().to_vec()),
                 8 => Ok(value.to_le_bytes().to_vec()),

@@ -266,3 +266,58 @@ fn battery_package_index_store_and_ec_index_field() {
     interp2.load_table(&aml2).unwrap();
     assert_eq!(as_int(eval(&interp2, "\\_LID", vec![])), 1);
 }
+
+/// `Object::as_integer`/`as_string`/`as_buffer` and `Increment`/`Decrement` unwrap
+/// `Object::Reference` (matching `Object::typ()`), avoiding
+/// `ObjectNotOfExpectedType { expected: Integer, got: Integer }` in `_LID` and local loops.
+#[test]
+fn reference_unwrapping_and_local_inc_dec() {
+    use acpi::aml::object::ReferenceKind;
+
+    let int_ref = Object::Reference {
+        kind: ReferenceKind::LocalOrArg,
+        inner: WrappedObject::new(Object::Integer(42)),
+    };
+    let nested_ref = Object::Reference {
+        kind: ReferenceKind::RefOf,
+        inner: WrappedObject::new(int_ref.clone()),
+    };
+    assert_eq!(int_ref.as_integer().unwrap(), 42);
+    assert_eq!(nested_ref.as_integer().unwrap(), 42);
+    assert_eq!(nested_ref.to_integer(8).unwrap(), 42);
+
+    let str_ref = Object::Reference {
+        kind: ReferenceKind::LocalOrArg,
+        inner: WrappedObject::new(Object::String("x17".into())),
+    };
+    assert_eq!(str_ref.as_string().unwrap(), "x17");
+
+    let buf_ref = Object::Reference {
+        kind: ReferenceKind::LocalOrArg,
+        inner: WrappedObject::new(Object::Buffer(vec![1, 2, 3])),
+    };
+    assert_eq!(buf_ref.as_buffer().unwrap(), &[1, 2, 3]);
+    assert_eq!(buf_ref.to_buffer(8).unwrap(), vec![1, 2, 3]);
+
+    // Method(\_LID, 0) { Store(0, Local0); Increment(Local0); Increment(Local0); Decrement(Local0); Return(Local0) }
+    // AML opcodes: Store=0x70, Zero=0x00, Local0=0x60, Increment=0x75, Decrement=0x76, Return=0xA4
+    let body: &[u8] = &[
+        0x70, 0x00, 0x60, // Store(Zero, Local0)
+        0x75, 0x60,       // Increment(Local0) -> 1
+        0x75, 0x60,       // Increment(Local0) -> 2
+        0x76, 0x60,       // Decrement(Local0) -> 1
+        0xa4, 0x60,       // Return(Local0)
+    ];
+    let mut aml = Vec::new();
+    aml.push(0x14); // MethodOp
+    aml.push((1 + 4 + 1 + body.len()) as u8);
+    aml.extend_from_slice(b"LIDR");
+    aml.push(0x00); // 0 args
+    aml.extend_from_slice(body);
+
+    let interp = interpreter();
+    interp.load_table(&aml).unwrap();
+    let res = eval(&interp, "\\LIDR", vec![]).unwrap();
+    assert_eq!(res.as_integer().unwrap(), 1);
+}
+
