@@ -58,6 +58,18 @@ def main():
   g['wait'](rf'\[display.app.pixels\] target={ready[1]} ',s,60);time.sleep(2)
   g['focus'](int(launch[1]));time.sleep(.5)
   return ready[1],ready[2],int(launch[1]),datetime.date.fromisoformat(ready[3]),s
+ def focus_window(sid):
+  # Keyboard traversal first; after a window closes Shell's Tab order can skip
+  # the one left, so fall back to clicking that window's title bar.
+  try:g['focus'](sid);return
+  except RuntimeError:pass
+  tile=re.findall(rf'\[shell\.tile\.apply\] sid={sid} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t())
+  assert tile,f'no tile for Date window {sid}'
+  x,y,w,h=map(int,tile[-1]);sw,sh=map(int,a.resolution.split('x'))
+  s=len(t())
+  q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round((x+w//2)*32767/(sw-1))}},{'type':'abs','data':{'axis':'y','value':round((y+8)*32767/(sh-1))}}]});time.sleep(.25)
+  for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.2)
+  g['wait'](rf'\[shell\.focus\.set\] id={sid}\n',s,10)
  def close(target,task):
   s=len(t());q.key('f11');g['wait'](rf'\[calendar.closed\] target={target} task={task}',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
  try:
@@ -252,7 +264,7 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'date-owner-under-input.ppm')})
   assert (a.out/'date-owner-under-input.ppm').read_bytes().startswith(b'P6\n')
   g['focus'](first_sid);close(first_target,first_task)
-  g['focus'](second_sid);time.sleep(.5);s=len(t());q.key('c');time.sleep(.3);q.key('r');time.sleep(.3);keys('2s new owner');q.key('ret')
+  focus_window(second_sid);time.sleep(.5);s=len(t());q.key('c');time.sleep(.3);q.key('r');time.sleep(.3);keys('2s new owner');q.key('ret')
   g['wait'](rf'\[date.notice.ui.owner\] task={second_task} owns=1',s,30)
   g['wait'](r'\[date.alarm.fired\] kind=timer title=new owner notified=1',s,30)
   time.sleep(2)
