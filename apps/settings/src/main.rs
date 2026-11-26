@@ -109,6 +109,57 @@ fn about_lines(text: &mut [u8]) -> usize {
     about::render(&k, env!("CARGO_PKG_VERSION"), text)
 }
 
+/// Queries `sexfiles` for the raw GPT partition table (`INSTALL_LIST | INSTALL_LIST_RAW`).
+fn refresh_install_parts(window: &mut Window, gui: &mut GuiState, m: &mut Model) {
+    let mut raw = [0u8; 2048];
+    let flags = sex_pdx::fs::INSTALL_LIST | sex_pdx::fs::INSTALL_LIST_RAW;
+    match sex_app::files::install(window, b"", 0, flags, &mut raw) {
+        Ok(n) => {
+            gui.install.parse_raw(&raw[..n]);
+            sex_pdx::serial_record!("[settings.install.list] parts={} total_sectors={}", gui.install.part_count, gui.install.total_sectors);
+            m.say("Disk partition table refreshed.");
+        }
+        Err(e) => {
+            gui.install.loaded = true;
+            gui.install.set_report(b"Unable to read disk partitions from Files.");
+            sex_pdx::serial_record!("[settings.install.list] error={}", e);
+            m.say("Could not read disk partition table.");
+        }
+    }
+}
+
+/// Dispatches a dry-run (`go = false`) or atomic (`go = true`) install request to `sexfiles`.
+fn run_install_action(window: &mut Window, gui: &mut GuiState, m: &mut Model, go: bool) {
+    let Some(row) = gui.install.selected_row().copied() else {
+        m.say("Select a replaceable partition or Free Space first.");
+        return;
+    };
+    let (offset, mut flags) = if row.kind == candy_gui::DiskPartKind::FreeSpace {
+        (0u64, 0u64)
+    } else {
+        (row.part_num as u64, sex_pdx::fs::INSTALL_REPLACE)
+    };
+    if go {
+        flags |= sex_pdx::fs::INSTALL_GO;
+        m.say("Installing SexOS... Do not power off.");
+        show(window, m, gui);
+    }
+    let mut out = [0u8; 2048];
+    match sex_app::files::install(window, b"", offset, flags, &mut out) {
+        Ok(n) => {
+            gui.install.set_report(&out[..n]);
+            gui.install.plan_ready = !go;
+            sex_pdx::serial_record!("[settings.install.run] go={} part={} bytes={}", go as u8, offset, n);
+            m.say(if go { "Install completed. Restart to boot SexOS." } else { "Dry-run plan ready. Nothing written yet." });
+        }
+        Err(e) => {
+            gui.install.set_report(b"Installer request was refused by Files.");
+            sex_pdx::serial_record!("[settings.install.run] go={} part={} error={}", go as u8, offset, e);
+            m.say("Install request failed.");
+        }
+    }
+}
+
 static mut GUI: GuiState = GuiState::new();
 static mut GLYPHS: Glyphs = Glyphs::new();
 
@@ -246,6 +297,8 @@ pub extern "C" fn _start() -> ! {
                                 if let SidebarView::SystemPage(idx) = v {
                                     m.page = idx;
                                     m.row = 0;
+                                } else if v == SidebarView::Install && !gui.install.loaded {
+                                    refresh_install_parts(&mut window, gui, &mut m);
                                 }
                             }
                             UiAction::SetTheme(val) => {
@@ -325,6 +378,22 @@ pub extern "C" fn _start() -> ! {
                                     persist_setting(&mut m, k, v, &mut generation);
                                     if m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
                                 }
+                            }
+                            UiAction::SelectInstallPart(idx) => {
+                                if gui.install.select_part(idx) {
+                                    m.say("Install target selected.");
+                                } else {
+                                    m.say("That partition is protected and cannot be replaced.");
+                                }
+                            }
+                            UiAction::InstallRefresh => {
+                                refresh_install_parts(&mut window, gui, &mut m);
+                            }
+                            UiAction::InstallPlan => {
+                                run_install_action(&mut window, gui, &mut m, false);
+                            }
+                            UiAction::InstallExecute => {
+                                run_install_action(&mut window, gui, &mut m, true);
                             }
                         }
                         if m.page != old_page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }

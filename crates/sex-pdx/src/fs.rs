@@ -40,13 +40,18 @@ pub const PREPARE: u8 = 12;
 pub const ARGS: u8 = 13;
 pub const ARGS_MAX: usize = 256;
 /// Installs SexOS beside whatever the disk holds (GPT, shared EFI System partition,
-/// slots A and B and a store in free space). The path names a boot image file, or is
-/// empty for the running system's. `offset` is the store size in MiB (0: all the free
-/// space), `length` carries INSTALL_GO; without it Files only plans. Either way the
-/// reply's value is the length of a report, lines of text in the data area.
-/// Spindle only: it changes how the machine starts.
+/// slots A and B and a store in free space), or safely replaces a single GPT partition.
+/// The path names a boot image file, or is empty for the running system's.
+/// - Default (`flags` = 0 or `INSTALL_GO`): `offset` is store size in MiB (0 = all free space).
+/// - `INSTALL_LIST`: lists GPT partitions read-only (human table, or machine format with `INSTALL_LIST_RAW`).
+/// - `INSTALL_REPLACE`: `offset` is 1-based GPT partition number (`1..=1024`); without `INSTALL_GO`, plans only.
+/// Either way the reply's value is the length of a report, lines of text in the data area.
+/// Spindle and Tatami Settings only: it changes how the machine starts.
 pub const INSTALL: u8 = 14;
 pub const INSTALL_GO: u64 = 1;
+pub const INSTALL_LIST: u64 = 1 << 1;
+pub const INSTALL_REPLACE: u64 = 1 << 2;
+pub const INSTALL_LIST_RAW: u64 = 1 << 3;
 /// No-clobber move of a file, only if its current object ID equals `offset`.
 /// The path region contains `source\0destination`, like RENAME. The caller's
 /// existing file scope is applied to both paths independently.

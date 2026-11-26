@@ -891,8 +891,13 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
         (None, Some(k)) => {
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
-            // its other paths below; mounting stays Spindle's.
-            if matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            // its other paths below; mounting stays Spindle's. Tatami Settings may also
+            // invoke the safe partition installer (`w::INSTALL`).
+            if matches!(r.kind, w::UPDATE | w::MOUNT)
+                || (r.kind == w::INSTALL && !bound.is_some_and(|b| is_settings(&b)))
+            {
+                return w::reply(r.seq, w::DENIED, 0);
+            }
             if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) {
                 // A run just started can ask for its arguments before Shell's bind gets here:
                 // it waits for the bind rather than starting with none.
@@ -994,10 +999,11 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let path_len = (r.path_len as usize).min(w::PATH_BYTES);
         let mut path = [0u8; w::PATH_BYTES];
         path[..path_len].copy_from_slice(&region[..path_len]);
-        let go = r.length & w::INSTALL_GO != 0;
+        let flags = r.length;
+        let go = (flags & w::INSTALL_GO != 0) && (flags & w::INSTALL_LIST == 0);
         if go && writes_pending() { if let State::Ready(fs) = state { commit_writes(fs); } }
         let fs = match state { State::Ready(fs) => Some(fs), _ => None };
-        let result = crate::installer::run(fs, &path[..path_len], r.offset, go, &mut region[w::PATH_BYTES..]);
+        let result = crate::installer::run(fs, &path[..path_len], r.offset, flags, &mut region[w::PATH_BYTES..]);
         // Once the installer has written raw, the driver stops this system's writes and the
         // layout under the mounted filesystem may have changed: drop it until restart.
         if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; crate::organize::unmounted(); }

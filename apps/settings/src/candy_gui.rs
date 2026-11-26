@@ -168,6 +168,333 @@ pub const HOTKEY_ROWS: [(&str, &str, &str); 8] = [
     ("Super + Space", "Open SilkBar launcher", "Candy Desktop"),
 ];
 
+/// Maximum partitions (plus free space runs) tracked by the Candy graphical installer.
+pub const MAX_INSTALL_PARTS: usize = 16;
+/// Minimum partition size (1.5 GiB in 512-byte sectors) required to replace with SexOS A/B + Store.
+pub const MIN_INSTALL_SECTORS: u64 = 1536 * 2048;
+
+/// Partition category for color-coding in the Candy GPT Partition Bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskPartKind {
+    Esp,
+    Msr,
+    Windows,
+    Linux,
+    SexOs,
+    FreeSpace,
+    Other,
+}
+
+impl DiskPartKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Esp => "ESP",
+            Self::Msr => "MSR",
+            Self::Windows => "Windows",
+            Self::Linux => "Linux",
+            Self::SexOs => "SexOS",
+            Self::FreeSpace => "Free Space",
+            Self::Other => "Other",
+        }
+    }
+
+    /// Distinct Candy palette RGB color for each partition type in the GPT bar.
+    pub const fn color(self) -> u32 {
+        match self {
+            Self::Esp => 0x00F5_9E0B,       // Amber (EFI System)
+            Self::Msr => 0x0064_748B,       // Slate (MSR)
+            Self::Windows => 0x0038_BDF8,   // Sky Blue (Windows)
+            Self::Linux => 0x0034_D399,     // Mint/Emerald (Linux / Garuda / Void)
+            Self::SexOs => 0x00A7_8BFA,     // Candy Lavender (SexOS)
+            Self::FreeSpace => 0x0047_5569, // Muted Slate (Free Space)
+            Self::Other => 0x00F4_72B6,     // Orchid Pink (Other)
+        }
+    }
+
+    pub fn from_code(code: &[u8]) -> Self {
+        match code {
+            b"esp" => Self::Esp,
+            b"msr" => Self::Msr,
+            b"win" => Self::Windows,
+            b"lin" => Self::Linux,
+            b"sex" => Self::SexOs,
+            b"free" => Self::FreeSpace,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// One partition or free-space entry displayed in the Candy graphical installer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskPartRow {
+    /// 1-based GPT partition number (`0` for Free Space).
+    pub part_num: u16,
+    pub kind: DiskPartKind,
+    pub first_lba: u64,
+    pub sectors: u64,
+    pub replaceable: bool,
+    pub name: [u8; 32],
+    pub name_len: usize,
+}
+
+impl DiskPartRow {
+    pub const EMPTY: Self = Self {
+        part_num: 0,
+        kind: DiskPartKind::Other,
+        first_lba: 0,
+        sectors: 0,
+        replaceable: false,
+        name: [0; 32],
+        name_len: 0,
+    };
+
+    pub fn new(part_num: u16, kind: DiskPartKind, first_lba: u64, sectors: u64, replaceable: bool, label: &[u8]) -> Self {
+        let mut row = Self {
+            part_num,
+            kind,
+            first_lba,
+            sectors,
+            // Enforce protection invariant in UI too: ESP, MSR, and < 1.5 GiB are always locked.
+            replaceable: replaceable
+                && !matches!(kind, DiskPartKind::Esp | DiskPartKind::Msr)
+                && sectors >= MIN_INSTALL_SECTORS,
+            name: [0; 32],
+            name_len: 0,
+        };
+        let n = label.len().min(row.name.len());
+        row.name[..n].copy_from_slice(&label[..n]);
+        row.name_len = n;
+        row
+    }
+
+    pub fn name_bytes(&self) -> &[u8] {
+        &self.name[..self.name_len]
+    }
+}
+
+/// Zero-heap state for the Candy Lavender Graphical Installer & Partition Manager.
+pub struct InstallState {
+    pub total_sectors: u64,
+    pub parts: [DiskPartRow; MAX_INSTALL_PARTS],
+    pub part_count: usize,
+    pub selected: Option<usize>,
+    pub loaded: bool,
+    pub plan_ready: bool,
+    pub report: [u8; 512],
+    pub report_len: usize,
+}
+
+impl InstallState {
+    pub const fn new() -> Self {
+        Self {
+            total_sectors: 0,
+            parts: [DiskPartRow::EMPTY; MAX_INSTALL_PARTS],
+            part_count: 0,
+            selected: None,
+            loaded: false,
+            plan_ready: false,
+            report: [0; 512],
+            report_len: 0,
+        }
+    }
+
+    pub fn set_report(&mut self, bytes: &[u8]) {
+        let n = bytes.len().min(self.report.len());
+        self.report[..n].copy_from_slice(&bytes[..n]);
+        self.report_len = n;
+    }
+
+    pub fn report_bytes(&self) -> &[u8] {
+        &self.report[..self.report_len]
+    }
+
+    /// Selects a partition or free space entry ONLY if it is replaceable (never ESP/MSR/tiny).
+    pub fn select_part(&mut self, idx: usize) -> bool {
+        if idx < self.part_count && self.parts[idx].replaceable {
+            self.selected = Some(idx);
+            self.plan_ready = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn selected_row(&self) -> Option<&DiskPartRow> {
+        self.selected.and_then(|i| (i < self.part_count).then_some(&self.parts[i]))
+    }
+
+    /// Parses machine-readable output from `sexfiles` (`INSTALL_LIST | INSTALL_LIST_RAW`).
+    pub fn parse_raw(&mut self, data: &[u8]) {
+        self.total_sectors = 0;
+        self.part_count = 0;
+        self.selected = None;
+        self.plan_ready = false;
+        self.loaded = true;
+        for line in data.split(|&b| b == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix(b"DISK ") {
+                self.total_sectors = parse_u64_ascii(rest);
+            } else if let Some(rest) = line.strip_prefix(b"PART ") {
+                if self.part_count >= MAX_INSTALL_PARTS {
+                    continue;
+                }
+                let (num_b, r) = split_ws(rest);
+                let (kind_b, r) = split_ws(r);
+                let (first_b, r) = split_ws(r);
+                let (sec_b, r) = split_ws(r);
+                let (rep_b, name_b) = split_ws(r);
+                let num = parse_u64_ascii(num_b) as u16;
+                let kind = DiskPartKind::from_code(kind_b);
+                let first = parse_u64_ascii(first_b);
+                let sectors = parse_u64_ascii(sec_b);
+                let replaceable = rep_b == b"1";
+                let label = if name_b.is_empty() { kind.label().as_bytes() } else { name_b };
+                self.parts[self.part_count] = DiskPartRow::new(num, kind, first, sectors, replaceable, label);
+                self.part_count += 1;
+            } else if let Some(rest) = line.strip_prefix(b"FREE ") {
+                if self.part_count >= MAX_INSTALL_PARTS {
+                    continue;
+                }
+                let (first_b, sec_b) = split_ws(rest);
+                let first = parse_u64_ascii(first_b);
+                let sectors = parse_u64_ascii(sec_b);
+                self.parts[self.part_count] =
+                    DiskPartRow::new(0, DiskPartKind::FreeSpace, first, sectors, true, b"Unallocated Free Space");
+                self.part_count += 1;
+            } else if line.starts_with(b"ERR ") {
+                self.set_report(b"No GPT partition table found. Use Spindle `install` for blank disks.");
+            }
+        }
+        // Auto-select the first replaceable target (if any) for immediate clarity.
+        for i in 0..self.part_count {
+            if self.parts[i].replaceable {
+                self.selected = Some(i);
+                break;
+            }
+        }
+    }
+
+    /// Formats the safety summary line into `out`; returns `(len, is_replace_warning)`.
+    pub fn safety_summary(&self, out: &mut [u8; 160]) -> (usize, bool) {
+        let mut n = 0usize;
+        let mut push = |s: &[u8]| {
+            let take = s.len().min(out.len().saturating_sub(n));
+            out[n..n + take].copy_from_slice(&s[..take]);
+            n += take;
+        };
+        let Some(row) = self.selected_row() else {
+            push(b"Select a replaceable partition (>= 1.5 GiB) or Free Space. ESP & tiny partitions are locked.");
+            return (n, false);
+        };
+        let mut sz = [0u8; 16];
+        let sz_len = format_size_short(row.sectors, &mut sz);
+        if row.kind == DiskPartKind::FreeSpace {
+            push(b"Will install SexOS A/B + Store into Free Space (");
+            push(&sz[..sz_len]);
+            push(b"). All existing partitions remain untouched.");
+            (n, false)
+        } else {
+            let mut num_buf = [0u8; 8];
+            let num_len = format_u64_ascii(row.part_num as u64, &mut num_buf);
+            push(b"Will replace ONLY Partition #");
+            push(&num_buf[..num_len]);
+            push(b" (");
+            push(row.name_bytes());
+            push(b", ");
+            push(&sz[..sz_len]);
+            push(b") with SexOS A/B + Store. All other partitions remain untouched.");
+            (n, true)
+        }
+    }
+}
+
+fn split_ws(mut s: &[u8]) -> (&[u8], &[u8]) {
+    while let Some(&b) = s.first() {
+        if b == b' ' || b == b'\t' {
+            s = &s[1..];
+        } else {
+            break;
+        }
+    }
+    let mut i = 0;
+    while i < s.len() && s[i] != b' ' && s[i] != b'\t' {
+        i += 1;
+    }
+    let head = &s[..i];
+    let mut tail = &s[i..];
+    while let Some(&b) = tail.first() {
+        if b == b' ' || b == b'\t' {
+            tail = &tail[1..];
+        } else {
+            break;
+        }
+    }
+    (head, tail)
+}
+
+fn parse_u64_ascii(s: &[u8]) -> u64 {
+    let mut v = 0u64;
+    for &b in s {
+        if b.is_ascii_digit() {
+            v = v.saturating_mul(10).saturating_add((b - b'0') as u64);
+        } else {
+            break;
+        }
+    }
+    v
+}
+
+fn format_u64_ascii(mut v: u64, out: &mut [u8]) -> usize {
+    let mut tmp = [0u8; 20];
+    let mut k = 0;
+    loop {
+        tmp[k] = b'0' + (v % 10) as u8;
+        k += 1;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    let mut n = 0;
+    while k > 0 && n < out.len() {
+        k -= 1;
+        out[n] = tmp[k];
+        n += 1;
+    }
+    n
+}
+
+fn format_size_short(sectors: u64, out: &mut [u8; 16]) -> usize {
+    let mut n = 0usize;
+    if sectors < 2048 * 1024 {
+        let mib = sectors / 2048;
+        n += format_u64_ascii(mib, &mut out[n..]);
+        let suf = b" MiB";
+        let take = suf.len().min(out.len() - n);
+        out[n..n + take].copy_from_slice(&suf[..take]);
+        n += take;
+    } else {
+        let gib = sectors / (2048 * 1024);
+        let tenths = sectors % (2048 * 1024) * 10 / (2048 * 1024);
+        n += format_u64_ascii(gib, &mut out[n..]);
+        if n < out.len() {
+            out[n] = b'.';
+            n += 1;
+        }
+        if n < out.len() {
+            out[n] = b'0' + tenths as u8;
+            n += 1;
+        }
+        let suf = b" GiB";
+        let take = suf.len().min(out.len() - n);
+        out[n..n + take].copy_from_slice(&suf[..take]);
+        n += take;
+    }
+    n
+}
+
 /// Active top-level Candy sidebar tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarView {
@@ -175,6 +502,8 @@ pub enum SidebarView {
     WindowsTabs,
     Keybinds,
     Profiles,
+    /// Candy Lavender Graphical Installer & Partition Manager.
+    Install,
     /// One of the existing `sex-config` schema / info pages by index.
     SystemPage(usize),
 }
@@ -209,6 +538,10 @@ pub enum UiAction {
     ResetDefaults,
     SelectRow(usize),
     StepRow(usize, bool),
+    SelectInstallPart(usize),
+    InstallRefresh,
+    InstallPlan,
+    InstallExecute,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +572,7 @@ pub struct GuiState {
     pub pressed: Option<UiAction>,
     pub hits: [Option<HitRect>; MAX_HITS],
     pub hit_count: usize,
+    pub install: InstallState,
 }
 
 impl GuiState {
@@ -255,6 +589,7 @@ impl GuiState {
             pressed: None,
             hits: [None; MAX_HITS],
             hit_count: 0,
+            install: InstallState::new(),
         }
     }
 
@@ -469,6 +804,7 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
         SidebarView::WindowsTabs => b"Windows, Chrome & Tiling",
         SidebarView::Keybinds => b"Keybinds (Hyprland + KDE)",
         SidebarView::Profiles => b"Desktop Profiles (HyprMod)",
+        SidebarView::Install => b"Install SexOS & Partition Manager",
         SidebarView::SystemPage(idx) => {
             let (pages, n) = model::pages();
             if idx < n {
@@ -506,11 +842,12 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
     draw_text(buf, w, h, g, 14, sy, SIDEBAR_W - 24, b"PERSONALIZE", pal.text_dim);
     sy += 20;
 
-    let primary_items: [(&[u8], SidebarView); 4] = [
+    let primary_items: [(&[u8], SidebarView); 5] = [
         (b"Appearance", SidebarView::Appearance),
         (b"Windows & Tabs", SidebarView::WindowsTabs),
         (b"Keybinds", SidebarView::Keybinds),
         (b"Profiles", SidebarView::Profiles),
+        (b"Install SexOS", SidebarView::Install),
     ];
     for (label, view) in primary_items {
         let active = gui.view == view;
@@ -566,6 +903,7 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
         SidebarView::WindowsTabs => render_windows_tabs(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
         SidebarView::Keybinds => render_keybinds(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
         SidebarView::Profiles => render_profiles(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
+        SidebarView::Install => render_install(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
         SidebarView::SystemPage(_) => render_system_page(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
     }
 
@@ -966,6 +1304,267 @@ fn format_short_value(kind: Kind, value: i32, item: Option<u8>, out: &mut [u8; 1
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_install(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    ch: i32,
+) {
+    let max_y = y + ch;
+
+    // 1. Visual horizontal color-coded GPT Partition Bar card.
+    let bar_card_h = 84;
+    draw_candy_panel(buf, w, h, x, y, cw, bar_card_h, 10, pal);
+    let mut hdr = [0u8; 64];
+    let mut hlen = 0usize;
+    let prefix = b"GPT Disk Partition Map";
+    hdr[..prefix.len()].copy_from_slice(prefix);
+    hlen += prefix.len();
+    if gui.install.total_sectors > 0 {
+        let mut sz = [0u8; 16];
+        let sl = format_size_short(gui.install.total_sectors, &mut sz);
+        let sep = b" (";
+        hdr[hlen..hlen + sep.len()].copy_from_slice(sep);
+        hlen += sep.len();
+        let take = sl.min(hdr.len() - hlen - 1);
+        hdr[hlen..hlen + take].copy_from_slice(&sz[..take]);
+        hlen += take;
+        hdr[hlen] = b')';
+        hlen += 1;
+    }
+    draw_text(buf, w, h, g, x + 14, y + 8, cw - 120, &hdr[..hlen], pal.text);
+
+    // Refresh Disk button on top-right of GPT bar card.
+    let ref_w = 78;
+    let ref_act = UiAction::InstallRefresh;
+    draw_candy_button(buf, w, h, x + cw - ref_w - 10, y + 5, ref_w, 22, 8, ButtonStyle::Subtle, gui.btn_state(ref_act), pal);
+    draw_text(buf, w, h, g, x + cw - ref_w + 2, y + 8, ref_w - 12, b"Refresh", pal.text_dim);
+    gui.push_hit(x + cw - ref_w - 10, y + 5, ref_w, 22, ref_act);
+
+    // Proportional horizontal GPT Partition Bar.
+    let bar_x = x + 14;
+    let bar_y = y + 32;
+    let bar_w = (cw - 28).max(80);
+    let bar_h = 30;
+    fill_rounded_rect(buf, w, h, bar_x, bar_y, bar_w, bar_h, 6, pal.control);
+
+    let count = gui.install.part_count;
+    if count > 0 {
+        let sum_sectors: u64 = gui.install.parts[..count]
+            .iter()
+            .map(|p| p.sectors.max(1))
+            .sum::<u64>()
+            .max(1);
+        let min_seg = 24.min(bar_w / (count as i32).max(1)).max(8);
+        let mut sx = bar_x;
+        let bar_right = bar_x + bar_w;
+        for i in 0..count {
+            let p = gui.install.parts[i];
+            let rem_parts = (count - 1 - i) as i32;
+            let raw_w = ((p.sectors as u128 * bar_w as u128) / sum_sectors as u128) as i32;
+            let max_here = (bar_right - sx - rem_parts * min_seg).max(min_seg);
+            let seg_w = if i + 1 == count {
+                (bar_right - sx).max(1)
+            } else {
+                raw_w.clamp(min_seg, max_here)
+            };
+            let selected = gui.install.selected == Some(i);
+            let col = p.kind.color();
+            if selected {
+                fill_rounded_rect(buf, w, h, sx, bar_y - 2, seg_w.saturating_sub(2).max(4), bar_h + 4, 5, pal.text);
+                fill_rounded_rect(buf, w, h, sx + 2, bar_y, seg_w.saturating_sub(6).max(2), bar_h, 4, col);
+            } else {
+                fill_rounded_rect(buf, w, h, sx, bar_y, seg_w.saturating_sub(2).max(4), bar_h, 4, col);
+            }
+            if seg_w >= 44 {
+                let lbl = if p.kind == DiskPartKind::FreeSpace { b"Free" as &[u8] } else { p.kind.label().as_bytes() };
+                draw_text(buf, w, h, g, sx + 6, bar_y + 7, seg_w - 10, lbl, 0x0010_0C1C);
+            }
+            if p.replaceable {
+                gui.push_hit(sx, bar_y, seg_w, bar_h, UiAction::SelectInstallPart(i));
+            }
+            sx += seg_w;
+        }
+    } else {
+        let msg: &[u8] = if gui.install.loaded {
+            b"No GPT partitions detected (click Refresh or use Spindle `install`)."
+        } else {
+            b"Scanning disk layout..."
+        };
+        draw_text(buf, w, h, g, bar_x + 10, bar_y + 7, bar_w - 20, msg, pal.text_dim);
+    }
+
+    // Color legend strip under bar.
+    let legend: [(&[u8], u32); 5] = [
+        (b"ESP", DiskPartKind::Esp.color()),
+        (b"Windows", DiskPartKind::Windows.color()),
+        (b"Linux", DiskPartKind::Linux.color()),
+        (b"SexOS", DiskPartKind::SexOs.color()),
+        (b"Free", DiskPartKind::FreeSpace.color()),
+    ];
+    let mut lx = bar_x;
+    for (lbl, col) in legend {
+        if lx + 72 > bar_x + bar_w {
+            break;
+        }
+        fill_rounded_rect(buf, w, h, lx, y + 67, 10, 10, 3, col);
+        draw_text(buf, w, h, g, lx + 14, y + 64, 60, lbl, pal.text_dim);
+        lx += (lbl.len() as i32) * CELL_W as i32 + 28;
+    }
+    y += bar_card_h + 10;
+
+    // 2. Clickable Partition Cards / Rows (reserve room for safety panel + action buttons below).
+    let footer_h = 136;
+    let list_limit = (max_y - footer_h).max(y + 34);
+    for i in 0..count {
+        if y + 32 > list_limit {
+            break;
+        }
+        let p = gui.install.parts[i];
+        let selected = gui.install.selected == Some(i);
+        let act = UiAction::SelectInstallPart(i);
+        let st = gui.btn_state(act);
+
+        if selected {
+            draw_candy_selection_row(buf, w, h, x, y, cw, 28, 8, pal);
+        } else if p.replaceable && st == ButtonState::Hover {
+            draw_candy_button(buf, w, h, x, y, cw, 28, 8, ButtonStyle::Subtle, st, pal);
+        } else {
+            draw_candy_panel(buf, w, h, x, y, cw, 28, 8, pal);
+        }
+
+        // Color dot.
+        fill_rounded_rect(buf, w, h, x + 10, y + 8, 12, 12, 4, p.kind.color());
+
+        // Partition number (#N or FREE).
+        let mut num_lbl = [0u8; 8];
+        let num_len = if p.kind == DiskPartKind::FreeSpace {
+            num_lbl[..4].copy_from_slice(b"FREE");
+            4
+        } else {
+            num_lbl[0] = b'#';
+            1 + format_u64_ascii(p.part_num as u64, &mut num_lbl[1..])
+        };
+        draw_text(buf, w, h, g, x + 28, y + 6, 44, &num_lbl[..num_len], pal.text);
+
+        // Name & type.
+        let name_col = if p.replaceable { pal.text } else { pal.text_dim };
+        draw_text(buf, w, h, g, x + 76, y + 6, (cw - 270).max(80), p.name_bytes(), name_col);
+        draw_text(buf, w, h, g, x + cw - 190, y + 6, 64, p.kind.label().as_bytes(), pal.text_dim);
+
+        // Size.
+        let mut sz = [0u8; 16];
+        let sz_len = format_size_short(p.sectors, &mut sz);
+        draw_text(buf, w, h, g, x + cw - 126, y + 6, 68, &sz[..sz_len], name_col);
+
+        // Status pill (LOCKED for ESP / MSR / < 1.5 GiB, Selected / Select for replaceable).
+        if !p.replaceable {
+            draw_candy_badge(buf, w, h, x + cw - 68, y + 4, 60, 20, 0x0047_3520, pal);
+            draw_text(buf, w, h, g, x + cw - 62, y + 6, 52, b"LOCKED", 0x00FB_BF24);
+        } else {
+            let pill_col = if selected { pal.accent } else { pal.control };
+            let pill_ink = if selected { pal.text_on_accent } else { pal.text };
+            let pill_txt: &[u8] = if selected { b"Target" } else { b"Select" };
+            draw_candy_badge(buf, w, h, x + cw - 68, y + 4, 60, 20, pill_col, pal);
+            draw_text(buf, w, h, g, x + cw - 62, y + 6, 52, pill_txt, pill_ink);
+            gui.push_hit(x, y, cw, 28, act);
+        }
+        y += 32;
+    }
+
+    // 3. Green / Amber Safety Summary Panel.
+    let summary_y = y.max(list_limit - 2).min(max_y - 128);
+    let summary_h = 84;
+    let mut sum_buf = [0u8; 160];
+    let (sum_len, is_amber) = gui.install.safety_summary(&mut sum_buf);
+    let has_target = gui.install.selected_row().is_some();
+    let badge_bg = if !has_target {
+        pal.control
+    } else if is_amber {
+        0x00F5_9E0B // Amber caution (replacing single partition)
+    } else {
+        0x0034_D399 // Green safe (free space)
+    };
+    let badge_lbl: &[u8] = if !has_target {
+        b"SAFETY"
+    } else if is_amber {
+        b"SINGLE-PART"
+    } else {
+        b"SAFE FREE"
+    };
+
+    draw_candy_panel(buf, w, h, x, summary_y, cw, summary_h, 10, pal);
+    fill_rounded_rect(buf, w, h, x + 2, summary_y + 6, 4, summary_h - 12, 2, badge_bg);
+    draw_candy_badge(buf, w, h, x + 14, summary_y + 8, 98, 20, badge_bg, pal);
+    draw_text(buf, w, h, g, x + 20, summary_y + 10, 88, badge_lbl, 0x0010_0C1C);
+
+    // Wrap safety summary across 2 lines if needed.
+    let chars_per_line = ((cw - 130) / CELL_W as i32).max(20) as usize;
+    let line1_end = sum_len.min(chars_per_line);
+    draw_text(buf, w, h, g, x + 120, summary_y + 10, cw - 130, &sum_buf[..line1_end], pal.text);
+    if line1_end < sum_len {
+        draw_text(buf, w, h, g, x + 14, summary_y + 32, cw - 28, &sum_buf[line1_end..sum_len], pal.text);
+    }
+
+    // Show latest plan/install report from sexfiles (first 2 non-empty lines).
+    let rep = gui.install.report_bytes();
+    if !rep.is_empty() {
+        let mut ry = summary_y + 52;
+        for line in rep.split(|&b| b == b'\n') {
+            if line.is_empty() {
+                continue;
+            }
+            if ry + 16 > summary_y + summary_h {
+                break;
+            }
+            draw_text(buf, w, h, g, x + 14, ry, cw - 28, line, pal.text_dim);
+            ry += 16;
+        }
+    } else {
+        draw_text(
+            buf,
+            w,
+            h,
+            g,
+            x + 14,
+            summary_y + 54,
+            cw - 28,
+            b"Click 'Plan Install' for a dry-run preview before writing anything.",
+            pal.text_dim,
+        );
+    }
+
+    // 4. Clean "Plan Install" and "Install Now" Candy Action Buttons.
+    let btn_y = summary_y + summary_h + 10;
+    let plan_w = 136;
+    let go_w = 136;
+    let plan_style = if has_target { ButtonStyle::Normal } else { ButtonStyle::Disabled };
+    let plan_act = UiAction::InstallPlan;
+    let plan_state = if has_target { gui.btn_state(plan_act) } else { ButtonState::Rest };
+    draw_candy_button(buf, w, h, x, btn_y, plan_w, 30, 10, plan_style, plan_state, pal);
+    draw_text(buf, w, h, g, x + 20, btn_y + 7, plan_w - 24, b"Plan Install", button_text_color(plan_style, pal));
+    if has_target {
+        gui.push_hit(x, btn_y, plan_w, 30, plan_act);
+    }
+
+    let go_x = x + plan_w + 12;
+    let go_style = if has_target { ButtonStyle::Primary } else { ButtonStyle::Disabled };
+    let go_act = UiAction::InstallExecute;
+    let go_state = if has_target { gui.btn_state(go_act) } else { ButtonState::Rest };
+    draw_candy_button(buf, w, h, go_x, btn_y, go_w, 30, 10, go_style, go_state, pal);
+    draw_text(buf, w, h, g, go_x + 24, btn_y + 7, go_w - 24, b"Install Now", button_text_color(go_style, pal));
+    if has_target {
+        gui.push_hit(go_x, btn_y, go_w, 30, go_act);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,5 +1629,68 @@ mod tests {
             .flatten()
             .any(|h| h.action == UiAction::ToggleFrostedGlass);
         assert!(has_glass);
+
+        // Verify Install SexOS sidebar tab hitbox exists.
+        let has_install_tab = gui.hits[..gui.hit_count]
+            .iter()
+            .flatten()
+            .any(|h| h.action == UiAction::SelectView(SidebarView::Install));
+        assert!(has_install_tab, "missing Install SexOS sidebar tab");
+    }
+
+    #[test]
+    fn install_gui_locks_esp_msr_tiny_and_renders_partition_bar_and_buttons() {
+        let cfg = Config::new();
+        let m = Model::new(cfg);
+        let mut gui = GuiState::new();
+        gui.view = SidebarView::Install;
+
+        // Simulated raw GPT output from sexfiles: ESP + MSR + Windows + Void + Garuda + Tiny + Free.
+        let raw = concat!(
+            "DISK 1000215216\n",
+            "PART 1 esp 2048 532480 0 EFI system partition\n",
+            "PART 2 msr 534528 32768 0 Microsoft reserved\n",
+            "PART 3 win 567296 209715200 1 Windows\n",
+            "PART 4 lin 210282496 104857600 1 Void Linux\n",
+            "PART 5 lin 315140096 104857600 1 Garuda Linux\n",
+            "PART 6 lin 419997696 131072 0 Tiny Boot\n",
+            "FREE 420128768 50000000\n",
+        );
+        gui.install.parse_raw(raw.as_bytes());
+        assert_eq!(gui.install.part_count, 7);
+
+        // ESP (0), MSR (1), and Tiny (5) MUST be locked and unselectable.
+        assert!(!gui.install.parts[0].replaceable);
+        assert!(!gui.install.parts[1].replaceable);
+        assert!(!gui.install.parts[5].replaceable);
+        assert!(!gui.install.select_part(0), "ESP must never be selectable");
+        assert!(!gui.install.select_part(1), "MSR must never be selectable");
+        assert!(!gui.install.select_part(5), "Tiny (<1.5 GiB) must never be selectable");
+
+        // Select Garuda Linux (index 4, Partition #5).
+        assert!(gui.install.select_part(4));
+        let mut summary = [0u8; 160];
+        let (slen, is_amber) = gui.install.safety_summary(&mut summary);
+        let summary_str = core::str::from_utf8(&summary[..slen]).unwrap();
+        assert!(is_amber);
+        assert!(
+            summary_str.contains("Will replace ONLY Partition #5 (Garuda Linux, 50.0 GiB) with SexOS A/B + Store. All other partitions remain untouched."),
+            "unexpected summary: {summary_str}"
+        );
+
+        // Render Install page and verify hitboxes.
+        let mut g = Glyphs::new();
+        let mut buf = vec![0u32; 900 * 600];
+        render_gui(&mut buf, 900, 600, &mut g, &mut gui, &m);
+
+        let has = |act: UiAction| gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == act);
+        assert!(!has(UiAction::SelectInstallPart(0)), "ESP must not have selectable hitbox");
+        assert!(!has(UiAction::SelectInstallPart(1)), "MSR must not have selectable hitbox");
+        assert!(!has(UiAction::SelectInstallPart(5)), "Tiny must not have selectable hitbox");
+        assert!(has(UiAction::SelectInstallPart(4)), "Garuda must be clickable");
+        assert!(has(UiAction::InstallRefresh), "missing Refresh button hitbox");
+        assert!(has(UiAction::InstallPlan), "missing Plan Install button hitbox");
+        assert!(has(UiAction::InstallExecute), "missing Install Now button hitbox");
     }
 }
+

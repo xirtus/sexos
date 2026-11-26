@@ -46,6 +46,20 @@ pub const TYPE_SEXOS_BOOT: Guid = Guid::new(0x9b91c936, 0xd5fc, 0x4508, [0xa5, 0
 /// The SexOS store: DiskFS, the program store and the filesystem. The disk driver lets
 /// SexOS write only inside this partition.
 pub const TYPE_SEXOS_DATA: Guid = Guid::new(0xc4de67a4, 0xed02, 0x466c, [0x9a, 0xd5, 0x3f, 0x38, 0xc3, 0xc4, 0x76, 0xd6]);
+/// Microsoft Reserved Partition (MSR) — protected, never replaced.
+pub const TYPE_MSR: Guid = Guid::new(0xE3C9E316, 0x0B5C, 0x4DB8, [0x81, 0x7D, 0xF9, 0x2D, 0xF0, 0x02, 0x15, 0xAE]);
+/// Microsoft Basic Data Partition (NTFS / FAT / exFAT).
+pub const TYPE_BASIC_DATA: Guid = Guid::new(0xEBD0A0A2, 0xB9E5, 0x4433, [0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7]);
+/// Windows Recovery Environment.
+pub const TYPE_WINDOWS_RE: Guid = Guid::new(0xDE94BBA4, 0x06D1, 0x4D40, [0xA1, 0x6A, 0xBF, 0xD5, 0x01, 0x79, 0xD6, 0xAC]);
+/// Linux filesystem data (`8300`).
+pub const TYPE_LINUX_FS: Guid = Guid::new(0x0FC63DAF, 0x8483, 0x4772, [0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4]);
+/// Linux x86-64 root (`8304`).
+pub const TYPE_LINUX_ROOT_X64: Guid = Guid::new(0x4F68BCE3, 0xE8CD, 0x4DB1, [0x96, 0xE7, 0xFB, 0xCA, 0xF9, 0x84, 0xB7, 0x09]);
+/// Linux `/home` (`8302`).
+pub const TYPE_LINUX_HOME: Guid = Guid::new(0x933AC7E1, 0x2EB4, 0x4F13, [0xB8, 0x44, 0x0E, 0x14, 0xE2, 0xAE, 0xF9, 0x15]);
+/// Linux swap (`8200`).
+pub const TYPE_LINUX_SWAP: Guid = Guid::new(0x0657FD6D, 0xA4AB, 0x43C4, [0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F]);
 
 pub const SIGNATURE: &[u8; 8] = b"EFI PART";
 pub const HEADER_BYTES: usize = 92;
@@ -232,6 +246,15 @@ impl Gpt {
         let slot = self.entries.iter().position(|e| !e.is_used()).ok_or(Error::NoSpace)?;
         self.entries[slot] = Entry::new(self.header.entry_size as usize, type_guid, part_guid, first, last, name);
         Ok(slot)
+    }
+
+    /// Removes a single partition entry by 0-based index, zeroing ONLY that entry while
+    /// leaving every other entry's index, GUID, LBA range, flags, and raw bytes untouched.
+    pub fn remove(&mut self, index: usize) -> Result<Entry, Error> {
+        let Some(slot) = self.entries.get_mut(index) else { return Err(Error::NotFound); };
+        if !slot.is_used() { return Err(Error::NotFound); }
+        let empty = Entry { raw: vec![0; self.header.entry_size as usize] };
+        Ok(core::mem::replace(slot, empty))
     }
 
     pub fn find_type(&self, t: Guid) -> impl Iterator<Item = &Entry> { self.entries.iter().filter(move |e| e.type_guid() == t) }

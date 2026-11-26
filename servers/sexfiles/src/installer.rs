@@ -79,33 +79,150 @@ pub(crate) fn why(e: Error) -> &'static str {
     }
 }
 
-/// Plans, and with `go` installs. Writes what happened into `out` as lines of text and
-/// returns their length. `image` is a file path, or empty for the running system.
-pub fn run(fs: Option<&mut Fs<'static, crate::fs_service::Disk>>, image: &[u8], store_mib: u64, go: bool, out: &mut [u8]) -> Result<u32, sexfs::Error> {
-    let disk_sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) >> 8;
+fn fmt_size(sectors: u64) -> String {
+    if sectors < 2048 * 1024 {
+        format!("{} MiB", sectors / 2048)
+    } else {
+        let gib = sectors / (2048 * 1024);
+        let tenths = sectors % (2048 * 1024) * 10 / (2048 * 1024);
+        format!("{gib}.{tenths} GiB")
+    }
+}
+
+fn kind_code(k: install::PartKind) -> &'static str {
+    match k {
+        install::PartKind::Esp => "esp",
+        install::PartKind::Msr => "msr",
+        install::PartKind::Windows => "win",
+        install::PartKind::Linux => "lin",
+        install::PartKind::SexOs => "sex",
+        install::PartKind::Other => "oth",
+    }
+}
+
+fn list_report(disk: &mut RawDisk, raw: bool) -> String {
     let mut text = String::new();
-    let mut disk = RawDisk { sectors: disk_sectors };
-    let layout = sex_disk::probe::classify(&mut disk);
-    let mode = match layout {
-        Ok(sex_disk::probe::Layout::Blank) | Ok(sex_disk::probe::Layout::LegacySexos) => Mode::WholeDisk,
-        _ => Mode::FreeSpace(if store_mib == 0 { None } else { Some(store_mib * 2048) }),
-    };
+    match install::list_partitions(disk) {
+        Ok((total, parts, free)) => {
+            if raw {
+                text.push_str(&format!("DISK {total}\n"));
+                for p in &parts {
+                    text.push_str(&format!(
+                        "PART {} {} {} {} {} {}\n",
+                        p.index + 1,
+                        kind_code(p.kind),
+                        p.first_lba,
+                        p.sectors,
+                        if p.replaceable { 1 } else { 0 },
+                        p.name
+                    ));
+                }
+                for f in &free {
+                    if f.sectors >= install::MIN_REPLACE_SECTORS {
+                        text.push_str(&format!("FREE {} {}\n", f.first, f.sectors));
+                    }
+                }
+            } else {
+                text.push_str(&format!("GPT Disk ({}):\n", fmt_size(total)));
+                text.push_str("  #   Type     Size        Status                         Name\n");
+                for p in &parts {
+                    let status = if p.replaceable {
+                        String::from("replaceable")
+                    } else {
+                        format!("LOCKED ({})", p.protect_reason.unwrap_or("protected"))
+                    };
+                    text.push_str(&format!(
+                        "  {:<3} {:<8} {:<11} {:<30} {}\n",
+                        p.index + 1,
+                        p.kind.label(),
+                        fmt_size(p.sectors),
+                        status,
+                        p.name
+                    ));
+                }
+                let big_free: u64 = free
+                    .iter()
+                    .filter(|f| f.sectors >= install::MIN_REPLACE_SECTORS)
+                    .map(|f| f.sectors)
+                    .max()
+                    .unwrap_or(0);
+                if big_free > 0 {
+                    text.push_str(&format!("Largest free space: {} (usable with `install`)\n", fmt_size(big_free)));
+                }
+                text.push_str("To preview replacing one partition: install replace <N>\n");
+            }
+        }
+        Err(e) => {
+            if raw {
+                text.push_str(&format!("ERR {:?}\n", e));
+            } else {
+                text.push_str("Cannot list partitions. ");
+                text.push_str(why(e));
+                text.push('\n');
+            }
+        }
+    }
+    text
+}
+
+/// Plans, lists partitions, or with `INSTALL_GO` installs. Writes what happened into `out`
+/// as lines of text and returns their length. `image` is a file path, or empty for the running system.
+pub fn run(fs: Option<&mut Fs<'static, crate::fs_service::Disk>>, image: &[u8], arg: u64, flags: u64, out: &mut [u8]) -> Result<u32, sexfs::Error> {
+    let disk_sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) >> 8;
     let finish = |text: String, out: &mut [u8]| { let n = text.len().min(out.len()); out[..n].copy_from_slice(&text.as_bytes()[..n]); Ok(n as u32) };
+    let mut disk = RawDisk { sectors: disk_sectors };
+    if flags & w::INSTALL_LIST != 0 {
+        let raw = flags & w::INSTALL_LIST_RAW != 0;
+        let text = list_report(&mut disk, raw);
+        sex_pdx::serial_record!("[files.install.list] raw={} bytes={}", raw as u8, text.len());
+        return finish(text, out);
+    }
+    let replace = flags & w::INSTALL_REPLACE != 0;
+    let go = flags & w::INSTALL_GO != 0;
+    let mut text = String::new();
+    let layout = sex_disk::probe::classify(&mut disk);
+    let mode = if replace {
+        if arg == 0 || arg > 1024 {
+            text.push_str("Not installed. Partition number must be >= 1 (run `install parts` to list partitions).\n");
+            return finish(text, out);
+        }
+        Mode::ReplacePartition((arg - 1) as usize)
+    } else {
+        match layout {
+            Ok(sex_disk::probe::Layout::Blank) | Ok(sex_disk::probe::Layout::LegacySexos) => Mode::WholeDisk,
+            _ => Mode::FreeSpace(if arg == 0 { None } else { Some(arg * 2048) }),
+        }
+    };
     let mut plan = match install::plan(&mut disk, mode, &seeds()) {
         Ok(p) => p,
         Err(e) => {
-            sex_pdx::serial_record!("[files.install.refused] error={:?} layout={:?}", e, layout);
-            text.push_str("Not installed. "); text.push_str(why(e)); text.push('\n');
+            sex_pdx::serial_record!("[files.install.refused] error={:?} layout={:?} replace={}", e, layout, replace as u8);
+            text.push_str("Not installed. ");
+            if replace {
+                match e {
+                    Error::Invalid => text.push_str("That partition is protected (EFI System Partition or Microsoft Reserved) and cannot be replaced."),
+                    Error::NotFound => text.push_str(&format!("Partition #{} was not found on this disk. Run `install parts` to see valid numbers.", arg)),
+                    Error::NoSpace => text.push_str("That partition is smaller than 1.5 GiB (SexOS needs 256 MiB Slot A + 256 MiB Slot B + at least 1 GiB Store)."),
+                    _ => text.push_str(why(e)),
+                }
+            } else {
+                text.push_str(why(e));
+            }
+            text.push('\n');
             return finish(text, out);
         }
     };
     if mode == Mode::WholeDisk { text.push_str("This disk is blank or holds only an old SexOS: it becomes SexOS's alone.\n"); }
     for line in install::describe(&plan) { text.push_str(&line); text.push('\n'); }
-    sex_pdx::serial_record!("[files.install.plan] whole={} esp_new={} store_sectors={} others={}", plan.new_table as u8, plan.new_esp as u8, plan.store.sectors, plan.others.len());
+    sex_pdx::serial_record!("[files.install.plan] whole={} esp_new={} store_sectors={} others={} replace={}", plan.new_table as u8, plan.new_esp as u8, plan.store.sectors, plan.others.len(), replace as u8);
     if !go {
-        text.push_str("Nothing written yet. To install: install go");
-        if store_mib != 0 { text.push_str(&format!(" {}", store_mib / 1024)); }
-        text.push('\n');
+        if replace {
+            text.push_str(&format!("Nothing written yet. To install: install replace {} go\n", arg));
+        } else {
+            text.push_str("Nothing written yet. To install: install go");
+            if arg != 0 { text.push_str(&format!(" {}", arg / 1024)); }
+            text.push('\n');
+        }
         return finish(text, out);
     }
     // The image: the running system's, or a file.

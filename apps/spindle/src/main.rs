@@ -895,6 +895,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  spindle  a terminal window: runs programs (python, lua, rg...) inside it");
             sb.push(b"  edit FILE    open a file in Jot; @FILE gives any program that file");
             sb.push(b"  install [go] [GIB] [IMG] put SexOS beside the other systems on this disk; without go, only plans");
+            sb.push(b"  install parts            list GPT partitions (type, size, replaceable status)");
+            sb.push(b"  install replace N [go]   safely replace ONLY partition #N with SexOS A/B + Store");
             sb.push(b"  update [URL]           get the newest signed release into the other system slot, tried once");
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
