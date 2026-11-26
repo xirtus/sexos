@@ -464,7 +464,8 @@ impl Link {
             let f = rx.frame;
             if f.len() < 24 || f[4..10] != me && f[4] & 1 == 0 { return; }
             if f[0] & 0x0c == 0 {
-                if f[16..22] == bssid && f[4..10] == me {
+                // Protected (robust) action frames carry a CCMP header first: not ours to parse.
+                if f[16..22] == bssid && f[4..10] == me && f[1] & 0x40 == 0 {
                     if let Some(reason) = w::parse_disconnect(f) { gone = Some(reason); }
                     if let Some(req) = ba::parse_addba_request(f) { addba = Some(req); }
                     if let Some((tid, _)) = ba::parse_delba(f) { delba = Some(tid); }

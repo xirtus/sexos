@@ -84,7 +84,11 @@ impl Rsn {
 }
 
 /// The RSN element we put in the association request and EAPOL message 2.
-/// WPA3 always asks for protected management frames (MFPR); WPA2 offers them.
+/// WPA3 always asks for protected management frames (MFPR). WPA2 leaves them off, as
+/// wpa_supplicant does by default (`pmf=0`): offered on the x17's WPA2/WPA3 router,
+/// they were taken, so its ADDBA requests came encrypted (parsed as garbage, "tid 8")
+/// and our plain ADDBA response was dropped. The router then sent A-MPDUs that the
+/// firmware never block-acked, and unicast to the x17 stopped after ~19 frames.
 pub fn own_rsn(sae: bool, out: &mut [u8; 32]) -> usize {
     let mut n = 0;
     let mut put = |bytes: &[u8]| { out[n..n + bytes.len()].copy_from_slice(bytes); n += bytes.len(); };
@@ -95,7 +99,7 @@ pub fn own_rsn(sae: bool, out: &mut [u8; 32]) -> usize {
     put(&SUITE_CCMP);
     put(&1u16.to_le_bytes());
     put(if sae { &AKM_SAE } else { &AKM_PSK });
-    let caps = if sae { RSN_MFPC | RSN_MFPR } else { RSN_MFPC };
+    let caps = if sae { RSN_MFPC | RSN_MFPR } else { 0 };
     put(&caps.to_le_bytes());
     if sae {
         put(&0u16.to_le_bytes()); // no PMKIDs
