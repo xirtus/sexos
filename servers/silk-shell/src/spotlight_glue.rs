@@ -58,17 +58,27 @@ pub unsafe fn toggle() -> bool {
     }
 }
 
-unsafe fn launch_named_program(name: &str) -> bool {
+unsafe fn launch_named_program(name: &str, network: bool) -> bool {
     let Some(packed) = sex_pdx::program_store::pack_name(name.as_bytes()) else {
         return false;
     };
-    crate::program_start_own(packed)
+    let ok = crate::program_start_own(packed);
+    if ok && network {
+        crate::PROGRAM_NETWORK = true;
+    }
+    ok
+}
+
+fn program_needs_network(name: &str) -> bool {
+    matches!(name, "kaleidoscope" | "tailor" | "flirt" | "gossip" | "sexshop")
 }
 
 unsafe fn dispatch_launch(target: LaunchTarget) {
     match target {
         LaunchTarget::Browser => {
-            let _ = crate::open_browser_in_active_scene();
+            if !launch_named_program("kaleidoscope", true) {
+                let _ = crate::open_browser_in_active_scene();
+            }
         }
         LaunchTarget::Spindle => {
             let _ = crate::open_spindle_in_active_scene();
@@ -80,22 +90,22 @@ unsafe fn dispatch_launch(target: LaunchTarget) {
             let _ = crate::open_mesh_in_active_scene();
         }
         LaunchTarget::Files => {
-            if !launch_named_program("files") {
+            if !launch_named_program("loom", false) {
                 let _ = crate::open_linen_in_active_scene();
             }
         }
         LaunchTarget::Settings => {
-            if !launch_named_program("settings") {
+            if !launch_named_program("tatami", false) {
                 crate::toggle_scene_settings_panel();
             }
         }
         LaunchTarget::Audio => {
-            if !launch_named_program("play") {
+            if !launch_named_program("play", false) {
                 crate::tray_toggle(sex_pdx::tray::Menu::Quick);
             }
         }
         LaunchTarget::Program(name) => {
-            let _ = launch_named_program(name);
+            let _ = launch_named_program(name, program_needs_network(name));
         }
     }
 }

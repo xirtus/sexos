@@ -497,3 +497,67 @@ fn replayed() {
     let n = sv::ext4::RECOVERED.swap(0, core::sync::atomic::Ordering::Relaxed);
     if n > 0 { sex_pdx::serial_record!("[files.media.ext4.replayed] blocks={}", n - 1); }
 }
+
+/// Builds `/programs/<name>` inside a mounted volume; returns `None` if `name` is invalid.
+fn program_inner_path<'a>(name: &[u8], buf: &'a mut [u8; 64]) -> Option<&'a [u8]> {
+    const PREFIX: &[u8] = b"/programs/";
+    if name.is_empty() || PREFIX.len() + name.len() > buf.len() || name.iter().any(|&b| b == b'/' || b == 0) {
+        return None;
+    }
+    buf[..PREFIX.len()].copy_from_slice(PREFIX);
+    buf[PREFIX.len()..PREFIX.len() + name.len()].copy_from_slice(name);
+    Some(&buf[..PREFIX.len() + name.len()])
+}
+
+/// True if any mounted `/media/<vol>` contains a non-empty `/programs/<name>` file.
+pub fn has_program(mut fs: Option<&mut Fs<'static, FsDisk>>, name: &[u8]) -> bool {
+    let mut path_buf = [0u8; 64];
+    let Some(inner) = program_inner_path(name, &mut path_buf) else { return false };
+    for m in mounts().iter_mut() {
+        if let Ok(st) = with(fs.as_deref_mut(), m, |v, d| v.stat(d, inner)) {
+            if st.kind == sv::Kind::File && st.size > 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Searches mounted `/media/<vol>/programs/<name>` read-only and copies the first match into `image`.
+/// Returns `Ok(Some((bytes, volume_name)))`, `Ok(None)` if not present on any mounted volume,
+/// or `Err(program_store_error)` if found but invalid/unreadable.
+pub fn read_program(mut fs: Option<&mut Fs<'static, FsDisk>>, name: &[u8], image: &mut [u8]) -> Result<Option<(usize, String)>, u32> {
+    use sex_pdx::program_store as store;
+    let mut path_buf = [0u8; 64];
+    let Some(inner) = program_inner_path(name, &mut path_buf) else { return Ok(None) };
+    const CHUNK: usize = 64 * 1024;
+    for m in mounts().iter_mut() {
+        let Ok(st) = with(fs.as_deref_mut(), m, |v, d| v.stat(d, inner)) else { continue };
+        if st.kind == sv::Kind::Dir || st.size == 0 {
+            continue;
+        }
+        if st.size > image.len() as u64 {
+            return Err(store::TOO_LARGE);
+        }
+        let size = st.size as usize;
+        let read_res = with(fs.as_deref_mut(), m, |v, d| {
+            let mut done = 0usize;
+            while done < size {
+                let end = (done + CHUNK).min(size);
+                let n = v.read(d, inner, done as u64, &mut image[done..end])?;
+                if n == 0 {
+                    return Err(sv::Error::Corrupt);
+                }
+                done += n;
+            }
+            Ok(())
+        });
+        return match read_res {
+            Ok(()) => Ok(Some((size, m.name.clone()))),
+            Err(sv::Error::Corrupt) => Err(store::CORRUPT),
+            Err(_) => Err(store::IO),
+        };
+    }
+    Ok(None)
+}
+

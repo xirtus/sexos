@@ -100,6 +100,50 @@ fn kind_code(k: install::PartKind) -> &'static str {
     }
 }
 
+fn fmt_part_desc(p: &install::PartInfo) -> String {
+    let mut out = String::new();
+    if p.name != "(unnamed)" {
+        out.push_str(&p.name);
+    }
+    if !p.fs_label.is_empty() && p.fs_label != p.name {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push('"');
+        out.push_str(&p.fs_label);
+        out.push('"');
+    }
+    if let Some(u) = p.short_uuid() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push('[');
+        out.push_str(&u);
+        out.push(']');
+    }
+    if out.is_empty() {
+        out.push_str("(unnamed)");
+    }
+    out
+}
+
+fn fmt_raw_name(p: &install::PartInfo) -> String {
+    match p.fs_type {
+        Some(fs) => {
+            if !p.fs_label.is_empty() {
+                format!("{} ({})", p.fs_label, fs)
+            } else if p.name != "(unnamed)" {
+                format!("{} ({})", p.name, fs)
+            } else if let Some(u) = p.short_uuid() {
+                format!("{} [{}]", fs, u)
+            } else {
+                String::from(fs)
+            }
+        }
+        None => p.name.clone(),
+    }
+}
+
 fn list_report(disk: &mut RawDisk, raw: bool) -> String {
     let mut text = String::new();
     match install::list_partitions(disk) {
@@ -114,7 +158,7 @@ fn list_report(disk: &mut RawDisk, raw: bool) -> String {
                         p.first_lba,
                         p.sectors,
                         if p.replaceable { 1 } else { 0 },
-                        p.name
+                        fmt_raw_name(p)
                     ));
                 }
                 for f in &free {
@@ -124,7 +168,7 @@ fn list_report(disk: &mut RawDisk, raw: bool) -> String {
                 }
             } else {
                 text.push_str(&format!("GPT Disk ({}):\n", fmt_size(total)));
-                text.push_str("  #   Type     Size        Status                         Name\n");
+                text.push_str("  #   Type     FS     Size        Status                         Name / Label\n");
                 for p in &parts {
                     let status = if p.replaceable {
                         String::from("replaceable")
@@ -132,12 +176,13 @@ fn list_report(disk: &mut RawDisk, raw: bool) -> String {
                         format!("LOCKED ({})", p.protect_reason.unwrap_or("protected"))
                     };
                     text.push_str(&format!(
-                        "  {:<3} {:<8} {:<11} {:<30} {}\n",
+                        "  {:<3} {:<8} {:<6} {:<11} {:<30} {}\n",
                         p.index + 1,
                         p.kind.label(),
+                        p.fs_type.unwrap_or("-"),
                         fmt_size(p.sectors),
                         status,
-                        p.name
+                        fmt_part_desc(p)
                     ));
                 }
                 let big_free: u64 = free

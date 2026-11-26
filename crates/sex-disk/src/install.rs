@@ -115,6 +115,168 @@ pub struct PartInfo {
     pub sectors: u64,
     pub replaceable: bool,
     pub protect_reason: Option<&'static str>,
+    /// Detected filesystem type from a read-only superblock probe (e.g. `"ext4"`, `"btrfs"`, `"ntfs"`, `"fat32"`, `"swap"`, `"empty"`).
+    pub fs_type: Option<&'static str>,
+    /// Volume label extracted from the filesystem superblock, if any.
+    pub fs_label: String,
+    /// 16-byte filesystem UUID from the superblock, if available.
+    pub fs_uuid: Option<[u8; 16]>,
+}
+
+impl PartInfo {
+    /// First 4 bytes of the filesystem UUID as 8 lowercase hex characters (e.g. `"cd318437"`).
+    pub fn short_uuid(&self) -> Option<String> {
+        let u = self.fs_uuid?;
+        if u.iter().all(|&b| b == 0) {
+            return None;
+        }
+        Some(format!("{:02x}{:02x}{:02x}{:02x}", u[0], u[1], u[2], u[3]))
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct FsProbe {
+    fs_type: Option<&'static str>,
+    fs_label: String,
+    fs_uuid: Option<[u8; 16]>,
+}
+
+/// Extracts a printable, NUL- and whitespace-trimmed ASCII label from superblock bytes.
+fn superblock_label(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let mut s = String::new();
+    for &b in &bytes[..end] {
+        if (0x20..=0x7E).contains(&b) {
+            s.push(b as char);
+        }
+    }
+    String::from(s.trim())
+}
+
+/// Safe, read-only superblock probe for a single GPT partition.
+fn probe_fs<D: BlockDev + ?Sized>(dev: &mut D, first_lba: u64, sectors: u64) -> FsProbe {
+    if sectors == 0 {
+        return FsProbe::default();
+    }
+    // Read up to the first 4 KiB (8 sectors) covering boot sector, ext2/3/4 superblock, and swap header.
+    let head_sectors = sectors.min(8) as usize;
+    let head_len = head_sectors * SECTOR;
+    let mut head = [0u8; 4096];
+    if dev.read(first_lba, &mut head[..head_len]).is_err() {
+        return FsProbe::default();
+    }
+
+    // Read 1 KiB at offset 64 KiB (LBA +128) for btrfs superblock (magic at +64, UUID at +0x20, label at +0x12B..+0x22B).
+    let mut at64k = [0u8; 1024];
+    let have_64k = sectors >= 130 && dev.read(first_lba + 128, &mut at64k).is_ok();
+
+    // 1. ext2 / ext3 / ext4 (superblock at offset 1024).
+    if head_len >= 2048 {
+        let sb = &head[1024..2048];
+        let magic = u16::from_le_bytes([sb[56], sb[57]]);
+        if magic == 0xEF53 {
+            let compat = u32::from_le_bytes([sb[92], sb[93], sb[94], sb[95]]);
+            let incompat = u32::from_le_bytes([sb[96], sb[97], sb[98], sb[99]]);
+            let ro_compat = u32::from_le_bytes([sb[100], sb[101], sb[102], sb[103]]);
+            // EXT4_FEATURE_INCOMPAT_EXTENTS (0x40) | 64BIT (0x80) | FLEX_BG (0x200) or RO_COMPAT_HUGE_FILE (0x08).
+            let fs_type = if (incompat & (0x0040 | 0x0080 | 0x0200)) != 0 || (ro_compat & 0x0008) != 0 {
+                "ext4"
+            } else if (compat & 0x0004) != 0 {
+                // EXT3_FEATURE_COMPAT_HAS_JOURNAL (0x04).
+                "ext3"
+            } else {
+                "ext2"
+            };
+            let mut uuid = [0u8; 16];
+            uuid.copy_from_slice(&sb[104..120]);
+            let fs_label = superblock_label(&sb[120..136]);
+            return FsProbe {
+                fs_type: Some(fs_type),
+                fs_label,
+                fs_uuid: Some(uuid),
+            };
+        }
+    }
+
+    // 2. btrfs (superblock at offset 65536).
+    if have_64k && &at64k[64..72] == b"_BHRfS_M" {
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&at64k[0x20..0x30]);
+        let fs_label = superblock_label(&at64k[0x12B..0x12B + 256]);
+        return FsProbe {
+            fs_type: Some("btrfs"),
+            fs_label,
+            fs_uuid: Some(uuid),
+        };
+    }
+
+    // 3. Linux swap (signature at offset 4086, UUID at 1036, label at 1052).
+    if head_len >= 4096 && &head[4086..4096] == b"SWAPSPACE2" {
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&head[1036..1052]);
+        let fs_label = superblock_label(&head[1052..1068]);
+        return FsProbe {
+            fs_type: Some("swap"),
+            fs_label,
+            fs_uuid: Some(uuid),
+        };
+    }
+
+    // 4. NTFS (offset 0: "NTFS    " at +3).
+    if head_len >= 512 && &head[3..11] == b"NTFS    " {
+        return FsProbe {
+            fs_type: Some("ntfs"),
+            fs_label: String::new(),
+            fs_uuid: None,
+        };
+    }
+
+    // 5. exFAT (offset 0: "EXFAT   " at +3).
+    if head_len >= 512 && &head[3..11] == b"EXFAT   " {
+        return FsProbe {
+            fs_type: Some("exfat"),
+            fs_label: String::new(),
+            fs_uuid: None,
+        };
+    }
+
+    // 6. FAT32 (offset 0: "FAT32   " at +82, label at +71, 11 bytes).
+    if head_len >= 512 && &head[82..90] == b"FAT32   " {
+        let mut fs_label = superblock_label(&head[71..82]);
+        if fs_label == "NO NAME" {
+            fs_label.clear();
+        }
+        return FsProbe {
+            fs_type: Some("fat32"),
+            fs_label,
+            fs_uuid: None,
+        };
+    }
+
+    // 7. FAT16 / FAT12 (offset 0: "FAT16   "/"FAT12   " at +54, label at +43, 11 bytes).
+    if head_len >= 512 && (&head[54..62] == b"FAT16   " || &head[54..62] == b"FAT12   ") {
+        let fs_type = if &head[54..62] == b"FAT16   " { "fat16" } else { "fat12" };
+        let mut fs_label = superblock_label(&head[43..54]);
+        if fs_label == "NO NAME" {
+            fs_label.clear();
+        }
+        return FsProbe {
+            fs_type: Some(fs_type),
+            fs_label,
+            fs_uuid: None,
+        };
+    }
+
+    // 8. Empty (first 4 KiB and offset 64 KiB all zero).
+    if head[..head_len].iter().all(|&b| b == 0) && (!have_64k || at64k.iter().all(|&b| b == 0)) {
+        return FsProbe {
+            fs_type: Some("empty"),
+            fs_label: String::new(),
+            fs_uuid: None,
+        };
+    }
+
+    FsProbe::default()
 }
 
 /// Returns the 1 MiB-aligned usable extent strictly inside `[first_lba, last_lba]`.
@@ -167,6 +329,7 @@ pub fn list_partitions<D: BlockDev + ?Sized>(dev: &mut D) -> Result<(u64, Vec<Pa
         } else {
             None
         };
+        let fs = probe_fs(dev, e.first(), sectors);
         parts.push(PartInfo {
             index,
             kind,
@@ -175,6 +338,9 @@ pub fn list_partitions<D: BlockDev + ?Sized>(dev: &mut D) -> Result<(u64, Vec<Pa
             sectors,
             replaceable: protect_reason.is_none(),
             protect_reason,
+            fs_type: fs.fs_type,
+            fs_label: fs.fs_label,
+            fs_uuid: fs.fs_uuid,
         });
     }
     let free = gpt.free(ALIGN);

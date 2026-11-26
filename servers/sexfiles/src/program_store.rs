@@ -24,8 +24,6 @@ pub fn load_unbound(name:[u64;2])->u64 {
 fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u32> {
     let _writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
     if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
-    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
-    if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
     let view = sex_pdx::memory_region_view(store::IMAGE_SLOT_FILES, 0, store::IMAGE_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| store::IO)?;
     let image = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, store::IMAGE_BYTES) };
     // A ticket names a path Spindle prepared. A bare name tries the program directory.
@@ -47,6 +45,27 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
         },
         crate::fs_service::Program::Absent => {}
     }
+    match try_load_from_disk_store(name, remember, image) {
+        Ok(len) => Ok(len),
+        Err(err) if matches!(err, store::NOT_FOUND | store::IO) => {
+            // Live USB / removable media fallback: search mounted `/media/<vol>/programs/<name>`.
+            let (a, b) = (name[0].to_le_bytes(), name[1].to_le_bytes());
+            let mut bytes = [0u8; store::NAME_BYTES];
+            bytes[..8].copy_from_slice(&a); bytes[8..].copy_from_slice(&b);
+            let len = bytes.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES);
+            match crate::fs_service::read_media_program(&bytes[..len], image, remember) {
+                crate::fs_service::Program::Loaded(sz) => Ok(sz),
+                crate::fs_service::Program::Failed(code) => Err(code),
+                crate::fs_service::Program::Absent => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn try_load_from_disk_store(name: [u64; 2], remember: bool, image: &mut [u8]) -> Result<u32, u32> {
+    let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
+    if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
     // The directory: its first sector says how many follow.
     let directory = unsafe { &mut *core::ptr::addr_of_mut!(DIRECTORY) };
     read(store::DIRECTORY_LBA, store::SECTOR as u64, &mut directory[..store::SECTOR], buf_va)?;
