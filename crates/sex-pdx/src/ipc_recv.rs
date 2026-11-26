@@ -74,9 +74,12 @@ pub const fn is_peer_restarted(msg: &PdxMessage, expected_pd: u32) -> bool {
 pub enum AttemptOutcome<T, E> {
     /// Request completed with a final answer.
     Done(T),
-    /// Service was down (`ERR_SERVICE_NOT_READY`) or restarted mid-request
-    /// (`PEER_RESTARTED` / `E_RESTARTED`): wait for the peer to come back Live
-    /// and re-issue if retries remain.
+    /// Send refused with `ERR_SERVICE_NOT_READY`: either transient backpressure
+    /// while the peer is `Live` at the same epoch (yields without burning
+    /// `max_retries`) or an actual service restart / crash-loop give-up.
+    NotReady,
+    /// Service restarted mid-request (`PEER_RESTARTED` / `E_RESTARTED`): wait
+    /// for the peer to come back `Live` and re-issue if restart retries remain.
     PeerRestarted,
     /// Permanent error (do not retry).
     Failed(E),
@@ -99,7 +102,10 @@ pub const DEFAULT_RECONNECT_RETRIES: u32 = 8;
 pub const DEFAULT_RECONNECT_TIMEOUT_TICKS: u64 = 15_000;
 
 /// Pure, host-testable automatic reconnect loop. Runs `attempt()`; on
-/// [`AttemptOutcome::PeerRestarted`], observes the peer via `query_peer()` until
+/// [`AttemptOutcome::NotReady`], distinguishes transient busy backpressure
+/// (`PeerLife::Live` at an unchanged epoch, which yields without consuming
+/// `max_retries`) from an actual restart or [`crate::crash_log::PeerLife::GaveUp`].
+/// On [`AttemptOutcome::PeerRestarted`], observes the peer via `query_peer()` until
 /// it reports [`crate::crash_log::PeerLife::Live`] (tracking epoch advances),
 /// stops immediately on [`crate::crash_log::PeerLife::GaveUp`] or `timeout_ticks`,
 /// and re-issues the call up to `max_retries` times.
@@ -119,6 +125,66 @@ pub fn retry_on_peer_restart_with<T, E>(
         match attempt() {
             AttemptOutcome::Done(v) => return Ok(v),
             AttemptOutcome::Failed(e) => return Err(ReconnectError::Failed(e)),
+            AttemptOutcome::NotReady => {
+                if now_ticks().saturating_sub(start) >= timeout_ticks {
+                    return Err(ReconnectError::Exhausted);
+                }
+                match query_peer() {
+                    Ok(p) if p.life == PeerLife::GaveUp => return Err(ReconnectError::GaveUp),
+                    Ok(p) if p.live() => {
+                        if last_epoch != 0 && p.epoch > last_epoch {
+                            // Peer restarted between calls (epoch advanced).
+                            if retries >= max_retries {
+                                return Err(ReconnectError::Exhausted);
+                            }
+                            retries += 1;
+                            last_epoch = p.epoch;
+                        } else {
+                            // Peer is Live at the same epoch: transient full-inbox
+                            // backpressure. Yield without burning the restart budget.
+                            if last_epoch == 0 {
+                                last_epoch = p.epoch;
+                            }
+                            pause();
+                        }
+                    }
+                    Err(NOT_FOUND | DENIED | INVALID) => {
+                        // Peer is not a restart-supervised slot; treat NotReady as
+                        // transient busy backpressure bounded by timeout_ticks.
+                        pause();
+                    }
+                    Err(_) => {
+                        // Contended snapshot (e.g. RETRY): yield and re-issue without
+                        // burning the restart budget.
+                        pause();
+                    }
+                    Ok(_) => {
+                        // Peer is actually down / restarting (Starting, Ending, Exited,
+                        // Dead, FaultBlocked): counts as one restart retry.
+                        if retries >= max_retries {
+                            return Err(ReconnectError::Exhausted);
+                        }
+                        retries += 1;
+                        loop {
+                            if now_ticks().saturating_sub(start) >= timeout_ticks {
+                                return Err(ReconnectError::Exhausted);
+                            }
+                            match query_peer() {
+                                Ok(p) if p.life == PeerLife::GaveUp => return Err(ReconnectError::GaveUp),
+                                Ok(p) if p.live() => {
+                                    last_epoch = p.epoch;
+                                    break;
+                                }
+                                Err(NOT_FOUND | DENIED | INVALID) => {
+                                    pause();
+                                    break;
+                                }
+                                _ => pause(),
+                            }
+                        }
+                    }
+                }
+            }
             AttemptOutcome::PeerRestarted => {
                 if retries >= max_retries {
                     return Err(ReconnectError::Exhausted);
@@ -134,8 +200,6 @@ pub fn retry_on_peer_restart_with<T, E>(
                             if last_epoch == 0 || p.epoch > last_epoch {
                                 last_epoch = p.epoch;
                             } else {
-                                // Live at the same epoch (e.g. transient ring-full backpressure):
-                                // yield once before re-issuing.
                                 pause();
                             }
                             break;
@@ -153,7 +217,7 @@ pub fn retry_on_peer_restart_with<T, E>(
 }
 
 /// Retries an idempotent operation targeting the restartable service at `slot`
-/// whenever it reports [`AttemptOutcome::PeerRestarted`].
+/// whenever it reports [`AttemptOutcome::NotReady`] or [`AttemptOutcome::PeerRestarted`].
 #[cfg(target_arch = "x86_64")]
 pub fn retry_on_peer_restart<T, E>(
     slot: u64,
@@ -172,8 +236,8 @@ pub fn retry_on_peer_restart<T, E>(
 }
 
 /// Issues an idempotent `pdx_call_recv` to `slot` (`expected_pd`), automatically
-/// waiting for the peer to return `Live` and retrying on `ERR_SERVICE_NOT_READY`
-/// or a `PEER_RESTARTED` reply.
+/// yielding on transient busy `ERR_SERVICE_NOT_READY` and waiting for the peer
+/// to return `Live` and retrying on actual restarts or a `PEER_RESTARTED` reply.
 #[cfg(target_arch = "x86_64")]
 pub fn call_with_reconnect(
     slot: u64,
@@ -189,7 +253,7 @@ pub fn call_with_reconnect(
         match pdx_call_recv(slot, opcode, arg0, arg1, arg2) {
             Ok(Some(msg)) if is_peer_restarted(&msg, expected_pd) => AttemptOutcome::PeerRestarted,
             Ok(msg) => AttemptOutcome::Done(msg),
-            Err(crate::ERR_SERVICE_NOT_READY) => AttemptOutcome::PeerRestarted,
+            Err(crate::ERR_SERVICE_NOT_READY) => AttemptOutcome::NotReady,
             Err(e) => AttemptOutcome::Failed(e),
         }
     })

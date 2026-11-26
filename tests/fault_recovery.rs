@@ -487,3 +487,101 @@ fn client_auto_reconnect_waits_for_epoch_advance_and_retries() {
     assert_eq!(res, Err(ReconnectError::Exhausted));
     assert_eq!(attempts, 3); // 1 initial + 2 retries
 }
+
+#[test]
+fn busy_not_ready_never_burns_restart_retry_budget() {
+    use crash_log::{PeerLife, PeerState};
+    use ipc_recv::{retry_on_peer_restart_with, AttemptOutcome, ReconnectError};
+
+    // 1. 25 transient ERR_SERVICE_NOT_READY (busy) responses while peer is Live at
+    //    unchanged epoch=1 must succeed even with max_retries=4.
+    let mut attempts = 0u32;
+    let mut yields = 0u32;
+    let mut ticks = 0u64;
+    let res: Result<u64, ReconnectError<u8>> = retry_on_peer_restart_with(
+        4,
+        1_000,
+        || Ok(PeerState { epoch: 1, life: PeerLife::Live }),
+        || { ticks += 1; ticks },
+        || { yields += 1; },
+        || {
+            attempts += 1;
+            if attempts <= 25 { AttemptOutcome::NotReady } else { AttemptOutcome::Done(0xBEEFu64) }
+        },
+    );
+    assert_eq!(res, Ok(0xBEEFu64));
+    assert_eq!(attempts, 26);
+    assert_eq!(yields, 25);
+
+    // 2. Mix of 15 busy NotReady + 1 genuine restart (Ending -> Starting -> Live epoch=2)
+    //    + 15 busy NotReady at epoch=2 + 1 genuine PEER_RESTARTED (epoch=3) succeeds
+    //    with max_retries=2 (only the 2 real restarts count).
+    let mut attempts = 0u32;
+    let phase = std::cell::Cell::new(0u32);
+    let mut ticks = 0u64;
+    let res: Result<u64, ReconnectError<u8>> = retry_on_peer_restart_with(
+        2,
+        1_000,
+        || match phase.get() {
+            0 => Ok(PeerState { epoch: 1, life: PeerLife::Live }),
+            1 => { phase.set(2); Ok(PeerState { epoch: 1, life: PeerLife::Ending }) }
+            2 => { phase.set(3); Ok(PeerState { epoch: 2, life: PeerLife::Starting }) }
+            3 => Ok(PeerState { epoch: 2, life: PeerLife::Live }),
+            4 => { phase.set(5); Ok(PeerState { epoch: 2, life: PeerLife::Dead }) }
+            _ => Ok(PeerState { epoch: 3, life: PeerLife::Live }),
+        },
+        || { ticks += 1; ticks },
+        || {},
+        || {
+            attempts += 1;
+            match attempts {
+                1..=15 => AttemptOutcome::NotReady,
+                16 => { phase.set(1); AttemptOutcome::NotReady }
+                17..=31 => AttemptOutcome::NotReady,
+                32 => { phase.set(4); AttemptOutcome::PeerRestarted }
+                _ => AttemptOutcome::Done(0x1234u64),
+            }
+        },
+    );
+    assert_eq!(res, Ok(0x1234u64));
+    assert_eq!(attempts, 33);
+
+    // 3. NotReady when peer has hit GaveUp fails immediately without retrying.
+    let mut attempts = 0u32;
+    let res: Result<u64, ReconnectError<u8>> = retry_on_peer_restart_with(
+        8,
+        1_000,
+        || Ok(PeerState { epoch: 5, life: PeerLife::GaveUp }),
+        || 10,
+        || {},
+        || { attempts += 1; AttemptOutcome::NotReady },
+    );
+    assert_eq!(res, Err(ReconnectError::GaveUp));
+    assert_eq!(attempts, 1);
+
+    // 4. Sustained NotReady while Live eventually honors timeout_ticks.
+    let mut ticks = 0u64;
+    let res: Result<u64, ReconnectError<u8>> = retry_on_peer_restart_with(
+        8,
+        50,
+        || Ok(PeerState { epoch: 1, life: PeerLife::Live }),
+        || { ticks += 10; ticks },
+        || {},
+        || AttemptOutcome::NotReady,
+    );
+    assert_eq!(res, Err(ReconnectError::Exhausted));
+
+    // 5. NotReady where epoch advances between calls counts as a restart and bounds at max_retries.
+    let epoch = std::cell::Cell::new(1u64);
+    let mut attempts = 0u32;
+    let res: Result<u64, ReconnectError<u8>> = retry_on_peer_restart_with(
+        2,
+        1_000,
+        || Ok(PeerState { epoch: epoch.get(), life: PeerLife::Live }),
+        || 10,
+        || {},
+        || { attempts += 1; epoch.set(epoch.get() + 1); AttemptOutcome::NotReady },
+    );
+    assert_eq!(res, Err(ReconnectError::Exhausted));
+    assert_eq!(attempts, 3); // 1 initial + 2 epoch-advance restarts
+}
