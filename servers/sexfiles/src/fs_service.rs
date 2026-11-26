@@ -1161,8 +1161,9 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                         let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
                         Some(owner)
                     } else { None };
-                    let ticket = prepare_ticket(r, path, data, owner, None);
-                    return w::reply(r.seq, w::OK, ticket);
+                    if let Ok(ticket) = prepare(None, r, path, data, owner) {
+                        return w::reply(r.seq, w::OK, ticket);
+                    }
                 }
             }
             return w::reply(r.seq, w::UNAVAILABLE, 0);
@@ -1481,7 +1482,30 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         _ => Err(Error::Name),
     }
 }
-fn prepare_ticket(r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>, note: Option<sex_pdx::package::Note>) -> u32 {
+fn prepare(fs: impl Into<Option<&mut Fs<'static, Disk>>>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>) -> Result<u32, Error> {
+    // `/bin/NAME` with no such file may still be the disk program store's NAME or `/media/<vol>/programs/NAME`:
+    // the load looks there, and refuses then if none has it.
+    let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
+        .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
+    let note = if let Some(fs) = fs.into() {
+        match fs.open(path) {
+            Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
+            Ok(_) => {}
+            Err(Error::NotFound) if store_name => {}
+            Err(e) => return Err(e),
+        }
+        // A program a package installed: what it asks for and what the person said.
+        // Unasked grants take the person's default answer; a run holding an allowed
+        // grant is its last use.
+        let name = path.strip_prefix(sex_pdx::program_store::BIN);
+        let note = name.and_then(|name| crate::packages::note(fs, name)).map(crate::packages::with_defaults);
+        if let (Some(name), Some(n)) = (name, note) {
+            if n.allowed != 0 { crate::packages::mark_used(name, sex_pdx::civil_time_ms().map_or(0, |ms| ms / 1000)); }
+        }
+        note
+    } else {
+        None
+    };
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     prepared.0[..path.len()].copy_from_slice(path);
     prepared.1 = path.len();
@@ -1502,28 +1526,7 @@ fn prepare_ticket(r: w::Request, path: &[u8], data: &mut [u8], owner: Option<Tic
         crate::console_relay::prepared(id, pipe);
     }
     match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
-    ticket
-}
-fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>) -> Result<u32, Error> {
-    // `/bin/NAME` with no such file may still be the disk program store's NAME or `/media/<vol>/programs/NAME`:
-    // the load looks there, and refuses then if none has it.
-    let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
-        .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
-    match fs.open(path) {
-        Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
-        Ok(_) => {}
-        Err(Error::NotFound) if store_name => {}
-        Err(e) => return Err(e),
-    }
-    // A program a package installed: what it asks for and what the person said.
-    // Unasked grants take the person's default answer; a run holding an allowed
-    // grant is its last use.
-    let name = path.strip_prefix(sex_pdx::program_store::BIN);
-    let note = name.and_then(|name| crate::packages::note(fs, name)).map(crate::packages::with_defaults);
-    if let (Some(name), Some(n)) = (name, note) {
-        if n.allowed != 0 { crate::packages::mark_used(name, sex_pdx::civil_time_ms().map_or(0, |ms| ms / 1000)); }
-    }
-    Ok(prepare_ticket(r, path, data, owner, note))
+    Ok(ticket)
 }
 /// True when `caller` is a live program run from `/data/NAME`: the folder Files
 /// bound it to, never a name the program claims; and the program came from the system
