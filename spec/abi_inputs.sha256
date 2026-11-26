@@ -138,7 +138,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-ed67b6ebd0e929d8514d3e1ba772074b343ad5fb1f213df64152f66c6e40eb14  kernel/src/boot_memory.rs
+2eb12d77991e92f3fce80420171506759b761ea4ff9038065350985d2e15960e  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 

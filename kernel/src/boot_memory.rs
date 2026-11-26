@@ -926,14 +926,26 @@ pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32, shell: u3
     crate::serial_println!("[boot.bt.ui] shell={} cufflinks={} slot={} notify={} runtime_mint=0", shell, cufflinks, sex_pdx::bt_ui::SLOT, sex_pdx::bt_ui::NOTIFY_SLOT);
 }
 
-/// USB UVC webcams: SexUSB and SexUVC share a 128 KiB metadata + frame ring and wake route.
+/// USB UVC webcams: SexUSB and SexUVC share a 128 KiB metadata + frame ring and wake route,
+/// and SexUVC publishes completed frames into a 1 MiB read-only frame bank mapped to program rows.
 pub fn init_usb_uvc(usb: u32, uvc: u32) {
     use sex_pdx::usb_uvc as u;
     require_boot();
-    if uvc == 0 || DOMAIN_REGISTRY.get(uvc).is_none() { return; }
+    let Some(uvc_pd) = (uvc != 0).then(|| DOMAIN_REGISTRY.get(uvc)).flatten() else { return };
     paired(usb, uvc, u::SLOT, u::REGION_ID, u::BYTES, true);
     if let Some(d) = (usb != 0).then(|| DOMAIN_REGISTRY.get(usb)).flatten() { d.grant_capability(u::NOTIFY_SLOT, CapabilityData::Domain(uvc)); }
-    crate::serial_println!("[boot.usb.uvc] usb={} sexuvc={} slot={} notify={} bytes={} runtime_mint=0", usb, uvc, u::SLOT, u::NOTIFY_SLOT, u::BYTES);
+    let physical = backing(u::FRAME_BYTES);
+    let writer_va = alias(uvc_pd, physical, u::FRAME_BYTES, true, false);
+    grant(uvc_pd, u::FRAME_WRITER_SLOT, RegionGrant { region_id: u::FRAME_REGION_ID, virtual_base: writer_va, length: u::FRAME_BYTES,
+        rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None });
+    for row in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program && r.target != 0) {
+        if let Some(pd) = DOMAIN_REGISTRY.get(row.target) {
+            let va = alias(pd, physical, u::FRAME_BYTES, false, false);
+            grant(pd, u::FRAME_CLIENT_SLOT, RegionGrant { region_id: u::FRAME_REGION_ID, virtual_base: va, length: u::FRAME_BYTES,
+                rights: QUERY_VIEW | READ, dma_base: None, peer_pd: Some(uvc) });
+        }
+    }
+    crate::serial_println!("[boot.usb.uvc] usb={} sexuvc={} slot={} notify={} bytes={} frame_bytes={} runtime_mint=0", usb, uvc, u::SLOT, u::NOTIFY_SLOT, u::BYTES, u::FRAME_BYTES);
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
