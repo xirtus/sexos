@@ -990,6 +990,7 @@ pub mod files {
         }
     }
     struct Restarted;
+    #[inline(never)]
     fn once_attempt(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<Result<u32, Error>, Restarted> {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
