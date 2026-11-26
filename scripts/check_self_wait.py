@@ -361,8 +361,8 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/web.rs': '404f9c07116a41ef3ac80c797ffea6d54e008ca038aaac79fa7b4e81c5ca91c4',  # web protocol words for H2/H3 (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
- 'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
- 'kernel/src/app_resources.rs': '7f9e3f565051eac895c851e0e58ea8f3c7934e326aa0ff096a0dc4ffa75afb30',  # retire purges handoff slots + IPC v2 teardown (no observer change), 2026-11-25
+ 'kernel/src/core_local.rs': '0b72ffacafdbfce18323734be07acdfa224927ef0d65baac1831f4928cea5dd8',  # self pointer at gs:[32], per-core FS/TSC_AUX caches and IRET snapshot (no observer change; Gemini #699), 2026-11-26
+ 'kernel/src/app_resources.rs': 'b1b1dfda0016755aa8d4c868e93daf13d5598d550082798a87998810a6c4eeed',  # program pages the file fills come unzeroed (no observer change; Gemini #696), 2026-11-26
  'kernel/src/service_restart.rs': '2bb687b9f0bd3da1e5dd4c33ef67ab28cbbc792d8a162b40673f49745043437a',  # live server hotswap (no observer change), 2026-11-26
  'kernel/src/crash_log.rs': '3c41a4f593b5f82ed3687b97c9e5a6ab6feea9c0c4055e84828035e8ede6c155',  # OP_HOTSWAP syscall dispatch (no observer change), 2026-11-26
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}

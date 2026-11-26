@@ -129,10 +129,14 @@ fn kernel_wiring_grants_before_publication_and_spends_after_delivery() {
     assert!(grant < publish && publish < withdraw);
     let reply = router.split("pub fn send_reply(").nth(1).unwrap();
     let holds = reply.find("credits.holds(target_pd_id)").unwrap();
-    let full = reply.find("return Err(IpcError::BufferFull)").unwrap();
-    let push = reply.find("replies.push_back(").unwrap();
+    // A full reply queue refuses (BufferFull) before the credit is spent.
+    let push = reply.find("IpcReply::push_bounded(&mut replies,").unwrap();
     let consume = reply.find("credits.consume(target_pd_id)").unwrap();
-    assert!(holds < full && full < push && push < consume);
+    assert!(holds < push && push < consume);
+    assert!(reply[push..consume].contains(")?;"));
+    let messages = include_str!("../kernel/src/ipc/messages.rs");
+    let bounded = messages.split("pub fn push_bounded(").nth(1).unwrap();
+    assert!(bounded.find("queue.len()>=MAX_INCOMING_REPLIES{return Err(IpcError::BufferFull);}").unwrap() < bounded.find("queue.push_back(reply);").unwrap());
     let retire = include_str!("../kernel/src/app_resources.rs");
     assert!(retire.contains("target.reply_credits.lock().clear();"));
 }

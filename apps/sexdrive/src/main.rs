@@ -3152,9 +3152,9 @@ fn nvme_probe_bar() {
         drive_loan_cmd_run = identify::max_transfer(drive.mdts, LOAN_CMD_MAX);
         let (mut model, mut firmware) = ([0u8; 40], [0u8; 8]);
         let (m, f) = (identify::text(&drive.model, &mut model), identify::text(&drive.firmware, &mut firmware));
-        sex_pdx::serial_record!("[sexdrive.nvme.drive] vendor={:04x} model=\"{}\" firmware=\"{}\" mdts={} max_transfer_kib={} loan_kib={} namespaces={}",
+        sex_pdx::serial_record!("[sexdrive.nvme.drive] vendor={:04x} model=\"{}\" firmware=\"{}\" mdts={} max_transfer_kib={} namespaces={} loan_kib={}",
             drive.vendor, core::str::from_utf8(&model[..m]).unwrap_or("?"), core::str::from_utf8(&firmware[..f]).unwrap_or("?"),
-            drive.mdts, drive_cmd_run / 1024, drive_loan_cmd_run / 1024, drive.namespaces);
+            drive.mdts, drive_cmd_run / 1024, drive.namespaces, drive_loan_cmd_run / 1024);
     }
     let nn = unsafe { core::ptr::read_volatile((id_va + 516) as *const u32) };
     NVME_RTD3E_US.store(unsafe { core::ptr::read_volatile((id_va + 88) as *const u32) }, Ordering::Relaxed);

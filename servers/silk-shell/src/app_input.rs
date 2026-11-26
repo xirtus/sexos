@@ -37,6 +37,17 @@ impl Queue {
         }
         self.push(item)
     }
+    /// Replaces a resize still queued last for the same window so rapid corner drags
+    /// deliver the latest geometry instead of replaying stale intermediate sizes.
+    pub fn push_resize(&mut self,item:Item)->bool {
+        if matches!(item.input,Input::Resize(_)) && self.len>0 {
+            let last=(self.head+self.len-1)%CAPACITY;
+            if let Some(Item{destination,input:Input::Resize(_)}) = self.items[last] {
+                if destination==item.destination { self.items[last]=Some(item); return true; }
+            }
+        }
+        self.push(item)
+    }
     pub fn pop(&mut self){
         if self.len==0{return;}
         unsafe{core::ptr::write_volatile(&mut self.items[self.head],None)};

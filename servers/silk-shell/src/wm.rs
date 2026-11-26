@@ -158,6 +158,8 @@ pub enum WmAction {
     PrevTab,
     /// Super+T: dwindle on this workspace, or back to its previous layout.
     ToggleDwindle,
+    /// Super+Shift+F: toggle the compositor frame-time meter HUD.
+    FrameMeter,
     /// Super+Shift+C: cycle the focused window's candy color swatch.
     CycleWindowTint,
     /// Super+Shift+T: quickly switch between Light and Dark desktop modes.
@@ -202,7 +204,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::D, false) => WmAction::Spotlight,
         (code::D, true) => WmAction::Launcher,
         (code::Q, _) => WmAction::Close,
-        (code::F, _) => WmAction::Fullscreen,
+        (code::F, false) => WmAction::Fullscreen,
+        (code::F, true) => WmAction::FrameMeter,
         (code::V, false) => WmAction::ClipboardHistory,
         (code::V, true) | (code::SPACE, true) => WmAction::ToggleFloating,
         (code::SPACE, false) => WmAction::Spotlight,

@@ -67,9 +67,13 @@ fn complete(task: TaskId, words: [u64; 6], handoff: bool) {
     for (slot, word) in state.result.iter().zip(words) { slot.store(word, Ordering::Relaxed); }
     state.ready.store(true, Ordering::Release);
     let sched = &SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
-    if handoff { sched.arm_handoff(true); }
-    crate::scheduler::unpark_thread(task as *mut Task);
-    if handoff { sched.arm_handoff(false); }
+    if handoff {
+        sched.arm_handoff(true);
+        crate::scheduler::unpark_for_call(task as *mut Task);
+        sched.arm_handoff(false);
+    } else {
+        crate::scheduler::unpark_thread(task as *mut Task);
+    }
 }
 
 fn finish(regs: &mut SyscallRegs, state: &TaskIpc) -> u64 {

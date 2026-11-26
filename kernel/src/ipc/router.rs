@@ -56,13 +56,10 @@ pub fn send_reply(target_pd_id: u32, val: u64) -> Result<(), IpcError> {
             reply_denied(caller_pd, target_pd_id);
             return Err(IpcError::InvalidCapability);
         }
-        // 1. Enqueue the value into the target's internal reply slot
-        // Keep the earlier reply until consumed. Sext retries a full ACK slot.
+        // 1. Enqueue into the target's bounded FIFO reply queue so concurrent or
+        // back-to-back replies from multiple servers are never dropped.
         let mut replies = pd.incoming_replies.lock();
-        if replies.len() >= 1 {
-            return Err(IpcError::BufferFull);
-        }
-        replies.push_back(IpcReply { value: val, caller_pd, caller_task });
+        IpcReply::push_bounded(&mut replies, IpcReply { value: val, caller_pd, caller_task })?;
         drop(replies);
         credits.consume(target_pd_id);
         drop(credits);

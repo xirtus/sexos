@@ -223,6 +223,8 @@ static mut FOCUSED_SURFACE_ID: u64 = 0;
 static mut MOTION: sex_pdx::window_motion::Motion<32> = sex_pdx::window_motion::Motion::new();
 /// Animation frames at 60 Hz (pacing.rs).
 static mut PACER: pacing::Pacer = pacing::Pacer::new();
+/// Frame times for the Super+Shift+F HUD and the periodic serial summary.
+static mut FRAME_METER: pacing::FrameMeter = pacing::FrameMeter::new();
 /// Draws moving windows at their tweened geometry in this frame's scene.
 fn motion_place(scene: &mut scene::SceneSnapshot) {
     let now = sex_pdx::get_ticks();
@@ -2737,6 +2739,92 @@ fn glass_body(fb:*mut u32,w:usize,h:usize,scene:&scene::SceneSnapshot,plan:Plan)
     }
 }
 
+/// Lightweight toggleable frame-time meter HUD (Super+Shift+F).
+/// Zero cost when disabled; draws a compact pill + 48-frame bar sparkline in the top-right.
+fn draw_frame_meter_hud(fb:*mut u32,w:usize,h:usize,total:usize,scene:&scene::SceneSnapshot){
+    let meter=unsafe{&*core::ptr::addr_of!(FRAME_METER)};
+    if !meter.hud_enabled(){return;}
+    let s=scene.metrics.scale().max(1) as usize;
+    let bar_y=scene.metrics.bar() as usize;
+    let pad=6*s;
+    let pw=220*s;
+    let ph=38*s;
+    if w<pw+pad*2||h<bar_y+ph+pad*2{return;}
+    let ox=w-pw-pad;
+    let oy=bar_y+pad;
+    let bg_col=0x0011_151Cu32;
+    let border_col=0x0034_4154u32;
+    for y in oy..oy+ph{
+        let row_off=y*w;
+        for x in ox..ox+pw{
+            let idx=row_off+x;
+            if idx<total{
+                let edge=y==oy||y+1==oy+ph||x==ox||x+1==ox+pw;
+                unsafe{*fb.add(idx)=if edge{border_col}else{bg_col};}
+            }
+        }
+    }
+    // Format compact ASCII summary: "FT 00ms P95:00 P99:00 S:0"
+    let mut txt=[b' ';36];
+    let mut pos=0usize;
+    let push_bytes=|buf:&mut [u8],p:&mut usize,src:&[u8]|{
+        for &b in src{if *p<buf.len(){buf[*p]=b;*p+=1;}}
+    };
+    let push_u64=|buf:&mut [u8],p:&mut usize,mut v:u64|{
+        let mut tmp=[0u8;20];let mut n=0usize;
+        if v==0{tmp[0]=b'0';n=1;}else{while v>0&&n<tmp.len(){tmp[n]=b'0'+(v%10) as u8;v/=10;n+=1;}}
+        while n>0{n-=1;if *p<buf.len(){buf[*p]=tmp[n];*p+=1;}}
+    };
+    push_bytes(&mut txt,&mut pos,b"FT ");
+    push_u64(&mut txt,&mut pos,meter.last_ms() as u64);
+    push_bytes(&mut txt,&mut pos,b"MS P95:");
+    push_u64(&mut txt,&mut pos,meter.percentile(95) as u64);
+    push_bytes(&mut txt,&mut pos,b" P99:");
+    push_u64(&mut txt,&mut pos,meter.percentile(99) as u64);
+    push_bytes(&mut txt,&mut pos,b" S:");
+    push_u64(&mut txt,&mut pos,meter.slow_frames().min(999));
+    let tx0=ox+6*s;
+    let ty0=oy+5*s;
+    let fg_col=if meter.last_ms()>=20{0x00F3_8BA8}else if meter.last_ms()>=pacing::SLOW_THRESHOLD_MS{0x00F9_E2AF}else{0x00A6_E3A1};
+    for (ci,&ch) in txt[..pos].iter().enumerate(){
+        let glyph=scalar_glyph(ch as u32);
+        let gx=tx0+ci*6*s;
+        if gx+5*s>=ox+pw{break;}
+        for gy in 0..7{
+            let bits=glyph[gy];
+            if bits==0{continue;}
+            for px in 0..5{
+                if (bits>>(4-px))&1!=0{
+                    for sy in 0..s{
+                        for sx in 0..s{
+                            let idx=(ty0+gy*s+sy)*w+(gx+px*s+sx);
+                            if idx<total{unsafe{*fb.add(idx)=fg_col;}}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 48-bar sparkline (0..32 ms mapped to bar height)
+    let mut recent=[0u16;48];
+    let n=meter.recent(&mut recent);
+    let gx0=ox+6*s;
+    let gy_base=oy+ph-5*s;
+    let max_bar=16*s;
+    for i in 0..n{
+        let ms=recent[i];
+        let bh=((ms.min(32) as usize)*max_bar/32).max(s);
+        let col=if ms>=20{0x00F3_8BA8}else if ms>=pacing::SLOW_THRESHOLD_MS{0x00F9_E2AF}else{0x00A6_E3A1};
+        let bx=gx0+i*4*s;
+        for by in (gy_base.saturating_sub(bh))..gy_base{
+            for dx in 0..(3*s){
+                let idx=by*w+bx+dx;
+                if bx+dx<ox+pw-2*s&&idx<total{unsafe{*fb.add(idx)=col;}}
+            }
+        }
+    }
+}
+
 fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,plan:Plan)->bool{
     if !scene.is_valid()||scene.width!=target.width()||scene.height!=target.height()||plan.is_empty(){return false;}
     // Verified no-pixel text work republishes the committed baseline. Do not
@@ -2763,6 +2851,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         silkbar_menus::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize,scene);
         spotlight::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
+        draw_frame_meter_hud(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
     lock_screen::draw(fb,w,h,total);
@@ -5304,6 +5393,12 @@ pub extern "C" fn _start() -> ! {
                         if msg.arg0 == 0 && decor::clear_fades() { needs_full_redraw = true; }
                         // arg2 bit 0: plain look (square corners, no shadows).
                         if decor::set_effects(msg.arg2 & 1 == 0) { needs_full_redraw = true; }
+                        // arg2 bit 1: frame-time meter HUD.
+                        let meter = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_METER) };
+                        if meter.set_hud(msg.arg2 & 2 != 0) {
+                            needs_full_redraw = true;
+                            sex_pdx::serial_record!("[display.frame.meter.hud] on={} frames={} p95={} p99={} slow={}", meter.hud_enabled() as u8, meter.total_frames(), meter.percentile(95), meter.percentile(99), meter.slow_frames());
+                        }
                         let dir = msg.arg1 as u8 as i8;
                         if dir != 0 { motion.workspace(dir, unsafe { FB_W } as u32 / 8, sex_pdx::get_ticks()); }
                         sex_pdx::serial_record!("[display.motion] on={} dir={}", motion.enabled() as u8, dir);
@@ -6391,6 +6486,22 @@ pub extern "C" fn _start() -> ! {
         pending_paint.complete(published.is_some());
         let render_cycles=decor::cycles_now().wrapping_sub(render_start);
         let render_ms=sex_pdx::get_ticks().saturating_sub(render_ms_start);
+        if published.is_some() {
+            let meter = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_METER) };
+            meter.record(render_ms);
+            if meter.total_frames() % 64 == 0 {
+                static mut FRAME_METER_BUDGET: u32 = 32;
+                unsafe {
+                    if FRAME_METER_BUDGET > 0 {
+                        FRAME_METER_BUDGET -= 1;
+                        sex_pdx::serial_record!(
+                            "[display.frame.meter] frames={} last_ms={} p50={} p95={} p99={} max_ms={} slow={}",
+                            meter.total_frames(), meter.last_ms(), meter.percentile(50), meter.percentile(95), meter.percentile(99), meter.max_ms(), meter.slow_frames()
+                        );
+                    }
+                }
+            }
+        }
         // The landing frame counts too; then the next animation starts a fresh grid.
         let landing = !animating && motion_damage.is_some();
         if (animating && paced || landing) && published.is_some() {

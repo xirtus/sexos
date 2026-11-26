@@ -16,6 +16,7 @@ from pathlib import Path
 from PIL import Image
 from install_program import install
 ROOT=Path(__file__).resolve().parents[1]
+os.environ.setdefault('SEXOS_GATE_MEMORY','1G')
 
 def repo(port):
  base=f'http://10.0.2.2:{port}'

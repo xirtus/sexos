@@ -331,8 +331,17 @@ pub const CLASS_NORMAL: usize = 1;
 /// sexdisplay, silk-shell, sexinput, sexusb, silkbar. Sound (sexbell) stays normal:
 /// its device ring covers a scheduling delay, and it needs a deadline class instead.
 const INTERACTIVE_DOMAINS: [u64; 5] = [1, 3, 4, 5, 6];
+/// Mechanism-only priority hint: one domain nominated by an interactive domain (e.g.
+/// silk-shell's focused window) receives interactive class, bounded by URGENT_STREAK.
+static PRIORITY_HINT_DOMAIN: AtomicU64 = AtomicU64::new(0);
 pub fn class_of(pd: u64) -> usize {
-    if INTERACTIVE_DOMAINS.contains(&pd) { CLASS_INTERACTIVE } else { CLASS_NORMAL }
+    if INTERACTIVE_DOMAINS.contains(&pd)
+        || (pd != 0 && pd == PRIORITY_HINT_DOMAIN.load(Ordering::Relaxed))
+    {
+        CLASS_INTERACTIVE
+    } else {
+        CLASS_NORMAL
+    }
 }
 /// Interactive tasks may run this many times in a row ahead of a waiting normal one.
 const URGENT_STREAK: u32 = 16;
@@ -422,21 +431,6 @@ static TASK_LIFECYCLE_LOG_BUDGET: AtomicU64 = AtomicU64::new(128);
 // PERF_LOG_NOISE_ABLATION_V1: first 4 per-event lines, then power-of-two summaries.
 static SCHED_YIELD_SAVED_COUNT: AtomicU64 = AtomicU64::new(0);
 
-#[no_mangle]
-pub static mut ACTUAL_IRET_RSP: u64 = 0;
-#[no_mangle]
-pub static mut ACTUAL_IRET_Q0_RIP: u64 = 0;
-#[no_mangle]
-pub static mut ACTUAL_IRET_Q1_CS: u64 = 0;
-#[no_mangle]
-pub static mut ACTUAL_IRET_Q2_RFLAGS: u64 = 0;
-#[no_mangle]
-pub static mut ACTUAL_IRET_Q3_RSP: u64 = 0;
-#[no_mangle]
-pub static mut ACTUAL_IRET_Q4_SS: u64 = 0;
-#[no_mangle]
-pub static mut SWITCH_NEXT_CTX_PTR: u64 = 0;
-
 impl Scheduler {
     pub const fn new(core_id: u32) -> Self {
         Self {
@@ -468,9 +462,10 @@ impl Scheduler {
             || (!self.handoff.load(Ordering::Acquire).is_null() && self.handoff_streak.load(Ordering::Relaxed) < HANDOFF_STREAK);
         self.lean.store(lean, Ordering::Relaxed);
         if !lean { poll_paging_exit_notifications(); }
-        if SCHED_TICK_ENTER_LOG_BUDGET
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-            .is_ok()
+        if SCHED_TICK_ENTER_LOG_BUDGET.load(Ordering::Relaxed) != 0
+            && SCHED_TICK_ENTER_LOG_BUDGET
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                .is_ok()
         {
             let b = self.runqueue.bottom.load(Ordering::Acquire);
             let t = self.runqueue.top.load(Ordering::Acquire);
@@ -598,9 +593,10 @@ impl Scheduler {
         assert_eq!(replaced, old_task);
 
         unsafe {
-            if TASK_LIFECYCLE_LOG_BUDGET
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-                .is_ok()
+            if TASK_LIFECYCLE_LOG_BUDGET.load(Ordering::Relaxed) != 0
+                && TASK_LIFECYCLE_LOG_BUDGET
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                    .is_ok()
             {
                 serial_println!(
                     "task.running id={} pd_id={} rip={:#x} rsp={:#x}",
@@ -619,7 +615,7 @@ impl Scheduler {
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
             crate::program_records::before_dispatch((*next_task).context.pd_id);
             crate::program_tenancy::before_dispatch((*next_task).context.pd_id);
-            if !self.ran_task.swap(true, Ordering::Relaxed) {
+            if !self.ran_task.load(Ordering::Relaxed) && !self.ran_task.swap(true, Ordering::Relaxed) {
                 serial_println!("[smp.core.first_task] core={} pd={} tsc={}", self.core_id, (*next_task).context.pd_id, core::arch::x86_64::_rdtsc());
             }
             core.set_pd(next_pd_ptr);
@@ -627,9 +623,10 @@ impl Scheduler {
             crate::ipc::recv::deliver(next_task);
         }
 
-        if SCHED_PICK_NEXT_LOG_BUDGET
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
-            .is_ok()
+        if SCHED_PICK_NEXT_LOG_BUDGET.load(Ordering::Relaxed) != 0
+            && SCHED_PICK_NEXT_LOG_BUDGET
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
+                .is_ok()
         {
             let next_pd_id = unsafe { (*next_task).context.pd_id };
             serial_println!("scheduler.pick_next pd_id={}", next_pd_id);
@@ -825,15 +822,25 @@ impl Scheduler {
             "call {finish_switch}",
             "mov rsi, r12",
             "mov rsp, [rsi + 0xC0]",
-            // The next task's thread pointer (TaskContext.fs_base at 0xC8).
-            "mov eax, [rsi + 0xC8]",
-            "mov edx, [rsi + 0xCC]",
+            // The next task's thread pointer (TaskContext.fs_base at 0xC8):
+            // skip WRMSR when unchanged on this core (cached in CoreLocal::last_fs_base at gs:[40]).
+            "mov rax, [rsi + 0xC8]",
+            "cmp rax, gs:[40]",
+            "je 5f",
+            "mov gs:[40], rax",
+            "mov rdx, rax",
+            "shr rdx, 32",
             "mov ecx, 0xC0000100",
             "wrmsr",
-            // The next task's gate identity for RDPID (TaskContext.gate_aux at 0xD0).
+            "5:",
+            // The next task's gate identity for RDPID (TaskContext.gate_aux at 0xD0):
+            // skip WRMSR when unchanged on this core (cached in CoreLocal::last_gate_aux at gs:[48]).
             "cmp byte ptr [rip + {gates_on}], 0",
             "je 4f",
             "mov eax, [rsi + 0xD0]",
+            "cmp rax, gs:[48]",
+            "je 4f",
+            "mov gs:[48], rax",
             "xor edx, edx",
             "mov ecx, 0xC0000103",
             "wrmsr",
@@ -847,15 +854,15 @@ impl Scheduler {
             "wrpkru",
 
             "2:",
-            // 3. Debug-log IRET frame for GP fault logger (before pops, R11 scratch).
+            // 3. Per-core IRET frame snapshot for GP fault logger (gs:[64..112], zero SMP bouncing).
             //    IRET frame is at RSP+128 (16 qwords of GPRs+dummy above RIP).
             "lea r11, [rsp + 128]",
-            "mov [rip + {actual_iret_rsp}], r11",
-            "mov r11, [rsp + 128]", "mov [rip + {actual_q0}], r11",
-            "mov r11, [rsp + 136]", "mov [rip + {actual_q1}], r11",
-            "mov r11, [rsp + 144]", "mov [rip + {actual_q2}], r11",
-            "mov r11, [rsp + 152]", "mov [rip + {actual_q3}], r11",
-            "mov r11, [rsp + 160]", "mov [rip + {actual_q4}], r11",
+            "mov gs:[64], r11",
+            "mov r11, [rsp + 128]", "mov gs:[72], r11",
+            "mov r11, [rsp + 136]", "mov gs:[80], r11",
+            "mov r11, [rsp + 144]", "mov gs:[88], r11",
+            "mov r11, [rsp + 152]", "mov gs:[96], r11",
+            "mov r11, [rsp + 160]", "mov gs:[104], r11",
 
             // 4. Check CS.RPL for userspace (swapgs needed before iretq).
             "mov r11, [rsp + 136]",
@@ -877,12 +884,6 @@ impl Scheduler {
             finish_switch = sym scheduler_finish_switch,
             pku_enabled = sym crate::pku::PKU_ENABLED,
             gates_on = sym crate::gate::ON,
-            actual_iret_rsp = sym ACTUAL_IRET_RSP,
-            actual_q0 = sym ACTUAL_IRET_Q0_RIP,
-            actual_q1 = sym ACTUAL_IRET_Q1_CS,
-            actual_q2 = sym ACTUAL_IRET_Q2_RFLAGS,
-            actual_q3 = sym ACTUAL_IRET_Q3_RSP,
-            actual_q4 = sym ACTUAL_IRET_Q4_SS,
         );
     }
 }
@@ -922,10 +923,14 @@ fn log_wake_event(event: &str, task: *mut Task) {
 
 /// A fresh syscall or user timer frame proves the parked task actually crossed
 /// the restore/IRET boundary; a merely selected task is not reported resumed.
+#[inline]
 pub fn observe_user_entry() {
     let core = crate::core_local::CoreLocal::get().core_id as usize;
     let task = SCHEDULERS[core].current_task.load(Ordering::Acquire);
-    if !task.is_null() && unsafe { (*task).resume_observation_pending.swap(false, Ordering::AcqRel) } {
+    if !task.is_null() && unsafe {
+        (*task).resume_observation_pending.load(Ordering::Relaxed)
+            && (*task).resume_observation_pending.swap(false, Ordering::AcqRel)
+    } {
         log_wake_event("user_resumed", task);
     }
 }
@@ -1119,7 +1124,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         }
         // The first look for a task waiting on its partner skips housekeeping, as a
         // handoff does: the answer usually comes within microseconds.
-        if !polled && !current.is_null() && (*current).deliver.load(Ordering::Relaxed) { sched.lean_next.store(true, Ordering::Relaxed); }
+        if !polled && !current.is_null() && ((*current).deliver.load(Ordering::Relaxed) || (*current).ipc_v2.waiting()) { sched.lean_next.store(true, Ordering::Relaxed); }
         match sched.tick() {
             ScheduleDecision::Switch { next, .. } => { polling.store(false, Ordering::SeqCst); return next }
             ScheduleDecision::NoRunnable => {}
@@ -1150,14 +1155,27 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
     }
 }
 
-/// Syscall 104 (`sex_pdx::sched`): op 1 puts the calling task in the deadline class with
-/// a period in microseconds (`rsi`, clamped), or takes it out with 0. Self-only: the
-/// class's share of each core bounds what any task can take with it.
-pub fn sched_syscall(op: u64, period_us: u64) -> u64 {
+/// Syscall 104 (`sex_pdx::sched`):
+/// - op 1: puts the calling task in the deadline class with a period in microseconds
+///   (`arg`, clamped), or takes it out with 0. Self-only.
+/// - op 2: sets `PRIORITY_HINT_DOMAIN` to `arg` (or 0 to clear). Mechanism-only hint;
+///   only interactive-class domains may set it.
+pub fn sched_syscall(op: u64, arg: u64) -> u64 {
     let task = SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize].current_task.load(Ordering::Acquire);
-    if op != 1 || task.is_null() { return u64::MAX; }
-    unsafe { (*task).deadline_us.store(deadline::clamp_period_us(period_us), Ordering::Relaxed) };
-    0
+    if task.is_null() { return u64::MAX; }
+    match op {
+        1 => {
+            unsafe { (*task).deadline_us.store(deadline::clamp_period_us(arg), Ordering::Relaxed) };
+            0
+        }
+        2 => {
+            let caller_pd = unsafe { (*task).context.pd_id };
+            if !INTERACTIVE_DOMAINS.contains(&caller_pd) { return u64::MAX; }
+            PRIORITY_HINT_DOMAIN.store(arg, Ordering::Relaxed);
+            0
+        }
+        _ => u64::MAX,
+    }
 }
 
 /// Cores spinning for a partner's answer (`poll_for_partner`): a wake needs no interrupt.
@@ -1221,7 +1239,7 @@ pub unsafe fn park_current_unless(regs_ptr: *const crate::interrupts::SyscallReg
     if current.is_null() || ready() { return; }
     match (*current).state.park(core.core_id) {
         ParkResult::WakeConsumed => {}
-        ParkResult::Blocked => { (*current).resume_observation_pending.store(true, Ordering::Release); begin_last_runnable_proof(sched, current); yield_and_switch(regs_ptr); }
+        ParkResult::Blocked => { (*current).resume_observation_pending.store(true, Ordering::Release); sched.lean_next.store(true, Ordering::Relaxed); begin_last_runnable_proof(sched, current); yield_and_switch(regs_ptr); }
         ParkResult::Exited => yield_and_switch(regs_ptr),
         ParkResult::NotOwner => panic!("WAIT_WITHOUT_ATTACHED_OWNER"),
     }
@@ -1611,7 +1629,7 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         // RSP0 must be the frame TOP, identical to the timer path.
         crate::gdt::update_tss_rsp0(x86_64::VirtAddr::new(kstack_top + 168));
         static FIX_MARKER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-        if !FIX_MARKER.swap(true, Ordering::Relaxed) {
+        if !FIX_MARKER.load(Ordering::Relaxed) && !FIX_MARKER.swap(true, Ordering::Relaxed) {
             serial_println!("[scheduler.pd8.flake.fix.ok] reason=yield_rsp0_frame_base_ratchet");
         }
         unsafe {

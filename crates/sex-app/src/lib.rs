@@ -970,77 +970,69 @@ pub mod files {
     fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
         m.type_id == 1 && m.caller_pd == FILES && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
     }
+    /// Requests that change nothing, so they can be sent again after Files restarts.
     fn idempotent(kind: u8) -> bool {
         matches!(kind, w::STAT | w::LIST | w::READ | w::STATFS | w::ARGS | w::PING | w::READ_IO_STATS)
     }
-    /// One request, answered before it returns. Yields cleanly when Files is busy
-    /// (`ERR_SERVICE_NOT_READY` while `Live`) and automatically reconnects and retries
-    /// idempotent reads/stats if Files restarts mid-call or is briefly down.
+    /// One request, answered before it returns. A busy or restarting Files refuses with
+    /// not-ready, and the call waits for it as before. When Files restarts after taking
+    /// the request, the kernel answers `PEER_RESTARTED`: a request that changes nothing is
+    /// sent again (a few times at most); any other fails as unavailable, since the old
+    /// run may or may not have done it.
     fn once(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<u32, Error> {
-        use sex_pdx::ipc_recv::{
-            is_peer_restarted, retry_on_peer_restart, AttemptOutcome, ReconnectError,
-            DEFAULT_RECONNECT_RETRIES, DEFAULT_RECONNECT_TIMEOUT_TICKS,
+        let mut restarts = 0u32;
+        loop {
+            match once_attempt(hold, kind, path_len, offset, length) {
+                Err(Restarted) if idempotent(kind) && restarts < 4 => restarts += 1,
+                Err(Restarted) => return Err(w::UNAVAILABLE),
+                Ok(answer) => return answer,
+            }
+        }
+    }
+    struct Restarted;
+    #[inline(never)]
+    fn once_attempt(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<Result<u32, Error>, Restarted> {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
+        let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
+        let a = r.args();
+        // Waits for the answer in the same kernel entry, which usually brings it back in
+        // registers; Files runs next.
+        let mut first = loop {
+            match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
+                Ok(m) => break m,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Ok(Err(w::UNAVAILABLE)),
+            }
         };
+        // The main task sleeps until its inbox has something (or briefly, to see the
+        // mailbox); a worker cannot sleep that way, so it looks, and lets others run.
         let worker = crate::thread::is_worker();
-        let res = retry_on_peer_restart(
-            sex_pdx::SLOT_STORAGE,
-            DEFAULT_RECONNECT_RETRIES,
-            DEFAULT_RECONNECT_TIMEOUT_TICKS,
-            || {
-                let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
-                let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
-                let a = r.args();
-                // Waits for the answer in the same kernel entry, which usually brings it back in
-                // registers; Files runs next.
-                let mut first = match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
-                    Ok(m) => m,
-                    Err(sex_pdx::ERR_SERVICE_NOT_READY) => return AttemptOutcome::NotReady,
-                    Err(_) => return AttemptOutcome::Failed(w::UNAVAILABLE),
-                };
-                // The main task sleeps until its inbox has something (or briefly, to see the
-                // mailbox); a worker cannot sleep that way, so it looks, and lets others run.
-                let mut idle = 0u32;
-                loop {
-                    let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq) || is_peer_restarted(m, FILES))) {
-                        Some(m) => m,
-                        None => match sex_pdx::pdx_try_listen_raw(0) {
-                            Some(m) => { idle = 0; m }
-                            // Another task may move this answer into the mailbox meanwhile,
-                            // which wakes no one: the main task sleeps briefly and looks again.
-                            None if !worker => { let _ = sex_pdx::sys_wait_self_ticks(super::MAILBOX_LOOK_TICKS); continue; }
-                            None => { idle += 1; crate::thread::pause(idle); continue; }
-                        },
-                    };
-                    if is_peer_restarted(&m, FILES) {
-                        return if idempotent(kind) {
-                            AttemptOutcome::PeerRestarted
-                        } else {
-                            AttemptOutcome::Failed(w::UNAVAILABLE)
-                        };
-                    }
-                    if mine(&m, seq) {
-                        let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
-                        if status != w::OK { REFUSED_VALUE.store(value, Ordering::Relaxed); }
-                        return if status == w::OK {
-                            AttemptOutcome::Done(value)
-                        } else {
-                            AttemptOutcome::Failed(status)
-                        };
-                    }
-                    if is_answer(&m) { mailbox::put(m); continue; }
-                    match hold {
-                        Some(window) => if let Some(event) = window.event(&m) {
-                            if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
-                        },
-                        None => if is_shell(&m) { mailbox::put(m) },
-                    }
-                }
-            },
-        );
-        match res {
-            Ok(v) => Ok(v),
-            Err(ReconnectError::Failed(e)) => Err(e),
-            Err(ReconnectError::GaveUp | ReconnectError::Exhausted) => Err(w::UNAVAILABLE),
+        let mut idle = 0u32;
+        loop {
+            let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq) || sex_pdx::ipc_recv::is_peer_restarted(m, FILES))) {
+                Some(m) => m,
+                None => match sex_pdx::pdx_try_listen_raw(0) {
+                    Some(m) => { idle = 0; m }
+                    // Another task may move this answer into the mailbox meanwhile,
+                    // which wakes no one: the main task sleeps briefly and looks again.
+                    None if !worker => { let _ = sex_pdx::sys_wait_self_ticks(super::MAILBOX_LOOK_TICKS); continue; }
+                    None => { idle += 1; crate::thread::pause(idle); continue; }
+                },
+            };
+            if mine(&m, seq) {
+                let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
+                if status != w::OK { REFUSED_VALUE.store(value, Ordering::Relaxed); }
+                return Ok(if status == w::OK { Ok(value) } else { Err(status) });
+            }
+            // Files restarted after taking this request: the old run's answer never comes.
+            if sex_pdx::ipc_recv::is_peer_restarted(&m, FILES) { return Err(Restarted); }
+            if is_answer(&m) { mailbox::put(m); continue; }
+            match hold {
+                Some(window) => if let Some(event) = window.event(&m) {
+                    if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+                },
+                None => if is_shell(&m) { mailbox::put(m) },
+            }
         }
     }
     /// A package request (`sex_pdx::package`: `op` is INSTALL, SEARCH, ...), for a run the
@@ -1757,68 +1749,42 @@ pub mod net {
     fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
         m.type_id == 1 && m.caller_pd == NET && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
     }
-    fn idempotent(kind: u8) -> bool {
-        matches!(kind, w::UP | w::RESOLVE | w::STATE | w::CLOSE)
-    }
     /// One request and its answer, under the turn. What else arrives meanwhile goes to
-    /// the window, or to the mailbox for the task it belongs to. Yields cleanly when
-    /// Network is busy (`ERR_SERVICE_NOT_READY` while `Live`) and automatically
-    /// reconnects and retries idempotent network calls if Network restarts mid-call.
+    /// the window, or to the mailbox for the task it belongs to.
     fn call_held(mut hold: Option<&mut Window>, flow: Flow, kind: u8, value: u64) -> Result<(u8, u32), Error> {
-        use sex_pdx::ipc_recv::{
-            is_peer_restarted, retry_on_peer_restart, AttemptOutcome, ReconnectError,
-            DEFAULT_RECONNECT_RETRIES, DEFAULT_RECONNECT_TIMEOUT_TICKS,
-        };
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0x7F_FFFF;
+        loop {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(seq, kind, flow.0), value, 0) {
+                Ok(_) => break,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(Error::NotAllowed),
+            }
+        }
+        let began = sex_pdx::get_ticks();
         let worker = crate::thread::is_worker();
-        let res = retry_on_peer_restart(
-            sex_pdx::SLOT_NET,
-            DEFAULT_RECONNECT_RETRIES,
-            DEFAULT_RECONNECT_TIMEOUT_TICKS,
-            || {
-                let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0x7F_FFFF;
-                match sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(seq, kind, flow.0), value, 0) {
-                    Ok(_) => {}
-                    Err(sex_pdx::ERR_SERVICE_NOT_READY) => return AttemptOutcome::NotReady,
-                    Err(_) => return AttemptOutcome::Failed(Error::NotAllowed),
-                }
-                let began = sex_pdx::get_ticks();
-                let mut idle = 0u32;
-                loop {
-                    if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return AttemptOutcome::Failed(Error::TooSlow); }
-                    let m = match super::mailbox::take(|m| mine(m, seq) || is_peer_restarted(m, NET)) {
-                        Some(m) => m,
-                        None => match sex_pdx::pdx_try_listen_raw(0) {
-                            Some(m) => { idle = 0; m }
-                            None if worker => { idle += 1; crate::thread::pause(idle); continue; }
-                            None => { sex_pdx::sys_yield(); continue; }
-                        },
-                    };
-                    if is_peer_restarted(&m, NET) {
-                        return if idempotent(kind) {
-                            AttemptOutcome::PeerRestarted
-                        } else {
-                            AttemptOutcome::Failed(Error::Offline)
-                        };
-                    }
-                    if mine(&m, seq) {
-                        let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
-                        return AttemptOutcome::Done((status, value));
-                    }
-                    match hold.as_deref_mut() {
-                        Some(window) => if let Some(event) = window.event(&m) {
-                            if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
-                        },
-                        // Another task's answer, a key or a close: its owner looks in the mailbox.
-                        // A late answer to this program's own earlier question is dropped.
-                        None => if (super::is_answer(&m) && m.caller_pd != NET) || super::is_shell(&m) { super::mailbox::put(m) },
-                    }
-                }
-            },
-        );
-        match res {
-            Ok(v) => Ok(v),
-            Err(ReconnectError::Failed(e)) => Err(e),
-            Err(ReconnectError::GaveUp | ReconnectError::Exhausted) => Err(Error::Offline),
+        let mut idle = 0u32;
+        loop {
+            if sex_pdx::get_ticks().saturating_sub(began) > 30_000 { return Err(Error::TooSlow); }
+            let m = match super::mailbox::take(|m| mine(m, seq)) {
+                Some(m) => m,
+                None => match sex_pdx::pdx_try_listen_raw(0) {
+                    Some(m) => { idle = 0; m }
+                    None if worker => { idle += 1; crate::thread::pause(idle); continue; }
+                    None => { sex_pdx::sys_yield(); continue; }
+                },
+            };
+            if mine(&m, seq) {
+                let (_, status, value) = w::decode_reply(m.arg0).unwrap_or((0, w::INVALID, 0));
+                return Ok((status, value));
+            }
+            match hold.as_deref_mut() {
+                Some(window) => if let Some(event) = window.event(&m) {
+                    if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+                },
+                // Another task's answer, a key or a close: its owner looks in the mailbox.
+                // A late answer to this program's own earlier question is dropped.
+                None => if (super::is_answer(&m) && m.caller_pd != NET) || super::is_shell(&m) { super::mailbox::put(m) },
+            }
         }
     }
     fn ok(r: (u8, u32)) -> Result<u32, Error> {
