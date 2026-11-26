@@ -67,13 +67,14 @@ impl DoubleClick {
 
 /// What a button or a menu row does to its window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action { Close, Minimise, ToggleMaximise, ToggleFloat, Ungroup, MoveToWorkspace(u8) }
+pub enum Action { Close, Minimise, ToggleMaximise, ToggleFloat, Ungroup, MoveToWorkspace(u8), SetTint(u8) }
 
 impl Action {
     pub fn name(self) -> &'static str {
         match self {
             Action::Close => "close", Action::Minimise => "minimise", Action::ToggleMaximise => "maximise",
             Action::ToggleFloat => "float", Action::Ungroup => "ungroup", Action::MoveToWorkspace(_) => "workspace",
+            Action::SetTint(_) => "tint",
         }
     }
 }
@@ -89,7 +90,7 @@ pub fn item_action(i: Item) -> Action {
 /// A left press while the menu shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
-    /// A row: the menu closes and its action runs on `frame`.
+    /// A row or candy swatch: the menu closes and its action runs on `frame`.
     Choose { frame: u32, action: Action },
     /// The menu's border or padding: nothing happens.
     Inside,
@@ -128,18 +129,26 @@ impl WindowMenu {
                 self.open = None;
                 match menu.item(i) { Some(item) => Press::Choose { frame, action: item_action(item) }, None => Press::Dismiss }
             }
+            Hit::Swatch(swatch) => {
+                self.open = None;
+                Press::Choose { frame, action: Action::SetTint(swatch) }
+            }
         }
     }
 
-    /// The pointer moved: true when the highlighted row changed.
+    /// The pointer moved: true when the highlighted row or swatch changed.
     pub fn hover(&mut self, x: i32, y: i32, w: usize, h: usize, scale: u32) -> bool {
         let Some((frame, menu)) = self.open else { return false };
-        let row = match Layout::new(&menu, w, h, scale) {
-            Some(l) if x >= 0 && y >= 0 => match l.hit(x as usize, y as usize) { Hit::Row(i) => Some(i as u8), _ => None },
-            _ => None,
+        let (row, swatch) = match Layout::new(&menu, w, h, scale) {
+            Some(l) if x >= 0 && y >= 0 => match l.hit(x as usize, y as usize) {
+                Hit::Row(i) => (Some(i as u8), None),
+                Hit::Swatch(s) => (None, Some(s)),
+                _ => (None, None),
+            },
+            _ => (None, None),
         };
-        if row == menu.hover { return false; }
-        self.open = Some((frame, Menu { hover: row, ..menu }));
+        if row == menu.hover && swatch == menu.hover_swatch { return false; }
+        self.open = Some((frame, Menu { hover: row, hover_swatch: swatch, ..menu }));
         true
     }
 }

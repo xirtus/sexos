@@ -72,11 +72,14 @@ def main():
   time.sleep(3)
   first=shot('desktop.ppm')
   if first[:2]!=(w,h):raise RuntimeError(f'host resource {first[:2]} != {(w,h)}')
-  # The bar (the default Light theme's grey glass since the desktop follows the
-  # system theme), the rose-gold lips of the launcher button and the red close
-  # light of the first window.
-  checks={'bar':(px(first,300,14),(178,179,185)),'close':(px(first,20,49),(230,68,68))}
+  # The bar (the candy Light theme's pale SilkBar glass since the desktop
+  # follows the system theme), the rose-gold lips of the launcher button and
+  # the red close light of the first window. The close light carries its
+  # always-visible glyph, so check that red dominates rather than one shade.
+  checks={'bar':(px(first,300,14),(221,220,224))}
   bad={k:v for k,v in checks.items() if not near(*v)}
+  close=px(first,20,49)
+  if not(close[0]>=close[1]+50 and close[0]>=close[2]+50):bad['close']=(close,'red close light')
   lips=px(first,19,14)
   if not(lips[0]>lips[1]>lips[2] and lips[0]-lips[2]>=20):bad['launcher']=(lips,'rose-gold lips')
   if bad:raise RuntimeError(f'desktop not on the GPU resource: {bad}')

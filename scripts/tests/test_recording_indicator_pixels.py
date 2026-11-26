@@ -62,7 +62,10 @@ mod scene {
   let mut pixels=vec![0x102030;w*h];let(fg,bg)=(0xff4040,0x203040);
   assert!(recording_indicator::paint(pixels.as_mut_ptr(),w,h,&bar,scale,fg,bg));
   let snapshot=scene::SceneSnapshot{surfaces:vec![Surface{active:true,surface_id:0x90,x:r.x as i32,y:r.y as i32}],metrics};
+  // The cursor may cross the SilkBar now; raster_batch paints the protected
+  // marker after the cursor, so the marker stays exact on top of it.
   draw_cursor_z_top(pixels.as_mut_ptr(),w,h,pixels.len(),true,&snapshot);
+  assert!(recording_indicator::paint(pixels.as_mut_ptr(),w,h,&bar,scale,fg,bg));
   assert!(recording_indicator::matches(&pixels,w,h,&bar,scale,fg,bg));
   restore_cursor_under(pixels.as_mut_ptr(),w,h,pixels.len(),metrics);
   assert!(recording_indicator::matches(&pixels,w,h,&bar,scale,fg,bg));

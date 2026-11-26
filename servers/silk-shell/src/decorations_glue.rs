@@ -56,7 +56,8 @@ unsafe fn menu_open(frame: u32, sid: u64, x: i32, y: i32) {
     let current = (*core::ptr::addr_of!(crate::FRAMES)).iter().flatten().find(|f| f.frame_id == frame).map_or(crate::ACTIVE_SCENE_IDX, |f| f.scene_id);
     let menu = sex_pdx::window_menu::Menu::new(x, y, crate::frame_is_zoomed(frame), flags & crate::FRAME_FLAG_FLOATING != 0,
         crate::WORKSPACE_COUNT.min(sex_pdx::window_menu::MAX_WORKSPACES), current)
-        .grouped(crate::layouts_glue::tab_count(frame) > 1);
+        .grouped(crate::layouts_glue::tab_count(frame) > 1)
+        .with_tint(crate::frame_candy_tint(frame));
     let (w, h) = (crate::desktop_width().max(0) as usize, crate::desktop_height().max(0) as usize);
     // A screen that cannot hold the menu gets none, rather than an invisible
     // modal menu that swallows clicks.
@@ -94,9 +95,11 @@ unsafe fn act(frame: u32, action: Action, via: &str) {
         // The same split as Super+Shift+G, on the tab this frame shows (focused above).
         Action::Ungroup => crate::layouts_glue::action(crate::wm::WmAction::Ungroup),
         Action::MoveToWorkspace(n) => n < crate::WORKSPACE_COUNT && crate::reparent_frame_to_scene(frame, n, "window_menu"),
+        Action::SetTint(swatch) => crate::set_frame_candy_tint(frame, swatch),
     };
     match action {
         Action::MoveToWorkspace(n) => { sex_pdx::serial_record!("[shell.decor.action] frame={} sid={} action=workspace to={} via={} ok={}", frame, sid, n, via, ok as u8); }
+        Action::SetTint(swatch) => { sex_pdx::serial_record!("[shell.decor.action] frame={} sid={} action=tint swatch={} via={} ok={}", frame, sid, swatch, via, ok as u8); }
         _ => { sex_pdx::serial_record!("[shell.decor.action] frame={} sid={} action={} via={} ok={} zoomed={} floating={}", frame, sid, action.name(), via, ok as u8,
             crate::frame_is_zoomed(frame) as u8, crate::wm_frame_flags(frame).map_or(0, |f| (f & crate::FRAME_FLAG_FLOATING != 0) as u8)); }
     }
