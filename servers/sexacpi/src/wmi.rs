@@ -80,7 +80,7 @@ impl Awcc {
             dev.path, core::str::from_utf8(&method).unwrap_or("?"), inventory.description.word(),
             inventory.fan_count, inventory.sensor_count, inventory.profile_count, current);
         for (i, f) in inventory.fans().iter().enumerate() {
-            serial_println!("[sexacpi.awcc.fan] id={:#04x} name={} rpm={} min={} max={}", f.id, awcc::fan_name(f.id), last.rpm[i], f.min_rpm, f.max_rpm);
+            serial_println!("[sexacpi.awcc.fan] id={:#04x} name={} rpm={} min={} max={}", f.id, awcc::fan_name(f.id), last.rpm[i].map_or(-1, |v| v as i32), f.min_rpm, f.max_rpm);
         }
         for (i, s) in inventory.sensors().iter().enumerate() {
             serial_println!("[sexacpi.awcc.temp] id={:#04x} name={} celsius={}", s, awcc::sensor_name(*s), last.celsius[i].map_or(-1, |c| c as i32));
@@ -99,7 +99,7 @@ impl Awcc {
         self.reads = self.reads.wrapping_add(1);
         if self.reads % 60 == 1 || r.profile != self.last.profile {
             let mut fans = alloc::string::String::new();
-            for (i, f) in self.inventory.fans().iter().enumerate() { fans.push_str(&alloc::format!("{}:{} ", awcc::fan_name(f.id), r.rpm[i])); }
+            for (i, f) in self.inventory.fans().iter().enumerate() { fans.push_str(&alloc::format!("{}:{} ", awcc::fan_name(f.id), r.rpm[i].map_or(-1, |v| v as i32))); }
             let mut temps = alloc::string::String::new();
             for (i, s) in self.inventory.sensors().iter().enumerate() {
                 temps.push_str(&alloc::format!("{}:{} ", awcc::sensor_name(*s), r.celsius[i].map_or(-1, |c| c as i32)));
@@ -119,6 +119,21 @@ impl Awcc {
         let inv = self.inventory;
         let ok = awcc::activate(&mut self.fw(aml), &inv, id);
         serial_println!("[sexacpi.awcc.set] desktop={} firmware={:#04x} kind={} ok={}", p.name(), id, awcc::kind(id).map_or("unknown", awcc::kind_name), ok as u8);
+    }
+
+    /// Directly activates a specific AWCC thermal profile kind (from Spindle `profile <name>`).
+    pub fn set_kind(&mut self, aml: &Aml, wanted: awcc::Kind) {
+        let id = self.inventory.profiles().iter().copied().find(|&p| awcc::kind(p) == Some(wanted))
+            .or_else(|| (wanted == awcc::Kind::GMode).then_some(awcc::PROFILE_GMODE));
+        let Some(id) = id else {
+            serial_println!("[sexacpi.awcc.set] kind={} firmware=none", awcc::kind_name(wanted));
+            return;
+        };
+        let inv = self.inventory;
+        let ok = awcc::activate(&mut self.fw(aml), &inv, id);
+        serial_println!("[sexacpi.awcc.set] kind={} firmware={:#04x} ok={}", awcc::kind_name(wanted), id, ok as u8);
+        self.reads = 0;
+        self.refresh(aml);
     }
 }
 

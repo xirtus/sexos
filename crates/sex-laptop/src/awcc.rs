@@ -198,12 +198,12 @@ pub fn probe(fw: &mut impl Firmware) -> Option<Inventory> {
     Some(inv)
 }
 
-/// Plausible degrees Celsius only (firmware returns 0 or 255 for a missing sensor).
-pub fn plausible_celsius(v: u32) -> Option<u8> { (1..=125).contains(&v).then_some(v as u8) }
+/// Plausible degrees Celsius only (firmware returns 0, 2 or 255 for a missing or D3cold sensor).
+pub fn plausible_celsius(v: u32) -> Option<u8> { (10..=125).contains(&v).then_some(v as u8) }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Reading {
-    pub rpm: [u16; MAX_RESOURCES],
+    pub rpm: [Option<u16>; MAX_RESOURCES],
     pub celsius: [Option<u8>; MAX_RESOURCES],
     pub profile: Option<u8>,
 }
@@ -218,7 +218,7 @@ impl Reading {
 pub fn read(fw: &mut impl Firmware, inv: &Inventory) -> Reading {
     let mut r = Reading::default();
     for (i, f) in inv.fans().iter().enumerate() {
-        r.rpm[i] = call(fw, METHOD_THERMAL_INFORMATION, args(OP_FAN_RPM, f.id, 0, 0)).map_or(0, rpm);
+        r.rpm[i] = call(fw, METHOD_THERMAL_INFORMATION, args(OP_FAN_RPM, f.id, 0, 0)).map(rpm);
     }
     for (i, s) in inv.sensors().iter().enumerate() {
         r.celsius[i] = call(fw, METHOD_THERMAL_INFORMATION, args(OP_TEMPERATURE, *s, 0, 0)).and_then(plausible_celsius);
@@ -295,7 +295,7 @@ mod tests {
         // G-Mode is listed but never offered as an ordinary profile.
         assert_eq!(inv.profiles(), &[PROFILE_USTT_BALANCED, PROFILE_USTT_PERFORMANCE, PROFILE_USTT_QUIET]);
         let r = read(&mut fw, &inv);
-        assert_eq!(&r.rpm[..2], &[2400, 2100]);
+        assert_eq!(&r.rpm[..2], &[Some(2400), Some(2100)]);
         assert_eq!(&r.celsius[..3], &[Some(61), Some(48), None]);
         assert_eq!(r.hottest_decikelvin(), Some(3342));
         assert_eq!(r.profile, Some(PROFILE_USTT_BALANCED));
@@ -335,8 +335,36 @@ mod tests {
         let inv = probe(&mut fw).unwrap();
         assert!(activate(&mut fw, &inv, PROFILE_CUSTOM));
         assert!(set_boost(&mut fw, &inv, 0x32, 100));
-        assert_eq!(read(&mut fw, &inv).rpm[0], 3400);
+        assert_eq!(read(&mut fw, &inv).rpm[0], Some(3400));
         assert!(!set_boost(&mut fw, &inv, 0x40, 100));
+    }
+
+    #[test]
+    fn rpm_refusal_vs_zero_and_d3cold_temp_filtering() {
+        struct Mixed;
+        impl Firmware for Mixed {
+            fn call(&mut self, method: u32, a: u32) -> Option<u32> {
+                let [op, a1, _, _] = a.to_le_bytes();
+                Some(match (method, op) {
+                    (METHOD_THERMAL_INFORMATION, OP_SYSTEM_DESCRIPTION) => args(2, 2, 0, 0),
+                    (METHOD_THERMAL_INFORMATION, OP_RESOURCE_ID) => [0x32, 0x33, 0x01, 0x06].get(a1 as usize).map_or(FAILURE, |v| *v as u32),
+                    (METHOD_THERMAL_INFORMATION, OP_FAN_RPM) => match a1 { 0x32 => 0, 0x33 => FAILURE, _ => FAILURE },
+                    (METHOD_THERMAL_INFORMATION, OP_TEMPERATURE) => match a1 { 0x01 => 45, 0x06 => 2, _ => FAILURE },
+                    _ => FAILURE,
+                })
+            }
+        }
+        let inv = probe(&mut Mixed).unwrap();
+        let r = read(&mut Mixed, &inv);
+        // Stopped fan reports Some(0); firmware refusal reports None instead of masking as 0 RPM.
+        assert_eq!(&r.rpm[..2], &[Some(0), None]);
+        // Bogus 2 C reading from a D3cold dGPU is filtered out.
+        assert_eq!(&r.celsius[..2], &[Some(45), None]);
+        assert_eq!(plausible_celsius(2), None);
+        assert_eq!(plausible_celsius(9), None);
+        assert_eq!(plausible_celsius(10), Some(10));
+        assert_eq!(plausible_celsius(125), Some(125));
+        assert_eq!(plausible_celsius(126), None);
     }
 
     #[test]

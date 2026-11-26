@@ -91,6 +91,8 @@ pub const REQUEST: u8 = 1;
 pub const FLUSH: u8 = 2;
 pub const SENSE: u8 = 4;
 pub const FIRMWARE: u8 = 8;
+/// May change CPU/thermal power profiles (`CTL_PROFILE`, `CTL_THERMAL_PROFILE`), never off/restart/sleep.
+pub const PROFILE: u8 = 16;
 
 /// The message the kernel sends Files (as an IPC call from pd 0) before power changes.
 /// arg0 is the op (`OFF` or `RESTART`). The ACPI service gets it too, and runs `\_PTS`.
@@ -259,6 +261,16 @@ pub const fn charge_value_ok(value: u8) -> bool { value <= CHARGE_CUSTOM || (val
 pub const PROFILE_PERFORMANCE: u8 = 0;
 pub const PROFILE_BALANCED: u8 = 1;
 pub const PROFILE_SAVER: u8 = 2;
+/// Vendor thermal profile (e.g. Alienware AWCC), queued for the ACPI service.
+pub const CTL_THERMAL_PROFILE: u64 = 7;
+pub const THERMAL_CUSTOM: u8 = 0;
+pub const THERMAL_QUIET: u8 = 1;
+pub const THERMAL_BALANCED: u8 = 2;
+pub const THERMAL_BALANCED_PERFORMANCE: u8 = 3;
+pub const THERMAL_PERFORMANCE: u8 = 4;
+pub const THERMAL_COOL: u8 = 5;
+pub const THERMAL_LOW_POWER: u8 = 6;
+pub const THERMAL_GMODE: u8 = 7;
 pub const BUTTON_FALLBACK_TICKS: u64 = 10_000;
 pub const fn control_word(command: u64, value: u8) -> u64 { command | (value as u64) << 8 }
 

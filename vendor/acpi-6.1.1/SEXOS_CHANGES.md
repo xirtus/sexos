@@ -39,3 +39,16 @@
   or more give 0, and every remaining argument mismatch (`else { panic!() }`) or unknown
   store target returns `AmlError::LibUnimplemented`: a bad construct fails its method, not
   the interpreter.
+- `aml/mod.rs`: `do_store` now supports `ReferenceKind::RefOf` targets (such as
+  `Store(val, Index(PBST, i))` and `Index(Buf, i)`), `Uninitialized`/`String`/`Buffer`/
+  `Package` targets, and `Opcode::CopyObject`. `do_field_read` and `do_field_write` now
+  implement `FieldUnitKind::Bank` (`BankField`) and `FieldUnitKind::Index` (`IndexField`).
+  Upstream returned `LibUnimplemented`, breaking laptop `_BST`/`_BIF`/`_BIX` battery
+  packages and indexed EC/lid fields on the Alienware x17 R1.
+- `aml/object.rs`, `aml/mod.rs`: `Object::as_integer`, `as_string`, `as_buffer`,
+  `to_integer`, and `to_buffer` now unwrap `Object::Reference` (matching `Object::typ()`),
+  and `Opcode::Increment`/`Decrement` and `do_field_write` unwrap reference operands before
+  matching `Object::Integer`/`Buffer`. Upstream matched only direct variants, failing with
+  `ObjectNotOfExpectedType { expected: Integer, got: Integer }` on lid (`_LID`) and local
+  increment/decrement paths on the Alienware x17 R1.
+

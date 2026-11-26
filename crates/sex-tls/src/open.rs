@@ -473,8 +473,9 @@ impl Session {
                             Ok(n) => { self.wire_out.truncate(at + n); self.plain_out.drain(..take); more = true; }
                             Err(_) => { self.wire_out.truncate(at); drop(write); self.fail(Some(Failure::Application)); return self.stage; }
                         }
-                    } else if self.peer_closed {
-                        // The site closed; any partial record left behind is cut short.
+                    } else if self.peer_closed && discard == 0 {
+                        // The site closed and no complete record could be decoded; any
+                        // partial record left behind is cut short.
                         drop(write);
                         self.conn = None;
                         self.stage = Stage::Finished;
@@ -698,7 +699,6 @@ print('served=%d alpn=%s'%(served,alpn),flush=True)
         let host = "h2.sexos.test";
         let dir = std::env::temp_dir().join(format!("sexos-tls-h2-{}", std::process::id()));
         chain(&dir, host, "ec:P-256");
-        let _frozen = ROOTS_FROZEN.write().unwrap_or_else(|e| e.into_inner());
         let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 1;
         let mut server = Command::new("python3").current_dir(&dir).args(["-c", H2, "leaf.pem", "leaf.key"]).stdout(Stdio::piped()).spawn().unwrap();
         let mut lines = BufReader::new(server.stdout.take().unwrap());
@@ -915,6 +915,10 @@ print('reused='+','.join(map(str,reused)),flush=True)
         let host = "resume.sexos.test";
         let dir = std::env::temp_dir().join(format!("sexos-tls-resume-{}", std::process::id()));
         chain(&dir, host, "ec:P-256");
+        // Hold the write side so no concurrent test pushes a new test root and forces
+        // ClientCache::config_for to rebuild ClientConfig with a new WebPkiServerVerifier
+        // (rustls rejects cached tickets whose verifier does not match the active config).
+        let _frozen = ROOTS_FROZEN.write().unwrap_or_else(|e| e.into_inner());
         let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 1;
         let mut peer = Command::new("python3")
             .args(["-c", RESUME_PEER, dir.join("leaf.pem").to_str().unwrap(), dir.join("leaf.key").to_str().unwrap()])
@@ -957,18 +961,16 @@ print('reused='+','.join(map(str,reused)),flush=True)
                 std::thread::sleep(Duration::from_millis(1));
             }
             assert!(got.ends_with(b"OK"), "conn {conn_idx}: {:?}", String::from_utf8_lossy(&got));
+            if conn_idx == 0 {
+                assert!(cache.store().tls13_ticket_count() > 0, "first connection must ingest NewSessionTicket");
+            }
             resumed_flags.push(session.resumed());
             assert_eq!(cache.config_count(), 1, "Arc<ClientConfig> must be reused across connections");
         }
-        // The first connection is a full handshake. A later one must resume; under a
-        // loaded test runner a single follow-up was seen to miss (about 1 run in 3 with
-        // every TLS test in parallel, never alone), so three follow-ups are allowed.
-        assert!(!resumed_flags[0], "first connection must be a full handshake");
-        assert!(resumed_flags[1..].contains(&true), "a later connection must resume TLS session: {resumed_flags:?}");
+        assert_eq!(resumed_flags, vec![false, true, true, true], "every follow-up connection must resume TLS session: {resumed_flags:?}");
         let mut summary = String::new();
         out.read_line(&mut summary).unwrap();
-        let want: std::string::String = resumed_flags.iter().map(|r| if *r { "1" } else { "0" }).collect::<std::vec::Vec<_>>().join(",");
-        assert_eq!(summary.trim(), std::format!("reused={want}"), "server and client agree on which connections resumed");
+        assert_eq!(summary.trim(), "reused=0,1,1,1", "server and client agree on which connections resumed");
         let _ = peer.wait();
         let _ = std::fs::remove_dir_all(&dir);
     }

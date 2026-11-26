@@ -419,6 +419,7 @@ where
                     }
                     Opcode::Increment | Opcode::Decrement => {
                         let [Argument::Object(operand)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
+                        let operand = operand.clone().unwrap_reference();
                         let token = self.object_token.lock();
                         let Object::Integer(operand) = (unsafe { operand.gain_mut(&token) }) else {
                             Err(AmlError::ObjectNotOfExpectedType {
@@ -791,9 +792,10 @@ where
                         )?;
                         context.retire_op(op);
                     }
-                    Opcode::Store => {
+                    Opcode::Store | Opcode::CopyObject => {
                         let [Argument::Object(object), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
-                        self.do_store(target, object.clone())?;
+                        let stored = self.do_store(target, object.clone())?;
+                        context.contribute_arg(Argument::Object(stored));
                         context.retire_op(op);
                     }
                     Opcode::RefOf => {
@@ -1673,7 +1675,10 @@ where
                 )),
 
                 Opcode::ObjectType => context.start(OpInFlight::new(opcode, &[ResolveBehaviour::SuperName])),
-                Opcode::CopyObject => return Err(AmlError::LibUnimplemented),
+                Opcode::CopyObject => context.start(OpInFlight::new(
+                    Opcode::CopyObject,
+                    &[ResolveBehaviour::TermArg, ResolveBehaviour::SuperName],
+                )),
                 Opcode::Mid => context.start(OpInFlight::new(
                     Opcode::Mid,
                     &[
@@ -2361,7 +2366,26 @@ where
                 Object::FieldUnit(field) => self.do_field_write(field, object)?,
                 Object::Reference { kind, inner } => {
                     match kind {
-                        ReferenceKind::RefOf => return Err(AmlError::LibUnimplemented),
+                        // SexOS: `Index(Package, i)` and `Index(Buffer, i)` produce
+                        // `ReferenceKind::RefOf`. Writing through them is how ACPI
+                        // `_BST`/`_BIF`/`_BIX` populate battery packages.
+                        ReferenceKind::RefOf => match unsafe { inner.gain_mut(&token) } {
+                            Object::BufferField { .. } => match unsafe { object.gain_mut(&token) } {
+                                Object::Integer(value) => {
+                                    unsafe { inner.gain_mut(&token) }
+                                        .write_buffer_field(&value.to_le_bytes(), &token)?;
+                                }
+                                Object::Buffer(value) => {
+                                    unsafe { inner.gain_mut(&token) }
+                                        .write_buffer_field(value.as_slice(), &token)?;
+                                }
+                                _ => return Err(AmlError::LibUnimplemented),
+                            },
+                            Object::FieldUnit(field) => self.do_field_write(field, object)?,
+                            dst => {
+                                *dst = unsafe { object.gain_mut(&token) }.clone();
+                            }
+                        },
                         ReferenceKind::LocalOrArg => {
                             if let Object::Reference { kind: _inner_kind, inner: inner_inner } = &**inner {
                                 // TODO: this should store into the reference, potentially doing an
@@ -2378,6 +2402,9 @@ where
                         }
                         ReferenceKind::Unresolved => return Err(AmlError::LibUnimplemented),
                     }
+                }
+                Object::Uninitialized | Object::String(_) | Object::Buffer(_) | Object::Package(_) => {
+                    *unsafe { target.gain_mut(&token) } = unsafe { object.gain_mut(&token) }.clone();
                 }
                 Object::Debug => {
                     self.handler.handle_debug(&object);
@@ -2420,26 +2447,29 @@ where
             Output::Integer(value) => value,
         };
 
-        let read_region = match field.kind {
-            FieldUnitKind::Normal { ref region } => region,
-            // FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
-            FieldUnitKind::Bank { .. } => {
-                // TODO: put the bank_value in the bank
-                return Err(AmlError::LibUnimplemented);
+        enum ReadSource<'a> {
+            Region(&'a OpRegion),
+            Index(&'a FieldUnit, &'a FieldUnit),
+        }
+        let source = match field.kind {
+            FieldUnitKind::Normal { ref region } => {
+                let Object::OpRegion(ref read_region) = **region else { return Err(AmlError::LibUnimplemented) };
+                ReadSource::Region(read_region)
             }
-            // FieldUnitKind::Index { ref index, ref data } => {
-            FieldUnitKind::Index { .. } => {
-                // TODO: configure the correct index
-                return Err(AmlError::LibUnimplemented);
+            // SexOS: BankField selects the bank before reading the underlying region.
+            FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
+                let Object::FieldUnit(ref bank_field) = **bank else { return Err(AmlError::LibUnimplemented) };
+                self.do_field_write(bank_field, Object::Integer(bank_value).wrap())?;
+                let Object::OpRegion(ref read_region) = **region else { return Err(AmlError::LibUnimplemented) };
+                ReadSource::Region(read_region)
+            }
+            // SexOS: IndexField writes each byte offset to `index` then reads `data`.
+            FieldUnitKind::Index { ref index, ref data } => {
+                let Object::FieldUnit(ref index_field) = **index else { return Err(AmlError::LibUnimplemented) };
+                let Object::FieldUnit(ref data_field) = **data else { return Err(AmlError::LibUnimplemented) };
+                ReadSource::Index(index_field, data_field)
             }
         };
-        let Object::OpRegion(ref read_region) = **read_region else { return Err(AmlError::LibUnimplemented) };
-
-        /*
-         * TODO: it might be worth having a fast path here for reads that don't do weird
-         * unaligned accesses, which I'm guessing might be relatively common on real
-         * hardware? Eg. single native read + mask
-         */
 
         /*
          * Break the field read into native reads that respect the region's access width.
@@ -2451,7 +2481,15 @@ where
         let mut read_so_far = 0;
         for i in 0..native_accesses_needed {
             let aligned_offset = object::align_down(field.bit_index + i * access_width_bits, access_width_bits);
-            let raw = self.do_native_region_read(read_region, aligned_offset / 8, access_width_bits / 8)?;
+            let raw = match source {
+                ReadSource::Region(read_region) => {
+                    self.do_native_region_read(read_region, aligned_offset / 8, access_width_bits / 8)?
+                }
+                ReadSource::Index(index_field, data_field) => {
+                    self.do_field_write(index_field, Object::Integer((aligned_offset / 8) as u64).wrap())?;
+                    self.do_field_read(data_field)?.as_integer()?
+                }
+            };
             let src_index = if i == 0 { field.bit_index % access_width_bits } else { 0 };
             let remaining_length = field.bit_length - read_so_far;
             let length = if i == 0 {
@@ -2472,7 +2510,7 @@ where
 
     fn do_field_write(&self, field: &FieldUnit, value: WrappedObject) -> Result<(), AmlError> {
         trace!("AML field write. Field = {:?}. Value = {}", field, value);
-
+        let value = value.unwrap_reference();
         let value_bytes = match &*value {
             Object::Integer(value) => &value.to_le_bytes() as &[u8],
             Object::Buffer(bytes) => bytes,
@@ -2480,20 +2518,27 @@ where
         };
         let access_width_bits = field.flags.access_type_bytes()? * 8;
 
-        let write_region = match field.kind {
-            FieldUnitKind::Normal { ref region } => region,
-            // FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
-            FieldUnitKind::Bank { .. } => {
-                // TODO: put the bank_value in the bank
-                return Err(AmlError::LibUnimplemented);
+        enum WriteSink<'a> {
+            Region(&'a OpRegion),
+            Index(&'a FieldUnit, &'a FieldUnit),
+        }
+        let sink = match field.kind {
+            FieldUnitKind::Normal { ref region } => {
+                let Object::OpRegion(ref write_region) = **region else { return Err(AmlError::LibUnimplemented) };
+                WriteSink::Region(write_region)
             }
-            // FieldUnitKind::Index { ref index, ref data } => {
-            FieldUnitKind::Index { .. } => {
-                // TODO: configure the correct index
-                return Err(AmlError::LibUnimplemented);
+            FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
+                let Object::FieldUnit(ref bank_field) = **bank else { return Err(AmlError::LibUnimplemented) };
+                self.do_field_write(bank_field, Object::Integer(bank_value).wrap())?;
+                let Object::OpRegion(ref write_region) = **region else { return Err(AmlError::LibUnimplemented) };
+                WriteSink::Region(write_region)
+            }
+            FieldUnitKind::Index { ref index, ref data } => {
+                let Object::FieldUnit(ref index_field) = **index else { return Err(AmlError::LibUnimplemented) };
+                let Object::FieldUnit(ref data_field) = **data else { return Err(AmlError::LibUnimplemented) };
+                WriteSink::Index(index_field, data_field)
             }
         };
-        let Object::OpRegion(ref write_region) = **write_region else { return Err(AmlError::LibUnimplemented) };
 
         // TODO: if the region wants locking, do that
 
@@ -2515,9 +2560,15 @@ where
              */
             let mut bytes = if dst_index > 0 || (field.bit_length - written_so_far) < access_width_bits {
                 match field.flags.update_rule() {
-                    FieldUpdateRule::Preserve => self
-                        .do_native_region_read(write_region, aligned_offset / 8, access_width_bits / 8)?
-                        .to_le_bytes(),
+                    FieldUpdateRule::Preserve => match sink {
+                        WriteSink::Region(write_region) => self
+                            .do_native_region_read(write_region, aligned_offset / 8, access_width_bits / 8)?
+                            .to_le_bytes(),
+                        WriteSink::Index(index_field, data_field) => {
+                            self.do_field_write(index_field, Object::Integer((aligned_offset / 8) as u64).wrap())?;
+                            self.do_field_read(data_field)?.as_integer()?.to_le_bytes()
+                        }
+                    },
                     FieldUpdateRule::WriteAsOnes => [0xff; 8],
                     FieldUpdateRule::WriteAsZeros => [0; 8],
                 }
@@ -2533,12 +2584,18 @@ where
             };
 
             object::copy_bits(value_bytes, written_so_far, &mut bytes, dst_index, length);
-            self.do_native_region_write(
-                write_region,
-                aligned_offset / 8,
-                access_width_bits / 8,
-                u64::from_le_bytes(bytes),
-            )?;
+            match sink {
+                WriteSink::Region(write_region) => self.do_native_region_write(
+                    write_region,
+                    aligned_offset / 8,
+                    access_width_bits / 8,
+                    u64::from_le_bytes(bytes),
+                )?,
+                WriteSink::Index(index_field, data_field) => {
+                    self.do_field_write(index_field, Object::Integer((aligned_offset / 8) as u64).wrap())?;
+                    self.do_field_write(data_field, Object::Integer(u64::from_le_bytes(bytes)).wrap())?;
+                }
+            }
             written_so_far += length;
         }
 

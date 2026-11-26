@@ -271,15 +271,27 @@ fn virtio(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, fi
 fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind, pd: &ProtectionDomain, slot: u64, first: bool) -> bool {
     serial_println!("[kernel.pci.class.found] {:02x}:{:02x}.{} kind={:?} vendor={:04x} device={:04x}",
         dev.bus, dev.dev, dev.func, kind, dev.vendor_id, dev.device_id);
-    // Firmware may leave a part it does not use in D3hot (its BAR sizing or registers can read all ones).
-    if matches!(kind, crate::device_lease::Kind::SerialIo | crate::device_lease::Kind::Wifi) && crate::device_lease::wake_d0(dev) {
+    // Firmware may leave a part it does not use in D3hot (its BARs or registers read invalid/all ones).
+    if matches!(
+        kind,
+        crate::device_lease::Kind::SerialIo
+            | crate::device_lease::Kind::Wifi
+            | crate::device_lease::Kind::NvidiaGpu
+            | crate::device_lease::Kind::Hda
+    ) && crate::device_lease::wake_d0(dev)
+    {
         crate::hal::acpi::stall_us(10_000);
         serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind={:?}", dev.bus, dev.dev, dev.func, kind);
     }
     let Some((view, window)) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
-        let at = 0x10 + kind.bar() * 4;
-        serial_println!("[kernel.cap.class.skip] {:02x}:{:02x}.{} kind={:?} reason=invalid_bar bar={} low={:#x} high={:#x}",
-            dev.bus, dev.dev, dev.func, kind, kind.bar(), dev.read_u32(at), dev.read_u32(at + 4));
+        let bar = kind.bar();
+        let at = 0x10 + bar * 4;
+        let bar_lo = dev.read_u32(at);
+        let bar_hi = if ((bar_lo >> 1) & 3) == 2 && bar < 5 { dev.read_u32(at + 4) } else { 0 };
+        let cmd = dev.read_u32(0x04) & 0xffff;
+        let pmcsr = crate::device_lease::pmcsr(dev).unwrap_or(0xffff);
+        serial_println!("[kernel.cap.class.skip] {:02x}:{:02x}.{} kind={:?} reason=invalid_bar bar={} bar_lo={:#010x} bar_hi={:#010x} cmd={:#06x} pmcsr={:#06x}",
+            dev.bus, dev.dev, dev.func, kind, bar, bar_lo, bar_hi, cmd, pmcsr);
         return false;
     };
     if kind == crate::device_lease::Kind::Thunderbolt {

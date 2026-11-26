@@ -5,14 +5,16 @@ use sex_pdx::fs as w;
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 
 const CWD_MAX: usize = 512;
-const CAT_MAX: u64 = 32 * 1024;
+const CAT_MAX: u64 = 512 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Sum, Create, Write, Append(u8), Df, Program(u64, u64), Plugin(u8, u64), Install, Mount, Unmount, Update, Package, Organize }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Sum, Create, Write, Append(u8), Df, Program(u64, u64), Plugin(u8, u64), Install, Mount, Unmount, Update, Package, Organize, PushOpen, PushWrite }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize, fnv: u64 }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
 /// How Files answered the last package request.
 pub static mut PACKAGE_STATUS: Option<u8> = None;
+/// How Files answered the last tether push-file open/write step.
+pub static mut PUSHFILE_STATUS: Option<u8> = None;
 /// The last package report's lines meant for Spindle (URLs), newline separated.
 pub static mut PACKAGE_MACHINE: ([u8; 4096], usize) = ([0; 4096], 0);
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0, fnv: 0 };
@@ -113,6 +115,34 @@ impl Client {
         region[..arg.len()].copy_from_slice(arg);
         unsafe { PACKAGE_STATUS = None; }
         self.start(Cmd::Package, sex_pdx::package::KIND, arg.len(), op, length);
+        true
+    }
+    /// Prepares `path` for streaming `push-file` writes (creates if missing, truncates to 0 if present).
+    /// Outcome lands in [`PUSHFILE_STATUS`].
+    pub fn start_push_open(&mut self, path: &[u8]) -> bool {
+        if self.busy() { return false; }
+        let Some(region) = region() else { return false };
+        let mut full = [0u8; w::PATH_BYTES];
+        let Some(n) = self.join(path, &mut full) else { return false };
+        if n == 0 { return false; }
+        region[..n].copy_from_slice(&full[..n]);
+        unsafe { PUSHFILE_STATUS = None; }
+        self.start(Cmd::PushOpen, w::STAT, n, 0, 0);
+        true
+    }
+    /// Writes one streamed chunk directly into `sexfiles`'s shared region at `offset`.
+    /// Outcome lands in [`PUSHFILE_STATUS`].
+    pub fn start_push_write(&mut self, path: &[u8], offset: u64, bytes: &[u8]) -> bool {
+        if self.busy() || bytes.len() > w::DATA_MAX { return false; }
+        let Some(region) = region() else { return false };
+        let mut full = [0u8; w::PATH_BYTES];
+        let Some(n) = self.join(path, &mut full) else { return false };
+        if n == 0 { return false; }
+        region[..n].copy_from_slice(&full[..n]);
+        region[w::PATH_BYTES..w::PATH_BYTES + bytes.len()].copy_from_slice(bytes);
+        self.data_len = bytes.len();
+        unsafe { PUSHFILE_STATUS = None; }
+        self.start(Cmd::PushWrite, w::WRITE, n, offset, bytes.len() as u64);
         true
     }
     /// `organize ...`: Files' Organizer (servers/sexfiles/src/organize.rs). Files keeps
@@ -224,6 +254,7 @@ impl Client {
     /// Starts a command. False only for `ls` with arguments unusable here.
     pub fn submit_line(&mut self, cmd: &[u8], args: &[u8], sb: &mut Scrollback) -> bool {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return true; }
+        if unsafe { crate::play_command::PLAY.busy() } { sb.push(b"Audio playback is reading the disk; run `play stop` first."); return true; }
         let Some(region) = region() else { return false };
         if cmd == b"organize" { self.organize(args, region, sb); return true; }
         let (first, rest) = split(args);
@@ -396,8 +427,9 @@ impl Client {
         self.start(Cmd::Plugin(workspace, key), w::PREPARE, path.len(), 0, m as u64);
     }
     /// Delivers the current request. Retries a full queue on the next pass.
-    pub fn send(&mut self) -> bool {
+    pub fn send(&mut self, sb: &Scrollback) -> bool {
         if self.cmd.is_none() || self.sent { return false; }
+        if self.cmd == Some(Cmd::Cat) && unsafe { crate::tether_command::TETHER.backpressure(sb) } { return false; }
         let r = w::Request { seq: self.seq, kind: self.kind, path_len: self.path_len, offset: self.offset, length: self.length };
         let a = r.args();
         match sex_pdx::pdx_call_checked(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
@@ -411,8 +443,10 @@ impl Client {
     /// terminal busy for good. True if it just ended.
     pub fn expired(&mut self, now: u64, sb: &mut Scrollback) -> bool {
         if self.cmd.is_none() || !self.sent || now.saturating_sub(self.sent_at) < 15_000 { return false; }
+        let was_push = matches!(self.cmd, Some(Cmd::PushOpen | Cmd::PushWrite));
         self.cmd = None;
         if self.kind == w::UPDATE { unsafe { UPDATE_STATUS = Some(w::DENIED); } }
+        if was_push { unsafe { PUSHFILE_STATUS = Some(w::DENIED); } }
         sb.push(b"The disk did not answer. Try again.");
         sex_pdx::serial_record!("[spindle.fs.expired] kind={}", self.kind);
         true
@@ -429,6 +463,35 @@ impl Client {
         let Some(region) = region() else { self.cmd = None; return true };
         let data_at = w::PATH_BYTES;
         sex_pdx::serial_record!("[spindle.fs.result] kind={} status={} value={}", self.kind, status, value);
+        if cmd == Cmd::PushOpen {
+            if status == w::NOT_FOUND && self.kind == w::STAT {
+                self.next(w::CREATE, 0, 0);
+                return true;
+            }
+            if status != w::OK {
+                self.cmd = None;
+                unsafe { PUSHFILE_STATUS = Some(status); }
+                return true;
+            }
+            if self.kind == w::STAT {
+                if u64::from_le_bytes(region[data_at..data_at + 8].try_into().unwrap()) == 1 {
+                    self.cmd = None;
+                    unsafe { PUSHFILE_STATUS = Some(w::IS_DIR); }
+                    return true;
+                }
+                self.next(w::TRUNCATE, 0, 0);
+                return true;
+            }
+            self.cmd = None;
+            unsafe { PUSHFILE_STATUS = Some(w::OK); }
+            return true;
+        }
+        if cmd == Cmd::PushWrite {
+            self.cmd = None;
+            let st = if status != w::OK { status } else if (value as usize) < self.data_len { w::NO_SPACE } else { w::OK };
+            unsafe { PUSHFILE_STATUS = Some(st); }
+            return true;
+        }
         if cmd == Cmd::Package {
             self.cmd = None;
             let bytes = &region[data_at..data_at + (value as usize).min(w::DATA_MAX)];
@@ -582,7 +645,7 @@ impl Client {
                 }
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
-            Cmd::Update | Cmd::Package | Cmd::Organize => {}
+            Cmd::Update | Cmd::Package | Cmd::Organize | Cmd::PushOpen | Cmd::PushWrite => {}
             Cmd::Plugin(workspace, key) => {
                 self.cmd = None;
                 unsafe { (*core::ptr::addr_of_mut!(crate::silk_command::SILK)).plugin(workspace, value, key, sb); }

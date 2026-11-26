@@ -202,13 +202,52 @@ impl Window {
         let identity = lifecycle::catalog(lifecycle::SELF_CATALOG_SLOT).unwrap_or_else(|_| sex_pdx::task_finish(3));
         let region = sex_pdx::text_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
         let surface = identity.surface_id;
-        // The surface must be ours before Shell frames it and before text goes to it.
-        call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
-        call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
         let (w, h) = sex_pdx::pixel_region::area(640, 400);
-        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16] };
-        window.show(b"");
-        call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
+        // One-hop combined open: Shell frames the surface, enqueues a single
+        // OP_WINDOW_OPEN_COMBINED (upsert+initial empty text+present) to Display,
+        // and replies with `surface`. Waiting for Shell's reply via pdx_call_recv
+        // orders Display's 0x10B strictly before any title/show/pixels call below.
+        let combined = loop {
+            match sex_pdx::ipc_recv::pdx_call_recv(
+                SLOT_SHELL,
+                lifecycle::OP_WINDOW_OPEN_COMBINED,
+                surface,
+                TITLE_ID,
+                (identity.target_pd as u64) << 8,
+            ) {
+                Ok(mut pending) => {
+                    break loop {
+                        let m = match pending.take() {
+                            Some(m) => m,
+                            None => sex_pdx::pdx_listen_raw(0),
+                        };
+                        if m.type_id == 1 && m.caller_pd == SHELL {
+                            break m.arg0 == surface;
+                        }
+                        if is_shell(&m) || is_answer(&m) { mailbox::put(m); }
+                    };
+                }
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => break false,
+            }
+        };
+        let mut window = Self {
+            target: identity.target_pd,
+            task: identity.task_id,
+            surface,
+            region,
+            sequence: if combined { 1 } else { 0 },
+            size: (w as usize, h as usize),
+            held: [const { None }; 16],
+        };
+        if !combined {
+            // Safe fallback if combined open is refused: surface must be ours
+            // before Shell frames it and before text goes to it.
+            call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
+            call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
+            window.show(b"");
+            call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
+        }
         window
     }
     /// The window's pixel surface, 0x00RRGGBB, row-major at the width you show: the
@@ -951,6 +990,7 @@ pub mod files {
         }
     }
     struct Restarted;
+    #[inline(never)]
     fn once_attempt(hold: &mut Hold, kind: u8, path_len: usize, offset: u64, length: u64) -> Result<Result<u32, Error>, Restarted> {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };

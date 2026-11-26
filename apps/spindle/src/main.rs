@@ -108,6 +108,10 @@ mod tether_command;
 mod calc_command;
 mod complete;
 mod silk_command;
+mod sweep_math;
+mod sweep_command;
+mod power_command;
+mod play_command;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -853,10 +857,17 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         serial_println!("[spindle.cmd.held] len={}",line.len());
         return true
     }
-    // The tether holds the network region's calls; downloads wait for `tether off`.
-    if unsafe{tether_command::TETHER.active()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"The tether is using the network: tether off first, then try again.");return true}
+    // Normal tether and fetch/update/pkg share the network region turn-by-turn on separate flows;
+    // only a benchmark `tether sweep` holds the link exclusively.
+    if unsafe{tether_command::TETHER.sweeping()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"A Wi-Fi sweep is running: tether off first, then try again.");return true}
     let recognized = match cmd {
         b"tether"=>{unsafe{let busy=fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy();(*core::ptr::addr_of_mut!(tether_command::TETHER)).command(args,sb,busy);}true},
+        b"hotswap"=>{tether_command::hotswap_command(args,sb);true},
+        b"play"=>{unsafe{play_command::PLAY.command(args,sb);}true},
+        b"sweep"=>{sweep_command::command(args,sb);true},
+        b"power"=>{power_command::power_command(sb);true},
+        b"profile"=>{power_command::profile_command(args,sb);true},
+        b"fan"=>{power_command::fan_command(sb);true},
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
         b"capture"=>{unsafe{capture_command::CAPTURE.start(args,sb);}true},
@@ -898,7 +909,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  crashes      what stopped, this start and earlier ones");
             sb.push(b"  hw [all|TEXT|save [PATH]]  hardware report from the boot log; save writes it to a file");
             sb.push(b"  hw record [PATH|off]  rewrite the hardware report every 30 s (two files in turn)");
-            sb.push(b"  tether HOST[:PORT]|off  stream this Spindle to tether_host.py there; run its commands");
+            sb.push(b"  tether HOST[:PORT]|off|sweep  stream Spindle to tether_host.py or run Wi-Fi sweep");
+            sb.push(b"  sweep sched|ipc|nvme|all  real-hardware syscall, IPC v2, and NVMe read benchmarks");
+            sb.push(b"  power | profile [NAME] | fan  ACPI sensors, AWCC fan RPMs, and thermal profiles");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -2877,9 +2890,9 @@ pub extern "C" fn _start() -> ! {
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
         unsafe{record_command::RECORD.poll();}
         if unsafe{capture_command::CAPTURE.step(sb,!DISPLAY_IO.pending())}{unsafe{content_render(&line,sb);}}
-        if unsafe{fs_commands::FS.send()}{}
+        if unsafe{fs_commands::FS.send(sb)}{}
         {
-            let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
+            let idle=unsafe{!fs_commands::FS.busy()&&!play_command::PLAY.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
             // A line held while the session file was busy runs before the session opens more.
             if unsafe{session_command::SESSION.step(idle&&HELD_LEN==0,sb)}{unsafe{content_render(&line,sb);}}
         }
@@ -2890,15 +2903,16 @@ pub extern "C" fn _start() -> ! {
             unsafe{content_render(&line,sb);}
         }
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
-        if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
+        if unsafe{play_command::PLAY.step(sb)}{unsafe{content_render(&line,sb);}}
+        if unsafe{fetch_command::FETCH.step(sb,tether_command::TETHER.in_call())}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
         {
             // The tether and `hw record` poll on their own clocks: draw only when they said something.
             let before=sb.total_lines;
-            unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb);}
+            unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb,fetch_command::FETCH.region_in_use());}
             unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).step(sb);}
-            let files_free=unsafe{!session_command::SESSION.io_busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
+            let files_free=unsafe{!session_command::SESSION.io_busy()&&!play_command::PLAY.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
             hw_command::tick(sb,files_free);
             if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()}{
                 let mut remote=[0u8;tether_command::CMD_MAX];
@@ -2906,7 +2920,7 @@ pub extern "C" fn _start() -> ! {
             }
             if sb.total_lines!=before{unsafe{content_render(&line,sb);}}
         }
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()||(*core::ptr::addr_of!(wifi_command::WIFI)).busy()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||play_command::PLAY.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()||(*core::ptr::addr_of!(wifi_command::WIFI)).busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
@@ -2915,6 +2929,7 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id==1&&unsafe{fetch_command::FETCH.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).receive(msg.caller_pd,msg.arg0,sb)}{if sb.total_lines!=capture_lines{unsafe{content_render(&line,sb);}}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{session_command::SESSION.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
+        if msg.type_id==1&&msg.caller_pd==11&&unsafe{play_command::PLAY.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
             sex_pdx::serial_record!("[spindle.display.batch.admitted] target={} sid={} sequence={} paint={} bytes={}",instance_pd(),r.surface,r.stamp.sequence,r.stamp.paint,r.bytes);

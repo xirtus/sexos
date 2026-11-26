@@ -32,7 +32,7 @@ const VERSION_BITS:u32=0x5400_0000;
 impl Mock{
  fn new(model:c::Model)->Self{let mut regs=[0u8;256];let eeprom=[0x00,0xe0,0x4c,0x68,0x00,0x01];regs[..6].copy_from_slice(&eeprom);
   // Firmware left interrupts unmasked and RX accept bits on, engines stopped.
-  let (mask,phy)=if model==c::Model::Rtl8125{(0x38,0x80)}else{(0x3c,0x6c)};regs[mask]=0xff;regs[0x44]=0x0e;regs[phy]=0x02|0x10;
+  let mask=if model==c::Model::Rtl8125{0x38}else{0x3c};regs[mask]=0xff;regs[0x44]=0x0e;regs[0x6c]=0x02|0x10;
   Self(Rc::new(RefCell::new(State{model,mmio:256,command:0x103,regs,dma:vec![0xa5;c::DMA_BYTES as usize],ops:vec![],reset_reads:Some(2),resetting:None,eeprom,absent:false,locked_writes:0,stuck_lock:false})))}
  fn word(&self,n:u32)->u64{u64::from_le_bytes(self.0.borrow().dma[n as usize..n as usize+8].try_into().unwrap())}
  fn set(&self,n:u32,v:u64){self.0.borrow_mut().dma[n as usize..n as usize+8].copy_from_slice(&v.to_le_bytes());}
@@ -150,10 +150,14 @@ fn wrote(ops:&[Op],n:u32)->Vec<(u8,u32)>{ops.iter().filter_map(|op|match op{Op::
   assert!(m.0.borrow().dma[8192..ethernet::USED as usize].iter().all(|&x|x==0));}
 }
 #[test]fn link_waits_on_the_model_phy_status_register(){
- for model in MODELS{let m=Mock::new(model);let phy=if model==c::Model::Rtl8125{0x80}else{0x6c};m.0.borrow_mut().regs[phy]=0x10;
+ for model in MODELS{let m=Mock::new(model);m.0.borrow_mut().regs[0x6c]=0x10;
   let mac=prepared(&m);let mut d=Driver::new(m.clone(),mac,100);for n in 100..200{d.advance(n);}assert_eq!(d.phase(),Phase::Link);
-  m.0.borrow_mut().regs[phy]=0x12;d.advance(200);assert_eq!(d.phase(),Phase::Running);
-  let m=Mock::new(model);let mac=prepared(&m);let mut d=Driver::new(m.clone(),mac,100);m.0.borrow_mut().regs[phy]=0;for n in 100..5200{d.advance(n);}assert_eq!(d.failure(),Some(Failure::Deadline));}
+  m.0.borrow_mut().regs[0x6c]=0x12;d.advance(200);assert_eq!(d.phase(),Phase::Running);
+  // Unplugged cable stays in Phase::Link past WAIT_TICKS without quarantining, then recovers on plug-in.
+  let m=Mock::new(model);let mac=prepared(&m);let mut d=Driver::new(m.clone(),mac,100);m.0.borrow_mut().regs[0x6c]=0;
+  for n in 100..6000{d.advance(n);}
+  assert_eq!(d.phase(),Phase::Link);assert_eq!(d.failure(),None);assert!(d.active());
+  m.0.borrow_mut().regs[0x6c]=0x02;d.advance(6000);assert_eq!(d.phase(),Phase::Running);}
 }
 #[test]fn locked_or_absent_registers_fail_before_bus_master(){
  // 0: the chip ignores the unlock, so the ring registers keep their old values.
@@ -208,4 +212,43 @@ fn wrote(ops:&[Op],n:u32)->Vec<(u8,u32)>{ops.iter().filter_map(|op|match op{Op::
   assert!(ops.iter().position(|o|matches!(o,Op::Write(a,_,_)if *a==status)).unwrap()<ops.iter().position(|o|matches!(o,Op::Write(a,_,_)if *a==mask)).unwrap());
   m.0.borrow_mut().regs[status as usize]=0x05;let start=m.ops().len();assert_eq!(d.acknowledge_interrupts(),0x05);assert_eq!(wrote(&m.ops()[start..],status),vec![(w,0x05)]);
   let start=m.ops().len();d.disarm_interrupts();assert_eq!(wrote(&m.ops()[start..],mask),vec![(w,0)]);}
+}
+#[test]fn link_down_drops_tx_without_quarantine_and_recovers_on_link_up(){
+ for model in MODELS{let m=Mock::new(model);let mut d=ready(&m);
+  // Cable unplugged: PHYstatus.LinkSts (0x6c bit 1) clears.
+  m.0.borrow_mut().regs[0x6c]=0x10;let start=m.ops().len();
+  assert_eq!(d.send(&[0x55;60],400),Err(SendError::NotReady));
+  assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::Store(..)|Op::CopyIn(..)|Op::Write(..))));
+  assert_eq!(d.phase(),Phase::Running);assert_eq!(d.failure(),None);assert!(!d.busy());assert_eq!(d.dropped,1);
+  // Even after TX_TICKS elapse, the NIC stays active rather than quarantined.
+  for n in 401..3000{assert!(d.advance(n).is_none());}
+  assert_eq!(d.phase(),Phase::Running);assert!(d.active());
+  // Cable plugged back in: TX immediately works again.
+  m.0.borrow_mut().regs[0x6c]=0x12;
+  let (seq,index,_,_)=d.send(&[0x66;60],3000).unwrap();assert_eq!((seq,index),(1,0));
+  m.done(index);assert!(matches!(d.advance(3001),Some(Event::Transmitted{sequence:1,index:0,..})));}
+}
+#[test]fn rtl8125_unplugged_ignores_ephyar_0x80_and_never_quarantines(){
+ // On Alienware x17 R1 (Killer E3000 10ec:3000 / RTL8125B), 0x80 is EPHYAR (not PHYstatus).
+ // Even when 0x80 has bit 1 set, PHYstatus at 0x6c bit 1 = 0 means cable unplugged.
+ assert_eq!(c::Identity{vendor:0x10ec,product:0x3000}.model(),Some(c::Model::Rtl8125));
+ let m=Mock::new(c::Model::Rtl8125);
+ m.0.borrow_mut().regs[0x80]=0x12;
+ m.0.borrow_mut().regs[0x6c]=0x10;
+ let mac=prepared(&m);
+ let mut d=Driver::new(m.clone(),mac,100);
+ for n in 100..6200{d.advance(n);}
+ assert_eq!(d.phase(),Phase::Link);
+ assert_eq!(d.failure(),None);
+ assert_eq!(d.link_up(),Some(false));
+ assert_eq!(d.send(&[0x55;60],6200),Err(SendError::NotReady));
+ assert_eq!(d.phase(),Phase::Link);
+ // Plugging in the cable sets PHYstatus (0x6c) bit 1 -> Running and TX works.
+ m.0.borrow_mut().regs[0x6c]=0x12;
+ d.advance(6201);
+ assert_eq!(d.phase(),Phase::Running);
+ let (seq,index,_,_)=d.send(&[0x77;60],6202).unwrap();
+ assert_eq!((seq,index),(1,0));
+ m.done(index);
+ assert!(matches!(d.advance(6203),Some(Event::Transmitted{sequence:1,index:0,..})));
 }

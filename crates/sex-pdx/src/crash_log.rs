@@ -70,6 +70,12 @@ pub const LOG_CHUNK: usize = 1024;
 pub const OP_LOG_TAIL: u64 = 7;
 /// How much of the newest log the kernel holds for `OP_LOG_TAIL`.
 pub const LOG_TAIL_BYTES: usize = 64 * 1024;
+/// Live userspace server hot-swap: rsi = target_pd, rdx = elf_ptr, r10 = elf_len.
+/// Spindle or Shell only. Replaces a captured restartable server's ELF in place and
+/// restarts it cleanly. Returns new entry point in rsi on `OK`.
+pub const OP_HOTSWAP: u64 = 8;
+/// Maximum ELF size accepted by `OP_HOTSWAP` (8 MiB, within a server's 16 MiB slot).
+pub const HOTSWAP_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// The kernel's message to Files (caller 0) when it holds a record Files has not seen.
 pub const OP_NOTICE: u64 = 0x0C5A_0001;
@@ -329,4 +335,141 @@ pub fn peer_state(slot:u64)->Result<PeerState,u64>{
     let (status,epoch,life)=call(OP_RESTARTS,slot,0);
     if status!=OK{return Err(status)}
     PeerState::decode(epoch,life)
+}
+
+/// 64-bit FNV-1a offset basis.
+pub const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Incremental 64-bit FNV-1a update over `bytes`.
+pub fn fnv64_update(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 64-bit FNV-1a checksum used for crash records and tether binary frames.
+pub fn fnv64(bytes: &[u8]) -> u64 { fnv64_update(FNV64_OFFSET, bytes) }
+
+/// Maps a server name (canonical or short alias) to its BOOT protection domain ID.
+pub fn server_pd_by_name(name: &str) -> Option<u32> {
+    match name {
+        "sexdisplay" | "display" => Some(1),
+        "sexdrive" | "drive" => Some(2),
+        "silk-shell" | "shell" => Some(3),
+        "sexinput" | "input" => Some(4),
+        "sexusb" | "usb" => Some(5),
+        "sexbell" | "bell" => Some(10),
+        "sexfiles" | "files" => Some(11),
+        "sexnet" | "net" | "network" => Some(13),
+        "sexacpi" | "acpi" => Some(50),
+        "denim" => Some(51),
+        "cufflinks" => Some(52),
+        "sexgpu-nv" | "sexgpu" | "gpu" => Some(53),
+        "saddle" => Some(54),
+        _ => None,
+    }
+}
+
+/// Parsed `SEXOS-HOTSWAP <server_name> <size> <fnv64_hex>` tether upload header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HotswapHeader<'a> {
+    pub name: &'a str,
+    pub pd: Option<u32>,
+    pub size: usize,
+    pub fnv: u64,
+}
+
+/// Parses `SEXOS-HOTSWAP <server_name> <size> <fnv64_hex>` (without trailing newline).
+pub fn parse_hotswap_header(line: &str) -> Option<HotswapHeader<'_>> {
+    let mut parts = line.split_ascii_whitespace();
+    if parts.next()? != "SEXOS-HOTSWAP" { return None; }
+    let name = parts.next()?;
+    let size: usize = parts.next()?.parse().ok()?;
+    let hex = parts.next()?;
+    if parts.next().is_some() || size == 0 || size > HOTSWAP_MAX_BYTES || hex.is_empty() || hex.len() > 16 { return None; }
+    let fnv = u64::from_str_radix(hex, 16).ok()?;
+    Some(HotswapHeader { name, pd: server_pd_by_name(name), size, fnv })
+}
+
+/// Maximum file size accepted by `SEXOS-PUSHFILE` (16 MiB, streamed directly to `sexfiles`).
+pub const PUSHFILE_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum remote path length in bytes for `SEXOS-PUSHFILE`.
+pub const PUSHFILE_MAX_PATH: usize = 240;
+
+/// Parsed `SEXOS-PUSHFILE <remote_path> <size> <fnv64_hex>` tether file upload header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushfileHeader<'a> {
+    pub path: &'a str,
+    pub size: usize,
+    pub fnv: u64,
+}
+
+/// Parses `SEXOS-PUSHFILE <remote_path> <size> <fnv64_hex>` (without trailing newline).
+pub fn parse_pushfile_header(line: &str) -> Option<PushfileHeader<'_>> {
+    let mut parts = line.split_ascii_whitespace();
+    if parts.next()? != "SEXOS-PUSHFILE" { return None; }
+    let path = parts.next()?;
+    let size: usize = parts.next()?.parse().ok()?;
+    let hex = parts.next()?;
+    if parts.next().is_some()
+        || path.is_empty()
+        || path.len() > PUSHFILE_MAX_PATH
+        || path.bytes().any(|b| b < 0x21 || b == 0x7f)
+        || size > PUSHFILE_MAX_BYTES
+        || hex.is_empty()
+        || hex.len() > 16
+    {
+        return None;
+    }
+    let fnv = u64::from_str_radix(hex, 16).ok()?;
+    Some(PushfileHeader { path, size, fnv })
+}
+
+/// Live userspace server hot-swap: replaces the ELF image of restartable server `pd`
+/// and restarts it in place. Returns the new entry point on success.
+#[cfg(target_arch = "x86_64")]
+pub fn hotswap_server(pd: u32, elf: &[u8]) -> Result<u64, u64> {
+    let (status, entry, _): (u64, u64, u64);
+    unsafe {
+        core::arch::asm!("syscall",
+            inlateout("rax") SYSCALL => status,
+            inlateout("rdi") OP_HOTSWAP => _,
+            inlateout("rsi") pd as u64 => entry,
+            inlateout("rdx") elf.as_ptr() as u64 => _,
+            inlateout("r10") elf.len() as u64 => _,
+            out("rcx") _, out("r11") _, out("r8") _, options(nostack));
+    }
+    if status == OK { Ok(entry) } else { Err(status) }
+}
+
+#[cfg(test)]
+mod pushfile_tests {
+    use super::*;
+
+    #[test]
+    fn fnv64_incremental_matches_oneshot() {
+        assert_eq!(fnv64(b""), FNV64_OFFSET);
+        assert_eq!(fnv64(b"foobar"), 0x8594_4171_f739_67e8);
+        let h = fnv64_update(FNV64_OFFSET, b"foo");
+        let h = fnv64_update(h, b"bar");
+        assert_eq!(h, fnv64(b"foobar"));
+    }
+
+    #[test]
+    fn parse_pushfile_header_valid_and_invalid() {
+        let h = parse_pushfile_header("SEXOS-PUSHFILE /media/Ventoy/moss.wav 750123 0123456789abcdef").unwrap();
+        assert_eq!(h.path, "/media/Ventoy/moss.wav");
+        assert_eq!(h.size, 750123);
+        assert_eq!(h.fnv, 0x0123_4567_89ab_cdef);
+
+        let empty = parse_pushfile_header("SEXOS-PUSHFILE /tmp/empty.bin 0 cbf29ce484222325").unwrap();
+        assert_eq!(empty.size, 0);
+
+        assert!(parse_pushfile_header("SEXOS-HOTSWAP sexbell 100 abcd").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a 100 abcd extra").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a 16777217 abcd").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a 10 nothex").is_none());
+        assert!(parse_pushfile_header("SEXOS-PUSHFILE /a\x01b 10 abcd").is_none());
+    }
 }

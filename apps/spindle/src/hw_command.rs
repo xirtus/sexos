@@ -33,7 +33,7 @@ pub const TAGS: &[&[u8]] = &[
     b"[sexnet.nic.", b"[sexnet.phase", b"[sexnet.wifi.", b"[sexnet.irq", b"[sexnet.usb.link", b"[net.dhcp.lease]",
     b"fault.kill", b"[service.restarted]", b"[service.stack.overflow]", b"[usb.host.controller.found]", b"[sexusb.device]",
     b"[sexusb.device.refused]", b"[sexusb.device.fail]", b"[sexacpi.ready]", b"[sexacpi.tables]", b"[sexacpi.start",
-    b"[sexacpi.ec]", b"[sexacpi.ec.error", b"[sexacpi.touchpad", b"[sexacpi.aml.", b"[sexacpi.fadt.refused", b"[sexacpi.window.refused",
+    b"[sexacpi.ec]", b"[sexacpi.ec.error", b"[sexacpi.touchpad", b"[sexacpi.aml.", b"[sexacpi.awcc", b"[sexacpi.fadt.refused", b"[sexacpi.window.refused",
     b"[crash.record]", b"[files.fs.foreign]", b"[files.media.", b"[kernel.safe_start]",
     b"[kernel.ps2", b"[kernel.pci.xhci", b"[devmgr.lease", b"[ps2.port", b"[sexusb.controller", b"[iommu.boot_options]", b"[spindle.autorun", b"[spindle.tether.",
     b"[timer.source]", b"[shell.boot.windows]",

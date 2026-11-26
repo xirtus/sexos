@@ -103,7 +103,7 @@ fn alienware_wmax_end_to_end() {
     assert_eq!(inv.sensors(), &[0x01, 0x06, 0x03]);
     assert_eq!(inv.profiles(), &[awcc::PROFILE_USTT_BALANCED, awcc::PROFILE_USTT_PERFORMANCE, awcc::PROFILE_USTT_QUIET]);
     let r = awcc::read(&mut fw, &inv);
-    assert_eq!(&r.rpm[..2], &[2400, 2100]);
+    assert_eq!(&r.rpm[..2], &[Some(2400), Some(2100)]);
     assert_eq!(&r.celsius[..3], &[Some(41), Some(38), None]);
     assert_eq!(r.profile, Some(awcc::PROFILE_USTT_BALANCED));
 
@@ -180,3 +180,144 @@ fn unary_maths_and_divide_by_zero() {
     assert!(aml.evaluate_if_present(AmlName::from_str("\\DIV0").unwrap(), vec![int(0)]).is_err());
     assert_eq!(as_int(eval(&aml, "\\DIV0", vec![int(5)])), 2);
 }
+
+/// Laptop `_BST`/`_BIF`/`_BIX` methods populate their return package via
+/// `Store(val, Index(PBST, i))` and `CopyObject(...)`, and EC/lid registers often use
+/// `IndexField`.
+#[test]
+fn battery_package_index_store_and_ec_index_field() {
+    use acpi::aml::op_region::{OpRegion, RegionHandler, RegionSpace};
+    use acpi::aml::AmlError;
+    use std::sync::Mutex;
+
+    // 1. Store and CopyObject through ReferenceKind::RefOf (Index(PBST, i)).
+    let mut aml = Vec::new();
+    aml.extend_from_slice(&[0x08, b'P', b'B', b'S', b'T', 0x12, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00]);
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0x70, 0x0a, 0x02, 0x88, b'P', b'B', b'S', b'T', 0x00, 0x00]);
+    body.extend_from_slice(&[0x9d, 0x0b, 0x34, 0x12, 0x88, b'P', b'B', b'S', b'T', 0x0a, 0x02, 0x00]);
+    body.extend_from_slice(&[0xa4, b'P', b'B', b'S', b'T']);
+    aml.push(0x14);
+    aml.push((1 + 4 + 1 + body.len()) as u8);
+    aml.extend_from_slice(b"_BST");
+    aml.push(0x00);
+    aml.extend_from_slice(&body);
+
+    let interp = interpreter();
+    interp.load_table(&aml).unwrap();
+    let res = eval(&interp, "\\_BST", vec![]).unwrap();
+    let Object::Package(items) = &*res else { panic!("expected package") };
+    assert_eq!(as_int(Some(items[0].clone())), 0x02);
+    assert_eq!(as_int(Some(items[1].clone())), 0x00);
+    assert_eq!(as_int(Some(items[2].clone())), 0x1234);
+    assert_eq!(as_int(Some(items[3].clone())), 0x00);
+
+    // 2. IndexField over an EmbeddedControl OpRegion (e.g. `_LID`).
+    struct FakeEc {
+        idx: Mutex<u8>,
+        ram: Mutex<[u8; 256]>,
+    }
+    impl RegionHandler for FakeEc {
+        fn read_u8(&self, r: &OpRegion) -> Result<u8, AmlError> {
+            match r.base {
+                0 => Ok(*self.idx.lock().unwrap()),
+                1 => Ok(self.ram.lock().unwrap()[*self.idx.lock().unwrap() as usize]),
+                _ => Ok(0),
+            }
+        }
+        fn read_u16(&self, _: &OpRegion) -> Result<u16, AmlError> { Ok(0) }
+        fn read_u32(&self, _: &OpRegion) -> Result<u32, AmlError> { Ok(0) }
+        fn read_u64(&self, _: &OpRegion) -> Result<u64, AmlError> { Ok(0) }
+        fn write_u8(&self, r: &OpRegion, v: u8) -> Result<(), AmlError> {
+            match r.base {
+                0 => *self.idx.lock().unwrap() = v,
+                1 => self.ram.lock().unwrap()[*self.idx.lock().unwrap() as usize] = v,
+                _ => {}
+            }
+            Ok(())
+        }
+        fn write_u16(&self, _: &OpRegion, _: u16) -> Result<(), AmlError> { Ok(()) }
+        fn write_u32(&self, _: &OpRegion, _: u32) -> Result<(), AmlError> { Ok(()) }
+        fn write_u64(&self, _: &OpRegion, _: u64) -> Result<(), AmlError> { Ok(()) }
+    }
+
+    let mut ram = [0u8; 256];
+    ram[0x01] = 0x01;
+    let interp2 = interpreter();
+    interp2.install_region_handler(
+        RegionSpace::EmbeddedControl,
+        FakeEc { idx: Mutex::new(0), ram: Mutex::new(ram) },
+    );
+
+    let mut aml2 = Vec::new();
+    aml2.extend_from_slice(&[0x5b, 0x80, b'E', b'C', b'O', b'R', 0x03, 0x00, 0x0a, 0x02]);
+    aml2.extend_from_slice(&[
+        0x5b, 0x81, 16, b'E', b'C', b'O', b'R', 0x01,
+        b'E', b'C', b'I', b'X', 0x08,
+        b'E', b'C', b'D', b'A', 0x08,
+    ]);
+    aml2.extend_from_slice(&[
+        0x5b, 0x86, 17, b'E', b'C', b'I', b'X', b'E', b'C', b'D', b'A', 0x01,
+        0x00, 0x08,
+        b'L', b'I', b'D', b'S', 0x08,
+    ]);
+    aml2.extend_from_slice(&[0x14, 11, b'_', b'L', b'I', b'D', 0x00, 0xa4, b'L', b'I', b'D', b'S']);
+
+    interp2.load_table(&aml2).unwrap();
+    assert_eq!(as_int(eval(&interp2, "\\_LID", vec![])), 1);
+}
+
+/// `Object::as_integer`/`as_string`/`as_buffer` and `Increment`/`Decrement` unwrap
+/// `Object::Reference` (matching `Object::typ()`), avoiding
+/// `ObjectNotOfExpectedType { expected: Integer, got: Integer }` in `_LID` and local loops.
+#[test]
+fn reference_unwrapping_and_local_inc_dec() {
+    use acpi::aml::object::ReferenceKind;
+
+    let int_ref = Object::Reference {
+        kind: ReferenceKind::LocalOrArg,
+        inner: WrappedObject::new(Object::Integer(42)),
+    };
+    let nested_ref = Object::Reference {
+        kind: ReferenceKind::RefOf,
+        inner: WrappedObject::new(int_ref.clone()),
+    };
+    assert_eq!(int_ref.as_integer().unwrap(), 42);
+    assert_eq!(nested_ref.as_integer().unwrap(), 42);
+    assert_eq!(nested_ref.to_integer(8).unwrap(), 42);
+
+    let str_ref = Object::Reference {
+        kind: ReferenceKind::LocalOrArg,
+        inner: WrappedObject::new(Object::String("x17".into())),
+    };
+    assert_eq!(str_ref.as_string().unwrap(), "x17");
+
+    let buf_ref = Object::Reference {
+        kind: ReferenceKind::LocalOrArg,
+        inner: WrappedObject::new(Object::Buffer(vec![1, 2, 3])),
+    };
+    assert_eq!(buf_ref.as_buffer().unwrap(), &[1, 2, 3]);
+    assert_eq!(buf_ref.to_buffer(8).unwrap(), vec![1, 2, 3]);
+
+    // Method(\_LID, 0) { Store(0, Local0); Increment(Local0); Increment(Local0); Decrement(Local0); Return(Local0) }
+    // AML opcodes: Store=0x70, Zero=0x00, Local0=0x60, Increment=0x75, Decrement=0x76, Return=0xA4
+    let body: &[u8] = &[
+        0x70, 0x00, 0x60, // Store(Zero, Local0)
+        0x75, 0x60,       // Increment(Local0) -> 1
+        0x75, 0x60,       // Increment(Local0) -> 2
+        0x76, 0x60,       // Decrement(Local0) -> 1
+        0xa4, 0x60,       // Return(Local0)
+    ];
+    let mut aml = Vec::new();
+    aml.push(0x14); // MethodOp
+    aml.push((1 + 4 + 1 + body.len()) as u8);
+    aml.extend_from_slice(b"LIDR");
+    aml.push(0x00); // 0 args
+    aml.extend_from_slice(body);
+
+    let interp = interpreter();
+    interp.load_table(&aml).unwrap();
+    let res = eval(&interp, "\\LIDR", vec![]).unwrap();
+    assert_eq!(res.as_integer().unwrap(), 1);
+}
+

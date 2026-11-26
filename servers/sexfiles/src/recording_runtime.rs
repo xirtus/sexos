@@ -6,7 +6,7 @@ use crate::{
     recording_role::{Check, Role, Scope, ScopedReply},
 };
 use sex_pdx::{app_lifecycle as life, crash_log, desktop_recording as wire, fs as f};
-const SHELL_ROUTE: u64 = 6; // Added explicitly by recorder BOOT wiring, never raw PD lookup.
+const SHELL_ROUTE: u64 = 6; // Granted unconditionally by BOOT wiring (Files -> Shell), never raw PD lookup.
 struct Runtime {
     ready: bool,
     role: Role,

@@ -16,8 +16,10 @@ mod ipc_v2_wire {
 }
 
 use page_cache::{
-    read_cached_run, PageCache, ReadAheadTracker, BLOCK_SIZE, DEFAULT_CAPACITY,
-    INITIAL_AHEAD_WINDOW, MAX_AHEAD_WINDOW, MAX_STREAMS,
+    budget_for_heap, read_cached_run, HeapBudget, PageCache, ReadAheadTracker, BLOCK_SIZE,
+    DEFAULT_CAPACITY, FIXED_HEAP_BYTES, GROWN_HEAP_BASE_CAPACITY, GROWN_HEAP_HIGH_CAPACITY,
+    GROWN_HEAP_MID_CAPACITY, INITIAL_AHEAD_WINDOW, MAX_AHEAD_WINDOW, MAX_STREAMS,
+    TIGHT_HEAP_MAX_BLOCKS, TIGHT_HEAP_MIN_FREE,
 };
 
 fn pattern_block(block: u64, gen: u8) -> [u8; BLOCK_SIZE] {
@@ -415,3 +417,127 @@ fn ipc_v2_endpoint_request_reply_dispatch() {
     assert_eq!(bad_res.reply_word, E_BADMSG);
     assert_eq!(bad_res.reply_words[1], E_BADMSG);
 }
+
+#[test]
+fn lazy_zero_byte_startup_and_static_footprint() {
+    // Boot-time static slot `Option<PageCache>` must stay tiny (no large static arrays).
+    assert!(
+        core::mem::size_of::<Option<PageCache>>() <= 256,
+        "Option<PageCache> static footprint too large: {} bytes",
+        core::mem::size_of::<Option<PageCache>>()
+    );
+    assert!(
+        core::mem::size_of::<ReadAheadTracker>() <= 512,
+        "ReadAheadTracker static footprint too large: {} bytes",
+        core::mem::size_of::<ReadAheadTracker>()
+    );
+
+    // Empty / uninitialized cache owns 0 heap bytes and acts as a clean pass-through.
+    let mut cache = PageCache::empty();
+    assert_eq!(cache.capacity(), 0);
+    assert_eq!(cache.heap_bytes(), 0);
+
+    let mut tracker = ReadAheadTracker::new();
+    let mut staging = vec![0u8; 8 * BLOCK_SIZE];
+    let mut out = vec![0u8; 2 * BLOCK_SIZE];
+    let mut calls = Vec::new();
+    let outcome = read_cached_run(
+        &mut cache,
+        &mut tracker,
+        100,
+        10,
+        &mut out,
+        &mut staging,
+        true,
+        4,
+        |first, n, buf| {
+            calls.push((first, n));
+            for k in 0..n {
+                buf[k * BLOCK_SIZE..(k + 1) * BLOCK_SIZE]
+                    .copy_from_slice(&pattern_block(first + k as u64, 2));
+            }
+            Ok(())
+        },
+    )
+    .expect("pass-through read ok");
+
+    // Zero-capacity cache must not issue speculative read-ahead and must keep 0 heap bytes.
+    assert_eq!(calls, vec![(10, 2)]);
+    assert_eq!(outcome.device_calls, 1);
+    assert_eq!(outcome.demand_device_bytes, 2 * BLOCK_SIZE);
+    assert_eq!(cache.heap_bytes(), 0);
+}
+
+#[test]
+fn tight_heap_and_grown_arena_budget_capping() {
+    // 1. Any memory pressure -> 0 blocks, 0 heap bytes.
+    let under_pressure = HeapBudget {
+        heap_total_bytes: 32 * 1024 * 1024,
+        heap_free_bytes: 16 * 1024 * 1024,
+        arena_grown: true,
+        pressure: 1,
+    };
+    assert_eq!(budget_for_heap(under_pressure), 0);
+    let c_press = PageCache::new_for_budget(under_pressure);
+    assert_eq!(c_press.capacity(), 0);
+    assert_eq!(c_press.heap_bytes(), 0);
+
+    // 2. Ungrown 128 KiB fixed heap with < 64 KiB free -> 0 blocks (never starve Files).
+    let fixed_low_free = HeapBudget {
+        heap_total_bytes: FIXED_HEAP_BYTES,
+        heap_free_bytes: TIGHT_HEAP_MIN_FREE - 4096,
+        arena_grown: false,
+        pressure: 0,
+    };
+    assert_eq!(budget_for_heap(fixed_low_free), 0);
+    let c_low = PageCache::new_for_budget(fixed_low_free);
+    assert_eq!(c_low.capacity(), 0);
+    assert_eq!(c_low.heap_bytes(), 0);
+
+    // 3. Ungrown 128 KiB fixed heap with ample free space -> strictly capped at <= 16 KiB (4 blocks).
+    let fixed_ok_free = HeapBudget {
+        heap_total_bytes: FIXED_HEAP_BYTES,
+        heap_free_bytes: 96 * 1024,
+        arena_grown: false,
+        pressure: 0,
+    };
+    assert_eq!(budget_for_heap(fixed_ok_free), TIGHT_HEAP_MAX_BLOCKS);
+    let c_tight = PageCache::new_for_budget(fixed_ok_free);
+    assert_eq!(c_tight.capacity(), TIGHT_HEAP_MAX_BLOCKS);
+    assert!(
+        c_tight.heap_bytes() <= 20 * 1024,
+        "tight-heap cache must stay tiny (got {} bytes)",
+        c_tight.heap_bytes()
+    );
+
+    // 4. Grown service arena (< 16 MiB, e.g. QEMU after place()) -> 64 blocks (256 KiB > 128 KiB,
+    //    so data allocates from the grown arena rather than eating the 128 KiB fixed heap).
+    let grown_small = HeapBudget {
+        heap_total_bytes: 5 * 1024 * 1024,
+        heap_free_bytes: 256 * 1024,
+        arena_grown: true,
+        pressure: 0,
+    };
+    assert_eq!(budget_for_heap(grown_small), GROWN_HEAP_BASE_CAPACITY);
+    let c_base = PageCache::new_for_budget(grown_small);
+    assert_eq!(c_base.capacity(), GROWN_HEAP_BASE_CAPACITY);
+    assert!(c_base.capacity() * BLOCK_SIZE > FIXED_HEAP_BYTES);
+
+    // 5. Larger grown arenas scale cleanly up to 256 and 512 blocks.
+    let grown_mid = HeapBudget {
+        heap_total_bytes: 16 * 1024 * 1024,
+        heap_free_bytes: 2 * 1024 * 1024,
+        arena_grown: true,
+        pressure: 0,
+    };
+    assert_eq!(budget_for_heap(grown_mid), GROWN_HEAP_MID_CAPACITY);
+
+    let grown_high = HeapBudget {
+        heap_total_bytes: 64 * 1024 * 1024,
+        heap_free_bytes: 8 * 1024 * 1024,
+        arena_grown: true,
+        pressure: 0,
+    };
+    assert_eq!(budget_for_heap(grown_high), GROWN_HEAP_HIGH_CAPACITY);
+}
+

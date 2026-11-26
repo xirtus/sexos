@@ -146,6 +146,11 @@ impl Lifecycle {
     pub fn phase(&self, index: usize) -> Option<Phase> {
         self.entries.get(index).and_then(|e| e.map(|e| e.phase))
     }
+    pub fn task_for(&self, target: u32, sid: u64) -> Option<u32> {
+        self.entries.iter().flatten()
+            .find(|e| e.phase == Phase::Live && e.catalog.target_pd == target && e.catalog.surface_id == sid)
+            .map(|e| e.catalog.task_id)
+    }
     pub fn is_coordinator(&self, caller: u32) -> bool {
         caller != 0 && self.entries.iter().flatten().any(|e| e.catalog.coordinator_pd == caller)
     }

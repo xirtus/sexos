@@ -12,7 +12,7 @@ start = source.index('fn block_buffer_view(')
 end = source.index('\nfn ', start + 1)
 Path(sys.argv[2]).write_text(source[start:end])
 parts = []
-for name in ['disk_sectors','device_sectors','place','cmd_run','note_mdts_split','prp2_for','prp2_for_loan','block_loan','end_block_loan','nvme_wait_completion', 'give_up_if_stuck', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_batch', 'batch_lease', 'batch_command', 'prp2_in_slot', 'nvme_wait_batch', 'io_qdepth', 'bounce_count', 'prp_slot_count', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
+for name in ['disk_sectors','device_sectors','place','cmd_run','loan_cmd_run','note_mdts_split','prp2_for','prp2_for_loan','block_loan','end_block_loan','nvme_wait_completion', 'give_up_if_stuck', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_batch', 'batch_lease', 'batch_command', 'prp2_in_slot', 'nvme_wait_batch', 'io_qdepth', 'bounce_count', 'prp_slot_count', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
     start = source.index('fn ' + name + '(')
     end = source.index('\nfn ', start + 1)
     parts.append(source[start:end])
@@ -56,7 +56,7 @@ for name in ['service_next_request','fill_initial_frame','device_sleep']:
  parts.append(s[a:i])
 entry=s[s.index('pub extern "C" fn _start()'):]
 assert entry.index('fill_initial_frame(shared_addr);')<entry.index('pdx_call(SLOT_SHELL, OP_SHELL_BIND_BUFFER, shared_addr, 0, 0);')
-assert 'loop { service_next_request(); }' in entry
+assert 'let mut next: Option<sex_pdx::PdxMessage> = None;' in entry and 'loop { service_next_request(&mut next); }' in entry
 assert 'pdx_try_listen_raw'not in s and '0..2_000_000'not in entry
 Path(sys.argv[2]).write_text('\n'.join(parts))
 abi=(Path(sys.argv[1])/'crates/sex-pdx/src/lib.rs').read_text()

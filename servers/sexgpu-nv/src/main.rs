@@ -127,7 +127,7 @@ fn firmware<'a>(p: &Pack<'a>, name: &str) -> Option<&'a [u8]> {
 
 fn step_line(s: Step, r: &Report) {
     match s {
-        Step::Chip => log!("[nvidia.gsp] step=chip boot0={:#010x} chipset={:#x} vram_mib={}", r.boot0, r.chipset, r.fb_size >> 20),
+        Step::Chip => log!("[nvidia.gsp] step=chip boot0={:#010x} chipset={:#x} vram_mib={} unloaded_wpr2={}", r.boot0, r.chipset, r.fb_size >> 20, r.unloaded_wpr2 as u8),
         Step::Vbios => log!("[nvidia.gsp] step=vbios bytes={} version={:02x}.{:02x}.{:02x}.{:02x}.{:02x}", r.vbios_len,
             r.vbios_version[0], r.vbios_version[1], r.vbios_version[2], r.vbios_version[3], r.vbios_version[4]),
         Step::Layout => log!("[nvidia.gsp] step=layout frts={:#x} wpr2={:#x}+{:#x} heap_mib={} elf={:#x}", r.layout.frts.addr,
@@ -151,6 +151,14 @@ pub extern "C" fn _start() -> ! {
     let Ok(bars) = bars else { log!("[nvidia.gsp.failed] step=lease reason=bars_unreadable"); park() };
     log!("[nvidia.gpu] vendor={:#06x} device={:#06x} bar0={:#x} bar1={:#x} bar3={:#x} bus={:02x}:{:02x}.{} view_bytes={}",
         id.vendor, id.product, bars.bar0, bars.bar1, bars.bar3, bars.bus, bars.devfn >> 3, bars.devfn & 7, view.length);
+
+    // Enable Memory Space decode and Bus Master BEFORE touching BAR0: firmware
+    // on Optimus laptops often leaves the dGPU with Memory Decode off.
+    match sex_pdx::device_command(n::SLOT, c::NIC_BITS as u64, 0) {
+        Ok(r) if r.after & c::NIC_BITS == c::NIC_BITS => {}
+        other => { log!("[nvidia.gsp.failed] step=command ok={}", other.is_ok() as u8); park() }
+    }
+
     let mut bar0 = Bar0 { base: view.virtual_address, length: view.length };
     let boot0 = bar0.read(sex_gpu_nv::regs::PMC_BOOT_0);
     if boot0 == u32::MAX {
@@ -172,7 +180,8 @@ pub extern "C" fn _start() -> ! {
     };
     let (Some(booter_load), Some(bootloader), Some(gsp)) =
         (firmware(&p, pack::BOOTER_LOAD), firmware(&p, pack::BOOTLOADER), firmware(&p, pack::GSP_RM)) else { park() };
-    let f = Firmware { booter_load, bootloader, gsp };
+    let booter_unload = firmware(&p, pack::BOOTER_UNLOAD);
+    let f = Firmware { booter_load, booter_unload, bootloader, gsp };
     let sizes = match Sizes::for_firmware(&chip, &f) {
         Ok(s) => s,
         Err(e) => { log!("[nvidia.gsp.failed] step=firmware reason={:?}", e); park() }
@@ -189,12 +198,6 @@ pub extern "C" fn _start() -> ! {
         Err(e) => { log!("[nvidia.gsp.failed] step=dma reason={:?} pool={} need={}", e, pool.length, sizes.total()); park() }
     };
     log!("[nvidia.dma] pool_bytes={} need={} bus={:#x}", pool.length, sizes.total(), bus);
-
-    // Memory decode and bus mastering: GSP-RM and the falcons DMA from the pool.
-    match sex_pdx::device_command(n::SLOT, c::NIC_BITS as u64, 0) {
-        Ok(r) if r.after & c::NIC_BITS == c::NIC_BITS => {}
-        other => { log!("[nvidia.gsp.failed] step=command ok={}", other.is_ok() as u8); park() }
-    }
 
     calibrate();
     let cfg = Config {

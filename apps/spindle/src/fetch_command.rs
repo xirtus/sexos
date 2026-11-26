@@ -65,6 +65,9 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).
 
 impl Fetch {
     pub fn busy(&self) -> bool { self.phase != Phase::Idle }
+    /// True while `fetch` holds Spindle's shared network region (an in-flight `SLOT_NET`
+    /// call, or received bytes waiting in `net()` for `Phase::Store` to copy to `files()`).
+    pub fn region_in_use(&self) -> bool { (self.sent && !self.to_files) || self.phase == Phase::Store }
     fn end(&mut self) { self.phase = Phase::Close; self.sent = false; self.to_files = false; }
     fn fail(&mut self, sb: &mut Scrollback, why: &str) { say!(sb, "fetch: {}", why); self.written = 0; self.redirect_len = 0; self.result = Some(false); self.end(); }
 
@@ -139,12 +142,13 @@ impl Fetch {
         if sex_pdx::pdx_call_checked(sex_pdx::SLOT_STORAGE, fs::OP, a[0], a[1], a[2]).is_ok() { self.sent = true; self.to_files = true; }
     }
     /// Sends the next request when one is due.
-    pub fn step(&mut self, sb: &mut Scrollback) -> bool {
+    pub fn step(&mut self, sb: &mut Scrollback, region_busy: bool) -> bool {
         if self.lost_call(sb) { return true; }
         if self.phase == Phase::Idle || self.sent { return false; }
         let now = sex_pdx::get_ticks();
         if now < self.next_at { return false; }
         if now > self.deadline && self.phase != Phase::Close { self.fail(sb, "timed out"); }
+        if region_busy && !matches!(self.phase, Phase::CreateFile | Phase::CutFile | Phase::Store) { return false; }
         let Some(region) = net() else { self.phase = Phase::Idle; return true };
         match self.phase {
             Phase::Up => self.net_call(w::UP, 0),
@@ -264,6 +268,7 @@ impl Fetch {
             } else if self.result.is_none() { self.result = Some(false); }
             return true;
         }
+        if status == w::BUSY && self.phase == Phase::ResolveAsk { self.next_at = now + TICK_POLL * 10; return true; }
         if !matches!(status, w::OK | w::WAIT) { self.fail(sb, match status { w::OFFLINE => "no network", w::NO_NAME => "name not found", w::BUSY => "the network is busy", w::DENIED => "not allowed", _ => "network error" }); return true; }
         let Some(region) = net() else { self.phase = Phase::Idle; return true };
         match self.phase {

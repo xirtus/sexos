@@ -111,50 +111,158 @@ enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
 /// Device reads of file payload, for the asking client's READ_IO counters. Bytes are
 /// charged to the request they are handed to: blocks read ahead are charged when a later
-/// request takes them (`served_ahead`), never when fetched, so readahead that another
-/// client's block read throws away is not charged twice once it is fetched again.
-fn counted(bytes: usize) {
+/// request takes them (`readahead_hit_bytes`), never when fetched, so readahead that is
+/// evicted before use is never charged twice once it is fetched again.
+fn record_read_io(outcome: crate::page_cache::ReadOutcome) {
     unsafe {
-        DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
-        DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64);
+        if outcome.device_calls > 0 {
+            DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(outcome.device_calls);
+        }
+        let bytes = outcome.demand_device_bytes.saturating_add(outcome.readahead_hit_bytes) as u64;
+        if bytes > 0 {
+            DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes);
+        }
     }
 }
-/// Payload handed over from blocks an earlier device command read ahead.
-fn served_ahead(bytes: usize) {
-    unsafe { DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64); }
-}
-/// Sequential readahead (#307): file blocks the last run fetched past what was asked.
-/// They stay where the device put them, in the shared block buffer (Files' heap is far
-/// too small to copy them out), and are valid only until the buffer is next used: every
-/// block read or write (`DiskFs::diskfs_block_read`/`_write`) and every mount forgets
-/// them. The filesystem still checks each block's checksum when it is handed over.
+static mut HEAP_GROWN: bool = false;
+
+/// Lazy, heap-sized file data page cache and multi-stream adaptive read-ahead (#307).
+///
+/// Allocates 0 heap bytes at boot/mount. On the first file data read, it inspects
+/// `sex_rt::heap_usage()`, `HEAP_GROWN`, and `sex_pdx::program_memory::pressure()` via
+/// [`crate::page_cache::PageCache::new_for_budget`] so it never starves Files' 128 KiB
+/// fixed ELF heap or tight QEMU `program_frames`.
 pub(crate) mod ahead {
-    use sexfs::BLOCK;
-    /// (first disk block, blocks held, their byte offset in the block buffer).
-    static mut SPAN: (u64, u64, usize) = (0, 0, 0);
+    use crate::page_cache::{
+        read_cached_run, CacheStats, HeapBudget, PageCache, ReadAheadTracker, ReadOutcome,
+        BLOCK_SIZE,
+    };
+    use sex_pdx::fs as w;
+
+    static mut PAGE_CACHE: Option<PageCache> = None;
+    static mut TRACKER: ReadAheadTracker = ReadAheadTracker::new();
     static mut SERVED: u64 = 0;
-    pub fn forget() { unsafe { SPAN = (0, 0, 0); } }
-    /// Call after the read that left `blocks` blocks from disk block `first` at `at`.
-    pub fn keep(first: u64, blocks: u64, at: usize) { unsafe { SPAN = (first, blocks, at); } }
-    /// Fills `out` from blocks `first..` if they are all held in `buffer`; what is handed
-    /// over is let go.
-    pub fn take(first: u64, out: &mut [u8], buffer: &[u8]) -> bool {
+
+    fn ensure_cache() -> &'static mut PageCache {
         unsafe {
-            let (at, n, offset) = SPAN;
-            let want = (out.len() / BLOCK) as u64;
-            if n == 0 || out.len() % BLOCK != 0 || first < at || first + want > at + n { return false; }
-            let from = offset + ((first - at) as usize) * BLOCK;
-            let Some(held) = buffer.get(from..from + out.len()) else { forget(); return false; };
-            out.copy_from_slice(held);
-            let end = first + want;
-            // What follows stays held. A skip forward (over a block the file no longer uses,
-            // which sexfs readahead may read across) lets go only of what was skipped.
-            SPAN = if end < at + n { (end, at + n - end, from + out.len()) } else { (0, 0, 0) };
-            SERVED += 1;
-            let served = SERVED;
-            if served.is_power_of_two() { sex_pdx::serial_record!("[files.readahead] served={}", served); }
-            true
+            let slot = &mut *core::ptr::addr_of_mut!(PAGE_CACHE);
+            if slot.is_none() {
+                let usage = sex_rt::heap_usage();
+                let arena_grown = super::HEAP_GROWN;
+                let pressure = sex_pdx::program_memory::pressure();
+                let budget = HeapBudget {
+                    heap_total_bytes: usage.total,
+                    heap_free_bytes: usage.free,
+                    arena_grown,
+                    pressure,
+                };
+                let cache = PageCache::new_for_budget(budget);
+                let cap = cache.capacity();
+                sex_pdx::serial_record!(
+                    "[files.page_cache.init] capacity_blocks={} bytes={} arena_grown={} heap_total={} heap_free={} pressure={}",
+                    cap,
+                    cap * BLOCK_SIZE,
+                    arena_grown as u8,
+                    usage.total,
+                    usage.free,
+                    pressure
+                );
+                *slot = Some(cache);
+            }
+            slot.as_mut().unwrap()
         }
+    }
+
+    /// Drops all cached data blocks and stream trackers (e.g. on remount).
+    /// Never triggers lazy allocation if the cache has not been initialized yet.
+    pub fn forget() {
+        unsafe {
+            if let Some(cache) = (*core::ptr::addr_of_mut!(PAGE_CACHE)).as_mut() {
+                cache.clear();
+            }
+            (*core::ptr::addr_of_mut!(TRACKER)).reset();
+        }
+    }
+
+    /// Coherently invalidates cached data blocks overlapping `[offset, offset + size)`
+    /// in raw device bytes. No-op (and never allocates) before the cache is initialized.
+    pub fn invalidate_byte_range(offset: u64, size: u64) {
+        if size == 0 {
+            return;
+        }
+        let base_bytes = w::BASE_LBA.saturating_mul(512);
+        let end_bytes = offset.saturating_add(size);
+        if end_bytes <= base_bytes {
+            return;
+        }
+        let rel_start = offset.saturating_sub(base_bytes);
+        let rel_end = end_bytes.saturating_sub(base_bytes);
+        let first_block = rel_start / BLOCK_SIZE as u64;
+        let last_block = rel_end.div_ceil(BLOCK_SIZE as u64);
+        let count = last_block.saturating_sub(first_block);
+        unsafe {
+            if let Some(cache) = (*core::ptr::addr_of_mut!(PAGE_CACHE)).as_mut() {
+                cache.invalidate_range(first_block, count);
+            }
+        }
+    }
+
+    /// Current page cache diagnostic counters.
+    #[allow(dead_code)]
+    pub fn stats() -> CacheStats {
+        unsafe {
+            match (*core::ptr::addr_of!(PAGE_CACHE)).as_ref() {
+                Some(cache) => cache.stats(),
+                None => CacheStats::default(),
+            }
+        }
+    }
+
+    /// Reads `out` starting at block `first` through the lazy page cache, fetching only
+    /// contiguous missing ranges (plus adaptive read-ahead when enabled) via `read_device`.
+    pub fn read_blocks<F>(
+        disk_blocks: u64,
+        first: u64,
+        out: &mut [u8],
+        staging: &mut [u8],
+        enable_readahead: bool,
+        hint_ahead: usize,
+        read_device: F,
+    ) -> Result<ReadOutcome, ()>
+    where
+        F: FnMut(u64, usize, &mut [u8]) -> Result<(), ()>,
+    {
+        let cache = ensure_cache();
+        let tracker = unsafe { &mut *core::ptr::addr_of_mut!(TRACKER) };
+        let outcome = read_cached_run(
+            cache,
+            tracker,
+            disk_blocks,
+            first,
+            out,
+            staging,
+            enable_readahead,
+            hint_ahead,
+            read_device,
+        )?;
+        if outcome.readahead_hit_bytes > 0 {
+            unsafe {
+                SERVED = SERVED.saturating_add(1);
+                let served = SERVED;
+                if served.is_power_of_two() {
+                    let s = cache.stats();
+                    sex_pdx::serial_record!(
+                        "[files.readahead] served={} hits={} misses={} ra_hits={} evictions={}",
+                        served,
+                        s.hits,
+                        s.misses,
+                        s.readahead_hits,
+                        s.evictions
+                    );
+                }
+            }
+        }
+        Ok(outcome)
     }
 }
 pub struct Disk { blocks: u64 }
@@ -173,7 +281,8 @@ impl Device for Disk {
     fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> Result<(), ()> { self.read_run(block, out) }
     fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> Result<(), ()> { self.write_run(block, data) }
     fn run_blocks(&self) -> usize { crate::vfs::diskfs_bridge_buf_len() as usize / BLOCK }
-    // One command per run: per-command cost, not bytes, is what a disk charges for.
+    // One command per run: metadata blocks already live in sexfs's own tree cache (`PLACE`),
+    // so read_run bypasses the file-data PageCache and avoids allocating it during mount.
     fn read_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
         let buf = Self::buffer()?;
         if out.is_empty() || out.len() % BLOCK != 0 || out.len() > buf.len() { return Err(()); }
@@ -185,29 +294,46 @@ impl Device for Disk {
         self.read_data_run(block, out)
     }
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
-        if ahead::take(first, out, Self::buffer()?) { served_ahead(out.len()); return Ok(()); }
-        self.read_run(first, out)?;
-        counted(out.len());
+        let buf = Self::buffer()?;
+        if out.is_empty() || out.len() % BLOCK != 0 || out.len() > buf.len() { return Err(()); }
+        let outcome = ahead::read_blocks(self.blocks, first, out, buf, true, 0, |blk, n, _staging| {
+            if DiskFs::diskfs_block_read(Self::offset(blk), (n * BLOCK) as u64, SLOT_BUF_LEND) != 0 {
+                Err(())
+            } else {
+                Ok(())
+            }
+        })?;
+        record_read_io(outcome);
         Ok(())
     }
-    /// One command for `out` and the `ahead` blocks after it; those wait in `ahead` for
-    /// the reader's next request.
-    fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> Result<(), ()> {
+    /// One command for missing demand blocks plus adaptive/hinted read-ahead; trailing
+    /// blocks are populated directly into the lazy page cache for subsequent sequential reads.
+    fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead_hint: usize) -> Result<(), ()> {
         let buf = Self::buffer()?;
-        if ahead::take(first, out, buf) { served_ahead(out.len()); return Ok(()); }
-        let total = (out.len() + ahead * BLOCK).min(buf.len()) / BLOCK * BLOCK;
-        if total <= out.len() || out.len() % BLOCK != 0 { return self.read_data_run(first, out); }
-        if DiskFs::diskfs_block_read(Self::offset(first), total as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
-        out.copy_from_slice(&buf[..out.len()]);
-        ahead::keep(first + (out.len() / BLOCK) as u64, ((total - out.len()) / BLOCK) as u64, out.len());
-        counted(out.len());
+        if out.is_empty() || out.len() % BLOCK != 0 || out.len() > buf.len() { return Err(()); }
+        let outcome = ahead::read_blocks(
+            self.blocks,
+            first,
+            out,
+            buf,
+            true,
+            ahead_hint,
+            |blk, n, _staging| {
+                if DiskFs::diskfs_block_read(Self::offset(blk), (n * BLOCK) as u64, SLOT_BUF_LEND) != 0 {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+        record_read_io(outcome);
         Ok(())
     }
     fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
-        ahead::forget();
         let buf = Self::buffer()?;
         if data.is_empty() || data.len() % BLOCK != 0 || data.len() > buf.len() { return Err(()); }
         buf[..data.len()].copy_from_slice(data);
+        // diskfs_block_write coherently invalidates overlapping cached blocks before writing.
         if DiskFs::diskfs_block_write(Self::offset(first), data.len() as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         Ok(())
     }
@@ -230,6 +356,7 @@ fn place(blocks: u64) {
     let big = (|| Some((grab(CACHE, [0u8; BLOCK])?, grab(CACHE, Slot::EMPTY)?, grab(words, 0u64)?, grab(words, 0u64)?)))()
         .map(|(c, s, u, p)| (c.leak().as_mut_ptr(), s.leak().as_mut_ptr(), u.leak().as_mut_ptr(), p.leak().as_mut_ptr()));
     unsafe {
+        HEAP_GROWN = big.is_some();
         PLACE = match big {
             Some((cache, slots, used, pending)) => (cache, slots, CACHE, words, used, pending),
             None => (core::ptr::addr_of_mut!(SMALL_BLOCKS).cast(), core::ptr::addr_of_mut!(SMALL_SLOTS).cast(), SMALL_CACHE,

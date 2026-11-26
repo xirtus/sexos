@@ -601,7 +601,35 @@ extern "C" fn flash_main() -> ! {
         }
     }
 
-    if socket_conn.is_none() {
+    let usb_bank = if socket_conn.is_none() && !force_synthetic && net_endpoint.is_none() {
+        sex_pdx::usb_uvc::FrameBank::open_reader().filter(|b| b.is_active())
+    } else {
+        None
+    };
+    let mut usb_raw_buf: Vec<u8> = Vec::new();
+    let mut usb_last_seq: u32 = 0;
+    let mut usb_decode_errors: u32 = 0;
+    let mut usb_vendor: u16 = 0;
+    let mut usb_product: u16 = 0;
+
+    if let Some(bank) = usb_bank {
+        if let Some(info) = bank.info() {
+            let w = (info.width as usize).clamp(16, MAX_FRAME_DIM);
+            let h = (info.height as usize).clamp(16, MAX_FRAME_DIM);
+            frame_w = w;
+            frame_h = h;
+            frame_fps = (info.fps as u32).clamp(1, 120);
+            frame_format = match info.format {
+                sex_pdx::usb_uvc::FMT_MJPEG => FormatKind::Mjpeg,
+                sex_pdx::usb_uvc::FMT_YUY2 => FormatKind::Yuy2,
+                sex_pdx::usb_uvc::FMT_NV12 => FormatKind::Nv12,
+                _ => FormatKind::Mjpeg,
+            };
+            usb_vendor = info.vendor;
+            usb_product = info.product;
+        }
+        usb_raw_buf = vec![0u8; sex_pdx::usb_uvc::FRAME_SLOT_BYTES];
+    } else if socket_conn.is_none() {
         if net_endpoint.is_some() && !force_synthetic {
             log!("[flash.failed] uvc_tcp_unreachable=1");
             sex_pdx::task_finish(1);
@@ -627,10 +655,18 @@ extern "C" fn flash_main() -> ! {
         synthetic_cam = Some(syn);
     }
 
-    log!(
-        "[flash.uvc.source] kind={}",
-        if socket_conn.is_some() { "tcp" } else { "synthetic" }
-    );
+    if usb_bank.is_some() {
+        log!(
+            "[flash.uvc.source] kind=usb vendor={:#06x} product={:#06x}",
+            usb_vendor,
+            usb_product
+        );
+    } else {
+        log!(
+            "[flash.uvc.source] kind={}",
+            if socket_conn.is_some() { "tcp" } else { "synthetic" }
+        );
+    }
     log!(
         "[flash.uvc.negotiated] width={} height={} format={:?}",
         frame_w,
@@ -648,6 +684,10 @@ extern "C" fn flash_main() -> ! {
 
     let mut grid_mode = false;
     let mut grid_pixels = vec![0u32; pixel_len];
+
+    let mut fps_window_start = sex_pdx::get_ticks();
+    let mut fps_window_frames = 0u32;
+    let mut measured_fps = 0u32;
 
     // Library State
     let mut next_photo_id = 1u32;
@@ -1069,10 +1109,57 @@ extern "C" fn flash_main() -> ! {
             break;
         }
 
-        // Receive UVC packets
+        // Receive UVC frame (USB FrameBank, TCP socket, or synthetic fallback)
         let mut completed_frame = None;
+        let mut usb_frame_decoded = false;
 
-        if let Some(sock) = socket_conn.as_ref() {
+        if let Some(bank) = usb_bank {
+            if let Some(meta) = bank.read_frame(usb_last_seq, &mut usb_raw_buf) {
+                usb_last_seq = meta.seq;
+                let fmt = match meta.format {
+                    sex_pdx::usb_uvc::FMT_MJPEG => FormatKind::Mjpeg,
+                    sex_pdx::usb_uvc::FMT_YUY2 => FormatKind::Yuy2,
+                    sex_pdx::usb_uvc::FMT_NV12 => FormatKind::Nv12,
+                    _ => FormatKind::Mjpeg,
+                };
+                let raw = &usb_raw_buf[..meta.len];
+                let (dec_w, dec_h) = if fmt == FormatKind::Mjpeg {
+                    match sex_image::dimensions(raw) {
+                        Ok((_, w, h)) if w >= 16 && h >= 16 && w <= MAX_FRAME_DIM && h <= MAX_FRAME_DIM => (w, h),
+                        _ => (meta.width as usize, meta.height as usize),
+                    }
+                } else {
+                    (meta.width as usize, meta.height as usize)
+                };
+                let needed = dec_w.saturating_mul(dec_h);
+                if needed > 0 && needed <= MAX_FRAME_DIM * MAX_FRAME_DIM {
+                    if argb_pixels.len() != needed {
+                        argb_pixels.resize(needed, 0);
+                        filtered_pixels.resize(needed, 0);
+                    }
+                    match decode_frame(fmt, raw, dec_w, dec_h, &mut argb_pixels) {
+                        Ok((w, h)) => {
+                            frame_w = w;
+                            frame_h = h;
+                            frame_format = fmt;
+                            usb_frame_decoded = true;
+                        }
+                        Err(e) => {
+                            usb_decode_errors = usb_decode_errors.saturating_add(1);
+                            if usb_decode_errors <= 5 || usb_decode_errors.is_power_of_two() {
+                                log!(
+                                    "[flash.usb.decode_err] seq={} len={} fmt={:?} err={:?}",
+                                    meta.seq,
+                                    meta.len,
+                                    fmt,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(sock) = socket_conn.as_ref() {
             let mut read_buf = [0u8; 16384];
             for _ in 0..96 {
                 loop {
@@ -1114,17 +1201,28 @@ extern "C" fn flash_main() -> ! {
             }
         }
 
-        if let Some(frame) = completed_frame {
-            frame_count += 1;
-            log!("[flash.frame] n={}", frame_count);
-
-            // Decode UVC frame into argb_pixels
+        if let Some(ref frame) = completed_frame {
+            // Decode TCP/synthetic UVC frame into argb_pixels
             let _ = decode_frame(frame_format, &frame.data, frame_w, frame_h, &mut argb_pixels);
+        }
+
+        if usb_frame_decoded || completed_frame.is_some() {
+            frame_count += 1;
+            if usb_bank.is_none() || frame_count <= 8 || frame_count.is_power_of_two() {
+                log!("[flash.frame] n={}", frame_count);
+            }
+
+            let now = sex_pdx::get_ticks();
+            fps_window_frames = fps_window_frames.saturating_add(1);
+            let elapsed = now.saturating_sub(fps_window_start);
+            if elapsed >= 1000 {
+                measured_fps = (fps_window_frames as u64 * 1000 / elapsed.max(1)) as u32;
+                fps_window_frames = 0;
+                fps_window_start = now;
+            }
 
             // Apply active filter to camera frame
             apply_filter(active_filter, &argb_pixels, &mut filtered_pixels, frame_w, frame_h);
-
-            let now = sex_pdx::get_ticks();
 
             // 1. Countdown Timer State Machine
             if countdown_step > 0 && now >= step_due_ticks {
@@ -1424,17 +1522,27 @@ extern "C" fn flash_main() -> ! {
                 fill_rect(win_pixels, win_w, win_h, Rect::new(0, 0, win_w, top_h), 0x001B1E28);
                 // Title
                 draw_text_8x8(win_pixels, win_w, win_h, 16, 14, b"FLASH PHOTO BOOTH", 0x00FFFFFF, None);
-                // Camera status dot
-                let dot_col = if socket_conn.is_some() { 0x0010B981 } else { 0x003B82F6 };
+                // Camera status dot & live telemetry overlay (source + resolution + FPS)
+                let is_live = usb_bank.is_some() || socket_conn.is_some();
+                let dot_col = if is_live { 0x0010B981 } else { 0x003B82F6 };
                 draw_circle(win_pixels, win_w, win_h, 172, 18, 4, dot_col);
+                let src_label = if usb_bank.is_some() {
+                    "LIVE USB"
+                } else if socket_conn.is_some() {
+                    "LIVE TCP"
+                } else {
+                    "SYNTHETIC"
+                };
+                let fps_show = if measured_fps > 0 { measured_fps } else { frame_fps };
+                let status_line = alloc::format!("{} {}x{} {}fps", src_label, frame_w, frame_h, fps_show);
                 draw_text_8x8(
                     win_pixels,
                     win_w,
                     win_h,
                     182,
                     14,
-                    if socket_conn.is_some() { b"LIVE TCP" } else { b"SYNTHETIC" },
-                    0x0094A3B8,
+                    status_line.as_bytes(),
+                    if is_live { 0x00A7F3D0 } else { 0x0094A3B8 },
                     None,
                 );
 
@@ -1482,8 +1590,19 @@ extern "C" fn flash_main() -> ! {
                         win_pixels[dst_row..dst_row + vp_w].copy_from_slice(&grid_pixels[src_row..src_row + vp_w]);
                     }
                 } else {
-                    // Live Camera Viewfinder with active filter
-                    scale_blit(&filtered_pixels, frame_w, frame_h, win_pixels, win_w, win_h, Rect::new(vp_x, vp_y, vp_w, vp_h));
+                    // Live Camera Viewfinder with active filter (aspect-ratio preserving letterbox)
+                    let (fit_w, fit_h) = if frame_w > 0 && frame_h > 0 && vp_w > 0 && vp_h > 0 {
+                        if frame_w.saturating_mul(vp_h) >= frame_h.saturating_mul(vp_w) {
+                            (vp_w, (frame_h.saturating_mul(vp_w) / frame_w).max(1).min(vp_h))
+                        } else {
+                            ((frame_w.saturating_mul(vp_h) / frame_h).max(1).min(vp_w), vp_h)
+                        }
+                    } else {
+                        (vp_w, vp_h)
+                    };
+                    let fit_x = vp_x + (vp_w.saturating_sub(fit_w)) / 2;
+                    let fit_y = vp_y + (vp_h.saturating_sub(fit_h)) / 2;
+                    scale_blit(&filtered_pixels, frame_w, frame_h, win_pixels, win_w, win_h, Rect::new(fit_x, fit_y, fit_w, fit_h));
 
                     // Shutter flash effect
                     if shutter_flash_frames > 0 {

@@ -337,6 +337,16 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             }
             wire::OK
         }
+        wire::OP_HOTSWAP => {
+            let (Ok(target), Ok(len)) = (u32::try_from(arg), usize::try_from(regs.r10)) else { return wire::INVALID };
+            if !(is_spindle(caller) || caller == SHELL_PD) || target == 0 || caller == target { return wire::DENIED; }
+            if len == 0 || len > wire::HOTSWAP_MAX_BYTES || !crate::syscalls::validate_user_bytes(buf, len, false) { return wire::INVALID; }
+            let mut elf = alloc::vec::Vec::new();
+            if elf.try_reserve_exact(len).is_err() { return wire::FULL; }
+            elf.resize(len, 0);
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, elf.as_mut_ptr(), len) });
+            match crate::service_restart::replace_image(target, &elf) { Ok(entry) => { regs.rsi = entry; wire::OK } Err(e) => e }
+        }
         _ => wire::INVALID,
     }
 }

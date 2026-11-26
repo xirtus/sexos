@@ -237,6 +237,160 @@ impl UvcDriverServer {
             Err(_) => {}
         }
     }
+
+    pub fn grant_allows(&self, client_id: u32, w: u16, h: u16, fps: u32) -> bool {
+        self.grant_table.check(client_id, w, h, fps)
+    }
+}
+
+/// Reassembles stripped frame payload chunks pushed by `sexusb` into `sex_pdx::usb_uvc::Shared`
+/// and publishes each completed frame into the read-only client `FrameBank`.
+struct UsbFramePump {
+    active_seq: u32,
+    frame_bytes: usize,
+    frames_received: u64,
+    frames_dropped: u64,
+    frame_buf: alloc::vec::Vec<u8>,
+    overflow: bool,
+    vendor: u16,
+    product: u16,
+    width: u16,
+    height: u16,
+    format: u8,
+    fps: u16,
+}
+
+impl UsbFramePump {
+    fn new() -> Self {
+        Self {
+            active_seq: 0,
+            frame_bytes: 0,
+            frames_received: 0,
+            frames_dropped: 0,
+            frame_buf: alloc::vec::Vec::new(),
+            overflow: false,
+            vendor: 0,
+            product: 0,
+            width: 1280,
+            height: 720,
+            format: sex_pdx::usb_uvc::FMT_MJPEG,
+            fps: 30,
+        }
+    }
+
+    fn configure(&mut self, vendor: u16, product: u16, width: u16, height: u16, format: u8, fps: u16) {
+        self.vendor = vendor;
+        self.product = product;
+        self.width = width;
+        self.height = height;
+        self.format = format;
+        self.fps = fps;
+        self.reset();
+    }
+
+    fn reset(&mut self) {
+        self.active_seq = 0;
+        self.frame_bytes = 0;
+        self.frame_buf.clear();
+        self.overflow = false;
+    }
+
+    fn drain(
+        &mut self,
+        shared: sex_pdx::usb_uvc::Shared,
+        frame_bank: Option<sex_pdx::usb_uvc::FrameBank>,
+        buf: &mut [u8],
+    ) -> bool {
+        use sex_pdx::usb_uvc::{FLAG_EOF, FLAG_ERR, FLAG_SOF, FRAME_SLOT_BYTES};
+        let mut any = false;
+        while let Some(chunk) = shared.pop_chunk(buf) {
+            any = true;
+            if (chunk.flags & FLAG_ERR) != 0 {
+                self.frames_dropped += 1;
+                self.reset();
+                continue;
+            }
+            if (chunk.flags & FLAG_SOF) != 0 || self.active_seq != chunk.frame_seq {
+                if self.active_seq != 0 && self.active_seq != chunk.frame_seq {
+                    self.frames_dropped += 1;
+                }
+                self.active_seq = chunk.frame_seq;
+                self.frame_bytes = 0;
+                self.frame_buf.clear();
+                self.overflow = false;
+            }
+            self.frame_bytes = self.frame_bytes.saturating_add(chunk.len);
+            if !self.overflow && chunk.len > 0 {
+                if self.frame_buf.len().saturating_add(chunk.len) <= FRAME_SLOT_BYTES {
+                    if self.frame_buf.try_reserve(chunk.len).is_ok() {
+                        self.frame_buf.extend_from_slice(&buf[..chunk.len]);
+                    } else {
+                        self.overflow = true;
+                    }
+                } else {
+                    self.overflow = true;
+                }
+            }
+            if (chunk.flags & FLAG_EOF) != 0 {
+                self.frames_received += 1;
+                let total_dropped = self.frames_dropped + shared.frames_dropped() as u64;
+                let mut published = false;
+                if !self.overflow && !self.frame_buf.is_empty() {
+                    if let Some(bank) = frame_bank {
+                        published = bank
+                            .publish(
+                                self.width,
+                                self.height,
+                                self.format,
+                                self.fps,
+                                self.vendor,
+                                self.product,
+                                total_dropped as u32,
+                                &self.frame_buf,
+                            )
+                            .is_some();
+                    }
+                }
+                if self.frames_received <= 8 || self.frames_received.is_power_of_two() {
+                    log!(
+                        "[sexuvc.frame] source=usb n={} bytes={} dropped={} published={}",
+                        self.frames_received,
+                        self.frame_bytes,
+                        total_dropped,
+                        published as u8
+                    );
+                }
+                self.reset();
+            }
+        }
+        any
+    }
+}
+
+fn pick_usb_format(cam: &sex_pdx::usb_uvc::CameraInfo) -> sex_pdx::usb_uvc::FormatMeta {
+    let fmts = cam.formats_slice();
+    fmts.iter()
+        .find(|f| f.kind == sex_pdx::usb_uvc::FMT_MJPEG)
+        .or_else(|| fmts.iter().find(|f| f.kind == sex_pdx::usb_uvc::FMT_YUY2))
+        .or_else(|| fmts.first())
+        .copied()
+        .unwrap_or(sex_pdx::usb_uvc::FormatMeta {
+            index: 1,
+            kind: sex_pdx::usb_uvc::FMT_MJPEG,
+            frames: 1,
+            max_w: 1280,
+            max_h: 720,
+        })
+}
+
+fn drain_inbox() {
+    while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+        if m.type_id <= 1 {
+            continue;
+        }
+        let reply = if m.type_id == sex_pdx::usb_uvc::OP_LINK { 0 } else { u64::MAX };
+        let _ = sex_pdx::pdx_reply(m.caller_pd, reply);
+    }
 }
 
 #[no_mangle]
@@ -248,23 +402,98 @@ pub extern "C" fn _start() -> ! {
 
     let mut server = UvcDriverServer::new();
 
-    // Initialize camera device (hardware or deterministic synthetic camera loopback)
-    let mut synthetic = SyntheticUvcDevice::new(640, 480, 30);
-    let descriptors = synthetic.binary_descriptors();
+    // Open the SexUSB <-> SexUVC shared region if BOOT paired it.
+    let shared = sex_pdx::memory_region_full_view(
+        sex_pdx::usb_uvc::SLOT,
+        sex_pdx::memory_region::QUERY_VIEW
+            | sex_pdx::memory_region::READ
+            | sex_pdx::memory_region::WRITE,
+    )
+    .ok()
+    .filter(|v| v.length >= sex_pdx::usb_uvc::BYTES && v.virtual_address != 0)
+    .map(|v| unsafe { sex_pdx::usb_uvc::Shared::at(v.virtual_address as *mut u8) });
+    let frame_bank = sex_pdx::usb_uvc::FrameBank::open_writer();
+    log!(
+        "[sexuvc.transport] ok={} slot={} framebank={}",
+        shared.is_some() as u8,
+        sex_pdx::usb_uvc::SLOT,
+        frame_bank.is_some() as u8
+    );
 
-    if let Some(desc) = server.enumerate_device(&descriptors, 0x1d6b, 0x0002, "SexOS UVC Webcam") {
-        if server.negotiate_probe_commit(0, &desc, 640, 480, 30) {
-            // Process initial verification frames
-            for _ in 0..3 {
-                let packets = synthetic.next_frame_packets();
-                for pkt in &packets {
-                    server.process_packet(pkt);
+    let mut attached_gen: u32 = 0;
+    let mut pump = UsbFramePump::new();
+    let mut chunk_buf = [0u8; sex_pdx::usb_uvc::MAX_CHUNK];
+
+    // If no physical USB camera is present at boot (e.g. QEMU), keep the deterministic
+    // SyntheticUvcDevice fallback intact so existing camera/QEMU gates stay green.
+    if shared.and_then(|s| s.camera()).is_none() {
+        let mut synthetic = SyntheticUvcDevice::new(640, 480, 30);
+        let descriptors = synthetic.binary_descriptors();
+
+        if let Some(desc) = server.enumerate_device(&descriptors, 0x1d6b, 0x0002, "SexOS UVC Webcam") {
+            if server.negotiate_probe_commit(0, &desc, 640, 480, 30) {
+                for _ in 0..3 {
+                    let packets = synthetic.next_frame_packets();
+                    for pkt in &packets {
+                        server.process_packet(pkt);
+                    }
                 }
             }
         }
     }
 
     loop {
-        let _ = sex_pdx::sys_wait_self_ticks(100);
+        drain_inbox();
+        let mut streaming = false;
+        if let Some(s) = shared {
+            match s.camera() {
+                Some(cam) => {
+                    if cam.generation != attached_gen {
+                        attached_gen = cam.generation;
+                        let (max_w, max_h) = cam.max_dimensions();
+                        log!(
+                            "[sexuvc.usb.attached] vendor={:#06x} product={:#06x} max={}x{} formats={} max_payload={} control={} stream={}",
+                            cam.vendor, cam.product, max_w, max_h, cam.format_count, cam.max_payload, cam.control_iface, cam.stream_iface
+                        );
+                        let fmt = pick_usb_format(&cam);
+                        let w = if fmt.max_w > 0 { fmt.max_w } else { 1280 };
+                        let h = if fmt.max_h > 0 { fmt.max_h } else { 720 };
+                        pump.configure(cam.vendor, cam.product, w, h, fmt.kind, 30);
+                        if server.grant_allows(0, w, h, 30) {
+                            log!(
+                                "[sexuvc.commit] source=usb format={} index={} width={} height={} fps=30",
+                                fmt.kind_name(), fmt.index, w, h
+                            );
+                            if let Some(bank) = frame_bank {
+                                bank.set_active(cam.vendor, cam.product, w, h, fmt.kind, 30);
+                            }
+                            s.request_start(fmt.index, 1, 30, w, h);
+                        }
+                    }
+                    streaming = pump.drain(s, frame_bank, &mut chunk_buf)
+                        || s.stream_state() == sex_pdx::usb_uvc::STATE_STREAMING;
+                }
+                None if attached_gen != 0 => {
+                    log!(
+                        "[sexuvc.usb.detached] frames={} dropped={}",
+                        pump.frames_received, pump.frames_dropped
+                    );
+                    attached_gen = 0;
+                    pump.reset();
+                    if let Some(bank) = frame_bank {
+                        bank.set_inactive();
+                    }
+                }
+                None => {}
+            }
+        }
+        if streaming {
+            let _ = sex_pdx::sys_wait_self_ticks(1);
+        } else {
+            let msg = sex_pdx::pdx_listen_raw(0);
+            if msg.type_id == sex_pdx::usb_uvc::OP_LINK && msg.caller_pd != 0 {
+                sex_pdx::pdx_reply(msg.caller_pd, 0);
+            }
+        }
     }
 }

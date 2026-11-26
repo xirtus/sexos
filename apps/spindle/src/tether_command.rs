@@ -142,8 +142,53 @@ struct Sweep {
 }
 const SWEEP_IDLE: Sweep = Sweep { active: false, total: 0, trial: 0, next_trial: 0, gap_step: 0, mark: 0, started: 0, live_at: 0, progress_at: 0, header_sent: false, filler: 0, bytes_in: 0, last_pass: true, only: None, passes: [0; TRIALS_PER_ROUND as usize], runs: [0; TRIALS_PER_ROUND as usize] };
 
+#[derive(Clone, Copy)]
+struct Resume {
+    active: bool,
+    listening: bool,
+    host: [u8; 128],
+    host_len: usize,
+    port: u16,
+}
+const RESUME_NONE: Resume = Resume { active: false, listening: false, host: [0; 128], host_len: 0, port: DEFAULT_PORT };
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Call { Plain, Send, Receive, State, Close }
+
+struct HotswapRx {
+    active: bool,
+    discard: bool,
+    pd: u32,
+    name: [u8; 24],
+    name_len: usize,
+    expected_len: usize,
+    received: usize,
+    expected_fnv: u64,
+    /// Allocated on the heap only while a hot-swap binary frame is in flight, then dropped.
+    buf: alloc::vec::Vec<u8>,
+}
+const HOTSWAP_IDLE: HotswapRx = HotswapRx {
+    active: false, discard: false, pd: 0, name: [0; 24], name_len: 0,
+    expected_len: 0, received: 0, expected_fnv: 0, buf: alloc::vec::Vec::new(),
+};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PushPhase { Idle, Opening, Ready, Writing, Discard }
+
+struct PushfileRx {
+    phase: PushPhase,
+    fs_submitted: bool,
+    path: [u8; log::PUSHFILE_MAX_PATH],
+    path_len: usize,
+    expected_len: usize,
+    received: usize,
+    expected_fnv: u64,
+    fnv: u64,
+}
+const PUSHFILE_IDLE: PushfileRx = PushfileRx {
+    phase: PushPhase::Idle, fs_submitted: false, path: [0; log::PUSHFILE_MAX_PATH], path_len: 0,
+    expected_len: 0, received: 0, expected_fnv: 0, fnv: log::FNV64_OFFSET,
+};
 
 pub struct Tether {
     phase: Phase,
@@ -180,6 +225,10 @@ pub struct Tether {
     /// `tether listen`: SexOS waits and the Mac connects (no typing needed to aim it).
     listening: bool,
     sweep: Sweep,
+    hotswap: HotswapRx,
+    pushfile: PushfileRx,
+    /// Control tether to reconnect automatically after a `tether sweep` completes.
+    resume: Resume,
 }
 
 pub static mut TETHER: Tether = Tether {
@@ -189,6 +238,9 @@ pub static mut TETHER: Tether = Tether {
     inbound: [0; IN_MAX], in_len: 0, queue: [[0; CMD_MAX]; QUEUE], queue_len: [0; QUEUE],
     queue_head: 0, queue_count: 0, empty_receives: 0, recv_turn: false, bytes_out: 0, commands: 0, listening: false,
     sweep: SWEEP_IDLE,
+    hotswap: HOTSWAP_IDLE,
+    pushfile: PUSHFILE_IDLE,
+    resume: RESUME_NONE,
 };
 
 fn net() -> Option<&'static mut [u8]> {
@@ -307,8 +359,16 @@ impl Tether {
 
     /// Connecting or connected.
     pub fn active(&self) -> bool { self.phase != Phase::Idle }
+    /// Running a Wi-Fi benchmark sweep (`tether sweep`).
+    pub fn sweeping(&self) -> bool { self.sweep.active }
     /// Has a network call out (the shared region is in use).
     pub fn in_call(&self) -> bool { self.sent }
+    /// True while a live control tether has >= 512 unsent scrollback lines, so `cat`
+    /// paces its reads instead of overflowing the 1024-line scrollback ring.
+    pub fn backpressure(&self, sb: &Scrollback) -> bool {
+        self.phase == Phase::Live && !self.sweep.active && self.log_at == usize::MAX
+            && sb.total_lines.saturating_sub(self.lines_sent) >= 512
+    }
 
     pub fn command(&mut self, args: &[u8], sb: &mut Scrollback, fetch_busy: bool) {
         let args = trim(args);
@@ -327,50 +387,60 @@ impl Tether {
         if args == b"off" || args == b"stop" {
             if !self.active() { sb.push(b"tether: not running."); return; }
             sb.push(b"tether: closing.");
+            self.resume = RESUME_NONE;
             if self.sweep.active {
                 self.sweep.active = false;
                 self.note(b"sweep stopped by tether off");
                 self.save(sb);
+                unsafe {
+                    let r = &mut *core::ptr::addr_of_mut!(RESULTS);
+                    r.clear();
+                    r.shrink_to_fit();
+                }
                 if self.phase == Phase::Gap { self.phase = Phase::Idle; return; }
             }
             self.end();
             return;
         }
-        if self.active() { sb.push(b"tether: already running (tether off first)."); return; }
-        if fetch_busy { sb.push(b"tether: a download is using the network; try again when it ends."); return; }
-        if args == b"listen" || args.starts_with(b"listen ") {
-            let rest = trim(&args[6..]);
-            let port = if rest.is_empty() { Some(DEFAULT_PORT) } else { parse_port(rest) };
-            let Some(port) = port else { sb.push(b"Usage: tether listen [PORT]"); return };
-            self.reset(sb);
-            self.listening = true;
-            self.port = port;
-            self.host_len = 0;
-            self.phase = Phase::Up;
-            say!(sb, "tether: waiting for the network, then listening on port {}", port);
-            return;
-        }
         if args == b"sweep" || args.starts_with(b"sweep ") {
+            if self.sweep.active { sb.push(b"tether: a sweep is already running (tether off to stop it)."); return; }
+            if fetch_busy { sb.push(b"tether: a download is using the network; try again when it ends."); return; }
             let mut words = args[5..].split(|b| *b == b' ').filter(|w| !w.is_empty());
-            let target = words.next().and_then(parse_target);
-            let rounds = match words.next() {
-                None => Some(SWEEP_ROUNDS),
-                Some(w) => core::str::from_utf8(w).ok().and_then(|t| t.parse::<u32>().ok()).filter(|n| (1..=SWEEP_MAX_ROUNDS).contains(n)),
+            let mut sweep_host = [0u8; 128];
+            let (target, rounds, only) = if args == b"sweep" && self.active() && !self.listening && self.host_len > 0 {
+                sweep_host[..self.host_len].copy_from_slice(&self.host[..self.host_len]);
+                (Some((self.host_len, self.port)), Some(SWEEP_ROUNDS), Some(None))
+            } else {
+                let target = words.next().and_then(parse_target).map(|(h, p)| {
+                    sweep_host[..h.len()].copy_from_slice(h);
+                    (h.len(), p)
+                });
+                let rounds = match words.next() {
+                    None => Some(SWEEP_ROUNDS),
+                    Some(w) => core::str::from_utf8(w).ok().and_then(|t| t.parse::<u32>().ok()).filter(|n| (1..=SWEEP_MAX_ROUNDS).contains(n)),
+                };
+                let only = match words.next() {
+                    None => Some(None),
+                    Some(w) => SHAPES.iter().position(|s| s.name.as_bytes() == w).map(Some),
+                };
+                (target, rounds, only)
             };
-            let only = match words.next() {
-                None => Some(None),
-                Some(w) => SHAPES.iter().position(|s| s.name.as_bytes() == w).map(Some),
-            };
-            let (Some((host, port)), Some(rounds), Some(only)) = (target, rounds, only) else {
+            let (Some((hlen, port)), Some(rounds), Some(only)) = (target, rounds, only) else {
                 sb.push(b"Usage: tether sweep HOST[:PORT] [ROUNDS 1-50] [SHAPE]");
                 sb.push(b"Shapes: bulk mid small paced trickle idle45 down long");
                 return;
             };
-            self.listening = false;
-            self.host[..host.len()].copy_from_slice(host);
-            self.host_len = host.len();
+            let was_active = self.active();
+            if was_active {
+                self.resume = Resume { active: true, listening: self.listening, host: self.host, host_len: self.host_len, port: self.port };
+            } else {
+                self.resume = RESUME_NONE;
+                self.listening = false;
+            }
+            self.host[..hlen].copy_from_slice(&sweep_host[..hlen]);
+            self.host_len = hlen;
             self.port = port;
-            self.reset(sb);
+            if !was_active { self.reset(sb); }
             self.sweep = SWEEP_IDLE;
             self.sweep.active = true;
             self.sweep.only = only;
@@ -381,14 +451,33 @@ impl Tether {
                 r.clear();
                 let _ = r.try_reserve_exact(RESULTS_MAX);
             }
+            let host_str = core::str::from_utf8(&sweep_host[..hlen]).unwrap_or("?");
             let mut t = Text { buf: [0; 160], len: 0 };
-            let _ = core::fmt::Write::write_fmt(&mut t, format_args!("SexOS Wi-Fi sweep to {}:{}, {} trials ({} rounds)", core::str::from_utf8(host).unwrap_or("?"), port, self.sweep.total, rounds));
+            let _ = core::fmt::Write::write_fmt(&mut t, format_args!("SexOS Wi-Fi sweep to {}:{}, {} trials ({} rounds)", host_str, port, self.sweep.total, rounds));
             let (b, n) = (t.buf, t.len);
             self.note(&b[..n]);
             self.note(b"result: pass = all data moved; stall = nothing moved for 20 s; others = the network's answer");
-            say!(sb, "tether sweep: {} trials to {}:{}; tether off stops it. Results go to /media/Ventoy/wifi-sweep.txt", self.sweep.total, core::str::from_utf8(host).unwrap_or("?"), port);
-            self.phase = Phase::Gap;
-            self.next_at = 0;
+            if was_active {
+                say!(sb, "tether sweep: pausing tether for {} trials to {}:{}; will reconnect after.", self.sweep.total, host_str, port);
+                self.end();
+            } else {
+                say!(sb, "tether sweep: {} trials to {}:{}; tether off stops it. Results go to /media/Ventoy/wifi-sweep.txt", self.sweep.total, host_str, port);
+                self.phase = Phase::Gap;
+                self.next_at = 0;
+            }
+            return;
+        }
+        if self.active() { sb.push(b"tether: already running (tether off first)."); return; }
+        if args == b"listen" || args.starts_with(b"listen ") {
+            let rest = trim(&args[6..]);
+            let port = if rest.is_empty() { Some(DEFAULT_PORT) } else { parse_port(rest) };
+            let Some(port) = port else { sb.push(b"Usage: tether listen [PORT]"); return };
+            self.reset(sb);
+            self.listening = true;
+            self.port = port;
+            self.host_len = 0;
+            self.phase = Phase::Up;
+            say!(sb, "tether: waiting for the network, then listening on port {}", port);
             return;
         }
         let Some((host, port)) = parse_target(args) else { sb.push(b"Usage: tether HOST[:PORT] | tether listen [PORT] | tether sweep HOST [ROUNDS]"); return };
@@ -417,10 +506,35 @@ impl Tether {
         self.told_v4 = false;
         self.next_at = 0;
         self.sent = false;
+        self.hotswap_reset();
+        self.pushfile_reset();
+    }
+
+    fn hotswap_reset(&mut self) {
+        self.hotswap.active = false;
+        self.hotswap.discard = false;
+        self.hotswap.pd = 0;
+        self.hotswap.name_len = 0;
+        self.hotswap.expected_len = 0;
+        self.hotswap.received = 0;
+        self.hotswap.expected_fnv = 0;
+        self.hotswap.buf = alloc::vec::Vec::new();
+    }
+
+    fn pushfile_reset(&mut self) {
+        self.pushfile.phase = PushPhase::Idle;
+        self.pushfile.fs_submitted = false;
+        self.pushfile.path_len = 0;
+        self.pushfile.expected_len = 0;
+        self.pushfile.received = 0;
+        self.pushfile.expected_fnv = 0;
+        self.pushfile.fnv = log::FNV64_OFFSET;
     }
 
     fn end(&mut self) {
         // A call still out is answered and dropped by `receive` (phase Close).
+        self.hotswap_reset();
+        self.pushfile_reset();
         self.phase = Phase::Close;
         self.next_at = 0;
     }
@@ -436,7 +550,8 @@ impl Tether {
 
     fn net_call(&mut self, kind: u8, value: u64, call: Call) { self.net_call_on(FLOW, kind, value, call) }
     fn net_call_on(&mut self, flow: u8, kind: u8, value: u64, call: Call) {
-        self.seq = (self.seq + 1) & 0x7F_FFFF;
+        // High bit 0x80_0000 keeps tether sequence numbers disjoint from `fetch` (0x00_0001..=0x7F_FFFF).
+        self.seq = 0x80_0000 | ((self.seq + 1) & 0x7F_FFFF);
         if sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(self.seq, kind, flow), value, 0).is_ok() {
             self.sent = true;
             self.sent_at = sex_pdx::get_ticks();
@@ -494,7 +609,7 @@ impl Tether {
     }
 
     /// Sends the next call when one is due. True when the screen may need drawing.
-    pub fn step(&mut self, sb: &mut Scrollback) -> bool {
+    pub fn step(&mut self, sb: &mut Scrollback, region_busy: bool) -> bool {
         if self.phase == Phase::Idle { return false; }
         let now = sex_pdx::get_ticks();
         // sexnet keeps one answer per program waiting: when another command's call
@@ -516,6 +631,7 @@ impl Tether {
             self.fail(sb, "could not reach the other computer (is tether_host.py running, and the firewall open?)");
             return true;
         }
+        if region_busy { return false; }
         let Some(region) = net() else { self.phase = Phase::Idle; sb.push(b"tether: no network here."); return true };
         match self.phase {
             Phase::Up => self.net_call(w::UP, 0, Call::Plain),
@@ -534,19 +650,25 @@ impl Tether {
             Phase::Drop => self.net_call(w::CLOSE, 0, Call::Plain),
             Phase::CloseListener => self.net_call_on(LISTEN_FLOW, w::CLOSE, 0, Call::Close),
             Phase::Live => {
+                self.step_pushfile(sb);
                 if self.out_len == 0 { self.fill(sb); }
+                let push_rx = matches!(self.pushfile.phase, PushPhase::Ready | PushPhase::Discard);
+                let push_wait = matches!(self.pushfile.phase, PushPhase::Opening | PushPhase::Writing)
+                    || (self.pushfile.phase == PushPhase::Ready && unsafe { crate::fs_commands::FS.busy() });
                 // Receives and sends take turns, so commands get through during the log dump.
                 self.recv_turn = !self.recv_turn;
-                if self.out_len > 0 && !self.recv_turn {
+                if self.out_len > 0 && (!self.recv_turn || push_wait) {
                     // At most SEND_MAX a call, the size the Wi-Fi sweep proved on the x17.
                     let n = self.out_len.min(SEND_MAX);
                     region[..n].copy_from_slice(&self.out[..n]);
                     self.net_call(w::SEND, n as u64, Call::Send);
+                } else if push_wait {
+                    self.next_at = now + 2;
                 } else if self.empty_receives >= STATE_EVERY {
                     self.empty_receives = 0;
                     self.net_call(w::STATE, 0, Call::State);
                 } else {
-                    let room = if self.sweep.active { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
+                    let room = if self.sweep.active || self.hotswap.active || push_rx { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
                     self.net_call(w::RECEIVE, room as u64, Call::Receive);
                 }
             }
@@ -567,15 +689,26 @@ impl Tether {
             if self.call != Call::Close { return true; }
             // Listening: the listener closes too.
             if self.listening { self.phase = Phase::CloseListener; self.next_at = 0; return true; }
-            if self.sweep.active { self.phase = Phase::Gap; self.sweep.gap_step = 0; self.next_at = 0; return true; }
+            if self.sweep.active {
+                self.phase = Phase::Gap;
+                self.sweep.gap_step = if self.sweep.next_trial == 0 { 2 } else { 0 };
+                self.next_at = 0;
+                return true;
+            }
             self.phase = Phase::Idle;
             sex_pdx::serial_record!("[spindle.tether.closed] bytes={} commands={}", self.bytes_out, self.commands);
             sb.push(b"tether: closed.");
             return true;
         }
         if self.phase == Phase::CloseListener {
-            self.phase = Phase::Idle;
             self.listening = false;
+            if self.sweep.active {
+                self.phase = Phase::Gap;
+                self.sweep.gap_step = if self.sweep.next_trial == 0 { 2 } else { 0 };
+                self.next_at = 0;
+                return true;
+            }
+            self.phase = Phase::Idle;
             sex_pdx::serial_record!("[spindle.tether.closed] bytes={} commands={}", self.bytes_out, self.commands);
             sb.push(b"tether: closed.");
             return true;
@@ -588,6 +721,7 @@ impl Tether {
         }
         // Listening, the network may come up late (DHCP on a cable plugged in later).
         if self.listening && self.phase == Phase::Up && status == w::OFFLINE { self.next_at = now + 2_000; return true; }
+        if status == w::BUSY && self.phase == Phase::ResolveAsk { self.next_at = now + POLL_MS * 5; return true; }
         if !matches!(status, w::OK | w::WAIT) {
             self.fail(sb, match status { w::OFFLINE => "no network (join Wi-Fi with `wifi join N PASSWORD`, or plug in Ethernet)", w::NO_NAME => "name not found (use the computer's IP address)", w::BUSY => "the network is busy", w::DENIED => "not allowed to use the network", _ => "network error" });
             return true;
@@ -681,7 +815,8 @@ impl Tether {
                     }
                 }
                 Call::Receive => {
-                    let n = if self.sweep.active { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
+                    let push_rx = matches!(self.pushfile.phase, PushPhase::Ready | PushPhase::Discard);
+                    let n = if self.sweep.active || self.hotswap.active || push_rx { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
                     if n == 0 {
                         self.empty_receives += 1;
                         if self.out_len == 0 { self.next_at = now + POLL_MS; }
@@ -690,6 +825,12 @@ impl Tether {
                         self.empty_receives = 0;
                         self.sweep.bytes_in += n as u64;
                         self.sweep.progress_at = self.sweep.progress_at.max(now);
+                    } else if self.hotswap.active {
+                        self.empty_receives = 0;
+                        self.feed_hotswap(&region[..n], sb);
+                    } else if push_rx {
+                        self.empty_receives = 0;
+                        self.feed_pushfile(&region[..n], sb);
                     } else {
                         self.empty_receives = 0;
                         self.inbound[self.in_len..self.in_len + n].copy_from_slice(&region[..n]);
@@ -707,6 +848,194 @@ impl Tether {
         true
     }
 
+    fn step_pushfile(&mut self, sb: &mut Scrollback) {
+        match self.pushfile.phase {
+            PushPhase::Opening => {
+                if !self.pushfile.fs_submitted {
+                    if unsafe { crate::fs_commands::FS.busy() || crate::play_command::PLAY.busy() } {
+                        return;
+                    }
+                    let path = self.pushfile.path;
+                    let plen = self.pushfile.path_len;
+                    if unsafe { crate::fs_commands::FS.start_push_open(&path[..plen]) } {
+                        self.pushfile.fs_submitted = true;
+                    } else {
+                        let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                        say!(sb, "push-file: err {} filesystem unavailable", pstr);
+                        if self.pushfile.expected_len == 0 {
+                            self.pushfile_reset();
+                            if self.in_len > 0 { self.split_lines(sb); }
+                        } else {
+                            self.pushfile.phase = PushPhase::Discard;
+                            self.drain_inbound_pushfile(sb);
+                        }
+                    }
+                    return;
+                }
+                let Some(st) = (unsafe { crate::fs_commands::PUSHFILE_STATUS.take() }) else { return };
+                self.pushfile.fs_submitted = false;
+                let path = self.pushfile.path;
+                let plen = self.pushfile.path_len;
+                let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                if st != sex_pdx::fs::OK {
+                    say!(sb, "push-file: err {} open failed (status={})", pstr, st);
+                    if self.pushfile.expected_len == 0 {
+                        self.pushfile_reset();
+                        if self.in_len > 0 { self.split_lines(sb); }
+                    } else {
+                        self.pushfile.phase = PushPhase::Discard;
+                        self.drain_inbound_pushfile(sb);
+                    }
+                    return;
+                }
+                if self.pushfile.expected_len == 0 {
+                    if self.pushfile.fnv != self.pushfile.expected_fnv {
+                        say!(sb, "push-file: err {} checksum mismatch (got {:016x} want {:016x})", pstr, self.pushfile.fnv, self.pushfile.expected_fnv);
+                    } else {
+                        say!(sb, "push-file: ok {} (0 bytes)", pstr);
+                    }
+                    self.pushfile_reset();
+                    if self.in_len > 0 { self.split_lines(sb); }
+                    return;
+                }
+                self.pushfile.phase = PushPhase::Ready;
+                self.drain_inbound_pushfile(sb);
+            }
+            PushPhase::Writing => {
+                let Some(st) = (unsafe { crate::fs_commands::PUSHFILE_STATUS.take() }) else { return };
+                let path = self.pushfile.path;
+                let plen = self.pushfile.path_len;
+                let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                if st != sex_pdx::fs::OK {
+                    say!(sb, "push-file: err {} write failed (status={})", pstr, st);
+                    if self.pushfile.received >= self.pushfile.expected_len {
+                        self.pushfile_reset();
+                        if self.in_len > 0 { self.split_lines(sb); }
+                    } else {
+                        self.pushfile.phase = PushPhase::Discard;
+                    }
+                    return;
+                }
+                if self.pushfile.received >= self.pushfile.expected_len {
+                    if self.pushfile.fnv != self.pushfile.expected_fnv {
+                        say!(sb, "push-file: err {} checksum mismatch (got {:016x} want {:016x})", pstr, self.pushfile.fnv, self.pushfile.expected_fnv);
+                    } else {
+                        say!(sb, "push-file: ok {} ({} bytes)", pstr, self.pushfile.expected_len);
+                    }
+                    self.pushfile_reset();
+                    if self.in_len > 0 { self.split_lines(sb); }
+                } else {
+                    self.pushfile.phase = PushPhase::Ready;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn drain_inbound_pushfile(&mut self, sb: &mut Scrollback) {
+        let left = self.in_len;
+        if left > 0 {
+            let mut tmp = [0u8; IN_MAX];
+            tmp[..left].copy_from_slice(&self.inbound[..left]);
+            self.in_len = 0;
+            self.feed_pushfile(&tmp[..left], sb);
+        }
+    }
+
+    fn feed_pushfile(&mut self, bytes: &[u8], sb: &mut Scrollback) {
+        let need = self.pushfile.expected_len.saturating_sub(self.pushfile.received);
+        let take = bytes.len().min(need);
+        let rest = &bytes[take..];
+
+        if self.pushfile.phase == PushPhase::Discard {
+            self.pushfile.received += take;
+            if self.pushfile.received >= self.pushfile.expected_len {
+                self.pushfile_reset();
+                if !rest.is_empty() {
+                    let n = rest.len().min(IN_MAX - self.in_len);
+                    self.inbound[self.in_len..self.in_len + n].copy_from_slice(&rest[..n]);
+                    self.in_len += n;
+                    self.split_lines(sb);
+                }
+            }
+            return;
+        }
+
+        // PushPhase::Ready — stream chunk directly to `sexfiles` without heap allocation.
+        if !rest.is_empty() {
+            let n = rest.len().min(IN_MAX - self.in_len);
+            self.inbound[self.in_len..self.in_len + n].copy_from_slice(&rest[..n]);
+            self.in_len += n;
+        }
+        let offset = self.pushfile.received as u64;
+        self.pushfile.fnv = log::fnv64_update(self.pushfile.fnv, &bytes[..take]);
+        self.pushfile.received += take;
+        let path = self.pushfile.path;
+        let plen = self.pushfile.path_len;
+        if take == 0 {
+            if self.pushfile.received >= self.pushfile.expected_len {
+                let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                if self.pushfile.fnv != self.pushfile.expected_fnv {
+                    say!(sb, "push-file: err {} checksum mismatch (got {:016x} want {:016x})", pstr, self.pushfile.fnv, self.pushfile.expected_fnv);
+                } else {
+                    say!(sb, "push-file: ok {} ({} bytes)", pstr, self.pushfile.expected_len);
+                }
+                self.pushfile_reset();
+                if self.in_len > 0 { self.split_lines(sb); }
+            }
+            return;
+        }
+        if unsafe { crate::fs_commands::FS.start_push_write(&path[..plen], offset, &bytes[..take]) } {
+            self.pushfile.phase = PushPhase::Writing;
+        } else {
+            let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+            say!(sb, "push-file: err {} write start failed", pstr);
+            if self.pushfile.received >= self.pushfile.expected_len {
+                self.pushfile_reset();
+                if self.in_len > 0 { self.split_lines(sb); }
+            } else {
+                self.pushfile.phase = PushPhase::Discard;
+            }
+        }
+    }
+
+    fn feed_hotswap(&mut self, bytes: &[u8], sb: &mut Scrollback) {
+        let need = self.hotswap.expected_len.saturating_sub(self.hotswap.received);
+        let take = bytes.len().min(need);
+        if !self.hotswap.discard && take > 0 {
+            self.hotswap.buf.extend_from_slice(&bytes[..take]);
+        }
+        self.hotswap.received += take;
+        if self.hotswap.received < self.hotswap.expected_len { return; }
+        if !self.hotswap.discard {
+            let name = self.hotswap.name;
+            let nlen = self.hotswap.name_len;
+            let name_str = core::str::from_utf8(&name[..nlen]).unwrap_or("?");
+            let pd = self.hotswap.pd;
+            let len = self.hotswap.buf.len();
+            let got = log::fnv64(&self.hotswap.buf);
+            if got != self.hotswap.expected_fnv {
+                self.hotswap.buf = alloc::vec::Vec::new();
+                say!(sb, "hotswap: err {} checksum mismatch (got {:016x} want {:016x})", name_str, got, self.hotswap.expected_fnv);
+            } else {
+                let res = log::hotswap_server(pd, &self.hotswap.buf);
+                self.hotswap.buf = alloc::vec::Vec::new();
+                match res {
+                    Ok(entry) => say!(sb, "hotswap: ok {} pd={} entry={:#x} bytes={}", name_str, pd, entry, len),
+                    Err(code) => say!(sb, "hotswap: err {} pd={} code={}", name_str, pd, code),
+                }
+            }
+        }
+        self.hotswap_reset();
+        let rest = &bytes[take..];
+        if !rest.is_empty() {
+            let n = rest.len().min(IN_MAX - self.in_len);
+            self.inbound[self.in_len..self.in_len + n].copy_from_slice(&rest[..n]);
+            self.in_len += n;
+            self.split_lines(sb);
+        }
+    }
+
     fn split_lines(&mut self, sb: &mut Scrollback) {
         while let Some(end) = self.inbound[..self.in_len].iter().position(|b| *b == b'\n') {
             let mut line = [0u8; CMD_MAX];
@@ -718,6 +1047,60 @@ impl Tether {
             self.in_len -= end + 1;
             let text = trim(&line[..n]);
             if text.is_empty() { continue; }
+            if text.starts_with(b"SEXOS-PUSHFILE ") {
+                let Some(hdr) = core::str::from_utf8(text).ok().and_then(log::parse_pushfile_header) else {
+                    say!(sb, "push-file: err invalid header");
+                    continue;
+                };
+                self.pushfile_reset();
+                self.pushfile.phase = PushPhase::Opening;
+                self.pushfile.expected_len = hdr.size;
+                self.pushfile.expected_fnv = hdr.fnv;
+                let pb = hdr.path.as_bytes();
+                let pl = pb.len().min(self.pushfile.path.len());
+                self.pushfile.path[..pl].copy_from_slice(&pb[..pl]);
+                self.pushfile.path_len = pl;
+                self.step_pushfile(sb);
+                return;
+            }
+            if text.starts_with(b"SEXOS-HOTSWAP ") {
+                let Some(hdr) = core::str::from_utf8(text).ok().and_then(log::parse_hotswap_header) else {
+                    say!(sb, "hotswap: err invalid header");
+                    continue;
+                };
+                self.hotswap_reset();
+                self.hotswap.active = true;
+                self.hotswap.expected_len = hdr.size;
+                self.hotswap.expected_fnv = hdr.fnv;
+                let nb = hdr.name.as_bytes();
+                let nl = nb.len().min(self.hotswap.name.len());
+                self.hotswap.name[..nl].copy_from_slice(&nb[..nl]);
+                self.hotswap.name_len = nl;
+                match hdr.pd {
+                    Some(pd) => {
+                        self.hotswap.pd = pd;
+                        let mut buf = alloc::vec::Vec::new();
+                        if buf.try_reserve_exact(hdr.size).is_ok() {
+                            self.hotswap.buf = buf;
+                        } else {
+                            self.hotswap.discard = true;
+                            say!(sb, "hotswap: err {} out of memory ({} bytes)", hdr.name, hdr.size);
+                        }
+                    }
+                    None => {
+                        self.hotswap.discard = true;
+                        say!(sb, "hotswap: err unknown server {}", hdr.name);
+                    }
+                }
+                let left = self.in_len;
+                if left > 0 {
+                    let mut tmp = [0u8; IN_MAX];
+                    tmp[..left].copy_from_slice(&self.inbound[..left]);
+                    self.in_len = 0;
+                    self.feed_hotswap(&tmp[..left], sb);
+                }
+                return;
+            }
             if self.queue_count == QUEUE { sb.push(b"tether: too many commands waiting; one dropped."); continue; }
             let slot = (self.queue_head + self.queue_count) % QUEUE;
             self.queue[slot][..text.len()].copy_from_slice(text);
@@ -849,11 +1232,32 @@ impl Tether {
             }
             2 => {
                 if self.sweep.next_trial >= self.sweep.total {
-                    self.summary();
+                    self.summary(sb);
                     self.save(sb);
+                    unsafe {
+                        let r = &mut *core::ptr::addr_of_mut!(RESULTS);
+                        r.clear();
+                        r.shrink_to_fit();
+                    }
                     self.sweep.active = false;
-                    self.phase = Phase::Idle;
                     say!(sb, "tether sweep: done, {} trials. Results: /media/Ventoy/wifi-sweep.txt", self.sweep.total);
+                    if self.resume.active {
+                        self.listening = self.resume.listening;
+                        self.host = self.resume.host;
+                        self.host_len = self.resume.host_len;
+                        self.port = self.resume.port;
+                        self.resume = RESUME_NONE;
+                        self.reset(sb);
+                        self.phase = Phase::Up;
+                        self.next_at = now + 1_500;
+                        if self.listening {
+                            say!(sb, "tether: resuming listener on port {} after sweep.", self.port);
+                        } else {
+                            say!(sb, "tether: reconnecting to {}:{} after sweep.", core::str::from_utf8(&self.host[..self.host_len]).unwrap_or("?"), self.port);
+                        }
+                    } else {
+                        self.phase = Phase::Idle;
+                    }
                     return;
                 }
                 self.sweep.trial = self.sweep.next_trial;
@@ -885,9 +1289,10 @@ impl Tether {
     }
 
     /// Passes per shape and switch setting, at the end of the results.
-    fn summary(&mut self) {
+    fn summary(&mut self, sb: &mut Scrollback) {
         self.note(b"");
         self.note(b"--- summary: passes/runs (ba,replay) ---");
+        sb.push(b"--- sweep summary: passes/runs (ba,replay) ---");
         for (si, s) in SHAPES.iter().enumerate() {
             if self.sweep.only.is_some_and(|o| o != si) { continue; }
             let mut t = Text { buf: [0; 160], len: 0 };
@@ -898,6 +1303,7 @@ impl Tether {
             }
             let (b, n) = (t.buf, t.len);
             self.note(&b[..n]);
+            sb.push(&b[..n.min(110)]);
         }
     }
 
@@ -918,4 +1324,24 @@ fn trim(mut s: &[u8]) -> &[u8] {
     while let [b' ' | b'\t', rest @ ..] = s { s = rest; }
     while let [rest @ .., b' ' | b'\t'] = s { s = rest; }
     s
+}
+
+/// `hotswap <server_name>`: shows hot-swap target info and host push command.
+pub fn hotswap_command(args: &[u8], sb: &mut Scrollback) {
+    let name = trim(args);
+    if name.is_empty() {
+        sb.push(b"Usage: hotswap <server_name>");
+        sb.push(b"Servers: sexdisplay sexdrive silk-shell sexinput sexusb sexbell sexfiles sexnet sexacpi denim cufflinks sexgpu-nv saddle");
+        sb.push(b"From host over active tether: python3 scripts/tether_host.py push-server <name> <elf_path>");
+        return;
+    }
+    let s = core::str::from_utf8(name).unwrap_or("");
+    match log::server_pd_by_name(s) {
+        Some(pd) => {
+            say!(sb, "hotswap: {} -> pd={} (push via: python3 scripts/tether_host.py push-server {} <elf_path>)", s, pd, s);
+        }
+        None => {
+            say!(sb, "hotswap: unknown server '{}'. Run `hotswap` for valid names.", s);
+        }
+    }
 }

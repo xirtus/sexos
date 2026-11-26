@@ -334,20 +334,55 @@ pub extern "C" fn trampoline_main() {
         }
         if msg.type_id==sex_pdx::usb_disk::OP_CHANGED{crate::volumes::usb_changed(msg.caller_pd);continue;}
         if crate::recording_runtime::message(&msg){continue;}
-        if msg.type_id==sex_config::secret::OP{if let Some(word)=crate::password_store::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
-        if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
-        if msg.type_id==sex_pdx::bt_bonds::OP{if let Some(word)=crate::bt_bonds::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
+        // Helper macro: when nothing else is pending, answer and wait for the next
+        // request in a single kernel entry via `pdx_reply_recv` (sys 103); otherwise
+        // fall back to `reply_later` (for queued-reply protocols) or `pdx_reply`.
+        macro_rules! reply_fast_queued {
+            ($caller:expr, $word:expr) => {{
+                let idle = !crate::restricted_runtime::pending()
+                    && !crate::restricted_io::pending()
+                    && !crate::fs_service::replies_pending()
+                    && !crate::fs_service::writes_pending()
+                    && !crate::organize::pending()
+                    && !history.pending()
+                    && !probes.pending()
+                    && !documents.pending()
+                    && crate::pdx::defer_empty();
+                match idle.then(|| sex_pdx::ipc_recv::pdx_reply_recv($caller, $word)) {
+                    Some(Ok(m)) => next = m,
+                    _ => crate::fs_service::reply_later($caller, $word),
+                }
+            }};
+        }
+        macro_rules! reply_fast_direct {
+            ($caller:expr, $word:expr) => {{
+                let idle = !crate::restricted_runtime::pending()
+                    && !crate::restricted_io::pending()
+                    && !crate::fs_service::replies_pending()
+                    && !crate::fs_service::writes_pending()
+                    && !crate::organize::pending()
+                    && !history.pending()
+                    && !probes.pending()
+                    && !documents.pending()
+                    && crate::pdx::defer_empty();
+                match idle.then(|| sex_pdx::ipc_recv::pdx_reply_recv($caller, $word)) {
+                    Some(Ok(m)) => next = m,
+                    _ => { pdx_reply($caller, $word); }
+                }
+            }};
+        }
+
+        if msg.type_id==sex_config::secret::OP{if let Some(word)=crate::password_store::handle(caller,msg.arg0,msg.arg1){reply_fast_queued!(caller,word);}continue;}
+        if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);reply_fast_queued!(caller,word);continue;}
+        if msg.type_id==sex_pdx::bt_bonds::OP{if let Some(word)=crate::bt_bonds::handle(caller,msg.arg0,msg.arg1){reply_fast_queued!(caller,word);}continue;}
         if msg.type_id==sex_pdx::fs::OP{
             let word=crate::fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2);
-            // Nothing else owed and nothing to commit: answer and wait in one entry, so
-            // the caller runs next. Otherwise the loop's top answers in order.
-            let idle=!crate::restricted_runtime::pending()&&!crate::restricted_io::pending()&&!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
-            match idle.then(||sex_pdx::ipc_recv::pdx_reply_recv(caller,word)){Some(Ok(m))=>next=m,_=>crate::fs_service::reply_later(caller,word)}
+            reply_fast_queued!(caller,word);
             continue;
         }
         if msg.type_id==sex_pdx::autofill::IDENTIFY {
             if caller==3&&msg.caller_task==3&&msg.arg1<6&&msg.arg2==0 {
-                if let Some(subject)=sex_pdx::autofill::Subject::decode(msg.arg0){let word=crate::fs_service::autofill_identity(subject,msg.arg1 as usize);crate::fs_service::reply_later(caller,word);}
+                if let Some(subject)=sex_pdx::autofill::Subject::decode(msg.arg0){let word=crate::fs_service::autofill_identity(subject,msg.arg1 as usize);reply_fast_queued!(caller,word);}
             }
             continue;
         }
@@ -360,25 +395,25 @@ pub extern "C" fn trampoline_main() {
             continue;
         }
         if msg.type_id==sex_pdx::program_store::OP{
-            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1],msg.arg2 as u32)};crate::fs_service::reply_later(caller,word);}
+            if caller==3{let word=if crate::recording_runtime::image_busy(){sex_pdx::program_store::failed(sex_pdx::program_store::IMAGE_BUSY)}else{crate::program_store::load([msg.arg0,msg.arg1],msg.arg2 as u32)};reply_fast_queued!(caller,word);}
             continue;
         }
         if msg.type_id==sex_pdx::document::OP{
             if let Some(r)=sex_pdx::document::Request::decode(msg.arg0,msg.arg1,msg.arg2){
                 let live=document_caller_live(caller);
-                if let Some(v)=documents.handle(caller,live,r,&mut vfs::DocumentBackend){pdx_reply(caller,v);}
+                if let Some(v)=documents.handle(caller,live,r,&mut vfs::DocumentBackend){reply_fast_direct!(caller,v);}
             }continue;
         }
         if msg.type_id==sex_pdx::spindle_probe::OP{
             if let Some(r)=sex_pdx::spindle_probe::Request::decode(msg.arg0,msg.arg1,msg.arg2){
-                if let Some(v)=probes.handle(caller,crate::spindle_history::live(caller),r,&mut vfs::SpindleProbeBackend){pdx_reply(caller,v);}
+                if let Some(v)=probes.handle(caller,crate::spindle_history::live(caller),r,&mut vfs::SpindleProbeBackend){reply_fast_direct!(caller,v);}
             }continue;
         }
         if msg.type_id==sex_pdx::spindle_history::OP {
             // The terminal on the desktop is up and asking for its history: a system on
             // trial after an update has started well enough to keep.
             if crate::spindle_history::live(caller) { crate::updater::on_healthy(); }
-            if let Some(value)=history.handle(&vfs::RAMFS,caller,crate::spindle_history::live(caller),msg.arg0,msg.arg1,msg.arg2,&mut durable_history){pdx_reply(caller,value);}
+            if let Some(value)=history.handle(&vfs::RAMFS,caller,crate::spindle_history::live(caller),msg.arg0,msg.arg1,msg.arg2,&mut durable_history){reply_fast_direct!(caller,value);}
             continue;
         }
 
@@ -393,7 +428,7 @@ pub extern "C" fn trampoline_main() {
                     caller, reply
                 );
             }
-            pdx_reply(caller, reply);
+            reply_fast_direct!(caller, reply);
         }
     }
 }

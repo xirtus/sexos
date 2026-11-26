@@ -120,7 +120,8 @@ def main():
         assert 'remote: refused' in r.stdout, r.stdout
 
         line('fetch http://10.0.2.2/x x.txt')
-        until(r'The tether is using the network')
+        until(r'Connecting to 10\.0\.2\.2:80')
+        until(r'fetch: could not connect')
 
         s2 = len(t())
         line('tether off')

@@ -122,7 +122,8 @@ crates = [
   "apps/burlesque/Cargo.toml",
   "apps/corset/Cargo.toml",
   "apps/filigree/Cargo.toml",
-  "apps/cabaret/Cargo.toml"
+  "apps/cabaret/Cargo.toml",
+  "apps/tailor/Cargo.toml"
 ]
 
 [[stage]]
@@ -1086,6 +1087,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/cabaret/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/cabaret"
 dest_artifact = "iso_root/programs/cabaret"
+
+# Tailor: native multi-provider AI coding agent (Gemini, Claude, Codex) on sex-app + shibari.
+[[stage]]
+id = "build_tailor"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/tailor/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/tailor"
+dest_artifact = "iso_root/programs/tailor"
 
 [[stage]]
 id = "copy_limine_cfg"

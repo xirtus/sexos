@@ -159,6 +159,6 @@ fn real_535_firmware() {
     let rm = fw::gsp_rm(&gsp, Chip::decode(0x174000a1).unwrap().signature_section()).unwrap();
     assert_eq!((rm.image.len(), rm.signature.len()), (0x2448000, 0x1000));
     assert_eq!(sex_gpu_nv::elf::section(&gsp, ".fwversion").unwrap(), b"535.113.01\0");
-    let sizes = sex_gpu_nv::boot::Sizes::for_firmware(&Chip::decode(0x174000a1).unwrap(), &sex_gpu_nv::boot::Firmware { booter_load: &booter_load, bootloader: &bl, gsp: &gsp }).unwrap();
+    let sizes = sex_gpu_nv::boot::Sizes::for_firmware(&Chip::decode(0x174000a1).unwrap(), &sex_gpu_nv::boot::Firmware { booter_load: &booter_load, booter_unload: None, bootloader: &bl, gsp: &gsp }).unwrap();
     assert!(sizes.total() < 40 << 20, "GPU-visible memory for the boot: {} bytes", sizes.total());
 }

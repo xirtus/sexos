@@ -309,7 +309,28 @@ pub fn control_button_pixel(
     bg
 }
 
-/// Modern Apple-style translucent SilkBar glass pixel at row `y` (bar height `bar_h`).
+/// Candy & Lavender SilkBar palette constants (`0x00RRGGBB`),
+/// aligned with `sex_theme::candy_lavender`.
+pub const SILKBAR_DARK_TOP: u32 = 0x0021_1635;
+pub const SILKBAR_DARK_BOTTOM: u32 = 0x0031_224C;
+pub const SILKBAR_DARK_SPECULAR: u32 = 0x00EC_DFFF;
+pub const SILKBAR_DARK_HAIRLINE: u32 = 0x00B8_8CFF;
+pub const SILKBAR_DARK_PILL_FILL: u32 = 0x003D_2B5E;
+pub const SILKBAR_DARK_PILL_RIM: u32 = 0x00C9_A8FF;
+
+pub const SILKBAR_LIGHT_TOP: u32 = 0x00F1_E8FF;
+pub const SILKBAR_LIGHT_BOTTOM: u32 = 0x00E4_D6FC;
+pub const SILKBAR_LIGHT_SPECULAR: u32 = 0x00FD_FAFF;
+pub const SILKBAR_LIGHT_HAIRLINE: u32 = 0x00A7_8BFA;
+pub const SILKBAR_LIGHT_PILL_FILL: u32 = 0x00FA_F6FF;
+pub const SILKBAR_LIGHT_PILL_RIM: u32 = 0x00B8_9CF8;
+
+pub const SILKBAR_ORCHID_ACCENT: u32 = 0x00A7_8BFA;
+pub const SILKBAR_ORCHID_GLOW: u32 = 0x00D8_B4FE;
+
+/// Smooth, modern candy-lavender frosted glass SilkBar pixel at row `y` (bar height `bar_h`).
+/// Renders a vertical candy-lavender frosted gradient with a crisp 1px pastel-lavender
+/// specular highlight along the top edge and a soft orchid bottom hairline.
 /// Adapts cleanly to Dark, Light, HighContrast, and Reduce-Transparency modes.
 #[inline]
 pub const fn bar_glass_pixel(
@@ -321,46 +342,167 @@ pub const fn bar_glass_pixel(
     reduce_transparency: bool,
 ) -> u32 {
     if bar_h == 0 { return panel_fill; }
+    let grad_t = if bar_h <= 1 {
+        0u8
+    } else {
+        let clamped = if y >= bar_h { bar_h - 1 } else { y };
+        ((clamped * 255) / (bar_h - 1)) as u8
+    };
     match mode_id {
         MODE_HIGH_CONTRAST => {
             if y + 1 >= bar_h { 0x00FF_FFFF } else { 0x0000_0000 }
         }
         MODE_DARK => {
-            // Sleek dark translucent obsidian glass blended smoothly over wallpaper.
-            let tint = 0x0015_1520;
+            // Deep-plum / lavender-velvet top -> translucent lavender-lilac sheen bottom.
             let body = if reduce_transparency {
                 panel_fill & 0x00FF_FFFF
             } else {
-                mix_u8(blurred_wall & 0x00FF_FFFF, tint, 190)
+                let tint = mix_u8(SILKBAR_DARK_TOP, SILKBAR_DARK_BOTTOM, grad_t);
+                mix_u8(blurred_wall & 0x00FF_FFFF, tint, 198)
             };
             if y == 0 {
-                // Delicate specular sheen along the top edge.
-                mix_u8(body, 0x00FF_FFFF, 22)
+                // Crisp 1px pastel-lavender specular highlight along the top edge.
+                mix_u8(body, SILKBAR_DARK_SPECULAR, 78)
             } else if y + 1 >= bar_h {
-                // Subtle translucent bottom hairline separator.
-                mix_u8(body, 0x00FF_FFFF, 34)
+                // Soft orchid bottom hairline separator.
+                mix_u8(body, SILKBAR_DARK_HAIRLINE, 118)
             } else {
                 body
             }
         }
         _ => {
-            // Airy frosted white/pearl macOS-style menu bar.
-            let tint = 0x00F5_F4F9;
+            // Airy pastel-lavender top -> soft orchid-lilac frosted glass bottom.
             let body = if reduce_transparency {
                 panel_fill & 0x00FF_FFFF
             } else {
-                mix_u8(blurred_wall & 0x00FF_FFFF, tint, 224)
+                let tint = mix_u8(SILKBAR_LIGHT_TOP, SILKBAR_LIGHT_BOTTOM, grad_t);
+                mix_u8(blurred_wall & 0x00FF_FFFF, tint, 226)
             };
             if y == 0 {
-                mix_u8(body, 0x00FF_FFFF, 96)
+                // Crisp 1px pastel-lavender specular highlight along the top edge.
+                mix_u8(body, SILKBAR_LIGHT_SPECULAR, 160)
             } else if y + 1 >= bar_h {
-                // Crisp subtle hairline separator.
-                mix_u8(body, 0x009E_9AA8, 120)
+                // Soft orchid bottom hairline separator.
+                mix_u8(body, SILKBAR_LIGHT_HAIRLINE, 138)
             } else {
                 body
             }
         }
     }
+}
+
+/// Smooth anti-aliased frosted candy-lavender pill framing a SilkBar cluster or badge
+/// inside box `(bx, by, bw, bh)`. Uses a half-pixel rounded-rectangle SDF with a 1px
+/// anti-aliased edge, subtle vertical lavender frost, and crisp pastel-lavender rim.
+#[inline]
+pub fn candy_pill_pixel(
+    x: usize,
+    y: usize,
+    bx: usize,
+    by: usize,
+    bw: usize,
+    bh: usize,
+    scale: usize,
+    mode_id: u8,
+    accent_glow: bool,
+    bg: u32,
+) -> u32 {
+    let s = scale.max(1);
+    let pad_y = 2 * s;
+    let ph = bh.saturating_sub(2 * pad_y);
+    let pw = bw;
+    if pw < 6 * s || ph < 6 * s { return bg; }
+    let left = bx;
+    let top = by + pad_y;
+    if x < left || x >= left + pw || y < top || y >= top + ph { return bg; }
+
+    // Full capsule / smooth pill radius (clamped to ph/2, max 8*s).
+    let r = (ph / 2).min(8 * s) as i32;
+    let r2 = r * 2;
+    let px2 = (x * 2 + 1) as i32;
+    let py2 = (y * 2 + 1) as i32;
+    let x_l = (left * 2) as i32 + r2;
+    let x_r = ((left + pw) * 2) as i32 - r2;
+    let y_t = (top * 2) as i32 + r2;
+    let y_b = ((top + ph) * 2) as i32 - r2;
+    let cx = px2.clamp(x_l, x_r);
+    let cy = py2.clamp(y_t, y_b);
+    let dx = px2 - cx;
+    let dy = py2 - cy;
+    let d2 = dx * dx + dy * dy;
+    let r2_sq = r2 * r2;
+    if d2 >= r2_sq { return bg; }
+
+    // Crisp straight edges (d = r2 - 1) with smooth anti-aliasing on curved corners.
+    let aa_inner = (r2 - 1).max(1);
+    let aa_sq = aa_inner * aa_inner;
+    let cov: u8 = if d2 <= aa_sq {
+        255
+    } else {
+        let num = (r2_sq - d2).max(0) as u32;
+        let den = (r2_sq - aa_sq).max(1) as u32;
+        ((num * 255) / den).min(255) as u8
+    };
+
+    // Soft 1px inner rim check (top edge slightly brighter for glass sheen).
+    let rim_inner = (r2 - 2 * s as i32).max(1);
+    let on_rim = d2 >= rim_inner * rim_inner
+        || (x < left + s)
+        || (x + s >= left + pw)
+        || (y < top + s)
+        || (y + s >= top + ph);
+    let on_top_edge = y < top + s;
+
+    if mode_id == MODE_HIGH_CONTRAST {
+        let px = if on_rim { 0x00FF_FFFF } else { bg };
+        return mix_u8(bg, px, cov);
+    }
+
+    let local_t = if ph <= 1 { 0u8 } else { (((y - top) * 255) / (ph - 1)) as u8 };
+    let mut fill = match mode_id {
+        MODE_DARK => {
+            let base_fill = if accent_glow {
+                mix_u8(SILKBAR_DARK_PILL_FILL, SILKBAR_ORCHID_ACCENT, 42)
+            } else {
+                SILKBAR_DARK_PILL_FILL
+            };
+            let top_tint = mix_u8(base_fill, SILKBAR_DARK_SPECULAR, 24);
+            let pill_col = mix_u8(top_tint, base_fill, local_t);
+            mix_u8(bg, pill_col, if accent_glow { 148 } else { 126 })
+        }
+        _ => {
+            let base_fill = if accent_glow {
+                mix_u8(SILKBAR_LIGHT_PILL_FILL, SILKBAR_ORCHID_GLOW, 38)
+            } else {
+                SILKBAR_LIGHT_PILL_FILL
+            };
+            let top_tint = mix_u8(base_fill, 0x00FF_FFFF, 56);
+            let pill_col = mix_u8(top_tint, base_fill, local_t);
+            mix_u8(bg, pill_col, if accent_glow { 164 } else { 146 })
+        }
+    };
+
+    if on_rim {
+        let (rim_col, rim_a) = match mode_id {
+            MODE_DARK => {
+                if on_top_edge {
+                    (SILKBAR_DARK_SPECULAR, if accent_glow { 96 } else { 72 })
+                } else {
+                    (SILKBAR_DARK_PILL_RIM, if accent_glow { 92 } else { 62 })
+                }
+            }
+            _ => {
+                if on_top_edge {
+                    (0x00FF_FFFF, 155)
+                } else {
+                    (SILKBAR_LIGHT_PILL_RIM, if accent_glow { 116 } else { 88 })
+                }
+            }
+        };
+        fill = mix_u8(fill, rim_col, rim_a);
+    }
+
+    mix_u8(bg, fill, cov)
 }
 
 /// Modern rounded pill/dot workspace indicator inside box `(bx, by, bw, bh)`.

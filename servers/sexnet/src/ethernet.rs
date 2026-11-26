@@ -208,7 +208,7 @@ impl<H:Hardware> Driver<H>{
     pub fn advance_with_receive(&mut self,now:u64,receive:bool)->Option<Event>{
         if !self.active(){return None;}
         if now<self.last{self.fail(Failure::Clock);return None;}self.last=now;
-        if self.phase!=Phase::Running{
+        if !matches!(self.phase,Phase::Running|Phase::Link){
             self.turns+=1;if now-self.started>=WAIT_TICKS||self.turns>=WAIT_TURNS{self.fail(Failure::Deadline);return None;}
         }
         match self.phase{
@@ -344,12 +344,24 @@ impl<H:Hardware> Driver<H>{
         }
         None
     }
+    /// Whether the PHY currently reports link up; `None` if the device stopped answering.
+    pub fn link_up(&mut self)->Option<bool>{
+        if self.realtek(){rtl::link(&mut self.hardware)}
+        else{let status=self.hardware.read(nic::STATUS);if status==u32::MAX{None}else{Some(status&2!=0)}}
+    }
     pub fn send(&mut self,packet:&[u8],now:u64)->Result<(u64,u32,usize,u64),SendError>{
         if self.phase==Phase::Quarantined{return Err(SendError::Quarantined);}
         if self.phase!=Phase::Running{return Err(SendError::NotReady);}
         if self.pending.is_some(){return Err(SendError::Busy);}
         if !(14..=MAX_FRAME).contains(&packet.len()){return Err(SendError::Length);}
         if now<self.last{self.fail(Failure::Clock);return Err(SendError::Quarantined);}
+        // Skip TX while link is down instead of handing a descriptor to a disconnected
+        // MAC that will never retire it and trip Failure::Deadline -> Phase::Quarantined.
+        match self.link_up(){
+            None=>{self.fail(Failure::Registers);return Err(SendError::Quarantined);}
+            Some(false)=>{self.dropped=self.dropped.saturating_add(1);return Err(SendError::NotReady);}
+            Some(true)=>{}
+        }
         let Some(sequence)=self.sent.checked_add(1)else{self.fail(Failure::Sequence);return Err(SendError::Quarantined);};
         self.last=now;
         let index=self.tx;let length=packet.len().max(60);let data=TX_DATA+index*BUFFER;

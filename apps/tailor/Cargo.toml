@@ -1,0 +1,16 @@
+[package]
+name = "tailor"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Tailor: native multi-provider AI coding agent for SexOS"
+
+[[bin]]
+name = "tailor"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+shibari = { path = "../../crates/shibari" }
+tailor-core = { path = "../../crates/tailor-core" }

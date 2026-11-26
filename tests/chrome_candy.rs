@@ -215,3 +215,35 @@ fn silkbar_capsule_and_animated_workspace_pill_render_in_dark_and_light() {
     let (dot, mid, pill) = (count(0), count(128), count(255));
     assert!(dot < mid && mid < pill, "dot={dot} mid={mid} pill={pill}");
 }
+
+#[test]
+fn candy_lavender_silkbar_gradient_and_pills() {
+    let wall = 0x002A_2426;
+    for mode in [MODE_DARK, MODE_LIGHT] {
+        let top_spec = bar_glass_pixel(0, 28, wall, mode, 0x0018_1825, false);
+        let upper = bar_glass_pixel(2, 28, wall, mode, 0x0018_1825, false);
+        let lower = bar_glass_pixel(25, 28, wall, mode, 0x0018_1825, false);
+        let bottom_line = bar_glass_pixel(27, 28, wall, mode, 0x0018_1825, false);
+        // Smooth vertical candy-lavender gradient: upper and lower rows differ,
+        // specular top highlight and orchid bottom hairline are distinct.
+        assert_ne!(upper, lower, "mode={mode} should render a vertical gradient");
+        assert_ne!(top_spec, upper, "mode={mode} should have a 1px specular top highlight");
+        assert_ne!(bottom_line, lower, "mode={mode} should have an orchid bottom hairline");
+        // Lavender tint: blue channel strictly exceeds green channel (not flat grey).
+        let g = (upper >> 8) & 0xFF;
+        let b = upper & 0xFF;
+        assert!(b > g + 15, "mode={mode} bar must be lavender-tinted, got 0x{upper:06X}");
+
+        // Anti-aliased candy pill: corner pixel outside radius stays bg, interior changes.
+        let bg = upper;
+        let corner = candy_pill_pixel(10, 4, 10, 2, 80, 24, 1, mode, false, bg);
+        let center = candy_pill_pixel(50, 14, 10, 2, 80, 24, 1, mode, false, bg);
+        let glow_center = candy_pill_pixel(50, 14, 10, 2, 80, 24, 1, mode, true, bg);
+        assert_eq!(corner, bg, "mode={mode} pill corner must be smoothly rounded");
+        assert_ne!(center, bg, "mode={mode} pill interior must render frosted lavender");
+        assert_ne!(glow_center, center, "mode={mode} accent_glow pill should add soft orchid tint");
+    }
+    // High contrast pill draws crisp white rim and leaves interior black.
+    assert_eq!(candy_pill_pixel(50, 14, 10, 2, 80, 24, 1, MODE_HIGH_CONTRAST, false, 0), 0);
+    assert_eq!(candy_pill_pixel(50, 4, 10, 2, 80, 24, 1, MODE_HIGH_CONTRAST, false, 0), 0x00FF_FFFF);
+}

@@ -322,7 +322,7 @@ mod driver_read {
         let mut r=Rig{sq:vec![0;64*16],cq:vec![0;64*4],db:Box::new([0;2]),
             bounce:(0..bounces).map(|i|vec![0x1111_1111_1111_1111u64*(i as u64+1);((BLOCK_CMD_RUN+PAGE_SIZE)/8)as usize]).collect(),
             prp:vec![0;ioq::MAX_IN_FLIGHT*32]};
-        NVME_CMD_RUN.store(run,Ordering::SeqCst);NVME_IO_DEPTH.store(64,Ordering::SeqCst);
+        NVME_CMD_RUN.store(run,Ordering::SeqCst);NVME_LOAN_CMD_RUN.store(run,Ordering::SeqCst);NVME_IO_DEPTH.store(64,Ordering::SeqCst);
         unsafe{
             LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;NOW=10;BATCH_WAIT=true;BLOCK_LOAN=0;
             CQ_PTR=r.cq.as_mut_ptr();DOORBELLS=r.db.as_ptr();DEST_PTR=core::ptr::null();DEST_LEN=0;
@@ -352,7 +352,7 @@ mod driver_read {
     fn unrig(){unsafe{
         READ_LEASE=None;WRITE_LEASE=None;SPARE_BOUNCE=[None,None];for l in PRP_LEASES.iter_mut(){*l=None;}
         BATCH_WAIT=false;BLOCK_LOAN=0;CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();NVME_IO_STATE.ready=false;
-        NVME_CMD_RUN.store(BLOCK_CMD_RUN,Ordering::SeqCst);NVME_IO_DEPTH.store(16,Ordering::SeqCst);
+        NVME_CMD_RUN.store(BLOCK_CMD_RUN,Ordering::SeqCst);NVME_LOAN_CMD_RUN.store(BLOCK_CMD_RUN,Ordering::SeqCst);NVME_IO_DEPTH.store(16,Ordering::SeqCst);
     }}
 
     #[test]fn batch_read_sends_every_command_with_one_doorbell_and_reaps_in_any_order(){
