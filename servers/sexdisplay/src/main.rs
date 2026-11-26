@@ -3609,9 +3609,12 @@ fn tray_menu_rect(w: usize, bar: usize, scale: u32) -> Option<glass::Rect> {
     }
 }
 /// The tray menu the Shell opened: quick settings or the calendar.
+/// The calendar month last logged while the calendar stays open (None once it closes).
+static mut TRAY_CAL_LOGGED: Option<(u32, u32, bool)> = None;
 fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene::SceneSnapshot) {
     use sex_pdx::tray::{self, Menu};
     let view = unsafe { TRAY_VIEW };
+    if view.menu != Menu::Calendar { unsafe { TRAY_CAL_LOGGED = None; } }
     if view.menu == Menu::None { return; }
     let scale = scene.metrics.scale();
     let s = scale as usize;
@@ -3706,8 +3709,10 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
                 tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, r.1 + r.3.saturating_sub(line) / 2, bg, scale, r.2);
             }
             unsafe {
+                // The menu's slide redraws it every frame: log each month shown once.
                 static mut CAL_BUDGET: u32 = 8;
-                if CAL_BUDGET > 0 { CAL_BUDGET -= 1; sex_pdx::serial_record!("[display.tray.calendar] year={} month={} first={} days={} today={}", year, month, first, days, if this_month { today.day } else { 0 }); }
+                let shown = Some((year as u32, month as u32, this_month));
+                if TRAY_CAL_LOGGED != shown && CAL_BUDGET > 0 { TRAY_CAL_LOGGED = shown; CAL_BUDGET -= 1; sex_pdx::serial_record!("[display.tray.calendar] year={} month={} first={} days={} today={}", year, month, first, days, if this_month { today.day } else { 0 }); }
             }
         }
         Menu::None => {}

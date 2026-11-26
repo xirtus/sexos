@@ -19,3 +19,10 @@ Self-wait: `scripts/check_self_wait.py` gains an `ACPI_AUX_COHORTS` entry for th
 keyboard proof and Host regressions refused ACPI's task 50 timed polls.
 
 No syscall ABI change. No Wi-Fi or tether code touched.
+
+Follow-up in this PR (a #823 regression found by this PR's Desktop shell gate): the
+candy tray menu slide redraws the calendar on every animation frame, which spent
+`[display.tray.calendar]`'s 8-line budget before `tray_gate.py` clicked Next. Display
+now logs each month once per opening (`TRAY_CAL_LOGGED`, reset when the calendar
+closes). `scripts/bt_panel_gate.py` now reports where and how the panel area still
+differs after Escape.
