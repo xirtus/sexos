@@ -2186,12 +2186,6 @@ impl Browser {
             return;
         }
 
-        // 6. Right-click inside the browser viewport opens the frosted lavender context menu.
-        if self.in_frame.is_none() && wy >= bar_h && matches!(p.kind, Kind::Down { button: 2 }) {
-            self.open_context_menu(wx, wy);
-            return;
-        }
-
         let (x, y) = (wx - px0, wy - bar_h);
         let (px, py) = (x, y + self.scroll);
         // Over a frame: the frame's page has the pointer, in its own coordinates.
@@ -2243,6 +2237,9 @@ impl Browser {
         if hover_changed { self.relayout(); self.draw(); }
         match p.kind {
             Kind::Wheel { steps } if !kept => self.scroll_by(-steps as i32 * 40),
+            Kind::Down { button: 2 } if !kept && y >= 0 && self.in_frame.is_none() => {
+                self.open_context_menu(wx, wy);
+            }
             Kind::Up { button: 0 } if !kept && y >= 0 => {
                 let i = match (link, pressed) { (Some(n), Some(m)) if n == m => self.page.links.iter().position(|l| l.node == n), _ => None };
                 if let Some(i) = i {
