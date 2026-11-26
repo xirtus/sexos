@@ -23,12 +23,13 @@ use sex_app::{files, nav, typed, Event, Nav, Window};
 use sex_mesh::canvas::{mix, Canvas, Glyphs, CELL_H, CELL_W};
 use sex_mesh::chart::{self, Area, Style};
 use sex_mesh::history::{self, History};
-use sex_mesh::layout::{self, Action, Tab, PAD, ROW_H, TOP};
+use sex_mesh::layout::{self, Action, HoverTarget, Tab, PAD, ROW_H, TAB_H, TOP};
 use sex_mesh::line::Line;
 use sex_pdx::app_pointer::Kind;
 use sex_pdx::fs::runs;
 use sex_pdx::system_stats as stats;
 use sex_pdx::mesh_stats as mesh;
+use sex_theme::candy_ui::{button_text_color, ButtonState, ButtonStyle, CandyPalette};
 
 const MAX: usize = 96;
 const PERIOD_MS: u64 = 1000;
@@ -39,15 +40,11 @@ const CORES: usize = 16;
 const RUNS_BYTES: usize = 8192;
 const GRANT_LINES: usize = 96;
 
-const BG: u32 = 0x0014161C;
-const PANEL: u32 = 0x001D2029;
-const TEXT: u32 = sex_pdx::desktop_style::TEXT;
-const DIM: u32 = 0x008A93A6;
-const ACCENT: u32 = sex_pdx::desktop_style::FOCUS;
-const CPU: u32 = 0x005AC8FA;
-const MEMORY: u32 = 0x00A78BFA;
-const CALLS: u32 = 0x0034D399;
-const DISK: u32 = 0x00F59E0B;
+const PAL: CandyPalette = CandyPalette::dark();
+const CPU: u32 = PAL.sky;
+const MEMORY: u32 = PAL.accent;
+const CALLS: u32 = PAL.mint;
+const DISK: u32 = PAL.honey;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -74,6 +71,8 @@ struct Mesh {
     /// First list line shown, and the chosen program (domain, task).
     top: usize,
     chosen: Option<(u32, u32)>,
+    hovered: Option<HoverTarget>,
+    pressed: Option<HoverTarget>,
     prev: Sample,
     now: Sample,
     cpu: History<SPAN>,
@@ -92,7 +91,7 @@ struct Mesh {
 }
 
 static mut MESH: Mesh = Mesh {
-    tab: Tab::Processes, top: 0, chosen: None, prev: Sample::empty(), now: Sample::empty(),
+    tab: Tab::Processes, top: 0, chosen: None, hovered: None, pressed: None, prev: Sample::empty(), now: Sample::empty(),
     cpu: History::new(), cores: [const { History::new() }; CORES], memory: History::new(), calls: History::new(), disk: History::new(),
     runs: [0; RUNS_BYTES], runs_len: 0, runs_ok: true, runs_seen: 0, status: Line::new(),
     grants: [const { Line::new() }; GRANT_LINES], grant_count: 0,
@@ -270,13 +269,30 @@ impl Mesh {
 
     fn pointer(&mut self, window: &Window, p: sex_pdx::app_pointer::Pointer) -> bool {
         let (w, h) = window.size();
+        let (wi, hi) = (w as i32, h as i32);
+        let target = layout::hover(self.tab, p.x as i32, p.y as i32, wi, hi);
         match p.kind {
-            Kind::Down { button: 0 } => match layout::click(self.tab, p.x as i32, p.y as i32, w as i32, h as i32) {
-                Some(Action::Show(t)) => self.show(t, "mouse"),
-                Some(Action::Select(row)) => self.choose(self.top + row),
-                Some(Action::End) => self.end(window.target),
-                Some(Action::Scroll(_)) | None => return false,
-            },
+            Kind::Move => {
+                let changed = self.hovered != target;
+                self.hovered = target;
+                return changed;
+            }
+            Kind::Up { button: 0 } => {
+                let changed = self.pressed.is_some() || self.hovered != target;
+                self.pressed = None;
+                self.hovered = target;
+                return changed;
+            }
+            Kind::Down { button: 0 } => {
+                self.hovered = target;
+                self.pressed = target;
+                match layout::click(self.tab, p.x as i32, p.y as i32, wi, hi) {
+                    Some(Action::Show(t)) => self.show(t, "mouse"),
+                    Some(Action::Select(row)) => self.choose(self.top + row),
+                    Some(Action::End) => self.end(window.target),
+                    Some(Action::Scroll(_)) | None => return false,
+                }
+            }
             Kind::Wheel { steps } => self.top = if steps > 0 { self.top.saturating_sub(steps as usize) } else { self.top + (-(steps as i32)) as usize },
             _ => return false,
         }
@@ -323,6 +339,16 @@ impl Mesh {
         self.grant_count = n;
     }
 
+    fn control_state(&self, target: HoverTarget) -> ButtonState {
+        if self.pressed == Some(target) {
+            ButtonState::Pressed
+        } else if self.hovered == Some(target) {
+            ButtonState::Hover
+        } else {
+            ButtonState::Rest
+        }
+    }
+
     fn render(&mut self, window: &mut Window) {
         let (w, h) = window.size();
         let px = window.pixels();
@@ -330,13 +356,15 @@ impl Mesh {
         let h = h.clamp(64, px.len() / w);
         let Some(mut c) = Canvas::new(&mut px[..w * h], w, h) else { return };
         let g = unsafe { &mut *core::ptr::addr_of_mut!(GLYPHS) };
-        c.fill(0, 0, w as i32, h as i32, BG);
+        c.fill(0, 0, w as i32, h as i32, PAL.bg);
+        c.candy_toolbar(0, 0, w as i32, TAB_H + 3, &PAL);
         for t in layout::TABS {
             let r = layout::tab_rect(t);
             let on = t == self.tab;
-            c.fill(r.x, r.y, r.w, r.h, if on { PANEL } else { BG });
-            if on { c.fill(r.x, r.y + r.h - 2, r.w, 2, ACCENT); }
-            c.text(g, r.x + PAD, r.y + 3, t.label(), if on { TEXT } else { DIM });
+            let st = self.control_state(HoverTarget::Tab(t));
+            c.candy_tab(r.x, r.y, r.w, r.h, on, st, &PAL);
+            let ink = if on { PAL.text } else if st == ButtonState::Hover { PAL.text } else { PAL.text_dim };
+            c.text(g, r.x + PAD, r.y + 3, t.label(), ink);
         }
         match self.tab {
             Tab::Processes => self.draw_programs(&mut c, g, window.target),
@@ -356,7 +384,7 @@ impl Mesh {
 
     fn draw_programs(&mut self, c: &mut Canvas, g: &mut Glyphs, me: u32) {
         let (w, h) = (c.w as i32, c.h as i32);
-        c.text(g, PAD, TOP, b"NAME             DOMAIN    CPU     MEMORY  CALLS/S    READS/S  GRANTS", DIM);
+        c.text(g, PAD, TOP, b"NAME             DOMAIN    CPU     MEMORY  CALLS/S    READS/S  GRANTS", PAL.text_dim);
         let fit = layout::rows_fit(h);
         let s = &self.now;
         let chosen = self.chosen_index();
@@ -365,27 +393,37 @@ impl Mesh {
         self.top = self.top.min(s.count.saturating_sub(1));
         for (k, r) in s.rows[self.top..s.count].iter().take(fit).enumerate() {
             let y = layout::list_top() + k as i32 * ROW_H;
-            if chosen == Some(self.top + k) { c.fill(0, y, w, ROW_H, mix(BG, ACCENT, 60)); c.fill(0, y, 3, ROW_H, ACCENT); }
+            if chosen == Some(self.top + k) {
+                c.candy_selection_row(4, y, w - 8, ROW_H, 6, &PAL);
+            }
             let mut l: Line<128> = Line::new();
             name_into(&mut l, r.pd, 16);
             l.num(r.pd as u64, 6).put(b"  ").tenths(r.tenths).put(b" ").pages(r.pages).num(r.rate, 9).put(b" ").size(r.read_rate).put(b"/s").num(r.grants as u64, 5);
-            c.text(g, PAD, y + 1, l.as_bytes(), if r.pd == me { DIM } else { TEXT });
+            c.text(g, PAD, y + 1, l.as_bytes(), if r.pd == me { PAL.text_dim } else { PAL.text });
         }
         let bar = layout::button_bar(h);
-        c.fill(0, bar - 4, w, 1, PANEL);
+        c.candy_toolbar(0, bar - 4, w, h - (bar - 4), &PAL);
         let e = layout::end_button(w, h);
         let can_end = self.chosen.is_some_and(|(pd, _)| pd != me && is_program(pd));
-        c.fill(e.x, e.y, e.w, e.h, if can_end { mix(BG, 0x00E5484D, 160) } else { PANEL });
-        c.text(g, e.x + PAD, e.y + 2, layout::END_LABEL, if can_end { TEXT } else { DIM });
+        let style = if can_end { ButtonStyle::Danger } else { ButtonStyle::Disabled };
+        let st = if can_end { self.control_state(HoverTarget::End) } else { ButtonState::Rest };
+        c.candy_button(e.x, e.y, e.w, e.h, (e.h / 2).min(10), style, st, &PAL);
+        c.text(g, e.x + PAD, e.y + 2, layout::END_LABEL, button_text_color(style, &PAL));
         let left = if self.status.is_empty() { self.summary() } else { let mut l = Line::new(); l.put(self.status.as_bytes()); l };
         let room = ((e.x - 2 * PAD) / CELL_W as i32).max(0) as usize;
-        c.text(g, PAD, bar + 2, &left.as_bytes()[..left.len().min(room)], DIM);
+        c.text(g, PAD, bar + 2, &left.as_bytes()[..left.len().min(room)], PAL.text_dim);
     }
 
     fn graph<const N: usize>(c: &mut Canvas, g: &mut Glyphs, area: Area, title: &[u8], h: &History<N>, top: u32, color: u32) -> usize {
-        c.text(g, area.x, area.y, title, TEXT);
-        let plot = Area { x: area.x, y: area.y + CELL_H as i32 + 2, w: area.w, h: area.h - CELL_H as i32 - 2 };
-        chart::plot(c, plot, h, top, 3, Style { back: PANEL, grid: mix(PANEL, DIM, 50), line: color, fill: mix(PANEL, color, 70) })
+        c.candy_panel(area.x, area.y, area.w, area.h, 8, &PAL);
+        c.text(g, area.x + 8, area.y + 4, title, PAL.text);
+        let plot = Area {
+            x: area.x + 6,
+            y: area.y + CELL_H as i32 + 6,
+            w: (area.w - 12).max(4),
+            h: (area.h - CELL_H as i32 - 12).max(4),
+        };
+        chart::plot(c, plot, h, top, 3, Style { back: PAL.well, grid: mix(PAL.well, PAL.hairline, 70), line: color, fill: mix(PAL.well, color, 78) })
     }
 
     fn draw_performance(&mut self, c: &mut Canvas, g: &mut Glyphs) {
@@ -433,11 +471,11 @@ impl Mesh {
         let lines: &[Line<160>];
         let hw_count;
         if grants {
-            c.text(g, PAD, TOP, b"DOMAIN           ORGAN (PKU KEY), CAPABILITIES AND WHOM IT MAY CALL", DIM);
+            c.text(g, PAD, TOP, b"DOMAIN           ORGAN (PKU KEY), CAPABILITIES AND WHOM IT MAY CALL", PAL.text_dim);
             lines = &self.grants[..self.grant_count];
             hw_count = 0;
         } else {
-            c.text(g, PAD, TOP, b"HARDWARE", DIM);
+            c.text(g, PAD, TOP, b"HARDWARE", PAL.text_dim);
             let s = &self.now;
             let mut n = 0;
             hw[n].put(b"Cores online      ").num(s.cores, 1); n += 1;
@@ -466,7 +504,7 @@ impl Mesh {
         for k in 0..fit.min(count.saturating_sub(self.top)) {
             let y = layout::list_top() + k as i32 * ROW_H;
             let text = if grants { lines[self.top + k].as_bytes() } else { hw[self.top + k].as_bytes() };
-            let color = if text.starts_with(b"    ") || text.starts_with(b"Not") || text.starts_with(b"and") { ACCENT } else { TEXT };
+            let color = if text.starts_with(b"    ") || text.starts_with(b"Not") || text.starts_with(b"and") { PAL.accent } else { PAL.text };
             c.text(g, PAD, y + 1, text, color);
         }
     }

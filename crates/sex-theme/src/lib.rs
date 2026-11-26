@@ -162,6 +162,8 @@ pub mod candy_lavender {
     pub const ORCHID_GLOW: u32 = solid(0xD8_B4FE);
 }
 
+pub mod candy_ui;
+
 #[cfg(test)]
 mod tests {
     use super::*;

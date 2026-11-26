@@ -38,13 +38,14 @@ const EXPORT: &[u8] = b"subscriptions.opml";
 const FEED_MAX: usize = 4 << 20;
 const EPISODE_MAX: usize = 64 << 20;
 
-const BACK: u32 = 0x0016_1820;
-const PANEL: u32 = 0x0020_232C;
-const ACCENT: u32 = 0x00E0_7A5F;
-const TEXT: u32 = 0x00E8_EAED;
-const DIM: u32 = 0x0080_868E;
-const SELECT: u32 = 0x002E_3442;
-const UNREAD: u32 = 0x0072_B7F2;
+use sex_theme::candy_ui::{draw_candy_selection_row, draw_candy_toolbar, CandyPalette};
+
+const PAL: CandyPalette = CandyPalette::dark();
+const BACK: u32 = PAL.bg;
+const ACCENT: u32 = PAL.accent;
+const TEXT: u32 = PAL.text;
+const DIM: u32 = PAL.text_dim;
+const UNREAD: u32 = PAL.sky;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -300,7 +301,7 @@ fn render(window: &mut Window, app: &App, small: &mut Face, big: &mut Face) {
     let (wi, hi) = (w as i32, h as i32);
     let mut c = Canvas { px: window.pixels(), w, h };
     c.fill(0, 0, wi, hi, BACK);
-    c.fill(0, 0, wi, 36, PANEL);
+    draw_candy_toolbar(c.px, c.w, c.h, 0, 0, wi, 36, &PAL);
     let cols = ((wi - 32) / small.w as i32).max(4) as usize;
     let rows = ((hi - LIST_Y - 34) / ROW).max(1) as usize;
     match app.mode {
@@ -311,7 +312,7 @@ fn render(window: &mut Window, app: &App, small: &mut Face, big: &mut Face) {
             let first = app.feed.saturating_sub(rows.saturating_sub(1));
             for (k, f) in app.subs.feeds.iter().enumerate().skip(first).take(rows) {
                 let y = LIST_Y + (k - first) as i32 * ROW;
-                if k == app.feed { c.fill(8, y - 2, wi - 16, ROW, SELECT); }
+                if k == app.feed { draw_candy_selection_row(c.px, c.w, c.h, 8, y - 2, wi - 16, ROW, 6, &PAL); }
                 let unread = app.unread(k);
                 let name = if f.title.is_empty() { f.url.as_str() } else { f.title.as_str() };
                 let tail = match app.loaded.get(k).and_then(|l| l.error.as_ref()) { Some(e) => format!("({e})"), None => format!("{unread} unread") };
@@ -328,7 +329,7 @@ fn render(window: &mut Window, app: &App, small: &mut Face, big: &mut Face) {
             let first = app.item.saturating_sub(rows.saturating_sub(1));
             for (k, it) in items.iter().enumerate().skip(first).take(rows) {
                 let y = LIST_Y + (k - first) as i32 * ROW;
-                if k == app.item { c.fill(8, y - 2, wi - 16, ROW, SELECT); }
+                if k == app.item { draw_candy_selection_row(c.px, c.w, c.h, 8, y - 2, wi - 16, ROW, 6, &PAL); }
                 let read = app.read.is_read(url, &it.id);
                 c.text(small, 16, y, if read { " " } else { "*" }, UNREAD, 20);
                 let mark = if it.enclosure.is_some() { " [episode]" } else { "" };

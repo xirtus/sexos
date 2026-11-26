@@ -70,6 +70,17 @@ pub fn end_button(w: i32, h: i32) -> Rect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action { Show(Tab), Select(usize), End, Scroll(i32) }
 
+/// Which interactive control the pointer currently hovers over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HoverTarget { Tab(Tab), End }
+
+/// Returns the interactive control under `(x, y)` for hover/pressed styling.
+pub fn hover(tab: Tab, x: i32, y: i32, w: i32, h: i32) -> Option<HoverTarget> {
+    if let Some(t) = tab_at(x, y) { return Some(HoverTarget::Tab(t)); }
+    if tab == Tab::Processes && end_button(w, h).contains(x, y) { return Some(HoverTarget::End); }
+    None
+}
+
 /// A left click at (x, y) in a window `w` by `h`, with `tab` showing.
 pub fn click(tab: Tab, x: i32, y: i32, w: i32, h: i32) -> Option<Action> {
     if let Some(t) = tab_at(x, y) { return Some(Action::Show(t)); }
@@ -116,11 +127,14 @@ mod tests {
         let e = end_button(w, h);
         assert!(e.x > 0 && e.y + e.h <= h);
         assert_eq!(click(Tab::Processes, e.x + 2, e.y + 2, w, h), Some(Action::End));
+        assert_eq!(hover(Tab::Processes, e.x + 2, e.y + 2, w, h), Some(HoverTarget::End));
         // On another tab the list and button are not there.
         assert_eq!(click(Tab::Grants, e.x + 2, e.y + 2, w, h), None);
+        assert_eq!(hover(Tab::Grants, e.x + 2, e.y + 2, w, h), None);
         assert_eq!(click(Tab::Grants, 40, first, w, h), None);
         let t = tab_rect(Tab::Hardware);
         assert_eq!(click(Tab::Grants, t.x + 3, t.y + 3, w, h), Some(Action::Show(Tab::Hardware)));
+        assert_eq!(hover(Tab::Grants, t.x + 3, t.y + 3, w, h), Some(HoverTarget::Tab(Tab::Hardware)));
         // Header line and button bar are not rows.
         assert_eq!(row_at(TOP + 1, h), None);
         assert_eq!(row_at(button_bar(h) + 1, h), None);

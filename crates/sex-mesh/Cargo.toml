@@ -7,3 +7,4 @@ description = "Mesh's pure parts: sample history, line graphs, text and layout i
 
 [dependencies]
 sex-font = { path = "../sex-font" }
+sex-theme = { path = "../sex-theme" }
