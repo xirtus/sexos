@@ -39,6 +39,7 @@ struct KeyVault {
     keeper: Keeper,
     gemini: Option<Knot>,
     claude: Option<Knot>,
+    claude_deepseek: Option<Knot>,
     codex: Option<Knot>,
 }
 
@@ -49,6 +50,7 @@ impl KeyVault {
             keeper: Keeper::new(salt, 8),
             gemini: None,
             claude: None,
+            claude_deepseek: None,
             codex: None,
         }
     }
@@ -57,6 +59,7 @@ impl KeyVault {
         match provider {
             Provider::Gemini => self.gemini,
             Provider::Claude => self.claude,
+            Provider::ClaudeDeepSeek => self.claude_deepseek,
             Provider::Codex => self.codex,
         }
     }
@@ -65,6 +68,7 @@ impl KeyVault {
         match provider {
             Provider::Gemini => self.gemini = Some(knot),
             Provider::Claude => self.claude = Some(knot),
+            Provider::ClaudeDeepSeek => self.claude_deepseek = Some(knot),
             Provider::Codex => self.codex = Some(knot),
         }
     }
@@ -103,8 +107,40 @@ impl KeyVault {
 
     fn load_from_files(&mut self, window: &mut Window) -> usize {
         let mut loaded = 0usize;
+        // 1. Load JSON key bundles first (supports gemini, claude, claude-deepseek, codex).
+        let mut jbuf = vec![0u8; 4096];
+        for path in [
+            b"/data/tailor/keys.json".as_slice(),
+            b"/media/Ventoy/tailor-keys.json".as_slice(),
+            b"/media/Ventoy/keys.json".as_slice(),
+            b"keys.json".as_slice(),
+        ] {
+            if let Ok(n) = files::read(window, path, &mut jbuf) {
+                if let Ok(raw) = core::str::from_utf8(&jbuf[..n]) {
+                    for (provider, secret) in tailor_core::parse_keys_json(raw) {
+                        if !self.has_key(provider)
+                            && self.store(provider, secret.as_bytes()).is_ok()
+                        {
+                            loaded += 1;
+                        }
+                    }
+                }
+            }
+            for b in &mut jbuf {
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+        }
+        // 2. Fallback to per-provider *.key files.
         let mut buf = vec![0u8; 512];
-        for provider in [Provider::Gemini, Provider::Claude, Provider::Codex] {
+        for provider in [
+            Provider::Gemini,
+            Provider::Claude,
+            Provider::ClaudeDeepSeek,
+            Provider::Codex,
+        ] {
+            if self.has_key(provider) {
+                continue;
+            }
             let abs = format!("/data/tailor/{}", provider.key_filename());
             let candidates = [abs.as_bytes(), provider.key_filename().as_bytes()];
             for path in candidates {

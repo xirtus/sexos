@@ -16,6 +16,7 @@ use crate::sse::{HttpSseDecoder, SseError, SseMessage, StreamEvent};
 pub enum Provider {
     Gemini,
     Claude,
+    ClaudeDeepSeek,
     Codex,
 }
 
@@ -24,6 +25,7 @@ impl Provider {
         match self {
             Self::Gemini => "gemini",
             Self::Claude => "claude",
+            Self::ClaudeDeepSeek => "claude-deepseek",
             Self::Codex => "codex",
         }
     }
@@ -32,6 +34,7 @@ impl Provider {
         match self {
             Self::Gemini => "Gemini",
             Self::Claude => "Claude",
+            Self::ClaudeDeepSeek => "Claude-DeepSeek",
             Self::Codex => "Codex",
         }
     }
@@ -40,6 +43,7 @@ impl Provider {
         match self {
             Self::Gemini => "generativelanguage.googleapis.com",
             Self::Claude => "api.anthropic.com",
+            Self::ClaudeDeepSeek => "api.deepseek.com",
             Self::Codex => "api.openai.com",
         }
     }
@@ -52,6 +56,7 @@ impl Provider {
         match self {
             Self::Gemini => "gemini-2.5-flash",
             Self::Claude => "claude-sonnet-4-20250514",
+            Self::ClaudeDeepSeek => "deepseek-chat",
             Self::Codex => "gpt-4.1",
         }
     }
@@ -60,6 +65,7 @@ impl Provider {
         match self {
             Self::Gemini => "gemini.key",
             Self::Claude => "claude.key",
+            Self::ClaudeDeepSeek => "claude-deepseek.key",
             Self::Codex => "codex.key",
         }
     }
@@ -68,6 +74,11 @@ impl Provider {
         let lower = s.trim();
         if lower.eq_ignore_ascii_case("gemini") || lower.eq_ignore_ascii_case("google") {
             Some(Self::Gemini)
+        } else if lower.eq_ignore_ascii_case("claude-deepseek")
+            || lower.eq_ignore_ascii_case("claude_deepseek")
+            || lower.eq_ignore_ascii_case("deepseek")
+        {
+            Some(Self::ClaudeDeepSeek)
         } else if lower.eq_ignore_ascii_case("claude") || lower.eq_ignore_ascii_case("anthropic") {
             Some(Self::Claude)
         } else if lower.eq_ignore_ascii_case("codex") || lower.eq_ignore_ascii_case("openai") {
@@ -76,6 +87,34 @@ impl Provider {
             None
         }
     }
+}
+
+/// Parses a JSON API key bundle into `(Provider, api_key)` pairs.
+///
+/// Accepts either flat string values (`{"gemini": "...", "claude-deepseek": "..."}`)
+/// or nested objects (`{"claude": {"api_key": "..."}}` / `"key"` / `"token"`).
+pub fn parse_keys_json(raw: &str) -> Vec<(Provider, String)> {
+    let mut out = Vec::new();
+    let Ok(JsonValue::Object(map)) = json::parse(raw) else {
+        return out;
+    };
+    for (k, v) in map {
+        let Some(provider) = Provider::from_name(&k) else {
+            continue;
+        };
+        let secret = v
+            .as_str()
+            .or_else(|| v.get("api_key").and_then(|val| val.as_str()))
+            .or_else(|| v.get("key").and_then(|val| val.as_str()))
+            .or_else(|| v.get("token").and_then(|val| val.as_str()));
+        if let Some(s) = secret {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                out.push((provider, String::from(trimmed)));
+            }
+        }
+    }
+    out
 }
 
 /// Complete HTTP/1.1 request ready to send over a TLS `sex_app::net::Duplex` connection.
@@ -104,8 +143,12 @@ pub fn build_http_request(
             let headers = format!("x-goog-api-key: {}\r\n", api_key);
             (path, body, headers)
         }
-        Provider::Claude => {
-            let path = String::from("/v1/messages");
+        Provider::Claude | Provider::ClaudeDeepSeek => {
+            let path = if provider == Provider::ClaudeDeepSeek {
+                String::from("/anthropic/v1/messages")
+            } else {
+                String::from("/v1/messages")
+            };
             let body = build_claude_body(model, system_prompt, messages, tools);
             let headers = format!(
                 "x-api-key: {}\r\nanthropic-version: 2023-06-01\r\n",
@@ -555,7 +598,9 @@ impl ProviderStreamParser {
         };
         match self.provider {
             Provider::Gemini => self.parse_gemini_chunk(&val, out),
-            Provider::Claude => self.parse_claude_chunk(msg.event.as_deref(), &val, out),
+            Provider::Claude | Provider::ClaudeDeepSeek => {
+                self.parse_claude_chunk(msg.event.as_deref(), &val, out)
+            }
             Provider::Codex => self.parse_codex_chunk(&val, out),
         }
     }
