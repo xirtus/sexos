@@ -78,7 +78,7 @@ def main():
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','cross-def.rs','cross-use.rs','identifier.rs','occurrences.rs','raw.rs','fstring.py','interpolation.py','template.js'):
+  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','cross-def.rs','cross-use.rs','identifier.rs','occurrences.rs','raw.rs','raw-multiline.rs','raw-scroll.rs','fstring.py','interpolation.py','template.js'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   m=expect(f'fetch http://10.0.2.2:{PORT}/untracked /data/quil/notes.txt',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   line('mkdir /data/quil/.git')
