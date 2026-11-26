@@ -188,7 +188,7 @@ def source_contract(root):
                       'ParkResult::NotOwner=>{(*task).wait_deadline.cancel();panic!("TIMED_WAIT_WITHOUT_ATTACHED_OWNER")}'):
             if token not in wait:raise ValueError('changed nonblocked cancellation')
         usb=texts['servers/sexusb/src/main.rs']
-        if 'letquiet=irq&&!queued&&!usb.changed&&!slept&&!usb.ether_active()&&!usb.bt_hid_active();' not in usb or 'sys_wait_self_ticks(ifquiet{32}else{1})' not in usb:
+        if 'letquiet=irq&&!queued&&!usb.changed&&!slept&&!usb.ether_active()&&!usb.bt_hid_active()&&!usb.uvc_active();' not in usb or 'sys_wait_self_ticks(ifquiet{32}else{1})' not in usb:
             raise ValueError('changed USB quiet predicate')
         net=texts['servers/sexnet/src/main.rs']
         envelope='letbefore=sex_pdx::get_ticks();sex_pdx::sys_wait_self_ticks(2).expect("BOOT_SELF_WAIT_AUTHORITY");letafter=sex_pdx::get_ticks();'
@@ -220,8 +220,8 @@ ACPI_AUX_COHORTS=(
  ('8e6bb20e7be6ff97c756986704690f9a5ad3791d77106b69de16bfcc5618590a','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'),
  # x17 WMI/charge (CTL_CHARGE) merged with OP_DEVICE_SLEEP and MWAIT _CST reporting (wait unchanged), 2026-11-20
  ('bebe39ef539901e45a8b979c2c9e2f17bbe30d4cff62abfb98e0283f61f67721','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'),
- # x17 battery/lid ref unwrap, _BIF fallback, 16th SSDT & _CST diagnostics (wait loop unchanged), 2026-11-26
- ('f59b57434505d32f467cb11f08059126f712f485bbd0a93b02c4100d63cfbdb9','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'))
+ # x17 battery/lid ref unwrap, _BIF fallback, 16th SSDT & _CST diagnostics + power::PROFILE/CTL_THERMAL_PROFILE (wait loop unchanged), 2026-11-26
+ ('f59b57434505d32f467cb11f08059126f712f485bbd0a93b02c4100d63cfbdb9','58d75780cd168c6538c0388da110fbc966e13b7cd169b20a012070ee75821884'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
@@ -353,16 +353,16 @@ def _task_ordinals_ok(records):
 # Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
- 'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
+ 'servers/silk-shell/src/main.rs': 'wait-v1:be9e938c6bbdc5e952457d2f9f366404b6d1a3bb14d3990b036606bee9a83069',
  'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
- 'crates/sex-pdx/src/crash_log.rs': '3104eb235e1e1d2d3840a5ea43ef39d5aa8cc95358a9d104494d9f14ba480997',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
+ 'crates/sex-pdx/src/crash_log.rs': '55481e34c541c7ce4fad78f03c3940d66cfbc331895e6c1d1803a984ad65de29',  # OP_HOTSWAP live server reload (no observer change), 2026-11-26
  'crates/sex-pdx/src/web.rs': '404f9c07116a41ef3ac80c797ffea6d54e008ca038aaac79fa7b4e81c5ca91c4',  # web protocol words for H2/H3 (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '7f9e3f565051eac895c851e0e58ea8f3c7934e326aa0ff096a0dc4ffa75afb30',  # retire purges handoff slots + IPC v2 teardown (no observer change), 2026-11-25
- 'kernel/src/service_restart.rs': '555bb544fde987179952f7f83e8fea945ce91f804996938e209e3f5ce4dfeaa8',  # restart tears down IPC v2 state, named hang limits (no observer change), 2026-11-25
- 'kernel/src/crash_log.rs': '9a34837711796f87b9d53de4be81116561eec80b7920866af1ef4723683dacee',  # OP_LOG_TAIL read-only log copy (no observer change), 2026-11-23
+ 'kernel/src/service_restart.rs': '2bb687b9f0bd3da1e5dd4c33ef67ab28cbbc792d8a162b40673f49745043437a',  # live server hotswap (no observer change), 2026-11-26
+ 'kernel/src/crash_log.rs': '3c41a4f593b5f82ed3687b97c9e5a6ab6feea9c0c4055e84828035e8ede6c155',  # OP_HOTSWAP syscall dispatch (no observer change), 2026-11-26
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 
