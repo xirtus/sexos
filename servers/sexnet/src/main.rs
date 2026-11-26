@@ -5394,14 +5394,14 @@ pub extern "C" fn _start() -> ! {
     let mut transfer_changes=0u64;
     let mut timed_waits=0u64;
     let mut net_irq=irq_wait::NetIrq::default();
-    let mut web=web::Service::new();let mut web_reply:Option<(u32,u64)>=None;
+    let mut web=web::Service::new();let mut web_replies:[Option<(u32,u64)>;16]=[None;16];
     loop {
         restriction.poll(&mut restricted::Kernel,|effect|match effect {
             sex_pdx::restricted_helper_provider::Effect::Scrub(subject)=>{
                 if let Some(owner)=outbound.owner().filter(|owner|owner.pd==subject.pd){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
                 if let Some(owner)=dns.owner().filter(|owner|owner.pd==subject.pd){dns.retire(owner,&mut DnsWire(transport.as_mut()));}
                 web.quarantine(subject.pd,transport.as_mut());
-                if web_reply.is_some_and(|(pd,_)|pd==subject.pd){web_reply=None;}
+                for slot in web_replies.iter_mut(){if slot.is_some_and(|(pd,_)|pd==subject.pd){*slot=None;}}
                 source_denials.retire(source_denial::Identity{pd:subject.pd,task:subject.task});
                 if pending_packet.as_ref().is_some_and(|f|!packet_owned_live(f,&outbound,&dns,network_config.as_ref())){pending_packet=None;}
                 restricted::scrub(subject)
@@ -5621,8 +5621,8 @@ pub extern "C" fn _start() -> ! {
         }
         poll_source_receipts(&mut seed,&mut clock,&mut trust);
         poll_source_denials(source_denials);
-        if let Some((pd,word))=web_reply{if restricted::denied(pd)||pdx_reply(pd,word)==0{web_reply=None;}}
-        let reply_pending=web_reply.is_some()||outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
+        for slot in web_replies.iter_mut(){if let Some((pd,word))=*slot{if restricted::denied(pd)||pdx_reply(pd,word)==0{*slot=None;}}}
+        let reply_pending=web_replies.iter().any(Option::is_some)||outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
         let pending=restriction.pending()||preparing||polling||reply_pending||seed.busy();
         let req = if pending {
             // One message per device turn; no startup polling loop can starve
@@ -5672,6 +5672,7 @@ pub extern "C" fn _start() -> ! {
                 req.type_id,req.caller_pd as u64,[req.arg0,req.arg1,req.arg2],|notice| {
                     outbound.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut ClientWire(transport.as_mut(),false));
                     web.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},transport.as_mut());
+                    for slot in web_replies.iter_mut(){if slot.is_some_and(|(pd,_)|pd==notice.target_pd){*slot=None;}}
                     dns.retire(jobs::Identity{pd:notice.target_pd,task:notice.task_id},&mut DnsWire(transport.as_mut()));
                     seed.retire(sex_pdx::entropy_seed::Identity{pd:notice.target_pd,task:notice.task_id});
                     clock.retire(sex_pdx::clock_source::Identity{pd:notice.target_pd,task:notice.task_id});
@@ -5709,10 +5710,15 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if req.type_id==sex_pdx::web::OP{
-            web_reply=Some((req.caller_pd,match network_request_owner(req.caller_pd,req.caller_task){
+            let word=match network_request_owner(req.caller_pd,req.caller_task){
                 Some(owner)=>web.handle(owner,req.arg0,req.arg1,transport.as_mut()),
                 None=>sex_pdx::web::reply((req.arg0&0xFF_FFFF)as u32,sex_pdx::web::DENIED,0),
-            }));
+            };
+            if pdx_reply(req.caller_pd,word)!=0{
+                let idx=web_replies.iter().position(|s|s.is_some_and(|(pd,_)|pd==req.caller_pd))
+                    .or_else(||web_replies.iter().position(|s|s.is_none()));
+                if let Some(i)=idx{web_replies[i]=Some((req.caller_pd,word));}
+            }
             continue;
         }
 

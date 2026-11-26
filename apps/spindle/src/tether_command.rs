@@ -339,6 +339,8 @@ impl Tether {
 
     /// Connecting or connected.
     pub fn active(&self) -> bool { self.phase != Phase::Idle }
+    /// Running a Wi-Fi benchmark sweep (`tether sweep`).
+    pub fn sweeping(&self) -> bool { self.sweep.active }
     /// Has a network call out (the shared region is in use).
     pub fn in_call(&self) -> bool { self.sent }
     /// True while a live control tether has >= 512 unsent scrollback lines, so `cat`
@@ -446,7 +448,6 @@ impl Tether {
             return;
         }
         if self.active() { sb.push(b"tether: already running (tether off first)."); return; }
-        if fetch_busy { sb.push(b"tether: a download is using the network; try again when it ends."); return; }
         if args == b"listen" || args.starts_with(b"listen ") {
             let rest = trim(&args[6..]);
             let port = if rest.is_empty() { Some(DEFAULT_PORT) } else { parse_port(rest) };
@@ -517,7 +518,8 @@ impl Tether {
 
     fn net_call(&mut self, kind: u8, value: u64, call: Call) { self.net_call_on(FLOW, kind, value, call) }
     fn net_call_on(&mut self, flow: u8, kind: u8, value: u64, call: Call) {
-        self.seq = (self.seq + 1) & 0x7F_FFFF;
+        // High bit 0x80_0000 keeps tether sequence numbers disjoint from `fetch` (0x00_0001..=0x7F_FFFF).
+        self.seq = 0x80_0000 | ((self.seq + 1) & 0x7F_FFFF);
         if sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(self.seq, kind, flow), value, 0).is_ok() {
             self.sent = true;
             self.sent_at = sex_pdx::get_ticks();
@@ -575,7 +577,7 @@ impl Tether {
     }
 
     /// Sends the next call when one is due. True when the screen may need drawing.
-    pub fn step(&mut self, sb: &mut Scrollback) -> bool {
+    pub fn step(&mut self, sb: &mut Scrollback, region_busy: bool) -> bool {
         if self.phase == Phase::Idle { return false; }
         let now = sex_pdx::get_ticks();
         // sexnet keeps one answer per program waiting: when another command's call
@@ -597,6 +599,7 @@ impl Tether {
             self.fail(sb, "could not reach the other computer (is tether_host.py running, and the firewall open?)");
             return true;
         }
+        if region_busy { return false; }
         let Some(region) = net() else { self.phase = Phase::Idle; sb.push(b"tether: no network here."); return true };
         match self.phase {
             Phase::Up => self.net_call(w::UP, 0, Call::Plain),
@@ -680,6 +683,7 @@ impl Tether {
         }
         // Listening, the network may come up late (DHCP on a cable plugged in later).
         if self.listening && self.phase == Phase::Up && status == w::OFFLINE { self.next_at = now + 2_000; return true; }
+        if status == w::BUSY && self.phase == Phase::ResolveAsk { self.next_at = now + POLL_MS * 5; return true; }
         if !matches!(status, w::OK | w::WAIT) {
             self.fail(sb, match status { w::OFFLINE => "no network (join Wi-Fi with `wifi join N PASSWORD`, or plug in Ethernet)", w::NO_NAME => "name not found (use the computer's IP address)", w::BUSY => "the network is busy", w::DENIED => "not allowed to use the network", _ => "network error" });
             return true;

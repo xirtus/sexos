@@ -697,4 +697,72 @@ fn queries(e:&mut Engine<'static>,now:&mut u64)->Vec<(u16,Vec<u8>)>{let mut v=Ve
  assert_eq!(e.open_cache_lookup(b"doh.example",false),Ok(Some(hans)));
  assert_eq!(e.open_cache_stats().hits,3);
 }
+#[test]fn concurrent_open_flows_keep_tether_alive_while_second_client_transfers(){
+ let(mut e,mut now,_)=resolving();
+ // Flow 0: long-lived Spindle tether connection to PEER_IP:7177.
+ let tether=e.open_add_flow().unwrap();
+ assert_eq!(tether,0);
+ e.open_connect(tether,Address::V4(PEER_IP),7177).unwrap();
+ e.open_keep_alive(tether,true);
+ let mut t_sport=0u16;let mut t_seq=0u32;
+ for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if let Some(s)=parse(&f){if s.flags&2!=0&&u16::from_be_bytes(f.bytes[36..38].try_into().unwrap())==7177{
+  t_sport=u16::from_be_bytes(f.bytes[34..36].try_into().unwrap());t_seq=s.seq.wrapping_add(1);break;
+ }}}}
+ assert_ne!(t_sport,0);
+ let mut t_peer=1000u32;
+ e.submit_frame(&tcp_for(PEER_IP,LOCAL,7177,t_sport,t_peer,t_seq,0x12,&[])).unwrap();
+ t_peer+=1;tick(&mut e,&mut now);
+ assert_eq!(e.open_state(tether),OpenState::Open);
+ // Tether sends its greeting.
+ assert_eq!(e.open_send(tether,b"SEXOS-TETHER 1\n"),Ok(15));
+ let mut got_tether=Vec::new();
+ for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if let Some(s)=parse(&f){if u16::from_be_bytes(f.bytes[34..36].try_into().unwrap())==t_sport&&!s.body.is_empty(){
+  got_tether.extend_from_slice(&s.body);t_seq=t_seq.wrapping_add(s.body.len() as u32);
+ }}}}
+ assert_eq!(&got_tether,b"SEXOS-TETHER 1\n");
+ e.submit_frame(&tcp_for(PEER_IP,LOCAL,7177,t_sport,t_peer,t_seq,0x10,&[])).unwrap();
+ tick(&mut e,&mut now);
+
+ // Flow 1: second concurrent client (Tailor / Kaleidoscope / fetch) connects to PEER_IP:443 while tether stays open!
+ let client=e.open_add_flow().unwrap();
+ assert_eq!(client,1);
+ e.open_connect(client,Address::V4(PEER_IP),443).unwrap();
+ let mut c_sport=0u16;let mut c_seq=0u32;
+ for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if let Some(s)=parse(&f){if s.flags&2!=0&&u16::from_be_bytes(f.bytes[36..38].try_into().unwrap())==443{
+  c_sport=u16::from_be_bytes(f.bytes[34..36].try_into().unwrap());c_seq=s.seq.wrapping_add(1);break;
+ }}}}
+ assert_ne!(c_sport,0);assert_ne!(c_sport,t_sport);
+ let mut c_peer=5000u32;
+ e.submit_frame(&tcp_for(PEER_IP,LOCAL,443,c_sport,c_peer,c_seq,0x12,&[])).unwrap();
+ c_peer+=1;tick(&mut e,&mut now);
+ assert_eq!(e.open_state(client),OpenState::Open);
+ assert_eq!(e.open_state(tether),OpenState::Open);
+
+ // Second client sends a request and receives a response while tether simultaneously receives a remote command!
+ assert_eq!(e.open_send(client,b"GET / HTTP/1.1\r\n\r\n"),Ok(18));
+ let mut got_req=Vec::new();
+ for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if let Some(s)=parse(&f){if u16::from_be_bytes(f.bytes[34..36].try_into().unwrap())==c_sport&&!s.body.is_empty(){
+  got_req.extend_from_slice(&s.body);c_seq=c_seq.wrapping_add(s.body.len() as u32);
+ }}}}
+ assert_eq!(&got_req,b"GET / HTTP/1.1\r\n\r\n");
+ e.submit_frame(&tcp_for(PEER_IP,LOCAL,443,c_sport,c_peer,c_seq,0x18,b"HTTP/1.1 200 OK\r\n\r\nOK")).unwrap();
+ e.submit_frame(&tcp_for(PEER_IP,LOCAL,7177,t_sport,t_peer,t_seq,0x18,b"hw wifi\n")).unwrap();
+ for _ in 0..4{tick(&mut e,&mut now);}
+ let mut c_buf=[0u8;64];let cn=e.open_receive(client,&mut c_buf).unwrap();
+ assert_eq!(&c_buf[..cn],b"HTTP/1.1 200 OK\r\n\r\nOK");
+ let mut t_buf=[0u8;64];let tn=e.open_receive(tether,&mut t_buf).unwrap();
+ assert_eq!(&t_buf[..tn],b"hw wifi\n");
+
+ // Closing the second client leaves the tether flow completely unaffected and still transmitting!
+ e.open_close(client);
+ for _ in 0..4{tick(&mut e,&mut now);}
+ assert_eq!(e.open_state(tether),OpenState::Open);
+ assert_eq!(e.open_send(tether,b"wifi: connected\n"),Ok(16));
+ let mut got_reply=Vec::new();
+ for _ in 0..8{if let Some(f)=tick(&mut e,&mut now){if let Some(s)=parse(&f){if u16::from_be_bytes(f.bytes[34..36].try_into().unwrap())==t_sport&&!s.body.is_empty(){
+  got_reply.extend_from_slice(&s.body);
+ }}}}
+ assert_eq!(&got_reply,b"wifi: connected\n");
+}
+
 

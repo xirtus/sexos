@@ -856,8 +856,9 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         serial_println!("[spindle.cmd.held] len={}",line.len());
         return true
     }
-    // The tether holds the network region's calls; downloads wait for `tether off`.
-    if unsafe{tether_command::TETHER.active()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"The tether is using the network: tether off first, then try again.");return true}
+    // Normal tether and fetch/update/pkg share the network region turn-by-turn on separate flows;
+    // only a benchmark `tether sweep` holds the link exclusively.
+    if unsafe{tether_command::TETHER.sweeping()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"A Wi-Fi sweep is running: tether off first, then try again.");return true}
     let recognized = match cmd {
         b"tether"=>{unsafe{let busy=fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy();(*core::ptr::addr_of_mut!(tether_command::TETHER)).command(args,sb,busy);}true},
         b"hotswap"=>{tether_command::hotswap_command(args,sb);true},
@@ -2900,13 +2901,13 @@ pub extern "C" fn _start() -> ! {
             unsafe{content_render(&line,sb);}
         }
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
-        if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
+        if unsafe{fetch_command::FETCH.step(sb,tether_command::TETHER.in_call())}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
         {
             // The tether and `hw record` poll on their own clocks: draw only when they said something.
             let before=sb.total_lines;
-            unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb);}
+            unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb,fetch_command::FETCH.region_in_use());}
             unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).step(sb);}
             let files_free=unsafe{!session_command::SESSION.io_busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
             hw_command::tick(sb,files_free);
