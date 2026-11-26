@@ -19,6 +19,9 @@ fn alienware_x17_r1_parts_are_named_and_owned() {
     assert_eq!((killer.service, killer.support), (Service::Net, Support::Driven));
     assert_eq!(describe(id(0x8086, 0x43c8, 0x04, 0x03, 0)).service, Service::Bell);
     assert_eq!(describe(id(0x8086, 0x43ed, 0x0c, 0x03, 0x30)).support, Support::Driven);
+    let spi = describe(id(0x8086, 0x43a4, 0x0c, 0x80, 0));
+    assert_eq!(spi.model, "Tiger Lake-H SPI Flash");
+    assert_eq!((spi.service, spi.support), (Service::Kernel, Support::Platform));
 }
 
 #[test]

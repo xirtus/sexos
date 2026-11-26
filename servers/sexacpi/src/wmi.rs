@@ -80,7 +80,7 @@ impl Awcc {
             dev.path, core::str::from_utf8(&method).unwrap_or("?"), inventory.description.word(),
             inventory.fan_count, inventory.sensor_count, inventory.profile_count, current);
         for (i, f) in inventory.fans().iter().enumerate() {
-            serial_println!("[sexacpi.awcc.fan] id={:#04x} name={} rpm={} min={} max={}", f.id, awcc::fan_name(f.id), last.rpm[i], f.min_rpm, f.max_rpm);
+            serial_println!("[sexacpi.awcc.fan] id={:#04x} name={} rpm={} min={} max={}", f.id, awcc::fan_name(f.id), last.rpm[i].map_or(-1, |v| v as i32), f.min_rpm, f.max_rpm);
         }
         for (i, s) in inventory.sensors().iter().enumerate() {
             serial_println!("[sexacpi.awcc.temp] id={:#04x} name={} celsius={}", s, awcc::sensor_name(*s), last.celsius[i].map_or(-1, |c| c as i32));
@@ -99,7 +99,7 @@ impl Awcc {
         self.reads = self.reads.wrapping_add(1);
         if self.reads % 60 == 1 || r.profile != self.last.profile {
             let mut fans = alloc::string::String::new();
-            for (i, f) in self.inventory.fans().iter().enumerate() { fans.push_str(&alloc::format!("{}:{} ", awcc::fan_name(f.id), r.rpm[i])); }
+            for (i, f) in self.inventory.fans().iter().enumerate() { fans.push_str(&alloc::format!("{}:{} ", awcc::fan_name(f.id), r.rpm[i].map_or(-1, |v| v as i32))); }
             let mut temps = alloc::string::String::new();
             for (i, s) in self.inventory.sensors().iter().enumerate() {
                 temps.push_str(&alloc::format!("{}:{} ", awcc::sensor_name(*s), r.celsius[i].map_or(-1, |c| c as i32)));

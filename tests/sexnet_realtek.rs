@@ -209,3 +209,18 @@ fn wrote(ops:&[Op],n:u32)->Vec<(u8,u32)>{ops.iter().filter_map(|op|match op{Op::
   m.0.borrow_mut().regs[status as usize]=0x05;let start=m.ops().len();assert_eq!(d.acknowledge_interrupts(),0x05);assert_eq!(wrote(&m.ops()[start..],status),vec![(w,0x05)]);
   let start=m.ops().len();d.disarm_interrupts();assert_eq!(wrote(&m.ops()[start..],mask),vec![(w,0)]);}
 }
+#[test]fn link_down_drops_tx_without_quarantine_and_recovers_on_link_up(){
+ for model in MODELS{let m=Mock::new(model);let phy=if model==c::Model::Rtl8125{0x80}else{0x6c};let mut d=ready(&m);
+  // Cable unplugged: PHYstatus.LinkSts clears.
+  m.0.borrow_mut().regs[phy]=0x10;let start=m.ops().len();
+  assert_eq!(d.send(&[0x55;60],400),Err(SendError::NotReady));
+  assert!(!m.ops()[start..].iter().any(|op|matches!(op,Op::Store(..)|Op::CopyIn(..)|Op::Write(..))));
+  assert_eq!(d.phase(),Phase::Running);assert_eq!(d.failure(),None);assert!(!d.busy());assert_eq!(d.dropped,1);
+  // Even after TX_TICKS elapse, the NIC stays active rather than quarantined.
+  for n in 401..3000{assert!(d.advance(n).is_none());}
+  assert_eq!(d.phase(),Phase::Running);assert!(d.active());
+  // Cable plugged back in: TX immediately works again.
+  m.0.borrow_mut().regs[phy]=0x12;
+  let (seq,index,_,_)=d.send(&[0x66;60],3000).unwrap();assert_eq!((seq,index),(1,0));
+  m.done(index);assert!(matches!(d.advance(3001),Some(Event::Transmitted{sequence:1,index:0,..})));}
+}
