@@ -60,7 +60,8 @@ def main():
    elif k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
    elif k in '<>':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'comma' if k=='<' else 'dot'}],'hold-time':80})
    elif k=='*':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'8'}],'hold-time':80})
-   else:q.key({' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal'}.get(k,k))
+   elif k.isupper():q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':k.lower()}],'hold-time':80})
+   else:q.key({' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}.get(k,k))
    time.sleep(.05)
  def run(line):
   g['focus'](153);time.sleep(.5);type_line(line);q.key('ret')
