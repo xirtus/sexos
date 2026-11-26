@@ -1148,8 +1148,25 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     let (head, cache) = region.split_at_mut(w::CACHE_AT);
     let data = &mut head[w::PATH_BYTES..];
     let Some(fs) = fs else {
-        // No SexOS filesystem on this disk: only its own volumes under /media, read only.
+        // No SexOS filesystem on this disk: only its own volumes under /media, read only,
+        // plus read-only PREPARE for `/bin/<name>` served from `/media/<vol>/programs/<name>`.
         let path = &path[..path_len];
+        if r.kind == w::PREPARE {
+            if let Some(name) = path
+                .strip_prefix(sex_pdx::program_store::BIN)
+                .filter(|n| !n.is_empty() && !n.contains(&b'/'))
+            {
+                if crate::volumes::has_program(None, name) {
+                    let owner = if program.is_some() {
+                        let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
+                        Some(owner)
+                    } else { None };
+                    let ticket = prepare_ticket(r, path, data, owner, None);
+                    return w::reply(r.seq, w::OK, ticket);
+                }
+            }
+            return w::reply(r.seq, w::UNAVAILABLE, 0);
+        }
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
         if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
@@ -1305,6 +1322,26 @@ fn read_program(path: &[u8], image: &mut [u8], remember: bool) -> Program {
     sex_pdx::serial_record!("[files.program.file] bytes={}", size);
     Program::Loaded(size as u32)
 }
+/// Live USB / removable media fallback: loads `/media/<vol>/programs/<name>` read-only into `image`.
+pub fn read_media_program(name: &[u8], image: &mut [u8], remember: bool) -> Program {
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let fs = match state { State::Ready(fs) => Some(fs), _ => None };
+    match crate::volumes::read_program(fs, name, image) {
+        Ok(Some((size, vol))) => {
+            if remember { loaded_from_store(name); }
+            sex_pdx::serial_record!(
+                "[files.program.media] name={} vol={} bytes={}",
+                core::str::from_utf8(name).unwrap_or("?"),
+                vol,
+                size
+            );
+            Program::Loaded(size as u32)
+        }
+        Ok(None) => Program::Absent,
+        Err(code) => Program::Failed(code),
+    }
+}
 /// A bare name looks in the program directory.
 pub fn read_named(name: &[u8], image: &mut [u8]) -> Program {
     unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; (*core::ptr::addr_of_mut!(LOADED_ARGS)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
@@ -1444,50 +1481,49 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         _ => Err(Error::Name),
     }
 }
-fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>) -> Result<u32, Error> {
-    {
-        {
-            // `/bin/NAME` with no such file may still be the disk program store's NAME:
-            // the load looks there, and refuses then if neither has it.
-            let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
-                .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
-            match fs.open(path) {
-                Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
-                Ok(_) => {}
-                Err(Error::NotFound) if store_name => {}
-                Err(e) => return Err(e),
-            }
-            let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
-            prepared.0[..path.len()].copy_from_slice(path);
-            prepared.1 = path.len();
-            // Arguments travel with the path, after it in the data area.
-            let args = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED_ARGS) };
-            let n = (r.length as usize).min(w::ARGS_MAX).min(data.len());
-            args.0[..n].copy_from_slice(&data[..n]);
-            args.1 = n;
-            // Never zero, and within the reply's 24 bits.
-            let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
-            prepared.2 = ticket;
-            let by = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_FOR)) };
-            let row = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_ROW)) };
-            let relay = by.map(|v| v & ((1 << PIPE_AT) - 1));
-            unsafe { PREPARED_OWNER = owner; PREPARED_LAUNCHER = (relay, row); }
-            if let (Some(id), Some(v)) = (relay, by) {
-                let pipe = (v >> PIPE_AT).checked_sub(1).map(|w| w as u8);
-                crate::console_relay::prepared(id, pipe);
-            }
-            // A program a package installed: what it asks for and what the person said.
-            // Unasked grants take the person's default answer; a run holding an allowed
-            // grant is its last use.
-            let name = path.strip_prefix(sex_pdx::program_store::BIN);
-            let note = name.and_then(|name| crate::packages::note(fs, name)).map(crate::packages::with_defaults);
-            if let (Some(name), Some(n)) = (name, note) {
-                if n.allowed != 0 { crate::packages::mark_used(name, sex_pdx::civil_time_ms().map_or(0, |ms| ms / 1000)); }
-            }
-            match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
-            Ok(ticket)
-        }
+fn prepare_ticket(r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>, note: Option<sex_pdx::package::Note>) -> u32 {
+    let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
+    prepared.0[..path.len()].copy_from_slice(path);
+    prepared.1 = path.len();
+    // Arguments travel with the path, after it in the data area.
+    let args = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED_ARGS) };
+    let n = (r.length as usize).min(w::ARGS_MAX).min(data.len());
+    args.0[..n].copy_from_slice(&data[..n]);
+    args.1 = n;
+    // Never zero, and within the reply's 24 bits.
+    let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
+    prepared.2 = ticket;
+    let by = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_FOR)) };
+    let row = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_ROW)) };
+    let relay = by.map(|v| v & ((1 << PIPE_AT) - 1));
+    unsafe { PREPARED_OWNER = owner; PREPARED_LAUNCHER = (relay, row); }
+    if let (Some(id), Some(v)) = (relay, by) {
+        let pipe = (v >> PIPE_AT).checked_sub(1).map(|w| w as u8);
+        crate::console_relay::prepared(id, pipe);
     }
+    match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
+    ticket
+}
+fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u8], owner: Option<TicketOwner>) -> Result<u32, Error> {
+    // `/bin/NAME` with no such file may still be the disk program store's NAME or `/media/<vol>/programs/NAME`:
+    // the load looks there, and refuses then if none has it.
+    let store_name = path.strip_prefix(sex_pdx::program_store::BIN)
+        .is_some_and(|name| !name.contains(&b'/') && sex_pdx::program_store::pack_name(name).is_some());
+    match fs.open(path) {
+        Ok(st) if st.kind == Kind::Dir => return Err(Error::IsDir),
+        Ok(_) => {}
+        Err(Error::NotFound) if store_name => {}
+        Err(e) => return Err(e),
+    }
+    // A program a package installed: what it asks for and what the person said.
+    // Unasked grants take the person's default answer; a run holding an allowed
+    // grant is its last use.
+    let name = path.strip_prefix(sex_pdx::program_store::BIN);
+    let note = name.and_then(|name| crate::packages::note(fs, name)).map(crate::packages::with_defaults);
+    if let (Some(name), Some(n)) = (name, note) {
+        if n.allowed != 0 { crate::packages::mark_used(name, sex_pdx::civil_time_ms().map_or(0, |ms| ms / 1000)); }
+    }
+    Ok(prepare_ticket(r, path, data, owner, note))
 }
 /// True when `caller` is a live program run from `/data/NAME`: the folder Files
 /// bound it to, never a name the program claims; and the program came from the system

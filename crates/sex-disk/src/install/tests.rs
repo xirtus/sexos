@@ -327,3 +327,128 @@ fn replace_partition_refuses_esp_msr_tiny_and_replaces_only_garuda() {
     );
 }
 
+#[test]
+fn superblock_probe_detects_filesystems_labels_and_uuids() {
+    // 16 MiB virtual GPT disk with 8 partitions covering ext4, ext3, ext2, btrfs, NTFS, FAT32, swap, and empty.
+    let mut d = MemDev(vec![0u8; 16 << 20]);
+    let total = d.sectors();
+    let mut g = Gpt::new_empty(total, Guid::random([0xA1; 16])).unwrap();
+
+    let mut cur = 2048u64; // 1 MiB
+    let mut alloc_part = |mib: u64| -> (u64, u64) {
+        let first = cur;
+        let sectors = mib * 2048;
+        cur += sectors;
+        (first, sectors)
+    };
+
+    let p_ext4 = alloc_part(1);
+    let p_btrfs = alloc_part(1);
+    let p_ntfs = alloc_part(1);
+    let p_fat32 = alloc_part(1);
+    let p_swap = alloc_part(1);
+    let p_empty = alloc_part(1);
+    let p_ext3 = alloc_part(1);
+    let p_ext2 = alloc_part(1);
+    let p_exfat = alloc_part(1);
+
+    g.add(TYPE_LINUX_FS, Guid::random([0xB1; 16]), p_ext4.0, p_ext4.1, "").unwrap();
+    g.add(TYPE_LINUX_FS, Guid::random([0xB2; 16]), p_btrfs.0, p_btrfs.1, "").unwrap();
+    g.add(TYPE_BASIC_DATA, Guid::random([0xB3; 16]), p_ntfs.0, p_ntfs.1, "Windows").unwrap();
+    g.add(TYPE_ESP, Guid::random([0xB4; 16]), p_fat32.0, p_fat32.1, "ESP").unwrap();
+    g.add(TYPE_LINUX_SWAP, Guid::random([0xB5; 16]), p_swap.0, p_swap.1, "").unwrap();
+    g.add(TYPE_LINUX_FS, Guid::random([0xB6; 16]), p_empty.0, p_empty.1, "").unwrap();
+    g.add(TYPE_LINUX_FS, Guid::random([0xB7; 16]), p_ext3.0, p_ext3.1, "").unwrap();
+    g.add(TYPE_LINUX_FS, Guid::random([0xB8; 16]), p_ext2.0, p_ext2.1, "").unwrap();
+    g.add(TYPE_BASIC_DATA, Guid::random([0xB9; 16]), p_exfat.0, p_exfat.1, "Ventoy").unwrap();
+    g.write(&mut d).unwrap();
+
+    // 1. ext4 at offset 1024: magic 0xEF53 (+56), compat (+92), incompat (+96 = EXTENTS 0x40), UUID (+104), label (+120).
+    let ext4_off = p_ext4.0 as usize * SECTOR + 1024;
+    d.0[ext4_off + 56..ext4_off + 58].copy_from_slice(&0xEF53u16.to_le_bytes());
+    d.0[ext4_off + 92..ext4_off + 96].copy_from_slice(&0x0004u32.to_le_bytes());
+    d.0[ext4_off + 96..ext4_off + 100].copy_from_slice(&0x0040u32.to_le_bytes());
+    let ext4_uuid: [u8; 16] = [0xcd, 0x31, 0x84, 0x37, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    d.0[ext4_off + 104..ext4_off + 120].copy_from_slice(&ext4_uuid);
+    d.0[ext4_off + 120..ext4_off + 129].copy_from_slice(b"VoidLinux");
+
+    // 2. btrfs at offset 65536: magic "_BHRfS_M" (+64), UUID (+0x20), label (+0x12B).
+    let btrfs_off = p_btrfs.0 as usize * SECTOR + 65536;
+    d.0[btrfs_off + 64..btrfs_off + 72].copy_from_slice(b"_BHRfS_M");
+    let btrfs_uuid: [u8; 16] = [0x1a, 0x2b, 0x3c, 0x4d, 0xaa, 0xbb, 0xcc, 0xdd, 1, 2, 3, 4, 5, 6, 7, 8];
+    d.0[btrfs_off + 0x20..btrfs_off + 0x30].copy_from_slice(&btrfs_uuid);
+    d.0[btrfs_off + 0x12B..btrfs_off + 0x12B + 6].copy_from_slice(b"Garuda");
+
+    // 3. NTFS at offset 0: "NTFS    " (+3).
+    let ntfs_off = p_ntfs.0 as usize * SECTOR;
+    d.0[ntfs_off + 3..ntfs_off + 11].copy_from_slice(b"NTFS    ");
+
+    // 4. FAT32 at offset 0: "FAT32   " (+82), label (+71, 11 bytes).
+    let fat32_off = p_fat32.0 as usize * SECTOR;
+    d.0[fat32_off + 71..fat32_off + 82].copy_from_slice(b"SYSTEM_ESP ");
+    d.0[fat32_off + 82..fat32_off + 90].copy_from_slice(b"FAT32   ");
+
+    // 5. Linux swap at offset 4086: "SWAPSPACE2", UUID (+1036), label (+1052).
+    let swap_off = p_swap.0 as usize * SECTOR;
+    d.0[swap_off + 4086..swap_off + 4096].copy_from_slice(b"SWAPSPACE2");
+    let swap_uuid: [u8; 16] = [0xde, 0xad, 0xbe, 0xef, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    d.0[swap_off + 1036..swap_off + 1052].copy_from_slice(&swap_uuid);
+    d.0[swap_off + 1052..swap_off + 1059].copy_from_slice(b"SWAP_X7");
+
+    // 6. Empty partition: untouched zeroes.
+
+    // 7. ext3 (HAS_JOURNAL = 0x04, no ext4 incompat).
+    let ext3_off = p_ext3.0 as usize * SECTOR + 1024;
+    d.0[ext3_off + 56..ext3_off + 58].copy_from_slice(&0xEF53u16.to_le_bytes());
+    d.0[ext3_off + 92..ext3_off + 96].copy_from_slice(&0x0004u32.to_le_bytes());
+    d.0[ext3_off + 120..ext3_off + 124].copy_from_slice(b"Old3");
+
+    // 8. ext2 (no journal, no ext4 incompat).
+    let ext2_off = p_ext2.0 as usize * SECTOR + 1024;
+    d.0[ext2_off + 56..ext2_off + 58].copy_from_slice(&0xEF53u16.to_le_bytes());
+
+    // 9. exFAT at offset 0: "EXFAT   " (+3).
+    let exfat_off = p_exfat.0 as usize * SECTOR;
+    d.0[exfat_off + 3..exfat_off + 11].copy_from_slice(b"EXFAT   ");
+
+    let before = d.0.clone();
+    let (_, parts, _) = list_partitions(&mut d).unwrap();
+    // Superblock probe must be strictly read-only.
+    assert!(d.0 == before, "list_partitions modified disk bytes!");
+    assert_eq!(parts.len(), 9);
+
+    assert_eq!(parts[0].fs_type, Some("ext4"));
+    assert_eq!(parts[0].fs_label, "VoidLinux");
+    assert_eq!(parts[0].fs_uuid, Some(ext4_uuid));
+    assert_eq!(parts[0].short_uuid().as_deref(), Some("cd318437"));
+
+    assert_eq!(parts[1].fs_type, Some("btrfs"));
+    assert_eq!(parts[1].fs_label, "Garuda");
+    assert_eq!(parts[1].fs_uuid, Some(btrfs_uuid));
+    assert_eq!(parts[1].short_uuid().as_deref(), Some("1a2b3c4d"));
+
+    assert_eq!(parts[2].fs_type, Some("ntfs"));
+    assert_eq!(parts[2].fs_label, "");
+    assert_eq!(parts[2].short_uuid(), None);
+
+    assert_eq!(parts[3].fs_type, Some("fat32"));
+    assert_eq!(parts[3].fs_label, "SYSTEM_ESP");
+
+    assert_eq!(parts[4].fs_type, Some("swap"));
+    assert_eq!(parts[4].fs_label, "SWAP_X7");
+    assert_eq!(parts[4].short_uuid().as_deref(), Some("deadbeef"));
+
+    assert_eq!(parts[5].fs_type, Some("empty"));
+    assert_eq!(parts[5].fs_label, "");
+    assert_eq!(parts[5].short_uuid(), None);
+
+    assert_eq!(parts[6].fs_type, Some("ext3"));
+    assert_eq!(parts[6].fs_label, "Old3");
+
+    assert_eq!(parts[7].fs_type, Some("ext2"));
+    assert_eq!(parts[7].fs_label, "");
+
+    assert_eq!(parts[8].fs_type, Some("exfat"));
+}
+
+

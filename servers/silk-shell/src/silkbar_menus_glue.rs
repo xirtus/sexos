@@ -158,11 +158,15 @@ pub unsafe fn handle_top_bar_click(px: i32, py: i32) -> bool {
     true
 }
 
-unsafe fn launch_named_program(name: &str) -> bool {
+unsafe fn launch_named_program(name: &str, network: bool) -> bool {
     let Some(packed) = sex_pdx::program_store::pack_name(name.as_bytes()) else {
         return false;
     };
-    crate::program_start_own(packed)
+    let ok = crate::program_start_own(packed);
+    if ok && network {
+        crate::PROGRAM_NETWORK = true;
+    }
+    ok
 }
 
 unsafe fn dispatch_action(action: MenuAction) {
@@ -174,27 +178,29 @@ unsafe fn dispatch_action(action: MenuAction) {
             let _ = crate::open_mesh_in_active_scene();
         }
         MenuAction::LaunchBrowser => {
-            let _ = crate::open_browser_in_active_scene();
+            if !launch_named_program("kaleidoscope", true) {
+                let _ = crate::open_browser_in_active_scene();
+            }
         }
         MenuAction::LaunchTerminal | MenuAction::NewWindow => {
             let _ = crate::open_spindle_in_active_scene();
         }
         MenuAction::LaunchTailor => {
-            let _ = launch_named_program("tailor");
+            let _ = launch_named_program("tailor", true);
         }
         MenuAction::LaunchFlash => {
-            let _ = launch_named_program("flash");
+            let _ = launch_named_program("flash", false);
         }
         MenuAction::LaunchPdGraph => {
             let _ = crate::open_mesh_in_active_scene();
         }
         MenuAction::LaunchFiles => {
-            if !launch_named_program("files") {
+            if !launch_named_program("loom", false) {
                 let _ = crate::open_linen_in_active_scene();
             }
         }
         MenuAction::LaunchSettings | MenuAction::DisplaySettings | MenuAction::NetworkSettings => {
-            if !launch_named_program("settings") {
+            if !launch_named_program("tatami", false) {
                 crate::toggle_scene_settings_panel();
             }
         }

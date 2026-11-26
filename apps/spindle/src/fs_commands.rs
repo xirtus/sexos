@@ -587,9 +587,9 @@ impl Client {
             // Only a run with no arguments: the store's run carries none, and a program
             // started without the words it was given does the wrong thing (`run bench
             // spin 600` became a whole `bench` when a PREPARE failed under load).
-            if let (Cmd::Program(0, _), true) = (cmd, self.bare_len > 0 && self.length == 0) {
+            if let (Cmd::Program(0, flags), true) = (cmd, self.bare_len > 0 && self.length == 0) {
                 if let Some(name) = sex_pdx::program_store::pack_name(&self.bare[..self.bare_len]) {
-                    let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, sex_pdx::program_store::OP_RUN, name[0], name[1], 0).is_ok();
+                    let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, sex_pdx::program_store::OP_RUN, name[0], name[1], flags).is_ok();
                     say!(sb, "{}", if asked { "Asked for the program. A window opens if it starts." } else { "Could not reach the shell." });
                     return true;
                 }
