@@ -212,51 +212,18 @@ pub fn init() {
 
     // Denim, compressed memory: a program's cold heap pages packed in Denim's own
     // memory. Optional: without it no page ever goes out.
-    let mut denim_id=0;
-    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/denim")) {
-        let id=sex_pdx::denim::DENIM_PD;
-        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::denim::DENIM_KEY) {
-            Ok(created)=>{assert_eq!(created,id,"BOOT_DENIM_IDENTITY");denim_id=created;
-                serial_println!("[kernel.spawn.denim] id={} key={} organ=memory",created,sex_pdx::denim::DENIM_KEY);}
-            Err(e)=>{serial_println!("[kernel.spawn.denim] failed={}",e);}
+    let spawn_opt = |suffix: &str, id: u32, key: u8, name: &str, organ: &str| -> u32 {
+        let Some(m) = modules.modules().iter().find(|m| m.path().ends_with(suffix)) else { return 0 };
+        match crate::pd::create::create_boot_domain(m.path(), Some(id), id as u8, key) {
+            Ok(c) => { assert_eq!(c, id, "BOOT_OPT_IDENTITY"); serial_println!("[kernel.spawn.{}] id={} key={} organ={}", name, c, key, organ); c }
+            Err(e) => { serial_println!("[kernel.spawn.{}] failed={}", name, e); 0 }
         }
-    }
-
-    // Cufflinks, the Bluetooth host stack, in the Senses organ. Optional: without a
-    // controller it sleeps until SexUSB reports one.
-    let mut cufflinks_id=0;
-    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/cufflinks")) {
-        let id=sex_pdx::bt_hci::CUFFLINKS_PD;
-        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::bt_hci::CUFFLINKS_KEY) {
-            Ok(created)=>{assert_eq!(created,id,"BOOT_CUFFLINKS_IDENTITY");cufflinks_id=created;
-                serial_println!("[kernel.spawn.cufflinks] id={} key={} organ=senses",created,sex_pdx::bt_hci::CUFFLINKS_KEY);}
-            Err(e)=>{serial_println!("[kernel.spawn.cufflinks] failed={}",e);}
-        }
-    }
-
-    // Saddle hosts drivers built on the Harness SDK (crates/harness) for devices no
-    // system service drives, on generic leases. Optional, in the Senses organ.
-    let mut saddle_id=0;
-    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/saddle")) {
-        let id=sex_pdx::pci_command::SADDLE_PD;
-        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::pci_command::SADDLE_KEY) {
-            Ok(created)=>{assert_eq!(created,id,"BOOT_SADDLE_IDENTITY");saddle_id=created;
-                serial_println!("[kernel.spawn.saddle] id={} key={} organ=senses",created,sex_pdx::pci_command::SADDLE_KEY);}
-            Err(e)=>{serial_println!("[kernel.spawn.saddle] failed={}",e);}
-        }
-    }
-    // sexgpu-nv, the NVIDIA GPU service (GSP-RM boot), in the Core organ beside the
-    // display it will feed. Only the "SexOS with NVIDIA GPU" entry lists it; without it
-    // the GPU is powered off as before and Display holds its identity.
-    let mut sexgpu_id=0;
-    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with(sex_pdx::nvidia_gpu::SERVICE_MODULE)) {
-        let id=sex_pdx::nvidia_gpu::GPU_PD;
-        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::nvidia_gpu::GPU_KEY) {
-            Ok(created)=>{assert_eq!(created,id,"BOOT_GPU_IDENTITY");sexgpu_id=created;
-                serial_println!("[kernel.spawn.sexgpu-nv] id={} key={} organ=core",created,sex_pdx::nvidia_gpu::GPU_KEY);}
-            Err(e)=>{serial_println!("[kernel.spawn.sexgpu-nv] failed={}",e);}
-        }
-    }
+    };
+    let denim_id = spawn_opt("/denim", sex_pdx::denim::DENIM_PD, sex_pdx::denim::DENIM_KEY, "denim", "memory");
+    let cufflinks_id = spawn_opt("/cufflinks", sex_pdx::bt_hci::CUFFLINKS_PD, sex_pdx::bt_hci::CUFFLINKS_KEY, "cufflinks", "senses");
+    let sexuvc_id = spawn_opt("/sexuvc", sex_pdx::usb_uvc::SEXUVC_PD, sex_pdx::usb_uvc::SEXUVC_KEY, "sexuvc", "senses");
+    let saddle_id = spawn_opt("/saddle", sex_pdx::pci_command::SADDLE_PD, sex_pdx::pci_command::SADDLE_KEY, "saddle", "senses");
+    let sexgpu_id = spawn_opt(sex_pdx::nvidia_gpu::SERVICE_MODULE, sex_pdx::nvidia_gpu::GPU_PD, sex_pdx::nvidia_gpu::GPU_KEY, "sexgpu-nv", "core");
 
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
@@ -918,6 +885,7 @@ pub fn init() {
     // Final BOOT_DAG memory edges precede sealing and every task admission.
     crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
     crate::boot_memory::init_bluetooth(sexusb_id, cufflinks_id, sexfiles_id, sexbell_id, silkshell_id);
+    crate::boot_memory::init_usb_uvc(sexusb_id, sexuvc_id);
     // UEFI firmware leaves network controllers bus-mastering (OVMF does, with or without
     // a network option ROM). The network service proves custody of a NIC only from idle,
     // so it gets its controllers as a restarted run does: bus mastering off first.
@@ -1234,6 +1202,7 @@ pub fn init() {
                     52 => "cufflinks",
                     53 => "sexgpu-nv",
                     54 => "saddle",
+                    55 => "sexuvc",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };
