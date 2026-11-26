@@ -299,7 +299,7 @@ fn inventory(aml: &Aml) -> Devices {
             NamespaceLevelKind::Processor => d.processors.push(path),
             _ => {
                 let ids = ids_of(aml, &path);
-                let has = |x: &str| ids.iter().any(|i| i == x);
+                let has = |x: &str| ids.iter().any(|i| i.eq_ignore_ascii_case(x));
                 if has("ACPI0007") { d.processors.push(path.clone()); }
                 if !present(aml, &path) { continue; }
                 if has("PNP0C0A") { d.batteries.push(path); }

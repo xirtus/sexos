@@ -61,27 +61,29 @@ pub fn set_power(register: u16, on: bool, out: &mut [u8; 5]) -> usize {
 }
 
 /// `SET_REPORT` of a feature report through the data register: the command, then the data
-/// register, the length (2 + payload) and the payload (report id first).
+/// register, the length (2 + payload [+ 1 for non-zero report id]) and the payload.
 pub fn set_feature(command_register: u16, data_register: u16, report_id: u8, payload: &[u8], out: &mut [u8]) -> Option<usize> {
     let mut c = [0u8; 5];
     let n = command(command_register, OP_SET_REPORT, REPORT_FEATURE, report_id, &mut c);
-    let total = n + 2 + 2 + 1 + payload.len();
+    let has_id = usize::from(report_id != 0);
+    let data_len = 2 + has_id + payload.len();
+    let total = n + 2 + data_len;
     if out.len() < total { return None; }
     out[..n].copy_from_slice(&c[..n]);
     out[n..n + 2].copy_from_slice(&data_register.to_le_bytes());
-    out[n + 2..n + 4].copy_from_slice(&((3 + payload.len()) as u16).to_le_bytes());
-    out[n + 4] = report_id;
-    out[n + 5..total].copy_from_slice(payload);
+    out[n + 2..n + 4].copy_from_slice(&(data_len as u16).to_le_bytes());
+    let mut at = n + 4;
+    if report_id != 0 { out[at] = report_id; at += 1; }
+    out[at..total].copy_from_slice(payload);
     Some(total)
 }
 
 /// An input report as read from the input register: two length bytes (the length counts
-/// itself), then the report. A length of 0 (or 2) means nothing new — after a reset, or
-/// when polled without an interrupt.
+/// itself), then the report. A length of 0, 2, or 0xFFFF (bus glitch) means nothing new.
 pub fn input_payload(raw: &[u8]) -> Option<&[u8]> {
     if raw.len() < 2 { return None; }
     let len = u16::from_le_bytes([raw[0], raw[1]]) as usize;
-    if len <= 2 { return None; }
+    if len <= 2 || len == 0xFFFF { return None; }
     raw.get(2..len.min(raw.len()))
 }
 
