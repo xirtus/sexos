@@ -142,9 +142,11 @@ def main():
   assert (a.out/'pdf-region-drag.ppm').stat().st_size>10000
   step(lambda:q.key('ret'),r'\[pdf\.annotate\] kind=highlight page=1 rects=1 from=region annots=3\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-marked.ppm')})
-  # Click the region highlight itself, in the middle of where it was dragged:
-  # nothing has scrolled since, so the same window-to-page mapping holds.
-  s=len(t());click(bx+round((left+180)*ui),by+round((BAR+12+115)*ui))
+  # Click the region highlight itself, just inside where the drag began:
+  # nothing has scrolled since, so the same window-to-page mapping holds. The
+  # Vellum window can be short (the drag's end may lie below it), so stay near
+  # the drag's top edge, which is inside the window.
+  s=len(t());click(bx+round((left+180)*ui),by+round((BAR+12+88)*ui))
   g['wait'](r'\[pdf\.annot\.pick\] page=1 selected=3 kind=Highlight\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-annotation-pointer-selection.ppm')})
   assert (a.out/'pdf-annotation-pointer-selection.ppm').stat().st_size>10000
