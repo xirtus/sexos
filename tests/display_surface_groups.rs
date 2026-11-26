@@ -384,6 +384,9 @@ fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapsh
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 mod bt_panel{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+mod silkbar_menus{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize,_:&crate::scene::SceneSnapshot){}}
+mod spotlight{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+fn top_bar_menu_fg_at(_:usize,_:usize,_:&silkbar_model::SilkBar,_:&scene::SceneSnapshot,_:u32)->Option<u32>{None}
 #[path="../servers/sexdisplay/src/chrome_candy.rs"]mod chrome_candy;
 // Frosted panels (S6b): no popup shows in this fixture, so no body is repainted under one.
 fn glass_body(_:*mut u32,_:usize,_:usize,_:&scene::SceneSnapshot,_:Plan){}
