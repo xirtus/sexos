@@ -145,6 +145,23 @@ const SWEEP_IDLE: Sweep = Sweep { active: false, total: 0, trial: 0, next_trial:
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Call { Plain, Send, Receive, State, Close }
 
+struct HotswapRx {
+    active: bool,
+    discard: bool,
+    pd: u32,
+    name: [u8; 24],
+    name_len: usize,
+    expected_len: usize,
+    received: usize,
+    expected_fnv: u64,
+    /// Allocated on the heap only while a hot-swap binary frame is in flight, then dropped.
+    buf: alloc::vec::Vec<u8>,
+}
+const HOTSWAP_IDLE: HotswapRx = HotswapRx {
+    active: false, discard: false, pd: 0, name: [0; 24], name_len: 0,
+    expected_len: 0, received: 0, expected_fnv: 0, buf: alloc::vec::Vec::new(),
+};
+
 pub struct Tether {
     phase: Phase,
     seq: u32,
@@ -180,6 +197,7 @@ pub struct Tether {
     /// `tether listen`: SexOS waits and the Mac connects (no typing needed to aim it).
     listening: bool,
     sweep: Sweep,
+    hotswap: HotswapRx,
 }
 
 pub static mut TETHER: Tether = Tether {
@@ -189,6 +207,7 @@ pub static mut TETHER: Tether = Tether {
     inbound: [0; IN_MAX], in_len: 0, queue: [[0; CMD_MAX]; QUEUE], queue_len: [0; QUEUE],
     queue_head: 0, queue_count: 0, empty_receives: 0, recv_turn: false, bytes_out: 0, commands: 0, listening: false,
     sweep: SWEEP_IDLE,
+    hotswap: HOTSWAP_IDLE,
 };
 
 fn net() -> Option<&'static mut [u8]> {
@@ -417,10 +436,23 @@ impl Tether {
         self.told_v4 = false;
         self.next_at = 0;
         self.sent = false;
+        self.hotswap_reset();
+    }
+
+    fn hotswap_reset(&mut self) {
+        self.hotswap.active = false;
+        self.hotswap.discard = false;
+        self.hotswap.pd = 0;
+        self.hotswap.name_len = 0;
+        self.hotswap.expected_len = 0;
+        self.hotswap.received = 0;
+        self.hotswap.expected_fnv = 0;
+        self.hotswap.buf = alloc::vec::Vec::new();
     }
 
     fn end(&mut self) {
         // A call still out is answered and dropped by `receive` (phase Close).
+        self.hotswap_reset();
         self.phase = Phase::Close;
         self.next_at = 0;
     }
@@ -546,7 +578,7 @@ impl Tether {
                     self.empty_receives = 0;
                     self.net_call(w::STATE, 0, Call::State);
                 } else {
-                    let room = if self.sweep.active { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
+                    let room = if self.sweep.active || self.hotswap.active { w::REGION_BYTES } else { (IN_MAX - self.in_len).max(1).min(w::REGION_BYTES) };
                     self.net_call(w::RECEIVE, room as u64, Call::Receive);
                 }
             }
@@ -681,7 +713,7 @@ impl Tether {
                     }
                 }
                 Call::Receive => {
-                    let n = if self.sweep.active { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
+                    let n = if self.sweep.active || self.hotswap.active { (value as usize).min(w::REGION_BYTES) } else { (value as usize).min(IN_MAX - self.in_len) };
                     if n == 0 {
                         self.empty_receives += 1;
                         if self.out_len == 0 { self.next_at = now + POLL_MS; }
@@ -690,6 +722,9 @@ impl Tether {
                         self.empty_receives = 0;
                         self.sweep.bytes_in += n as u64;
                         self.sweep.progress_at = self.sweep.progress_at.max(now);
+                    } else if self.hotswap.active {
+                        self.empty_receives = 0;
+                        self.feed_hotswap(&region[..n], sb);
                     } else {
                         self.empty_receives = 0;
                         self.inbound[self.in_len..self.in_len + n].copy_from_slice(&region[..n]);
@@ -707,6 +742,43 @@ impl Tether {
         true
     }
 
+    fn feed_hotswap(&mut self, bytes: &[u8], sb: &mut Scrollback) {
+        let need = self.hotswap.expected_len.saturating_sub(self.hotswap.received);
+        let take = bytes.len().min(need);
+        if !self.hotswap.discard && take > 0 {
+            self.hotswap.buf.extend_from_slice(&bytes[..take]);
+        }
+        self.hotswap.received += take;
+        if self.hotswap.received < self.hotswap.expected_len { return; }
+        if !self.hotswap.discard {
+            let name = self.hotswap.name;
+            let nlen = self.hotswap.name_len;
+            let name_str = core::str::from_utf8(&name[..nlen]).unwrap_or("?");
+            let pd = self.hotswap.pd;
+            let len = self.hotswap.buf.len();
+            let got = log::fnv64(&self.hotswap.buf);
+            if got != self.hotswap.expected_fnv {
+                self.hotswap.buf = alloc::vec::Vec::new();
+                say!(sb, "hotswap: err {} checksum mismatch (got {:016x} want {:016x})", name_str, got, self.hotswap.expected_fnv);
+            } else {
+                let res = log::hotswap_server(pd, &self.hotswap.buf);
+                self.hotswap.buf = alloc::vec::Vec::new();
+                match res {
+                    Ok(entry) => say!(sb, "hotswap: ok {} pd={} entry={:#x} bytes={}", name_str, pd, entry, len),
+                    Err(code) => say!(sb, "hotswap: err {} pd={} code={}", name_str, pd, code),
+                }
+            }
+        }
+        self.hotswap_reset();
+        let rest = &bytes[take..];
+        if !rest.is_empty() {
+            let n = rest.len().min(IN_MAX - self.in_len);
+            self.inbound[self.in_len..self.in_len + n].copy_from_slice(&rest[..n]);
+            self.in_len += n;
+            self.split_lines(sb);
+        }
+    }
+
     fn split_lines(&mut self, sb: &mut Scrollback) {
         while let Some(end) = self.inbound[..self.in_len].iter().position(|b| *b == b'\n') {
             let mut line = [0u8; CMD_MAX];
@@ -718,6 +790,44 @@ impl Tether {
             self.in_len -= end + 1;
             let text = trim(&line[..n]);
             if text.is_empty() { continue; }
+            if text.starts_with(b"SEXOS-HOTSWAP ") {
+                let Some(hdr) = core::str::from_utf8(text).ok().and_then(log::parse_hotswap_header) else {
+                    say!(sb, "hotswap: err invalid header");
+                    continue;
+                };
+                self.hotswap_reset();
+                self.hotswap.active = true;
+                self.hotswap.expected_len = hdr.size;
+                self.hotswap.expected_fnv = hdr.fnv;
+                let nb = hdr.name.as_bytes();
+                let nl = nb.len().min(self.hotswap.name.len());
+                self.hotswap.name[..nl].copy_from_slice(&nb[..nl]);
+                self.hotswap.name_len = nl;
+                match hdr.pd {
+                    Some(pd) => {
+                        self.hotswap.pd = pd;
+                        let mut buf = alloc::vec::Vec::new();
+                        if buf.try_reserve_exact(hdr.size).is_ok() {
+                            self.hotswap.buf = buf;
+                        } else {
+                            self.hotswap.discard = true;
+                            say!(sb, "hotswap: err {} out of memory ({} bytes)", hdr.name, hdr.size);
+                        }
+                    }
+                    None => {
+                        self.hotswap.discard = true;
+                        say!(sb, "hotswap: err unknown server {}", hdr.name);
+                    }
+                }
+                let left = self.in_len;
+                if left > 0 {
+                    let mut tmp = [0u8; IN_MAX];
+                    tmp[..left].copy_from_slice(&self.inbound[..left]);
+                    self.in_len = 0;
+                    self.feed_hotswap(&tmp[..left], sb);
+                }
+                return;
+            }
             if self.queue_count == QUEUE { sb.push(b"tether: too many commands waiting; one dropped."); continue; }
             let slot = (self.queue_head + self.queue_count) % QUEUE;
             self.queue[slot][..text.len()].copy_from_slice(text);
@@ -918,4 +1028,24 @@ fn trim(mut s: &[u8]) -> &[u8] {
     while let [b' ' | b'\t', rest @ ..] = s { s = rest; }
     while let [rest @ .., b' ' | b'\t'] = s { s = rest; }
     s
+}
+
+/// `hotswap <server_name>`: shows hot-swap target info and host push command.
+pub fn hotswap_command(args: &[u8], sb: &mut Scrollback) {
+    let name = trim(args);
+    if name.is_empty() {
+        sb.push(b"Usage: hotswap <server_name>");
+        sb.push(b"Servers: sexdisplay sexdrive silk-shell sexinput sexusb sexbell sexfiles sexnet sexacpi denim cufflinks sexgpu-nv saddle");
+        sb.push(b"From host over active tether: python3 scripts/tether_host.py push-server <name> <elf_path>");
+        return;
+    }
+    let s = core::str::from_utf8(name).unwrap_or("");
+    match log::server_pd_by_name(s) {
+        Some(pd) => {
+            say!(sb, "hotswap: {} -> pd={} (push via: python3 scripts/tether_host.py push-server {} <elf_path>)", s, pd, s);
+        }
+        None => {
+            say!(sb, "hotswap: unknown server '{}'. Run `hotswap` for valid names.", s);
+        }
+    }
 }

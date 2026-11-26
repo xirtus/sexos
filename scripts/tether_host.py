@@ -144,6 +144,29 @@ def serve(d: Path, port: int, auto: list, once: bool, quiet: bool):
             return
 
 
+HOTSWAP_MAX_BYTES = 8 * 1024 * 1024
+
+
+def fnv64(data: bytes) -> int:
+    """64-bit FNV-1a checksum matching sex_pdx::crash_log::fnv64."""
+    h = 0xcbf29ce484222325
+    for b in data:
+        h = ((h ^ b) * 0x00000100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def build_hotswap_frame(server_name: str, elf_bytes: bytes) -> bytes:
+    """Build a framed SEXOS-HOTSWAP binary upload for Spindle."""
+    if not server_name or any(ch.isspace() for ch in server_name):
+        raise ValueError(f'invalid server name: {server_name!r}')
+    if not elf_bytes or len(elf_bytes) > HOTSWAP_MAX_BYTES:
+        raise ValueError(f'ELF size {len(elf_bytes)} out of bounds (1..={HOTSWAP_MAX_BYTES})')
+    if not elf_bytes.startswith(b'\x7fELF'):
+        raise ValueError('not an ELF binary (missing 0x7fELF magic)')
+    header = f'SEXOS-HOTSWAP {server_name} {len(elf_bytes)} {fnv64(elf_bytes):016x}\n'.encode('ascii')
+    return header + elf_bytes
+
+
 def sweep_reply(header: bytes) -> bytes:
     """The data a `SEXOS-SWEEP ... down=N` trial asks for: N bytes of 64-byte lines."""
     if not header.startswith(b'SEXOS-SWEEP'):
@@ -234,7 +257,17 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
                     new = f.read()
                 whole = new[:new.rfind(b'\n') + 1]
                 inbox_at += len(whole)
-                pending += whole
+                for line in whole.splitlines(keepends=True):
+                    if line.startswith(b'@HOTSWAP '):
+                        rel = line[9:].strip().decode('utf-8', 'replace')
+                        staged = (d / Path(rel).name)
+                        try:
+                            pending += staged.read_bytes()
+                            staged.unlink(missing_ok=True)
+                        except OSError as exc:
+                            print(f'tether: hotswap read failed ({staged}): {exc}', file=sys.stderr, flush=True)
+                    else:
+                        pending += line
             if time.time() - last_state > 1:
                 last_state = time.time()
                 write_state(d, connected=True, peer=peer, session=path.name, started=started, bytes=received)
@@ -282,6 +315,49 @@ def send(d: Path, command: str, wait: float):
     return 0
 
 
+def push_server(d: Path, server_name: str, elf_path: Path, wait: float):
+    """Push a compiled server ELF over the active tether and wait for Spindle's hotswap result."""
+    state = read_state(d)
+    if not state.get('connected'):
+        print('tether: SexOS is not connected (run serve/connect, then `tether ADDRESS` in Spindle).', file=sys.stderr)
+        return 2
+    try:
+        elf_bytes = elf_path.read_bytes()
+        frame = build_hotswap_frame(server_name, elf_bytes)
+    except (OSError, ValueError) as exc:
+        print(f'tether: push-server failed: {exc}', file=sys.stderr)
+        return 2
+    log = current_log(d)
+    start = log.stat().st_size if log else 0
+    staged_name = f'hotswap-{int(time.time() * 1000)}-{os.getpid()}.bin'
+    (d / staged_name).write_bytes(frame)
+    with (d / 'inbox.txt').open('a') as f:
+        f.write(f'@HOTSWAP {staged_name}\n')
+    deadline = time.time() + wait
+    at = start
+    seen = ''
+    while time.time() < deadline:
+        time.sleep(0.15)
+        if not log:
+            log = current_log(d)
+            continue
+        size = log.stat().st_size
+        if size > at:
+            with log.open('rb') as f:
+                f.seek(at)
+                chunk = f.read(size - at).decode('utf-8', 'replace')
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            at = size
+            seen += chunk
+            if 'hotswap: ok ' in seen:
+                return 0
+            if 'hotswap: err ' in seen:
+                return 1
+    print('tether: timed out waiting for hotswap confirmation.', file=sys.stderr)
+    return 1
+
+
 def tail(d: Path, n: int):
     log = current_log(d)
     if not log:
@@ -304,6 +380,10 @@ def main(argv=None):
     c = sub.add_parser('send')
     c.add_argument('command', nargs='+')
     c.add_argument('--wait', type=float, default=6.0, help='seconds to print what comes back')
+    ps = sub.add_parser('push-server', help='live hot-swap a running SexOS server ELF over the active tether')
+    ps.add_argument('server_name', help='target server name (e.g. sexbell, sexinput, sexacpi, cufflinks, sexdisplay)')
+    ps.add_argument('elf_path', type=Path, help='path to compiled PIE ELF binary')
+    ps.add_argument('--wait', type=float, default=10.0, help='seconds to wait for hotswap result')
     t = sub.add_parser('tail')
     t.add_argument('-n', type=int, default=80)
     sub.add_parser('status')
@@ -339,6 +419,8 @@ def main(argv=None):
             time.sleep(5)
     if a.what == 'send':
         return send(a.dir, ' '.join(a.command), a.wait)
+    if a.what == 'push-server':
+        return push_server(a.dir, a.server_name, a.elf_path, a.wait)
     if a.what == 'tail':
         return tail(a.dir, a.n)
     print(json.dumps(read_state(a.dir), indent=1))

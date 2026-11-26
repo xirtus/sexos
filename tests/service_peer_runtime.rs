@@ -40,12 +40,18 @@ mod ipc{
  pub struct Registry;pub static DOMAIN_REGISTRY:Registry=Registry;impl Registry{pub fn get(&self,id:u32)->Option<&'static crate::capability::ProtectionDomain>{let p=crate::REGISTRY.get(id as usize)?.load(crate::Ordering::Acquire);unsafe{p.as_ref()}}}
  pub mod messages{pub struct IpcReply{pub value:u64,pub caller_pd:u32,pub caller_task:u32}impl IpcReply{pub fn erase_queue(q:&mut std::collections::VecDeque<Self>){q.clear()}}}
 }
-mod boot_memory{pub fn existing_leaf_address(_:u64)->Option<u64>{None}pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}}
+mod boot_memory{pub fn existing_leaf_address(_:u64)->Option<u64>{None}pub fn arena_leaf(_:u64,_:u8)->Option<u64>{None}pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}pub fn write_frames(_:u64,_:&[u8]){}}
+mod program_frames{pub fn take()->Option<u64>{None}pub fn give(_:u64){}}
+#[path="../crates/sex-pdx/src/program_image.rs"]mod program_image;
+#[path="../crates/sex-pdx/src/program_code.rs"]pub mod program_code;
+pub struct HhdmResp{pub offset:u64}pub struct HhdmReq;impl HhdmReq{pub fn response(&self)->Option<HhdmResp>{Some(HhdmResp{offset:0})}}pub static HHDM_REQUEST:HhdmReq=HhdmReq;
+mod smp{pub mod tlb{pub fn flush_pages(_:usize,_:impl Iterator<Item=u64>){}}}
 mod pci_command{pub fn quiesce(_: &crate::capability::ProtectionDomain){}}
 mod iommu{pub fn revoke(_:u32){}}
 mod device_irq{pub fn snapshot(_:u32){}pub fn reset_begin(_:u32)->bool{false}pub fn reset_end(_:u32){}}
 mod program_workers{pub fn end(_:u32){}pub fn all_dead(_:u32)->bool{true}}
 mod console{pub fn stop(_:std::fmt::Arguments)->!{panic!("unexpected desktop stop")}}
+extern crate alloc;
 #[path="../kernel/src/service_restart.rs"]mod service_restart;
 
 mod core_local{pub static CALLER:std::sync::atomic::AtomicU32=std::sync::atomic::AtomicU32::new(12);pub struct CoreLocal;impl CoreLocal{pub fn get()->Self{Self}pub fn current_pd(&self)->u32{CALLER.load(crate::Ordering::Acquire)}}}

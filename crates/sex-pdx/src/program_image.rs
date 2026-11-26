@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 //! Pure check of an untrusted program file, before any of it touches a page.
 //! Every offset is bounded here, so the loader that follows cannot go out of range.
 pub const PAGE: u64 = 4096;

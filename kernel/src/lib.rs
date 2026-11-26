@@ -58,7 +58,7 @@ pub mod app_resource_state;
 pub mod app_catalog_state;
 #[cfg(target_arch = "x86_64")]
 pub mod app_resources;
-pub mod program_image;
+pub use sex_pdx::program_image;
 pub mod program_records;
 pub mod program_tenancy;
 pub mod views;
