@@ -151,6 +151,10 @@ impl Supplicant {
     }
     pub fn ptk(&self) -> Option<&Ptk> { self.ptk.as_ref() }
 
+    /// The pairwise key now in the firmware (for software decryption of frames the
+    /// firmware passed up undecrypted).
+    pub fn pairwise_tk(&self) -> Option<[u8; 16]> { self.installed_tk }
+
     fn fresh_tk(&mut self, tk: [u8; 16]) -> Option<[u8; 16]> {
         if self.installed_tk.is_some_and(|k| ct_eq(&k, &tk)) { return None; }
         self.installed_tk = Some(tk);

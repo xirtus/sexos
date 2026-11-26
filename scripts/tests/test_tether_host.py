@@ -19,6 +19,39 @@ def free_port():
 
 
 class TetherHost(unittest.TestCase):
+    def test_sweep_down(self):
+        d = Path(tempfile.mkdtemp(prefix='tether-sweep-'))
+        port = free_port()
+        serve = subprocess.Popen([sys.executable, str(HOST), '--dir', str(d), 'serve', '--port', str(port), '--once', '--quiet', '--auto', ''],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            for _ in range(100):
+                try:
+                    s = socket.create_connection(('127.0.0.1', port), timeout=1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                self.fail('serve never listened')
+            s.sendall(b'SEXOS-SWEEP 1 trial=7 shape=down ba=on replay=on up=0 down=10000\n' + b'x' * 5000)
+            s.settimeout(5)
+            got = b''
+            while len(got) < 10000:
+                part = s.recv(65536)
+                if not part:
+                    break
+                got += part
+            s.close()
+            serve.wait(timeout=10)
+            self.assertEqual(len(got), 10000)
+            self.assertTrue(got.startswith(b'd 000000000 '))
+            kept = next(d.glob('session-*.log')).read_bytes()
+            self.assertIn(b'trial=7 shape=down', kept)
+            self.assertNotIn(b'xxxx', kept)
+            self.assertIn(b'sweep session ended after', kept)
+        finally:
+            serve.kill()
+
     def test_session(self):
         d = Path(tempfile.mkdtemp(prefix='tether-test-'))
         port = free_port()

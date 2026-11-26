@@ -1074,6 +1074,7 @@ impl Firmware {
                 (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD) => Some(join::PHY_CONTEXT_BYTES),
                 (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD) => Some(32),
                 (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD) => Some(148),
+                (hcmd::LONG_GROUP, hcmd::MAC_PM_POWER_TABLE) => Some(sex_wifi::join::MAC_POWER_BYTES),
                 (hcmd::LONG_GROUP, hcmd::BINDING_CONTEXT_CMD) => Some(28),
                 (hcmd::LONG_GROUP, hcmd::ADD_STA) => Some(48),
                 (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => Some(36),
@@ -1706,7 +1707,12 @@ fn x17_authenticates_and_associates_like_net80211() {
     assert_eq!(&rsn.1[14..18], &[0, 0x0f, 0xac, 2], "PSK");
     // Then iwx_run: the station entry updated, the MAC context told the AID.
     let sent: Vec<(u8, u8)> = sim.commands[before..].iter().map(|c| (c.0, c.1)).collect();
-    assert_eq!(sent, vec![(hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD)]);
+    assert_eq!(sent, vec![(hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::MAC_PM_POWER_TABLE)]);
+    // Awake (CAM): no power save or power management flag, keep-alive at least 25 s.
+    let power = &sim.commands[before + 2].2;
+    assert_eq!(u32::from_le_bytes(power[0..4].try_into().unwrap()), u32::from_le_bytes(sim.commands[before + 1].2[0..4].try_into().unwrap()), "our MAC");
+    assert_eq!(u16::from_le_bytes([power[4], power[5]]), 0, "bit 1 would turn 802.11 power save on");
+    assert!(u16::from_le_bytes([power[6], power[7]]) >= 25);
     let (sta, mac) = (&sim.commands[before].2, &sim.commands[before + 1].2);
     assert_eq!(sta[0], 1, "modify");
     let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
@@ -1928,6 +1934,48 @@ fn protected_from_ap(me: &[u8], bssid: &[u8], sa: &[u8], pn: u64, payload: &[u8]
     f
 }
 
+#[test]
+fn x17_takes_frames_with_mic_ok_and_decrypts_what_the_firmware_left() {
+    let (r, sim, bss, _, _, i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    let mut sim = sim;
+    let mut i = i;
+    assert_eq!(r.step, rsna::Step::Connected);
+    let me = i.mac;
+    let tk = sim.ap.wpa.as_ref().unwrap().ptk.clone().unwrap().tk;
+    let mut link = r.into_link();
+    let fam = b.boot.chip.family;
+    let gw = [0x02, 0x99, 0, 0, 0, 1];
+    // MIC OK without bit 11 (decryption done): taken, as Linux and iwx do.
+    let mut p = protected_from_ap(&me, &bss.bssid, &gw, 7, &ip(0x61));
+    p[24] = 6; // TID 6, where macOS puts TCP ACKs
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &p, 3 | 2 << 8 | 1 << 6, true));
+    // Not decrypted at all (no key found: security none): decrypted here.
+    let mut plain = vec![0u8; 26];
+    plain[0..2].copy_from_slice(&(w::FC_QOS_DATA | w::FC_FROM_DS).to_le_bytes());
+    plain[4..10].copy_from_slice(&me); plain[10..16].copy_from_slice(&bss.bssid); plain[16..22].copy_from_slice(&gw);
+    plain[24] = 6;
+    plain.extend_from_slice(&[0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x00]);
+    plain.extend_from_slice(&ip(0x62));
+    let mut air = vec![0u8; plain.len() + 16];
+    ccmp::encrypt_frame(&tk, &plain, 26, 8, 0, &mut air).unwrap();
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &air, 3, true));
+    // The same with a broken MIC: refused, and counted.
+    let mut bad = air.clone();
+    let end = bad.len() - 1;
+    bad[end] ^= 1;
+    bad[26] = 9; // a new packet number, so only the MIC can refuse it
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &bad, 3, true));
+    let mut got = vec![];
+    link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec()));
+    assert_eq!(got.len(), 2);
+    assert_eq!(&got[0][14..], &ip(0x61)[..]);
+    assert_eq!(&got[1][14..], &ip(0x62)[..]);
+    assert_eq!((link.rx_stats.sw_ok, link.rx_stats.sw_fail), (1, 1));
+    assert_eq!(link.rx_stats.tid_in[6], 2);
+    assert_eq!(link.rx_stats.tid_not_decrypted[6], 1);
+    assert_eq!(link.rx_stats.last_other.map(|d| d.kind), Some(link::Drop::NotDecrypted));
+}
+
 /// A 28-byte IPv4 packet filled with `fill` past its header's version and length.
 fn ip(fill: u8) -> Vec<u8> {
     let mut p = vec![fill; 28];
@@ -2002,6 +2050,32 @@ fn x17_carries_ethernet_over_wpa2() {
     assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
     let fills: Vec<u8> = got.iter().map(|e| e[15]).collect();
     assert_eq!(fills, vec![0x50, 0x51, 0x52]);
+    assert_eq!(link.dropped, 3 + 4);
+    // An A-MSDU the hardware did not split (the x17's lost TCP ACKs): its body is
+    // subframes (DA, SA, length, LLC payload, padded to 4), each passed up with
+    // its own addresses. Address 3 is the BSSID.
+    let mut f = protected_from_ap(&me, &bss.bssid, &bss.bssid, 30, &[]);
+    f.truncate(34);
+    f[22..24].copy_from_slice(&(9u16 << 4).to_le_bytes());
+    f[24] |= 0x80; // QoS: A-MSDU present
+    let gw2 = [0x02, 0x99, 0, 0, 0, 2];
+    for (k, (sa, fill)) in [(gw, 0x60u8), (gw2, 0x61)].into_iter().enumerate() {
+        let mut msdu = vec![0xaa, 0xaa, 3, 0, 0, 0, 0x08, 0x00];
+        msdu.extend_from_slice(&ip(fill));
+        f.extend_from_slice(&me);
+        f.extend_from_slice(&sa);
+        f.extend_from_slice(&(msdu.len() as u16).to_be_bytes());
+        f.extend_from_slice(&msdu);
+        if k == 0 { while (f.len() - 34) % 4 != 0 { f.push(0); } }
+    }
+    f.extend_from_slice(&[0xee; 8]); // MIC
+    sim.deliver(&mut m, &b.layout, &mpdu_status(fam, &f, ok, true));
+    let mut got: Vec<Vec<u8>> = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
+    assert_eq!(got.len(), 2, "both subframes");
+    assert_eq!((&got[0][0..6], &got[0][6..12], got[0][15]), (&me[..], &gw[..], 0x60));
+    assert_eq!((&got[1][6..12], got[1][15]), (&gw2[..], 0x61));
+    assert_eq!(&got[1][14..], &ip(0x61)[..]);
     assert_eq!(link.dropped, 3 + 4);
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
@@ -2220,6 +2294,7 @@ fn x17_associates_as_wifi6_on_80mhz() {
     assert_eq!(sent, vec![
         (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::ADD_STA),
         (hcmd::DATA_PATH_GROUP, sex_wifi::ax::STA_HE_CTXT_CMD), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD),
+        (hcmd::LONG_GROUP, hcmd::MAC_PM_POWER_TABLE),
     ]);
     let c = |k: usize| &sim.commands[before + k].2;
     let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
@@ -2299,4 +2374,35 @@ fn x17_reorders_a_block_ack_session() {
     let mut plain = link::Link::new(tx::TxQueue::new(fam), target, me, fam, true);
     assert_eq!(plain.ba, None);
     let _ = &mut plain;
+}
+
+/// x17 tether stall: an answer's SSN is a ring entry, not our 16-bit write pointer.
+/// One that does not match it exactly must still free only the answered frames, not
+/// the ones waiting behind them (whose byte counts would be zeroed).
+#[test]
+fn tx_release_frees_up_to_the_answered_ring_entry() {
+    let fw_file = synthetic_firmware();
+    let fw = ucode::Firmware::parse(&fw_file).unwrap();
+    let family = devices::Family::Ax210;
+    let layout = context::Layout::plan(family, &fw.image(), 0, 2 << 20).unwrap();
+    let mut m = Memory(vec![0; 2 << 20]);
+    let mut hw = Chip::new();
+    let mut q = tx::TxQueue::new(family);
+    let frame = [0u8; 60];
+    let status = |ssn: u32| tx::Status { index: 0, status: 1, retries: 0, ssn };
+    // 4100 frames, answered one at a time with a 12-bit SSN (wraps at 4096).
+    for n in 0..4100u32 {
+        q.send(&mut m, &mut hw, &layout, 0, &frame, 24, 0, 0).unwrap();
+        q.release(&mut m, &layout, status((n + 1) & 0xfff));
+        assert_eq!(q.queued, 0, "frame {n}");
+    }
+    // Three out, one answered: two stay queued, their byte counts kept.
+    for _ in 0..3 { q.send(&mut m, &mut hw, &layout, 0, &frame, 24, 0, 0).unwrap(); }
+    q.release(&mut m, &layout, status((4101) & 0xfff));
+    assert_eq!(q.queued, 2);
+    let at = |i: u64| u16::from_le_bytes(m.0[(layout.tx_byte_counts.offset + i * 2) as usize..][..2].try_into().unwrap());
+    assert_eq!(at(4100 % 256), 0);
+    assert_ne!(at(4101 % 256), 0);
+    assert_ne!(at(4102 % 256), 0);
+    assert!(q.ssn_skew > 0);
 }

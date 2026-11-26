@@ -13,6 +13,8 @@
    and runs `df` there; dropping the connection leaves it listening; `tether off`.
 6. `hw record` writes hw-record-1.txt now and hw-record-2.txt 30 s later, each holding
    the report and Spindle's newest lines.
+7. `tether sweep HOST 1 down`: four Wi-Fi test trials (here over Ethernet), each moving
+   512 KiB from the host to SexOS, all passing.
 """
 import argparse, os, re, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -163,6 +165,23 @@ def main():
         s4 = len(t())
         line('hw record off')
         g['wait'](r'\[spindle\.hw\.record\] on=0 writes=2', s4, 30)
+
+        # tether sweep, one shape: `down` needs the host's answer to its header. Four
+        # trials (the four switch settings), each a pass, then the summary.
+        sdir = logs / 'sweep'
+        sport = free_port()
+        sweep_host = subprocess.Popen([sys.executable, str(HOST), '--dir', str(sdir), 'serve', '--port', str(sport), '--quiet', '--auto', ''],
+                                      stdout=open(a.out / 'tether-sweep-host.log', 'w'), stderr=subprocess.STDOUT)
+        try:
+            s5 = len(t())
+            line(f'tether sweep 10.0.2.2:{sport} 1 down')
+            for k in range(1, 5):
+                g['wait'](rf'\[spindle\.sweep\.trial\] trial {k} down ba=\w+ replay=\w+ -> pass up=\d+ down=524288 ', s5, 150)
+            g['wait'](r'tether sweep: done, 4 trials', s5, 60)
+            assert len(list(sdir.glob('session-*.log'))) == 4, list(sdir.iterdir())
+            report['sweep_trials'] = 4
+        finally:
+            sweep_host.kill()
         assert 'KERNEL PANIC' not in t()
     finally:
         g['stop']()

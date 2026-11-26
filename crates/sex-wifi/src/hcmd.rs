@@ -48,6 +48,8 @@ pub const ADD_STA_KEY: u8 = 0x17;
 pub const ADD_STA: u8 = 0x18;
 pub const TX_CMD: u8 = 0x1c;
 pub const MAC_CONTEXT_CMD: u8 = 0x28;
+/// Per-MAC power management (`MAC_PM_POWER_TABLE`).
+pub const MAC_PM_POWER_TABLE: u8 = 0xa9;
 pub const BINDING_CONTEXT_CMD: u8 = 0x2b;
 /// MAC_CONF_GROUP.
 pub const SESSION_PROTECTION_CMD: u8 = 0x05;

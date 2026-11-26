@@ -29,6 +29,7 @@
 //! (MCAST_FILTER_CMD with pass_all, as `iwx_allow_mcast` does), so IPv6 neighbour
 //! discovery and mDNS arrive and not only broadcasts.
 use crate::bringup::Bringup;
+use crate::ccmp;
 use crate::cmdq::CommandQueue;
 use crate::context::{Dma, DmaRead};
 use crate::csr::{self, Registers};
@@ -91,6 +92,10 @@ pub fn parse_missed_beacons(p: &Packet<'_>) -> Option<u32> {
     p.data.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
 }
 
+/// Frames of the block-ack session dropped in a row before reordering is given up
+/// on (Linux sends a DELBA after `IWL_MVM_AMPDU_CONSEC_DROPS_DELBA`, 10).
+const BA_GIVE_UP_DROPS: u32 = 16;
+
 /// The firmware saw this frame before (`IWX_RX_MPDU_RES_STATUS_DUPLICATE`).
 const STATUS_DUPLICATE: u32 = 1 << 22;
 /// How long a block-ack window may sit with holes before they are given up.
@@ -115,12 +120,16 @@ struct Intake<'a> {
     received: u64,
     dropped: u64,
     last_drop: Option<Drop>,
+    replay: bool,
+    /// Frames passed up and replays dropped, per TID (0..7; 8..15 fold into 7).
+    tid_in: [u32; 8],
+    replays: [u32; 8],
 }
 impl Intake<'_> {
     /// `subframe`: the frame's sequence number and A-MSDU subframe index.
     fn take(&mut self, eth: &[u8], tid: usize, number: Option<(usize, u64)>, subframe: (u16, u8), deliver: &mut impl FnMut(&[u8])) {
         let n = eth.len();
-        if let Some((key, number)) = number {
+        if let Some((key, number)) = number.filter(|_| self.replay) {
             // A-MSDU subframes after the first share the frame's packet number:
             // the same number passes only for a later subframe of the same frame,
             // so a replayed A-MSDU loses every subframe, not just the first.
@@ -130,6 +139,7 @@ impl Intake<'_> {
             if replay {
                 self.dropped += 1;
                 self.last_drop = Some(Drop::Replay);
+                self.replays[tid.min(7)] += 1;
                 return;
             }
             self.pn[key][tid] = Some((number, seq, index));
@@ -138,13 +148,34 @@ impl Intake<'_> {
         if key && self.rekeying && n - 14 <= eapol::MAX_FRAME {
             self.key_frame[..n - 14].copy_from_slice(&eth[14..n]);
             *self.key_len = n - 14;
-        } else if n > 0 && !key { self.received += 1; deliver(eth); }
+        } else if n > 0 && !key { self.received += 1; self.tid_in[tid.min(7)] += 1; deliver(eth); }
     }
     fn take_slot(&mut self, slots: &ba::Slots, i: usize, tid: usize, deliver: &mut impl FnMut(&[u8])) {
         let n = slots.len[i] as usize;
-        self.take(&slots.data[i][..n], tid, slots.pn[i], (0, 0), deliver);
+        self.take(&slots.data[i][..n], tid, slots.pn[i], slots.sub[i], deliver);
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct Malformed { pub head: [u8; MALFORMED_HEAD], pub len: u16, pub status: u32, pub subframe: Option<u8> }
+
+/// The last data frame dropped for a reason other than its shape (not decrypted,
+/// replay), for `[wifi.link.now6]`.
+#[derive(Clone, Copy)]
+pub struct Dropped { pub kind: Drop, pub head: [u8; MALFORMED_HEAD], pub len: u16, pub status: u32, pub tid: u8 }
+
+/// Receive counters by TID and by why frames were refused (`[wifi.link.now6]`).
+#[derive(Clone, Copy, Default)]
+pub struct RxStats {
+    pub tid_in: [u32; 8],
+    pub tid_not_decrypted: [u32; 8],
+    pub replays: [u32; 8],
+    /// Undecrypted by the firmware, then decrypted here (or refused here).
+    pub sw_ok: u32,
+    pub sw_fail: u32,
+    pub last_other: Option<Dropped>,
+}
+pub const MALFORMED_HEAD: usize = 48;
 
 /// Why a frame from the air was not passed up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +202,20 @@ pub struct Link {
     pub received: u64,
     pub dropped: u64,
     pub last_drop: Option<Drop>,
+    /// The last frame dropped as malformed (diagnostics): its first bytes as
+    /// they came (after the pad), its length, RX status and A-MSDU subframe.
+    pub malformed: Option<Malformed>,
+    pub malformed_count: u64,
+    /// Frames to us the firmware flagged duplicate, and the RX status and reorder
+    /// word of the last frame to us (diagnostics).
+    pub dup_flagged: u64,
+    pub last_unicast: Option<(u32, u32)>,
+    pub rx_stats: RxStats,
+    /// Field tests: hand frames up without block-ack reordering; skip the replay check.
+    pub ba_bypass: bool,
+    pub replay_check: bool,
+    /// Times reordering was given up on after `BA_GIVE_UP_DROPS` drops in a row.
+    pub ba_gave_up: u32,
     pub down: Option<Down>,
     rekey: Option<Rekey>,
     /// Key messages answered after the handshake, keys installed since, and the
@@ -207,7 +252,10 @@ pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) ->
     let fc = u16::from_le_bytes([frame[0], frame[1]]);
     let tid = if fc & 0x0080 != 0 { (frame[24 + if fc & 0x0300 == 0x0300 { 6 } else { 0 }] & 0x0f) as usize } else { 0 };
     let (body, pn) = if fc & w::FC_PROTECTED != 0 {
-        if status & STATUS_SEC_MASK != STATUS_SEC_CCM || status & (STATUS_DEC_DONE | STATUS_MIC_OK) != (STATUS_DEC_DONE | STATUS_MIC_OK) {
+        // CCM and MIC OK is decrypted, as iwlwifi (`iwl_mvm_rx_crypto`) and iwx
+        // (`iwx_rx_hwdecrypt`) take it. Bit 11 is not required: frames without it
+        // (the x17's AP: the small high-priority ones, TCP ACKs) were all dropped.
+        if status & STATUS_SEC_MASK != STATUS_SEC_CCM || status & STATUS_MIC_OK == 0 {
             return Err(Drop::NotDecrypted);
         }
         let iv = frame.get(hdr..hdr + CCMP_HEADER).ok_or(Drop::Malformed)?;
@@ -221,6 +269,52 @@ pub fn decap(frame: &[u8], status: u32, protected_link: bool, out: &mut [u8]) ->
     };
     let n = w::to_ethernet(&frame[..hdr], body, out).ok_or(Drop::Malformed)?;
     Ok((declared(&out[..n]).ok_or(Drop::Malformed)?, tid, pn))
+}
+
+/// Where the subframes of an unsplit A-MSDU sit in its frame.
+#[derive(Clone, Copy)]
+struct AmsduParts { head: usize, count: usize, at: [(u16, u16); MAX_SUBFRAMES] }
+const MAX_SUBFRAMES: usize = 16;
+impl AmsduParts {
+    /// Subframe `i` as a frame of its own (header with the A-MSDU bit cleared,
+    /// CCMP header, LLC payload) in `out`; its length and DA/SA.
+    fn frame(&self, f: &[u8], i: usize, out: &mut [u8; 4096]) -> (usize, [u8; 12]) {
+        let (at, len) = (self.at[i].0 as usize, self.at[i].1 as usize);
+        out[..self.head].copy_from_slice(&f[..self.head]);
+        let qos = 24 + if f[1] & 3 == 3 { 6 } else { 0 };
+        out[qos] &= !0x80;
+        out[self.head..self.head + len].copy_from_slice(&f[at + 14..at + 14 + len]);
+        let mut addrs = [0u8; 12];
+        addrs.copy_from_slice(&f[at..at + 12]);
+        (self.head + len, addrs)
+    }
+}
+
+/// An A-MSDU (QoS A-MSDU bit set) whose body is subframes (DA, SA, length, LLC
+/// payload, padded to 4 bytes) rather than one LLC/SNAP payload. On the x17 the
+/// AP's TCP ACKs to us stopped arriving mid-stream, all dropped as malformed.
+fn amsdu_parts(f: &[u8], status: u32) -> Option<AmsduParts> {
+    let hdr = w::data_header_len(f)?;
+    let fc = u16::from_le_bytes([f[0], f[1]]);
+    if fc & 0x0080 == 0 { return None; }
+    let qos = 24 + if fc & 0x0300 == 0x0300 { 6 } else { 0 };
+    if f[qos] & 0x80 == 0 { return None; }
+    let protected = fc & w::FC_PROTECTED != 0 && status & STATUS_SEC_MASK == STATUS_SEC_CCM;
+    let head = hdr + if protected { CCMP_HEADER } else { 0 };
+    let body = f.get(head..)?;
+    // Already one MSDU (the hardware split it and left the bit set).
+    if body.len() >= 6 && body[..6] == [0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00] { return None; }
+    let mut parts = AmsduParts { head, count: 0, at: [(0, 0); MAX_SUBFRAMES] };
+    let mut at = head;
+    while at + 14 <= f.len() && parts.count < MAX_SUBFRAMES {
+        let len = u16::from_be_bytes([f[at + 12], f[at + 13]]) as usize;
+        if len < 8 || at + 14 + len > f.len() { break; }
+        parts.at[parts.count] = (at as u16, len as u16);
+        parts.count += 1;
+        // Each subframe but the last is padded to 4 bytes, counted from the first.
+        at = head + ((at + 14 + len - head + 3) & !3);
+    }
+    (parts.count > 0).then_some(parts)
 }
 
 /// The length of an Ethernet frame by what its packet says it holds: IPv4 total
@@ -242,7 +336,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, dup_flagged: 0, last_unicast: None, rx_stats: RxStats { tid_in: [0; 8], tid_not_decrypted: [0; 8], replays: [0; 8], sw_ok: 0, sw_fail: 0, last_other: None }, ba_bypass: false, replay_check: true, ba_gave_up: 0, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0,
             ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
@@ -333,7 +427,14 @@ impl Link {
         let mut addba = None;
         let mut delba = None;
         let mut moved = false;
-        let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+        let (mut malformed, mut malformed_count) = (None, 0u64);
+        let (mut dup_flagged, mut last_status) = (0u64, None);
+        let ba_bypass = self.ba_bypass;
+        let mut ba_gave_up = false;
+        let tk = self.rekey.as_ref().and_then(|k| k.sup.pairwise_tk());
+        let mut stats = self.rx_stats;
+        let mut soft = [0u8; 4096];
+        let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check, tid_in: [0; 8], replays: [0; 8] };
         let result = b.receive(r, dma, |p: &Packet<'_>| {
             if cmdq.on_packet(p) {
                 if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { intake.pn[id] = [None; 16]; } }
@@ -372,12 +473,78 @@ impl Link {
             }
             // Data from our AP only, and not our own broadcasts relayed back.
             if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
-            match decap(f, rx.status, protected, &mut eth) {
+            // Null and QoS Null (subtype bit 2): no body, nothing to take or count.
+            if f[0] & 0x40 != 0 { return; }
+            // An A-MSDU the hardware did not split: each subframe on its own, as
+            // the frame's header and CCMP header before the subframe's LLC payload.
+            let parts = amsdu_parts(f, rx.status);
+            let count = parts.map_or(1, |p| p.count);
+            for part in 0..count {
+            let mut sub = [0u8; 4096];
+            let (f, index, addrs) = match parts {
+                Some(p) => { let (n, a) = p.frame(f, part, &mut sub); (&sub[..n], part as u8, Some(a)) }
+                None => (f, rx.subframe.unwrap_or(0), None),
+            };
+            let mut result = decap(f, rx.status, protected, &mut eth);
+            // The firmware passed a protected unicast frame up without decrypting it
+            // (Linux's mac80211 then decrypts in software): do the same with the
+            // pairwise key, then take it as if the firmware had.
+            if let (Err(Drop::NotDecrypted), Some(tk), Some(hdr)) = (result, tk, w::data_header_len(f)) {
+                if f[1] & 0x40 != 0 && f[4] & 1 == 0 && f.len() <= soft.len() && parts.is_none() {
+                    // A padded frame: the two pad bytes after the header, or after the IV.
+                    // Without a pad, the frame as parsed (`None`).
+                    let tries: [Option<usize>; 2] = [Some(hdr), Some(hdr + ccmp::HEADER_LEN)];
+                    let count = if rx.raw.is_some() { 2 } else { 1 };
+                    let mut done = false;
+                    for k in 0..count {
+                        let n = match (rx.raw, tries[k]) {
+                            (Some(r), Some(at)) if r.len() >= at + 2 && r.len() <= soft.len() => {
+                                soft[..at].copy_from_slice(&r[..at]);
+                                soft[at..r.len() - 2].copy_from_slice(&r[at + 2..]);
+                                r.len() - 2
+                            }
+                            (Some(_), _) => continue,
+                            (None, _) => { soft[..f.len()].copy_from_slice(f); f.len() }
+                        };
+                        if let Ok((_, plain)) = ccmp::decrypt_frame(&tk, &mut soft[..n], hdr) {
+                            // Header, CCMP header, plaintext: the MIC is gone, as from the firmware.
+                            let end = hdr + ccmp::HEADER_LEN + plain.len();
+                            soft.copy_within(plain.start..plain.end, hdr + ccmp::HEADER_LEN);
+                            stats.sw_ok += 1;
+                            result = decap(&soft[..end], STATUS_SEC_CCM | STATUS_DEC_DONE | STATUS_MIC_OK, protected, &mut eth);
+                            done = true;
+                            break;
+                        }
+                    }
+                    if !done { stats.sw_fail += 1; }
+                }
+            }
+            match result {
                 Ok((n, tid, number)) => {
-                    let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, rx.subframe.unwrap_or(0));
+                    // The subframe's own addresses (in an A-MSDU, address 3 is the BSSID).
+                    if let Some(a) = addrs { eth[..12].copy_from_slice(&a); }
+                    let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, index);
                     let qos_unicast = f[0] & 0x80 != 0 && f[4] & 1 == 0;
+                    if f[4] & 1 == 0 { last_status = Some((rx.status, rx.reorder)); }
                     let verdict = match (session.as_mut(), qos_unicast) {
-                        (Some(s), true) => s.frame(rx.reorder, tid as u8, rx.status & STATUS_DUPLICATE != 0, false),
+                        (Some(s), true) if !ba_bypass => {
+                            // A duplicate is a retry of a frame already taken. The bit
+                            // alone is not trusted: on newer firmware bits 16..31 of this
+                            // word are the A1 hash and filter status, and a set bit 22
+                            // there dropped good frames for no reason.
+                            let flagged = rx.status & STATUS_DUPLICATE != 0;
+                            if flagged { dup_flagged += 1; }
+                            let amsdu = match parts {
+                                Some(_) => Some((part as u8, part + 1 == count)),
+                                None => rx.subframe.map(|i| (i, rx.last_subframe)),
+                            };
+                            let v = s.frame(rx.reorder, tid as u8, flagged && f[1] & 0x08 != 0, false, amsdu);
+                            // A firmware window out of step with the AP: every frame comes
+                            // marked old and is dropped (`iwl_mvm_oldsn_workaround`). Hand
+                            // frames up unordered from now on rather than lose them all.
+                            if s.consecutive_drops >= BA_GIVE_UP_DROPS { ba_gave_up = true; s.consecutive_drops = 0; }
+                            v
+                        }
                         _ => ba::Verdict::Outside,
                     };
                     match verdict {
@@ -388,6 +555,7 @@ impl Link {
                             sl.data[i][..n].copy_from_slice(&eth[..n]);
                             sl.len[i] = n as u16;
                             sl.pn[i] = number;
+                            sl.sub[i] = subframe;
                             s.release(ba::Session::nssn(rx.reorder), |i| intake.take_slot(sl, i, tid, &mut deliver));
                             moved = true;
                         }
@@ -395,10 +563,36 @@ impl Link {
                 }
                 // A frame with no payload (null data) is not an error.
                 Err(Drop::Malformed) if w::data_header_len(f) == Some(f.len()) => {}
-                Err(d) => { intake.dropped += 1; intake.last_drop = Some(d); }
+                Err(d) => {
+                    intake.dropped += 1;
+                    intake.last_drop = Some(d);
+                    if d != Drop::Malformed {
+                        let tid = if f[0] & 0x80 != 0 && f.len() > 24 { f[24] & 0x0f } else { 0 };
+                        if d == Drop::NotDecrypted { stats.tid_not_decrypted[(tid as usize).min(7)] += 1; }
+                        let mut head = [0u8; MALFORMED_HEAD];
+                        let k = f.len().min(MALFORMED_HEAD);
+                        head[..k].copy_from_slice(&f[..k]);
+                        stats.last_other = Some(Dropped { kind: d, head, len: f.len() as u16, status: rx.status, tid });
+                    }
+                    if d == Drop::Malformed {
+                        let mut head = [0u8; MALFORMED_HEAD];
+                        let k = f.len().min(MALFORMED_HEAD);
+                        head[..k].copy_from_slice(&f[..k]);
+                        malformed = Some(Malformed { head, len: f.len() as u16, status: rx.status, subframe: rx.subframe });
+                        malformed_count += 1;
+                    }
+                }
+            }
             }
         });
+        if ba_gave_up && !self.ba_bypass { self.ba_bypass = true; self.ba_gave_up += 1; }
+        self.dup_flagged += dup_flagged;
+        if last_status.is_some() { self.last_unicast = last_status; }
+        if malformed.is_some() { self.malformed = malformed; }
+        self.malformed_count += malformed_count;
         let (received, dropped, last_drop) = (intake.received, intake.dropped, intake.last_drop);
+        for t in 0..8 { stats.tid_in[t] += intake.tid_in[t]; stats.replays[t] += intake.replays[t]; }
+        self.rx_stats = stats;
         self.pn = pn;
         self.received += received;
         self.dropped += dropped;
@@ -411,7 +605,7 @@ impl Link {
             if let (Some(s), Some(sl)) = (self.ba.as_mut(), slots.as_deref_mut()) {
                 let tid = s.tid as usize;
                 let mut pn = self.pn;
-                let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+                let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check, tid_in: [0; 8], replays: [0; 8] };
                 s.flush(|i| intake.take_slot(sl, i, tid, &mut deliver));
                 self.received += intake.received;
                 self.dropped += intake.dropped;
@@ -524,7 +718,7 @@ impl Link {
                     let tid = s.tid as usize;
                     let (mut key_frame, mut key_len) = ([0u8; eapol::MAX_FRAME], 0);
                     let mut pn = self.pn;
-                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check, tid_in: [0; 8], replays: [0; 8] };
                     s.flush(|i| intake.take_slot(sl, i, tid, deliver));
                     self.received += intake.received;
                     self.pn = pn;

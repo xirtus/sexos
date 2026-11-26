@@ -141,8 +141,8 @@ static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
 /// The receive queue, and what IPv4 went by (for `[wifi.link.ip]`: whether DHCP
 /// requests leave and answers come back).
-struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32), unicast_in: u32 }
-impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0), unicast_in: 0 }; }
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32), unicast_in: u32, tx_full: u32 }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0), unicast_in: 0, tx_full: 0 }; }
 
 /// An Ethernet frame's kind: 1 IPv4, 2 ARP, 3 DHCP (IPv4 UDP to or from port 67/68), 0 other.
 fn ip_kind(f: &[u8]) -> u8 {
@@ -736,6 +736,55 @@ impl Wifi {
     pub fn link_up(&self) -> bool { self.link.as_ref().is_some_and(|l| l.up()) }
     pub fn link_mac(&self) -> Option<[u8; 6]> { self.link.as_ref().map(|l| l.me()) }
     pub fn link_ready(&self) -> bool { self.link.as_ref().is_some_and(|l| l.ready()) }
+    /// Logs the link's counters now (`[wifi.link.now]`, `[wifi.link.now2]`): Spindle's
+    /// `wifi` shows them, since typing alone can push older lines out of the log's tail.
+    pub fn log_link_now(&self) {
+        let Some(l) = self.link.as_ref() else { sex_pdx::serial_record!("[wifi.link.now] link=none"); return };
+        let q = &self.rx;
+        let t = &l.tx;
+        let (ssn, last) = t.last.map_or((0, 0), |s| (s.ssn, s.status));
+        sex_pdx::serial_record!("[wifi.link.now] up={} ready={} sent={} ok={} failed={} queued={} cur={} hw={} tail_hw={} ssn={} last={:#x} skew={} full={}",
+            l.up() as u8, l.ready() as u8, l.sent, l.tx_ok, l.tx_failed, t.queued, t.cur, t.hw, t.tail_hw(), ssn, last, t.ssn_skew, q.tx_full);
+        if l.ba_bypass || !l.replay_check { sex_pdx::serial_record!("[wifi.link.now5] tests: ba={} replay={} ba_gave_up={}", if l.ba_bypass { "off" } else { "on" }, if l.replay_check { "on" } else { "off" }, l.ba_gave_up); }
+        sex_pdx::serial_record!("[wifi.link.now2] rx={} dropped={} last_drop={:?} overflow={} queued_in={} v4_out={} v4_in={} arp={}/{} unicast_in={} missed_beacons={} ba={} flushes={}",
+            l.received, l.dropped, l.last_drop, q.overflow, q.count, q.tx_v4, q.rx_v4, q.tx_arp, q.rx_arp, q.unicast_in, l.missed_beacons, l.ba.is_some() as u8, l.ba_flushes);
+        let x = &l.rx_stats;
+        sex_pdx::serial_record!("[wifi.link.now6] tid_in={:?} not_decrypted={:?} replays={:?} sw_ok={} sw_fail={}", x.tid_in, x.tid_not_decrypted, x.replays, x.sw_ok, x.sw_fail);
+        if let Some(d) = x.last_other {
+            let mut hex = [0u8; 2 * sex_wifi::link::MALFORMED_HEAD];
+            let k = (d.len as usize).min(sex_wifi::link::MALFORMED_HEAD);
+            for (j, b) in d.head[..k].iter().enumerate() { hex[2 * j] = b"0123456789abcdef"[(b >> 4) as usize]; hex[2 * j + 1] = b"0123456789abcdef"[(b & 15) as usize]; }
+            sex_pdx::serial_record!("[wifi.link.now7] last_other={:?} tid={} len={} status={:#x} bytes={}", d.kind, d.tid, d.len, d.status, core::str::from_utf8(&hex[..2 * k]).unwrap_or("?"));
+        }
+        let (status, reorder) = l.last_unicast.unwrap_or((0, 0));
+        match l.ba.as_ref() {
+            Some(b) => sex_pdx::serial_record!("[wifi.link.now4] ba tid={} window={} head={} stored={} passed={} released={} dropped={} in_a_row={} dup_flagged={} last_status={:#x} reorder={:#x}",
+                b.tid, b.window, b.head(), b.stored, b.passed, b.released, b.dropped, b.consecutive_drops, l.dup_flagged, status, reorder),
+            None => sex_pdx::serial_record!("[wifi.link.now4] ba=none dup_flagged={} last_status={:#x} reorder={:#x}", l.dup_flagged, status, reorder),
+        }
+        if let Some(m) = l.malformed {
+            // Header, CCMP header and the start of the body, to see which check refused it.
+            let mut hex = [0u8; 2 * wlink::MALFORMED_HEAD];
+            let k = (m.len as usize).min(wlink::MALFORMED_HEAD);
+            for (i, b) in m.head[..k].iter().enumerate() {
+                const D: &[u8; 16] = b"0123456789abcdef";
+                hex[2 * i] = D[(b >> 4) as usize];
+                hex[2 * i + 1] = D[(b & 15) as usize];
+            }
+            sex_pdx::serial_record!("[wifi.link.now3] malformed={} len={} status={:#x} subframe={:?} bytes={}",
+                l.malformed_count, m.len, m.status, m.subframe, core::str::from_utf8(&hex[..2 * k]).unwrap_or("?"));
+        }
+    }
+    /// A field test knob (`wifi_status::TUNE`), for this boot.
+    pub fn tune(&mut self, knob: u64, on: bool) {
+        let Some(l) = self.link.as_mut() else { return };
+        match knob {
+            ws::TUNE_BA => l.ba_bypass = !on,
+            ws::TUNE_REPLAY => l.replay_check = on,
+            _ => return,
+        }
+        sex_pdx::serial_record!("[wifi.tune] knob={} on={} ba_bypass={} replay_check={}", knob, on as u8, l.ba_bypass as u8, l.replay_check as u8);
+    }
     /// Sends one Ethernet frame over the air.
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
         let Some(l) = self.link.as_mut() else { return false };
@@ -750,7 +799,12 @@ impl Wifi {
                 let q = &mut self.rx;
                 match ip_kind(ethernet) { 1 => q.tx_v4 += 1, 2 => q.tx_arp += 1, 3 => { q.tx_dhcp += 1; if q.tx_dhcp <= 24 { log_dhcp("out", ethernet); } } _ => {} }
                 if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
-            Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
+            Err(e) => {
+                let q = &mut self.rx;
+                q.tx_full += 1;
+                if q.tx_full <= 8 || q.tx_full.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?} times={}", e, q.tx_full); }
+                false
+            }
         }
     }
     /// Reads the air into the receive queue, then offers the oldest queued frame to
@@ -924,7 +978,11 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
     match (action, wifi) {
         (ws::STATE, None) | (ws::SCAN, None) => none,
         (ws::NETWORK, None) => ws::MISSING,
-        (ws::STATE, Some(w)) => w.state().word(),
+        (ws::STATE, Some(w)) => {
+            // Spindle's `wifi` (not SilkBar's polling): its counters, for `wifi` to show.
+            if spindle { w.log_link_now(); }
+            w.state().word()
+        }
         (ws::SCAN, Some(w)) if caller != 6 => { w.rescan(now_ticks); w.state().word() }
         (ws::NETWORK, Some(w)) => w.network(a, b),
         (ws::JOIN, None) => none,
@@ -935,6 +993,7 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
         }
         (ws::LEAVE, Some(w)) if caller != 6 => { w.leave(now_ticks); w.state().word() }
         (ws::LEAVE, None) => none,
+        (ws::TUNE, Some(w)) if spindle => { w.tune(a, b != 0); w.state().word() }
         (ws::WHY, Some(w)) => w.why_part(a),
         (ws::WHY, None) => ws::MISSING,
         (ws::PASSWORD, Some(w)) if caller != 6 => if w.password_part(a, b) { w.state().word() } else { ws::REFUSED },

@@ -55,7 +55,7 @@ pub static mut WIFI: Wifi = Wifi {
     why_len: 0,
 };
 
-const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | leave]";
+const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | leave | ba on|off | replay on|off]";
 
 fn send(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, ws::OP, action, a, b);
@@ -237,6 +237,12 @@ impl Wifi {
                 else { sb.push(b"Wi-Fi: the network service is unreachable."); }
                 return;
             }
+            (Some(k @ (b"ba" | b"replay")), Some(v @ (b"on" | b"off")), None) => {
+                let knob = if k == b"ba" { ws::TUNE_BA } else { ws::TUNE_REPLAY };
+                if self.ask(ws::TUNE, knob, (v == b"on") as u64) { self.waiting = Waiting::State { scan: false, join: false, leave: false }; }
+                else { sb.push(b"Wi-Fi: the network service is unreachable."); }
+                return;
+            }
             (Some(b"join"), Some(n), rest) => {
                 let Some(n) = parse(n) else { sb.push(USAGE); return; };
                 if rest.is_none() { (ws::JOIN, n - 1, false, true) } else {
@@ -273,6 +279,17 @@ impl Wifi {
                 let n = state_line(s, scan, join, leave, &mut line);
                 sb.push(&line[..n]);
                 sex_pdx::serial_record!("[spindle.wifi] phase={} networks={} scans={} channels={}", s.phase, s.networks, s.scans, s.channels);
+                // On a network: the link's counters, which sexnet logged just before
+                // answering (typing alone can push older Wi-Fi lines out of the log).
+                if matches!(s.phase, ws::ASSOCIATED | ws::CONNECTED) && !scan && !join && !leave {
+                    crate::hw_command::newest(b"[wifi.link.now]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now2]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now4]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now5]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now6]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now7]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now3]", sb);
+                }
                 // Connecting, or a try failed: why the last one failed says more than
                 // the list (the boot log may have moved past its [wifi.failed] line).
                 let trying = matches!(s.phase, ws::FAILED | ws::JOINING | ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE);

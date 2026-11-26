@@ -423,6 +423,8 @@ impl<'a> Engine<'a>{
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
         let_go(flow);
         let local=match address{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
+        // A reused flow starts without the last owner's keep-alives.
+        flow.set_keep_alive(None);
         flow.connect(self.iface.context(),(address.ip(),remote),local).map_err(|_|Error::Protocol)
     }
     /// Makes flow `flow` listen on `port`, for either family. Another flow listening there
@@ -494,15 +496,25 @@ impl<'a> Engine<'a>{
         if !flow.can_recv(){return Ok(0);}
         flow.recv_slice(out).map_err(|_|Error::Protocol)
     }
+    /// Keep-alives every 10 s on a connected flow, for a long-lived one that may sit
+    /// idle (Spindle's tether waiting for a command): the 30 s timeout counts silence
+    /// from the other side, and each keep-alive draws an ACK. Off by default: short
+    /// flows (Qupid's add-on downloads) never exited once every flow sent them.
+    pub fn open_keep_alive(&mut self,flow:usize,on:bool){
+        if let Ok(h)=self.tcp_handle(flow){self.flows.get_mut::<tcp::Socket>(h).set_keep_alive(on.then(||Duration::from_secs(10)));}
+    }
     /// Sends the flow's FIN after what is queued.
     pub fn open_shutdown(&mut self,flow:usize){
-        if let Ok(h)=self.tcp_handle(flow){self.flows.get_mut::<tcp::Socket>(h).close();}
+        // No keep-alives once ours is sent: a peer that never sends its FIN would
+        // answer them and hold FinWait2 forever; the 30 s timeout ends it instead.
+        if let Ok(h)=self.tcp_handle(flow){let s=self.flows.get_mut::<tcp::Socket>(h);s.set_keep_alive(None);s.close();}
     }
     /// Lets the flow go: reset, unless it was shut down and is finishing on its own.
     pub fn open_close(&mut self,flow:usize){
         self.open_take(flow);
         if let Ok(h)=self.tcp_handle(flow){
             let s=self.flows.get_mut::<tcp::Socket>(h);
+            s.set_keep_alive(None);
             if !matches!(s.state(),State::FinWait1|State::FinWait2|State::Closing|State::TimeWait|State::LastAck){let_go(s);}
         }
     }

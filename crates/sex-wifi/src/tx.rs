@@ -104,11 +104,13 @@ pub struct TxQueue {
     pub queued: u16,
     pub sent: u32,
     pub last: Option<Status>,
+    /// Answers whose SSN was not our write pointer (diagnostics).
+    pub ssn_skew: u32,
 }
 
 impl TxQueue {
     pub fn new(family: Family) -> Self {
-        Self { family, cur: 0, hw: 0, tail: 0, tail_hw: 0, queued: 0, sent: 0, last: None }
+        Self { family, cur: 0, hw: 0, tail: 0, tail_hw: 0, queued: 0, sent: 0, last: None, ssn_skew: 0 }
     }
     fn hw_wrap(&self) -> u32 { if self.family == Family::Ax210 { 65536 } else { TX_RING_COUNT as u32 } }
 
@@ -153,15 +155,22 @@ impl TxQueue {
 
     /// Takes a TX response (`parse_response`): frees the ring up to its SSN
     /// (`iwx_txq_advance`).
+    ///
+    /// The SSN is compared as a ring entry, as `iwl_txq_reclaim` and iwx do: the
+    /// firmware's count need not wrap where our write pointer does, and an exact
+    /// compare that never matches would free (and zero the byte counts of) frames
+    /// still waiting to go out.
     pub fn release(&mut self, dma: &mut impl Dma, layout: &Layout, s: Status) {
-        if s.ssn < self.hw_wrap() {
-            while self.tail_hw != s.ssn && self.queued > 0 {
-                dma.write(layout.tx_byte_counts.offset + self.tail as u64 * 2, &[0, 0]);
-                self.tail = ((self.tail as usize + 1) % TX_RING_COUNT) as u16;
-                self.tail_hw = (self.tail_hw + 1) % self.hw_wrap();
-                self.queued -= 1;
-            }
+        let to = (s.ssn as usize % TX_RING_COUNT) as u16;
+        while self.tail != to && self.queued > 0 {
+            dma.write(layout.tx_byte_counts.offset + self.tail as u64 * 2, &[0, 0]);
+            self.tail = ((self.tail as usize + 1) % TX_RING_COUNT) as u16;
+            self.tail_hw = (self.tail_hw + 1) % self.hw_wrap();
+            self.queued -= 1;
         }
+        if s.ssn != self.tail_hw { self.ssn_skew = self.ssn_skew.wrapping_add(1); }
         self.last = Some(s);
     }
+    /// Write pointer of the oldest frame not yet answered.
+    pub fn tail_hw(&self) -> u32 { self.tail_hw }
 }

@@ -230,6 +230,30 @@ pub fn mac_context(out: &mut [u8; MAC_CONTEXT_BYTES], action: u32, me: &[u8; 6],
     put32(out, sta + 36, aid.map_or(0, |a| (a & 0x3fff) as u32));
 }
 
+/// MAC_PM_POWER_TABLE (`iwl_mac_power_cmd`) bytes.
+pub const MAC_POWER_BYTES: usize = 40;
+/// No flags: neither POWER_SAVE_ENA (bit 0) nor POWER_MANAGEMENT_ENA (bit 1, 802.11
+/// power save with the rest of the command's timeouts) - the firmware stays awake (CAM).
+const POWER_FLAGS_AWAKE: u16 = 0;
+/// Linux's minimum keep-alive (`POWER_KEEP_ALIVE_PERIOD_SEC`).
+const KEEP_ALIVE_SECONDS: u32 = 25;
+
+/// MAC_PM_POWER_TABLE for our station in constantly-awake mode, as Linux sends it
+/// with power save disabled (`iwl_mvm_power_build_cmd` returns before setting any
+/// flag): only the keep-alive. Bit 1 (POWER_MANAGEMENT_ENA) turns 802.11 power save
+/// ON with this command's zero timeouts: the x17 then dozed after every frame, the
+/// AP buffered all unicast for it (ARP replies, TCP ACKs) while broadcasts still
+/// came, and every tether died 30 s in until a reboot.
+pub fn mac_power_awake(out: &mut [u8; MAC_POWER_BYTES], t: &Target) {
+    out.fill(0);
+    put32(out, 0, MAC_ID);
+    out[4..6].copy_from_slice(&POWER_FLAGS_AWAKE.to_le_bytes());
+    // Three DTIM intervals in TU (1.024 ms), at least 25 s, in whole seconds.
+    let dtim_ms = t.beacon_interval as u32 * t.dtim_period.max(1) as u32 * 1024 / 1000;
+    let keep = (3 * dtim_ms).max(1000 * KEEP_ALIVE_SECONDS).div_ceil(1000);
+    out[6..8].copy_from_slice(&(keep as u16).to_le_bytes());
+}
+
 /// BINDING_CONTEXT_CMD v2: our MAC context on PHY context 0, on the same LMAC.
 pub fn binding(out: &mut [u8; BINDING_BYTES], action: u32, channel: u8, cdb: bool) {
     out.fill(0);

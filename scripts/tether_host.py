@@ -144,6 +144,21 @@ def serve(d: Path, port: int, auto: list, once: bool, quiet: bool):
             return
 
 
+def sweep_reply(header: bytes) -> bytes:
+    """The data a `SEXOS-SWEEP ... down=N` trial asks for: N bytes of 64-byte lines."""
+    if not header.startswith(b'SEXOS-SWEEP'):
+        return b''
+    want = 0
+    for word in header.split():
+        if word.startswith(b'down=') and word[5:].isdigit():
+            want = min(int(word[5:]), 64 * 1024 * 1024)
+    out = bytearray()
+    while len(out) < want:
+        line = f'd {len(out):09} '.encode().ljust(63, b'.') + b'\n'
+        out += line
+    return bytes(out[:want])
+
+
 def session(d: Path, conn, peer: str, auto: list, quiet: bool):
     """One SexOS session on a connected socket, whichever side connected."""
     inbox = d / 'inbox.txt'
@@ -164,6 +179,9 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
     write_state(d, connected=True, peer=peer, session=path.name, started=started, bytes=0)
     conn.setblocking(False)
     pending = b''.join(c.encode() + b'\n' for c in auto)
+    # `tether sweep`: the first line names the trial; `down=N` asks for N bytes back.
+    first = b''
+    sweep = False
     last_state = 0.0
     with path.open('ab') as log:
         while True:
@@ -177,7 +195,22 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
                     data = b''
                 if data == b'':
                     break
-                if data:
+                if data and first is not None:
+                    first += data
+                    if b'\n' in first or len(first) > 4096:
+                        header = first.split(b'\n', 1)[0]
+                        reply = sweep_reply(header)
+                        if header.startswith(b'SEXOS-SWEEP'):
+                            # Test data is not kept: only the trial's line and its size.
+                            sweep = True
+                            log.write(header + b'\n')
+                            log.flush()
+                            print(f'tether: sweep {header.decode("utf-8", "replace")}', flush=True)
+                        pending += reply
+                        first = None
+                if data and sweep:
+                    received += len(data)
+                elif data:
                     log.write(data)
                     log.flush()
                     received += len(data)
@@ -206,6 +239,9 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
                 last_state = time.time()
                 write_state(d, connected=True, peer=peer, session=path.name, started=started, bytes=received)
     conn.close()
+    if sweep:
+        with path.open('ab') as log:
+            log.write(f'sweep session ended after {received} bytes\n'.encode())
     print(f'\ntether: {peer} disconnected after {received} bytes', flush=True)
     write_state(d, connected=False, last_session=path.name, bytes=received, ended=time.time())
 

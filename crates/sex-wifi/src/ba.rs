@@ -190,18 +190,25 @@ pub struct Session {
     pub passed: u64,
     pub released: u64,
     pub dropped: u64,
+    /// Frames dropped in a row (old or duplicate): a firmware window out of step
+    /// with the AP drops every frame, and the link gives up on reordering.
+    pub consecutive_drops: u32,
 }
 
 impl Session {
     pub fn new(tid: u8, baid: u8, ssn: u16, window: u16) -> Self {
-        Self { tid, baid, window: window.clamp(1, WINDOW as u16), head: ssn & 0xfff, held: 0, valid: false, stored: 0, passed: 0, released: 0, dropped: 0 }
+        Self { tid, baid, window: window.clamp(1, WINDOW as u16), head: ssn & 0xfff, held: 0, valid: false, stored: 0, passed: 0, released: 0, dropped: 0, consecutive_drops: 0 }
     }
     pub fn head(&self) -> u16 { self.head }
     fn slot(&self, sn: u16) -> usize { (sn % self.window) as usize }
 
     /// A unicast QoS data frame (or block-ack request, `bar`) with this
     /// descriptor `reorder` word, `tid`, and the firmware's duplicate bit.
-    pub fn frame(&mut self, reorder: u32, tid: u8, duplicate: bool, bar: bool) -> Verdict {
+    /// `amsdu`: for one subframe of an A-MSDU, its index and whether it is the
+    /// last. Subframes share the sequence number; the head moves on the last one
+    /// only (`iwl_mvm_reorder`).
+    pub fn frame(&mut self, reorder: u32, tid: u8, duplicate: bool, bar: bool, amsdu: Option<(u8, bool)>) -> Verdict {
+        let (index, last) = amsdu.unwrap_or((0, true));
         let baid = ((reorder >> REORDER_BAID_SHIFT) & 0x7f) as u8;
         if baid == INVALID_BAID || baid != self.baid || tid != self.tid { return Verdict::Outside; }
         let nssn = (reorder & REORDER_NSSN_MASK) as u16;
@@ -212,9 +219,23 @@ impl Session {
             self.valid = true;
         }
         if bar { return Verdict::Drop; } // the caller releases up to NSSN
-        if duplicate || old { self.dropped += 1; return Verdict::Drop; }
-        if self.stored == 0 && seq_lt(sn, nssn) { self.head = nssn; self.passed += 1; return Verdict::Pass; }
-        if self.stored == 0 && sn == self.head { self.head = (self.head + 1) & 0xfff; self.passed += 1; return Verdict::Pass; }
+        if duplicate || old { self.dropped += 1; self.consecutive_drops += 1; return Verdict::Drop; }
+        self.consecutive_drops = 0;
+        if self.stored == 0 && seq_lt(sn, nssn) {
+            if last && seq_lt(self.head, nssn) { self.head = nssn; }
+            self.passed += 1;
+            return Verdict::Pass;
+        }
+        if self.stored == 0 && sn == self.head {
+            if last { self.head = (self.head + 1) & 0xfff; }
+            self.passed += 1;
+            return Verdict::Pass;
+        }
+        // A later subframe of an A-MSDU whose first one already went up (or is
+        // held): up now, rather than lost (one slot holds one frame).
+        if index > 0 && (seq_lt(sn, self.head) || self.held & (1 << self.slot(sn)) != 0) { self.passed += 1; return Verdict::Pass; }
+        // Below the window: already released or given up on.
+        if seq_lt(sn, self.head) { self.dropped += 1; return Verdict::Drop; }
         let slot = self.slot(sn);
         if self.held & (1 << slot) != 0 { self.dropped += 1; return Verdict::Drop; }
         self.held |= 1 << slot;
@@ -257,8 +278,10 @@ impl Session {
 pub struct Slots {
     pub len: [u16; WINDOW],
     pub pn: [Option<(usize, u64)>; WINDOW],
+    /// Sequence number and A-MSDU subframe index, for the replay check at release.
+    pub sub: [(u16, u8); WINDOW],
     pub data: [[u8; MAX_ETHERNET]; WINDOW],
 }
 impl Slots {
-    pub const EMPTY: Self = Self { len: [0; WINDOW], pn: [None; WINDOW], data: [[0; MAX_ETHERNET]; WINDOW] };
+    pub const EMPTY: Self = Self { len: [0; WINDOW], pn: [None; WINDOW], sub: [(0, 0); WINDOW], data: [[0; MAX_ETHERNET]; WINDOW] };
 }
