@@ -9189,6 +9189,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tailor"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "shibari",
+ "tailor-core",
+]
+
+[[package]]
+name = "tailor-core"
+version = "0.1.0"
+
+[[package]]
 name = "talc"
 version = "5.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
