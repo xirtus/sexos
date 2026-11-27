@@ -18,9 +18,9 @@ pub const TETHER_CONF_PATH: &[u8] = b"/data/tether.conf";
 pub const DEFAULT_TETHER_PORT: u16 = 7177;
 
 /// Maximum number of saved Wi-Fi networks stored in `/data/wifi.conf`.
-pub const MAX_KNOWN_NETWORKS: usize = 16;
-/// Maximum serialized byte length for `/data/wifi.conf` (16 * ~107 bytes < 2048).
-pub const KNOWN_CONF_MAX: usize = 2048;
+pub const MAX_KNOWN_NETWORKS: usize = 8;
+/// Maximum serialized byte length for `/data/wifi.conf` (8 * ~107 bytes < 1024).
+pub const KNOWN_CONF_MAX: usize = 1024;
 
 /// Parsed legacy contents of `/data/wifi.conf`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,9 +33,9 @@ pub enum WifiConf<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KnownNetwork {
     pub ssid: [u8; 32],
-    pub ssid_len: usize,
+    pub ssid_len: u8,
     pub pass: [u8; 63],
-    pub pass_len: usize,
+    pub pass_len: u8,
 }
 
 impl KnownNetwork {
@@ -52,18 +52,18 @@ impl KnownNetwork {
         }
         let mut entry = Self::EMPTY;
         entry.ssid[..ssid.len()].copy_from_slice(ssid);
-        entry.ssid_len = ssid.len();
+        entry.ssid_len = ssid.len() as u8;
         entry.pass[..pass.len()].copy_from_slice(pass);
-        entry.pass_len = pass.len();
+        entry.pass_len = pass.len() as u8;
         Some(entry)
     }
 
     pub fn ssid_bytes(&self) -> &[u8] {
-        &self.ssid[..self.ssid_len]
+        &self.ssid[..self.ssid_len as usize]
     }
 
     pub fn pass_bytes(&self) -> &[u8] {
-        &self.pass[..self.pass_len]
+        &self.pass[..self.pass_len as usize]
     }
 }
 
@@ -378,8 +378,6 @@ mod runtime {
         saving_which: u8, // 1 = wifi, 2 = tether
         saving_verbose: bool,
         saving_kind: u8, // 1 = saved, 2 = forgot
-        active_buf: [u8; KNOWN_CONF_MAX],
-        active_len: usize,
         known: KnownNetworks,
         known_loaded: bool,
         save_wifi_pending: bool,
@@ -447,8 +445,6 @@ mod runtime {
                 saving_which: 0,
                 saving_verbose: false,
                 saving_kind: 1,
-                active_buf: [0; KNOWN_CONF_MAX],
-                active_len: 0,
                 known: KnownNetworks::new(),
                 known_loaded: false,
                 save_wifi_pending: false,
@@ -637,7 +633,6 @@ mod runtime {
                 self.saving_which = 1;
                 self.saving_verbose = self.save_wifi_verbose;
                 self.saving_kind = self.save_wifi_kind;
-                self.active_len = self.known.serialize(&mut self.active_buf);
                 self.save_wifi_pending = false;
                 if self.send_fs(w::MKDIR, DATA_DIR, 0, 0, None) {
                     self.io = IoPhase::MkdirData;
@@ -648,8 +643,6 @@ mod runtime {
                 self.saving_which = 2;
                 self.saving_verbose = false;
                 self.saving_kind = 1;
-                self.active_len = self.save_tether.len;
-                self.active_buf[..self.active_len].copy_from_slice(&self.save_tether.buf[..self.active_len]);
                 self.save_tether.active = false;
                 if self.send_fs(w::MKDIR, DATA_DIR, 0, 0, None) {
                     self.io = IoPhase::MkdirData;
@@ -808,7 +801,14 @@ mod runtime {
                 IoPhase::CreateFile | IoPhase::TruncateFile => {
                     if status == w::OK {
                         let path = self.active_path();
-                        let len = self.active_len;
+                        let mut buf = [0u8; KNOWN_CONF_MAX];
+                        let len = if self.saving_which == 1 {
+                            self.known.serialize(&mut buf)
+                        } else {
+                            let n = self.save_tether.len.min(KNOWN_CONF_MAX);
+                            buf[..n].copy_from_slice(&self.save_tether.buf[..n]);
+                            n
+                        };
                         if len == 0 {
                             sex_pdx::serial_record!("[spindle.autoconf.saved] which={} status=0 bytes=0", self.saving_which);
                             if self.saving_verbose {
@@ -818,11 +818,8 @@ mod runtime {
                                     b"Wi-Fi: saved /data/wifi.conf."
                                 });
                             }
-                        } else {
-                            let buf = self.active_buf;
-                            if self.send_fs(w::WRITE, path, 0, len as u64, Some(&buf[..len])) {
-                                self.io = IoPhase::WriteFile;
-                            }
+                        } else if self.send_fs(w::WRITE, path, 0, len as u64, Some(&buf[..len])) {
+                            self.io = IoPhase::WriteFile;
                         }
                     } else if self.saving_verbose {
                         sb.push(b"Wi-Fi: could not create /data/wifi.conf.");
@@ -930,15 +927,15 @@ mod tests {
             ssid[5] = b'0' + (i % 10);
             assert!(list.upsert(&ssid[..6], b"pass1234"));
         }
-        // Capped at MAX_KNOWN_NETWORKS (16), MRU first.
+        // Capped at MAX_KNOWN_NETWORKS (8), MRU first.
         assert_eq!(list.len(), MAX_KNOWN_NETWORKS);
         assert_eq!(list.entries[0].ssid_bytes(), b"Net-19");
-        assert_eq!(list.entries[MAX_KNOWN_NETWORKS - 1].ssid_bytes(), b"Net-04");
+        assert_eq!(list.entries[MAX_KNOWN_NETWORKS - 1].ssid_bytes(), b"Net-12");
 
         // Re-upserting an existing entry moves it to index 0 and updates passphrase.
-        assert!(list.upsert(b"Net-07", b"new-pass-77"));
+        assert!(list.upsert(b"Net-15", b"new-pass-77"));
         assert_eq!(list.len(), MAX_KNOWN_NETWORKS);
-        assert_eq!(list.entries[0].ssid_bytes(), b"Net-07");
+        assert_eq!(list.entries[0].ssid_bytes(), b"Net-15");
         assert_eq!(list.entries[0].pass_bytes(), b"new-pass-77");
         assert_eq!(list.entries[1].ssid_bytes(), b"Net-19");
 
@@ -946,7 +943,7 @@ mod tests {
         assert!(list.forget(b"Net-19"));
         assert_eq!(list.len(), MAX_KNOWN_NETWORKS - 1);
         assert_eq!(list.find_index(b"Net-19"), None);
-        assert_eq!(list.entries[0].ssid_bytes(), b"Net-07");
+        assert_eq!(list.entries[0].ssid_bytes(), b"Net-15");
         assert!(!list.forget(b"DoesNotExist"));
     }
 

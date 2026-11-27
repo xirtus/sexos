@@ -303,9 +303,9 @@ impl Wifi {
         if known_idx >= known.len() { return false; }
         let entry = known.entries[known_idx];
         self.auto_ssid = entry.ssid;
-        self.auto_ssid_len = entry.ssid_len;
+        self.auto_ssid_len = entry.ssid_len as usize;
         self.auto_pass = [0; ws::PASSWORD_MAX];
-        let pl = entry.pass_len.min(ws::PASSWORD_MAX);
+        let pl = (entry.pass_len as usize).min(ws::PASSWORD_MAX);
         self.auto_pass[..pl].copy_from_slice(&entry.pass[..pl]);
         self.auto_pass_len = pl;
         let mut msg = [0u8; 96];
