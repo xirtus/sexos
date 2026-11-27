@@ -17,9 +17,15 @@ use crate::provider::{
 
 /// Public Stremio v3 metadata catalog (standard open metadata provider).
 pub const CINEMETA_BASE: &str = "https://v3-cinemeta.strem.io";
+/// Direct Cinemeta CDN catalog endpoint (HTTP 200 without 307 redirect).
+pub const CINEMETA_CATALOGS_BASE: &str = "https://cinemeta-catalogs.strem.io";
+/// Secondary Cinemeta live endpoint for search fallback.
+pub const CINEMETA_LIVE_BASE: &str = "https://cinemeta-live.strem.io";
 
 const MAX_REDIRECTS: usize = 4;
-const MAX_CATALOG_BYTES: usize = 512 * 1024;
+const MAX_HTTP_ATTEMPTS: usize = 2;
+/// Cinemeta series catalogs are ~580–610 KiB; 1 MiB fits them with headroom.
+const MAX_CATALOG_BYTES: usize = 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 256 * 1024;
 const MAX_CATALOG_ITEMS: usize = 48;
 
@@ -139,31 +145,50 @@ impl StreamItem {
     }
 }
 
-/// Performs a bounded HTTP/HTTPS GET request following up to `MAX_REDIRECTS`.
+/// Performs a bounded HTTP/HTTPS GET request following up to `MAX_REDIRECTS`,
+/// retrying once on transient network/DNS errors.
 pub fn http_get(window: &mut Window, initial_url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-    let mut url = initial_url.to_string();
-    for _ in 0..=MAX_REDIRECTS {
-        let req = sex_fetch::Request {
-            method: "GET",
-            url: &url,
-            headers: &[("Accept", "application/json, image/*;q=0.8, */*;q=0.5")],
-            body: &[],
-            trusted_origin: false,
-            referrer: None,
-        };
-        let resp = sex_app::net::request(window, &req, None, max_bytes)
-            .map_err(|e| format!("net error: {e:?}"))?;
-        if resp.head.is_redirect() {
-            let loc = resp.head.get("location").unwrap_or("");
-            url = sex_fetch::join(&url, loc).ok_or_else(|| String::from("invalid redirect"))?;
-            continue;
+    let mut last_err = String::new();
+    for _attempt in 0..MAX_HTTP_ATTEMPTS {
+        let mut url = initial_url.to_string();
+        let mut attempt_err: Option<String> = None;
+        for _ in 0..=MAX_REDIRECTS {
+            let req = sex_fetch::Request {
+                method: "GET",
+                url: &url,
+                headers: &[("Accept", "application/json, image/*;q=0.8, */*;q=0.5")],
+                body: &[],
+                trusted_origin: false,
+                referrer: None,
+            };
+            let resp = match sex_app::net::request(window, &req, None, max_bytes) {
+                Ok(r) => r,
+                Err(e) => {
+                    attempt_err = Some(format!("net error: {e:?}"));
+                    break;
+                }
+            };
+            if resp.head.is_redirect() {
+                let loc = resp.head.get("location").unwrap_or("");
+                match sex_fetch::join(&url, loc) {
+                    Some(next) => {
+                        url = next;
+                        continue;
+                    }
+                    None => return Err(String::from("invalid redirect")),
+                }
+            }
+            if resp.head.status < 200 || resp.head.status >= 300 {
+                return Err(format!("HTTP {}", resp.head.status));
+            }
+            return Ok(resp.body);
         }
-        if resp.head.status < 200 || resp.head.status >= 300 {
-            return Err(format!("HTTP {}", resp.head.status));
+        match attempt_err {
+            Some(e) => last_err = e,
+            None => return Err(String::from("too many redirects")),
         }
-        return Ok(resp.body);
     }
-    Err(String::from("too many redirects"))
+    Err(last_err)
 }
 
 /// Parses a Stremio v3 catalog response (`{"metas": [...]}`).
@@ -202,6 +227,8 @@ pub fn parse_catalog_json(text: &str, fallback_type: &str) -> Vec<CatalogItem> {
 }
 
 /// Fetches a Stremio v3 catalog from `base_url` (`/catalog/{type}/{id}.json`).
+/// For default Cinemeta, tries the direct CDN host (`cinemeta-catalogs.strem.io`)
+/// first to skip the 307 redirect, falling back to `v3-cinemeta.strem.io`.
 pub fn fetch_catalog(
     window: &mut Window,
     base_url: &str,
@@ -209,9 +236,28 @@ pub fn fetch_catalog(
     catalog_id: &str,
 ) -> Result<Vec<CatalogItem>, String> {
     let base = base_url.trim_end_matches('/');
-    let url = format!("{}/catalog/{}/{}.json", base, media_type.as_str(), catalog_id);
-    sex_pdx::serial_record!("[brootlite.catalog] GET {}", url);
-    let body = http_get(window, &url, MAX_CATALOG_BYTES)?;
+    let body = if base == CINEMETA_BASE {
+        let direct_url = format!(
+            "{}/{}/catalog/{}/{}.json",
+            CINEMETA_CATALOGS_BASE,
+            catalog_id,
+            media_type.as_str(),
+            catalog_id
+        );
+        sex_pdx::serial_record!("[brootlite.catalog] GET {}", direct_url);
+        match http_get(window, &direct_url, MAX_CATALOG_BYTES) {
+            Ok(b) => b,
+            Err(_) => {
+                let fallback_url = format!("{}/catalog/{}/{}.json", base, media_type.as_str(), catalog_id);
+                sex_pdx::serial_record!("[brootlite.catalog] fallback GET {}", fallback_url);
+                http_get(window, &fallback_url, MAX_CATALOG_BYTES)?
+            }
+        }
+    } else {
+        let url = format!("{}/catalog/{}/{}.json", base, media_type.as_str(), catalog_id);
+        sex_pdx::serial_record!("[brootlite.catalog] GET {}", url);
+        http_get(window, &url, MAX_CATALOG_BYTES)?
+    };
     let text = core::str::from_utf8(&body).map_err(|_| String::from("invalid UTF-8 catalog"))?;
     let items = parse_catalog_json(text, media_type.as_str());
     sex_pdx::serial_record!("[brootlite.catalog] items={}", items.len());
@@ -229,14 +275,26 @@ pub fn search_catalog(
         return Ok(Vec::new());
     }
     let enc = percent_encode_query(trimmed);
-    let url = format!(
+    let primary_url = format!(
         "{}/catalog/{}/top/search={}.json",
         CINEMETA_BASE,
         media_type.as_str(),
         enc
     );
-    sex_pdx::serial_record!("[brootlite.search] GET {}", url);
-    let body = http_get(window, &url, MAX_CATALOG_BYTES)?;
+    sex_pdx::serial_record!("[brootlite.search] GET {}", primary_url);
+    let body = match http_get(window, &primary_url, MAX_CATALOG_BYTES) {
+        Ok(b) => b,
+        Err(_) => {
+            let fallback_url = format!(
+                "{}/catalog/{}/top/search={}.json",
+                CINEMETA_LIVE_BASE,
+                media_type.as_str(),
+                enc
+            );
+            sex_pdx::serial_record!("[brootlite.search] fallback GET {}", fallback_url);
+            http_get(window, &fallback_url, MAX_CATALOG_BYTES)?
+        }
+    };
     let text = core::str::from_utf8(&body).map_err(|_| String::from("invalid UTF-8 search"))?;
     Ok(parse_catalog_json(text, media_type.as_str()))
 }
@@ -260,13 +318,14 @@ pub fn fetch_streams(
         return (
             out,
             String::from(
-                "No Stremio stream addons configured. Add provider_pack.json to /data/brootlite/ or /media/Ventoy/.",
+                "No Stremio stream addons configured. Place provider_pack.json in /data/brootlite/.",
             ),
         );
     }
 
     let mut queried = 0usize;
     let mut errors = 0usize;
+    let mut last_err = String::new();
     // For series without episode suffix, default to S1E1 so Stremio stream addons return results.
     let lookup_id = if media_type.eq_ignore_ascii_case("series") && !item_id.contains(':') {
         format!("{}:1:1", item_id)
@@ -285,8 +344,9 @@ pub fn fetch_streams(
                     parse_streams_into(text, &addon.name, item_name, &pack.trackers, &mut out);
                 }
             }
-            Err(_) => {
+            Err(e) => {
                 errors += 1;
+                last_err = format!("{}: {}", addon.name, e);
             }
         }
     }
@@ -294,7 +354,7 @@ pub fn fetch_streams(
     let status = if !out.is_empty() {
         format!("Found {} streams from {} addon(s)", out.len(), queried)
     } else if errors == queried {
-        format!("All {} stream addon(s) unreachable (check +net / Wi-Fi)", queried)
+        format!("Addon error ({}) — click Retry or check +net", last_err)
     } else {
         format!("No streams returned by {} addon(s)", queried)
     };

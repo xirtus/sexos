@@ -71,6 +71,24 @@ pub struct FeaturedFeed {
     pub url: String,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct DirectSource {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub api_url: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct KodiRepoEntry {
+    pub id: String,
+    pub name: String,
+    pub addons_xml_url: String,
+    pub datadir_url: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ProviderPack {
     pub name: String,
@@ -78,33 +96,48 @@ pub struct ProviderPack {
     pub stremio_addons: Vec<StremioAddon>,
     pub swarm_indexers: Vec<SwarmIndexer>,
     pub featured_feeds: Vec<FeaturedFeed>,
+    pub direct_sources: Vec<DirectSource>,
+    pub kodi_repos: Vec<KodiRepoEntry>,
     pub trackers: Vec<String>,
 }
 
-const PACK_PATHS: [&[u8]; 5] = [
-    b"/data/brootlite/provider_pack.json",
-    b"/data/qupid/provider_pack.json",
-    b"/media/Ventoy/provider_pack.json",
+/// Search order under SexOS file confinement:
+/// 1. `provider_pack.json` — resolves directly to `/data/brootlite/provider_pack.json`
+///    inside BrootLite's own confined data folder (no `@` grant required).
+/// 2. `@/...` — resolves to explicit granted paths when launched with `@/data/qupid`, etc.
+const PACK_PATHS: [&[u8]; 6] = [
     b"provider_pack.json",
-    b"/data/provider_pack.json",
+    b"@/data/brootlite/provider_pack.json",
+    b"@/data/qupid/provider_pack.json",
+    b"@/media/Ventoy/provider_pack.json",
+    b"@/data/provider_pack.json",
+    b"/data/brootlite/provider_pack.json",
 ];
 
 impl ProviderPack {
-    /// Loads the first readable `provider_pack.json` from disk or Ventoy.
+    /// Loads the first readable `provider_pack.json` from BrootLite's data folder or granted paths.
     pub fn load(window: &mut Window) -> Self {
-        let mut buf = vec![0u8; 64 * 1024];
+        let mut buf = vec![0u8; 128 * 1024];
         for path in PACK_PATHS {
             if let Ok(n) = files::read(window, path, &mut buf) {
                 if n > 0 {
                     if let Ok(text) = core::str::from_utf8(&buf[..n]) {
                         let mut pack = parse_pack(text);
-                        pack.source_path = String::from_utf8_lossy(path).into_owned();
+                        pack.source_path = if path == b"provider_pack.json" {
+                            String::from("/data/brootlite/provider_pack.json")
+                        } else {
+                            String::from_utf8_lossy(path)
+                                .trim_start_matches('@')
+                                .into()
+                        };
                         sex_pdx::serial_record!(
-                            "[brootlite.pack] loaded={} addons={} indexers={} feeds={} trackers={}",
+                            "[brootlite.pack] loaded={} addons={} indexers={} feeds={} direct={} kodi={} trackers={}",
                             pack.source_path,
                             pack.stremio_addons.len(),
                             pack.swarm_indexers.len(),
                             pack.featured_feeds.len(),
+                            pack.direct_sources.len(),
+                            pack.kodi_repos.len(),
                             pack.trackers.len()
                         );
                         return pack;
@@ -425,6 +458,38 @@ pub fn parse_pack(text: &str) -> ProviderPack {
             let url = json_str_field(obj, "url").unwrap_or_default();
             if !label.is_empty() && !url.is_empty() {
                 pack.featured_feeds.push(FeaturedFeed { label, url });
+            }
+        }
+    }
+    if let Some(arr) = json_array_slice(text, "directSources") {
+        for obj in json_objects(arr) {
+            let id = json_str_field(obj, "id").unwrap_or_default();
+            let name = json_str_field(obj, "name").unwrap_or_else(|| id.clone());
+            let kind = json_str_field(obj, "kind").unwrap_or_default();
+            let api_url = json_str_field(obj, "apiUrl").unwrap_or_default();
+            if !name.is_empty() && !api_url.is_empty() {
+                pack.direct_sources.push(DirectSource {
+                    id,
+                    name,
+                    kind,
+                    api_url,
+                });
+            }
+        }
+    }
+    if let Some(arr) = json_array_slice(text, "kodiRepositories") {
+        for obj in json_objects(arr) {
+            let id = json_str_field(obj, "id").unwrap_or_default();
+            let name = json_str_field(obj, "name").unwrap_or_else(|| id.clone());
+            let addons_xml_url = json_str_field(obj, "addonsXmlUrl").unwrap_or_default();
+            let datadir_url = json_str_field(obj, "datadirUrl").unwrap_or_default();
+            if !name.is_empty() && !addons_xml_url.is_empty() {
+                pack.kodi_repos.push(KodiRepoEntry {
+                    id,
+                    name,
+                    addons_xml_url,
+                    datadir_url,
+                });
             }
         }
     }

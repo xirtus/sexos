@@ -979,10 +979,12 @@ impl App {
                 true,
             );
             let sub = format!(
-                "{} Stremio addons · {} Swarm indexers · {} featured feeds · {} trackers",
+                "{} Stremio addons · {} Swarm indexers · {} feeds · {} direct · {} Kodi repos · {} trackers",
                 self.pack.stremio_addons.len(),
                 self.pack.swarm_indexers.len(),
                 self.pack.featured_feeds.len(),
+                self.pack.direct_sources.len(),
+                self.pack.kodi_repos.len(),
                 self.pack.tracker_count()
             );
             self.tp.draw(
