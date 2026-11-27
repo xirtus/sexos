@@ -426,6 +426,115 @@ def push_file(d: Path, local_path: Path, remote_path: str, wait: float):
     return 1
 
 
+class PullStream:
+    """Reassembles Spindle's `@@PULL-BEGIN / @@PULL-CHUNK / @@PULL-END` framed hex stream."""
+
+    def __init__(self, expected_path=None):
+        self.expected_path = expected_path
+        self.started = False
+        self.path = None
+        self.expected_len = None
+        self.buf = bytearray()
+        self.fnv_hex = None
+        self.done = False
+        self.error = None
+
+    def feed_line(self, line: str) -> bool:
+        """Processes one line. Returns True if the line was a pull protocol frame."""
+        line = line.rstrip('\r\n')
+        if line.startswith('@@PULL-ERR '):
+            self.error = line[11:].strip() or 'remote pull error'
+            return True
+        if line.startswith('@@PULL-BEGIN '):
+            parts = line[13:].strip().split()
+            if len(parts) != 2 or not parts[1].isdigit():
+                self.error = f'malformed @@PULL-BEGIN: {line!r}'
+                return True
+            self.path = parts[0]
+            self.expected_len = int(parts[1])
+            self.buf = bytearray()
+            self.started = True
+            return True
+        if line.startswith('@@PULL-CHUNK '):
+            if not self.started:
+                return True
+            hex_data = line[13:].strip()
+            try:
+                self.buf.extend(bytes.fromhex(hex_data))
+            except ValueError as exc:
+                self.error = f'invalid hex chunk: {exc}'
+            return True
+        if line.startswith('@@PULL-END '):
+            if not self.started:
+                return True
+            fnv_hex = line[11:].strip()
+            try:
+                want_fnv = int(fnv_hex, 16)
+            except ValueError:
+                self.error = f'invalid FNV in @@PULL-END: {fnv_hex!r}'
+                return True
+            if self.expected_len is not None and len(self.buf) != self.expected_len:
+                self.error = f'size mismatch: got {len(self.buf)} bytes, expected {self.expected_len}'
+                return True
+            got_fnv = fnv64(bytes(self.buf))
+            if got_fnv != want_fnv:
+                self.error = f'checksum mismatch: got {got_fnv:016x}, expected {want_fnv:016x}'
+                return True
+            self.fnv_hex = f'{got_fnv:016x}'
+            self.done = True
+            return True
+        return False
+
+
+def pull_file(d: Path, remote_path: str, local_path: Path, wait: float):
+    """Pull a file from SexOS over the active tether via Spindle's `pull-file` command."""
+    state = read_state(d)
+    if not state.get('connected'):
+        print('tether: SexOS is not connected (run serve/connect, then `tether ADDRESS` in Spindle).', file=sys.stderr)
+        return 2
+    if not remote_path or any(ch.isspace() or ord(ch) < 0x21 or ord(ch) == 0x7f for ch in remote_path):
+        print(f'tether: invalid remote path: {remote_path!r}', file=sys.stderr)
+        return 2
+    log = current_log(d)
+    start = log.stat().st_size if log else 0
+    with (d / 'inbox.txt').open('a') as f:
+        f.write(f'pull-file {remote_path}\n')
+    stream = PullStream(expected_path=remote_path)
+    deadline = time.time() + wait
+    at = start
+    carry = ''
+    while time.time() < deadline:
+        time.sleep(0.1)
+        if not log:
+            log = current_log(d)
+            continue
+        size = log.stat().st_size
+        if size > at:
+            with log.open('rb') as f:
+                f.seek(at)
+                chunk = f.read(size - at).decode('utf-8', 'replace')
+            at = size
+            carry += chunk
+            while '\n' in carry:
+                line, carry = carry.split('\n', 1)
+                if stream.feed_line(line):
+                    deadline = max(deadline, time.time() + wait)
+                if stream.error:
+                    print(f'tether: pull failed: {stream.error}', file=sys.stderr)
+                    return 1
+                if stream.done:
+                    try:
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
+                        local_path.write_bytes(bytes(stream.buf))
+                    except OSError as exc:
+                        print(f'tether: could not write {local_path}: {exc}', file=sys.stderr)
+                        return 1
+                    print(f'tether: pulled {remote_path} -> {local_path} ({len(stream.buf)} bytes, fnv={stream.fnv_hex})', flush=True)
+                    return 0
+    print('tether: timed out waiting for pull-file stream.', file=sys.stderr)
+    return 1
+
+
 def tail(d: Path, n: int):
     log = current_log(d)
     if not log:
@@ -456,6 +565,10 @@ def main(argv=None):
     pf.add_argument('local_path', type=Path, help='path to local file to upload')
     pf.add_argument('remote_path', help='destination path on SexOS (e.g. /media/Ventoy/moss.wav)')
     pf.add_argument('--wait', type=float, default=30.0, help='seconds to wait for push-file confirmation')
+    pl = sub.add_parser('pull', aliases=['pull-file'], help='pull a remote file from SexOS over the active tether')
+    pl.add_argument('remote_path', help='source path on SexOS (e.g. /data/screen.png)')
+    pl.add_argument('local_path', type=Path, help='local destination path on this computer')
+    pl.add_argument('--wait', type=float, default=30.0, help='idle timeout in seconds while waiting for pull chunks')
     t = sub.add_parser('tail')
     t.add_argument('-n', type=int, default=80)
     sub.add_parser('status')
@@ -495,6 +608,8 @@ def main(argv=None):
         return push_server(a.dir, a.server_name, a.elf_path, a.wait)
     if a.what == 'push-file':
         return push_file(a.dir, a.local_path, a.remote_path, a.wait)
+    if a.what in ('pull', 'pull-file'):
+        return pull_file(a.dir, a.remote_path, a.local_path, a.wait)
     if a.what == 'tail':
         return tail(a.dir, a.n)
     print(json.dumps(read_state(a.dir), indent=1))

@@ -7,7 +7,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 512 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Sum, Create, Write, Append(u8), Df, Program(u64, u64), Plugin(u8, u64), Install, Mount, Unmount, Update, Package, Organize, PushOpen, PushWrite }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Sum, Create, Write, Append(u8), Df, Program(u64, u64), Plugin(u8, u64), Install, Mount, Unmount, Update, Package, Organize, PushOpen, PushWrite, PullStat, PullRead }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize, fnv: u64 }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
@@ -15,6 +15,10 @@ pub static mut UPDATE_STATUS: Option<u8> = None;
 pub static mut PACKAGE_STATUS: Option<u8> = None;
 /// How Files answered the last tether push-file open/write step.
 pub static mut PUSHFILE_STATUS: Option<u8> = None;
+/// How Files answered the last tether pull-file stat step: (status, file_size).
+pub static mut PULLFILE_STAT: Option<(u8, u64)> = None;
+/// How Files answered the last tether pull-file read step: (status, bytes_read).
+pub static mut PULLFILE_READ: Option<(u8, usize)> = None;
 /// The last package report's lines meant for Spindle (URLs), newline separated.
 pub static mut PACKAGE_MACHINE: ([u8; 4096], usize) = ([0; 4096], 0);
 pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0, fnv: 0 };
@@ -143,6 +147,38 @@ impl Client {
         self.data_len = bytes.len();
         unsafe { PUSHFILE_STATUS = None; }
         self.start(Cmd::PushWrite, w::WRITE, n, offset, bytes.len() as u64);
+        true
+    }
+    /// Stats `path` for streaming `pull-file` reads. Outcome lands in [`PULLFILE_STAT`].
+    pub fn start_pull_stat(&mut self, path: &[u8]) -> bool {
+        if self.busy() { return false; }
+        let Some(region) = region() else { return false };
+        let mut full = [0u8; w::PATH_BYTES];
+        let Some(n) = self.join(path, &mut full) else { return false };
+        if n == 0 { return false; }
+        region[..n].copy_from_slice(&full[..n]);
+        unsafe { PULLFILE_STAT = None; }
+        self.start(Cmd::PullStat, w::STAT, n, 0, 0);
+        true
+    }
+    /// Reads one chunk of `path` at `offset` (up to `len` bytes) into `sexfiles`'s shared region.
+    /// Outcome lands in [`PULLFILE_READ`].
+    pub fn start_pull_read(&mut self, path: &[u8], offset: u64, len: u64) -> bool {
+        if self.busy() || len as usize > w::DATA_MAX { return false; }
+        let Some(region) = region() else { return false };
+        let mut full = [0u8; w::PATH_BYTES];
+        let Some(n) = self.join(path, &mut full) else { return false };
+        if n == 0 { return false; }
+        region[..n].copy_from_slice(&full[..n]);
+        unsafe { PULLFILE_READ = None; }
+        self.start(Cmd::PullRead, w::READ, n, offset, len);
+        true
+    }
+    /// Borrows the `len` bytes placed in the shared region by the last completed `PullRead`.
+    pub fn with_pull_bytes<F: FnOnce(&[u8])>(len: usize, f: F) -> bool {
+        let Some(region) = region() else { return false };
+        let n = len.min(w::DATA_MAX);
+        f(&region[w::PATH_BYTES..w::PATH_BYTES + n]);
         true
     }
     /// `organize ...`: Files' Organizer (servers/sexfiles/src/organize.rs). Files keeps
@@ -493,9 +529,13 @@ impl Client {
     pub fn expired(&mut self, now: u64, sb: &mut Scrollback) -> bool {
         if self.cmd.is_none() || !self.sent || now.saturating_sub(self.sent_at) < 15_000 { return false; }
         let was_push = matches!(self.cmd, Some(Cmd::PushOpen | Cmd::PushWrite));
+        let was_pull_stat = self.cmd == Some(Cmd::PullStat);
+        let was_pull_read = self.cmd == Some(Cmd::PullRead);
         self.cmd = None;
         if self.kind == w::UPDATE { unsafe { UPDATE_STATUS = Some(w::DENIED); } }
         if was_push { unsafe { PUSHFILE_STATUS = Some(w::DENIED); } }
+        if was_pull_stat { unsafe { PULLFILE_STAT = Some((w::DENIED, 0)); } }
+        if was_pull_read { unsafe { PULLFILE_READ = Some((w::DENIED, 0)); } }
         sb.push(b"The disk did not answer. Try again.");
         sex_pdx::serial_record!("[spindle.fs.expired] kind={}", self.kind);
         true
@@ -539,6 +579,26 @@ impl Client {
             self.cmd = None;
             let st = if status != w::OK { status } else if (value as usize) < self.data_len { w::NO_SPACE } else { w::OK };
             unsafe { PUSHFILE_STATUS = Some(st); }
+            return true;
+        }
+        if cmd == Cmd::PullStat {
+            self.cmd = None;
+            if status != w::OK {
+                unsafe { PULLFILE_STAT = Some((status, 0)); }
+                return true;
+            }
+            let is_dir = u64::from_le_bytes(region[data_at..data_at + 8].try_into().unwrap()) == 1;
+            if is_dir {
+                unsafe { PULLFILE_STAT = Some((w::IS_DIR, 0)); }
+                return true;
+            }
+            let size = u64::from_le_bytes(region[data_at + 8..data_at + 16].try_into().unwrap());
+            unsafe { PULLFILE_STAT = Some((w::OK, size)); }
+            return true;
+        }
+        if cmd == Cmd::PullRead {
+            self.cmd = None;
+            unsafe { PULLFILE_READ = Some((status, (value as usize).min(w::DATA_MAX))); }
             return true;
         }
         if cmd == Cmd::Package {
@@ -694,7 +754,7 @@ impl Client {
                 }
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
-            Cmd::Update | Cmd::Package | Cmd::Organize | Cmd::PushOpen | Cmd::PushWrite => {}
+            Cmd::Update | Cmd::Package | Cmd::Organize | Cmd::PushOpen | Cmd::PushWrite | Cmd::PullStat | Cmd::PullRead => {}
             Cmd::Plugin(workspace, key) => {
                 self.cmd = None;
                 unsafe { (*core::ptr::addr_of_mut!(crate::silk_command::SILK)).plugin(workspace, value, key, sb); }
