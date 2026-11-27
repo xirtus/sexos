@@ -34,6 +34,7 @@ const TOOLS_LIST_JSON: &str = r#"[
   {"name":"sexos_input","description":"Inject gated synthetic pointer/keyboard input into SexOS (requires Full Control + visible indicator).","inputSchema":{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"text":{"type":"string"}},"required":["kind"]}},
   {"name":"sexos_snapshot_create","description":"Create a named SexOS snapshot checkpoint before risky edits or deploys (requires Dev mode).","inputSchema":{"type":"object","properties":{"label":{"type":"string"}},"required":["label"]}},
   {"name":"sexos_snapshot_restore","description":"Restore a previously created SexOS snapshot checkpoint (requires Dev mode).","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+  {"name":"sexos_ota_push","description":"Push a staged SexOS kernel or system OTA update image for live handoff or deployment (requires Full Control + exclusive lease).","inputSchema":{"type":"object","properties":{"elf_path":{"type":"string","description":"Path to the staged ELF or OTA image"},"target":{"type":"string","description":"Target component (e.g. kernel, system)"},"sha256":{"type":"string","description":"Expected SHA-256 hex digest of the payload"}},"required":["elf_path"]}},
   {"name":"sexos_wave_review","description":"Push a Wave Review summary and unified diff to the SexOS Tether GUI for human approval.","inputSchema":{"type":"object","properties":{"wave":{"type":"string"},"summary":{"type":"string"},"diff":{"type":"string"}},"required":["wave","summary"]}}
 ]"#;
 
@@ -54,6 +55,7 @@ fn map_tool_to_rpc(tool_name: &str) -> Option<&'static str> {
         "sexos_input" => Some("input_inject"),
         "sexos_snapshot_create" => Some("snapshot_create"),
         "sexos_snapshot_restore" => Some("snapshot_restore"),
+        "sexos_ota_push" => Some("ota_push"),
         "sexos_wave_review" => Some("wave_review"),
         _ => None,
     }
@@ -163,3 +165,17 @@ pub fn run_mcp_stdio(control_addr: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{map_tool_to_rpc, TOOLS_LIST_JSON};
+    use tether_proto::rpc::RpcMethod;
+
+    #[test]
+    fn ota_push_tool_registered_and_mapped() {
+        assert!(TOOLS_LIST_JSON.contains("\"name\":\"sexos_ota_push\""));
+        assert_eq!(map_tool_to_rpc("sexos_ota_push"), Some("ota_push"));
+        assert_eq!(RpcMethod::from_name("ota_push"), Some(RpcMethod::OtaPush));
+    }
+}
+

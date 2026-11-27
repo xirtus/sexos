@@ -124,6 +124,8 @@ pub mod vmx;
 pub mod svm;
 #[cfg(target_arch = "x86_64")]
 pub mod keyboard;
+#[cfg(target_arch = "x86_64")]
+pub mod handoff;
 
 // Phase 1 compile-time architecture seam. Behavior-neutral; no call path changed.
 // See Sex_ArmV9/docs/ARM_S1POE_PORT_PLAN_V1.md §D.
@@ -274,6 +276,7 @@ pub fn kernel_init() {
 
     iommu::RSDP.store(rsdp_phys as u64, core::sync::atomic::Ordering::Release);
     hal::init_advanced(rsdp_phys as u64, hhdm.offset);
+    handoff::init_from_limine();
 
     // 3.5 The other cores, set up and idle. Nothing runs on them yet.
     if let Some(mp) = MP_REQUEST.response() { smp::boot_aps(mp); }

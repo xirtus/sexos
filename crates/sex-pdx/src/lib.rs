@@ -37,6 +37,7 @@ pub mod spindle_view;
 pub mod spindle_status;
 pub mod history_recovery;
 pub mod program_image;
+pub mod kernel_handoff;
 pub mod wav;
 pub use memory_region::MemoryRegionInfo;
 

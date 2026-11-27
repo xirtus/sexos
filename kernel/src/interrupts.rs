@@ -75,6 +75,7 @@ lazy_static! {
         idt[crate::hal::acpi::SCI_VECTOR].set_handler_fn(sci_handler);
         idt[crate::smp::tlb::VECTOR].set_handler_fn(tlb_shootdown_handler);
         idt[crate::smp::WAKE_VECTOR].set_handler_fn(wake_handler);
+        idt[sex_pdx::kernel_handoff::IPI_QUIESCE_VECTOR].set_handler_fn(quiesce_ipi_handler);
         idt
     };
 }
@@ -915,6 +916,12 @@ extern "x86-interrupt" fn wake_handler(_frame: InterruptStackFrame) {
 extern "x86-interrupt" fn tlb_shootdown_handler(_frame: InterruptStackFrame) {
     crate::smp::tlb::service();
     unsafe { send_eoi(); }
+}
+
+/// Parks secondary cores cleanly during live kernel handoff without touching GS or console::STOPPING.
+extern "x86-interrupt" fn quiesce_ipi_handler(_frame: InterruptStackFrame) {
+    unsafe { send_eoi(); }
+    crate::handoff::park_ap();
 }
 
 pub unsafe fn send_eoi() {
