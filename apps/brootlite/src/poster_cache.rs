@@ -87,7 +87,16 @@ impl PosterCache {
         if !self.needs_fetch(url) {
             return false;
         }
-        let bytes = match http_get(window, url, POSTER_LIMITS.max_input_bytes) {
+        // Downsize Metahub/Cinemeta poster URLs to `small` (~15 KiB vs ~120 KiB)
+        // so TLS downloads and pure-Rust JPEG decodes complete 5x faster.
+        let fetch_url: String = if url.contains("images.metahub.space/poster/medium/") {
+            url.replace("images.metahub.space/poster/medium/", "images.metahub.space/poster/small/")
+        } else if url.contains("images.metahub.space/poster/large/") {
+            url.replace("images.metahub.space/poster/large/", "images.metahub.space/poster/small/")
+        } else {
+            String::from(url)
+        };
+        let bytes = match http_get(window, &fetch_url, POSTER_LIMITS.max_input_bytes) {
             Ok(b) => b,
             Err(_) => {
                 self.record_failed(url);

@@ -1427,7 +1427,7 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             let mut next = 0;
             while let Some((len, kind, child, after)) = fs.read_dir(id, cursor, &mut name)? {
                 if used + w::ENTRY_HEAD + len > 4000 { next = cursor; break; }
-                let size = if kind == Kind::File { fs.stat(child)?.size } else { 0 };
+                let size = if kind == Kind::File { fs.stat(child).map(|st| st.size).unwrap_or(0) } else { 0 };
                 data[used] = (kind == Kind::Dir) as u8;
                 data[used + 1] = len as u8;
                 data[used + 2..used + 10].copy_from_slice(&size.to_le_bytes());

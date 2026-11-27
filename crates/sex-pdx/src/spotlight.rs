@@ -146,7 +146,7 @@ pub struct SpotlightApp {
 /// Curated SexOS Spotlight catalog — every tile launches a real shipped SexOS program.
 /// First 20 entries populate the default 5x4 "All" grid; all entries are searchable and
 /// browsable via category pills.
-pub const CATALOG: [SpotlightApp; 41] = [
+pub const CATALOG: [SpotlightApp; 42] = [
     SpotlightApp {
         id: "tailor",
         name: "Tailor AI",
@@ -166,6 +166,16 @@ pub const CATALOG: [SpotlightApp; 41] = [
         badge_rgb: 0x00C6_A0F6,
         keywords: "tether antigravity acp remote agent bridge waves snapshots hotswap",
         target: LaunchTarget::Program("tether"),
+    },
+    SpotlightApp {
+        id: "splicy",
+        name: "Splicy",
+        icon: "splicy",
+        monogram: "SP",
+        category: Category::Media,
+        badge_rgb: 0x00F9_7316,
+        keywords: "splicy video editor timeline cut premiere final cut studio",
+        target: LaunchTarget::Program("splicy"),
     },
     SpotlightApp {
         id: "kaleidoscope",
@@ -1445,6 +1455,9 @@ mod tests {
             ("qupid", Category::Media, "qupid", LaunchTarget::Audio),
             ("flash", Category::Media, "flash", LaunchTarget::Program("flash")),
             ("tailor", Category::AiDev, "tailor", LaunchTarget::Program("tailor")),
+            ("tether", Category::AiDev, "tether", LaunchTarget::Program("tether")),
+            ("splicy", Category::Media, "splicy", LaunchTarget::Program("splicy")),
+            ("sexshop", Category::System, "sexshop", LaunchTarget::Program("sexshop")),
             ("kaleidoscope", Category::Apps, "kaleidoscope", LaunchTarget::Browser),
             ("tatami", Category::System, "settings", LaunchTarget::Settings),
             ("swingers", Category::Media, "swingers", LaunchTarget::Program("swingers")),

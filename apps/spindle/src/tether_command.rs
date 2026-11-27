@@ -164,6 +164,9 @@ const RESUME_NONE: Resume = Resume { active: false, listening: false, host: [0; 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Call { Plain, Send, Receive, State, Close }
 
+const HOTSWAP_BUF_CAP: usize = 4 * 1024 * 1024;
+static mut HOTSWAP_BUF: [u8; HOTSWAP_BUF_CAP] = [0u8; HOTSWAP_BUF_CAP];
+
 struct HotswapRx {
     active: bool,
     discard: bool,
@@ -173,12 +176,10 @@ struct HotswapRx {
     expected_len: usize,
     received: usize,
     expected_fnv: u64,
-    /// Allocated on the heap only while a hot-swap binary frame is in flight, then dropped.
-    buf: alloc::vec::Vec<u8>,
 }
 const HOTSWAP_IDLE: HotswapRx = HotswapRx {
     active: false, discard: false, pd: 0, name: [0; 24], name_len: 0,
-    expected_len: 0, received: 0, expected_fnv: 0, buf: alloc::vec::Vec::new(),
+    expected_len: 0, received: 0, expected_fnv: 0,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -564,7 +565,6 @@ impl Tether {
         self.hotswap.expected_len = 0;
         self.hotswap.received = 0;
         self.hotswap.expected_fnv = 0;
-        self.hotswap.buf = alloc::vec::Vec::new();
     }
 
     fn pushfile_reset(&mut self) {
@@ -1266,7 +1266,14 @@ impl Tether {
         let need = self.hotswap.expected_len.saturating_sub(self.hotswap.received);
         let take = bytes.len().min(need);
         if !self.hotswap.discard && take > 0 {
-            self.hotswap.buf.extend_from_slice(&bytes[..take]);
+            let start = self.hotswap.received;
+            let end = start + take;
+            if end <= HOTSWAP_BUF_CAP {
+                unsafe {
+                    let dst = core::ptr::addr_of_mut!(HOTSWAP_BUF) as *mut u8;
+                    core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.add(start), take);
+                }
+            }
         }
         self.hotswap.received += take;
         if self.hotswap.received < self.hotswap.expected_len { return; }
@@ -1275,14 +1282,15 @@ impl Tether {
             let nlen = self.hotswap.name_len;
             let name_str = core::str::from_utf8(&name[..nlen]).unwrap_or("?");
             let pd = self.hotswap.pd;
-            let len = self.hotswap.buf.len();
-            let got = log::fnv64(&self.hotswap.buf);
+            let len = self.hotswap.expected_len;
+            let slice = unsafe {
+                core::slice::from_raw_parts(core::ptr::addr_of!(HOTSWAP_BUF) as *const u8, len)
+            };
+            let got = log::fnv64(slice);
             if got != self.hotswap.expected_fnv {
-                self.hotswap.buf = alloc::vec::Vec::new();
                 say!(sb, "hotswap: err {} checksum mismatch (got {:016x} want {:016x})", name_str, got, self.hotswap.expected_fnv);
             } else {
-                let res = log::hotswap_server(pd, &self.hotswap.buf);
-                self.hotswap.buf = alloc::vec::Vec::new();
+                let res = log::hotswap_server(pd, slice);
                 match res {
                     Ok(entry) => say!(sb, "hotswap: ok {} pd={} entry={:#x} bytes={}", name_str, pd, entry, len),
                     Err(code) => say!(sb, "hotswap: err {} pd={} code={}", name_str, pd, code),
@@ -1342,12 +1350,9 @@ impl Tether {
                 match hdr.pd {
                     Some(pd) => {
                         self.hotswap.pd = pd;
-                        let mut buf = alloc::vec::Vec::new();
-                        if buf.try_reserve_exact(hdr.size).is_ok() {
-                            self.hotswap.buf = buf;
-                        } else {
+                        if hdr.size > HOTSWAP_BUF_CAP {
                             self.hotswap.discard = true;
-                            say!(sb, "hotswap: err {} out of memory ({} bytes)", hdr.name, hdr.size);
+                            say!(sb, "hotswap: err {} too large ({} > {} bytes)", hdr.name, hdr.size, HOTSWAP_BUF_CAP);
                         }
                     }
                     None => {
