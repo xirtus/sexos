@@ -606,6 +606,15 @@ extern "C" fn flash_main() -> ! {
     } else {
         None
     };
+    if usb_bank.is_some() {
+        let _ = sex_pdx::pdx_call_checked(
+            sex_pdx::usb_uvc::CLIENT_NOTIFY_SLOT,
+            sex_pdx::usb_uvc::OP_CLIENT_START,
+            0,
+            0,
+            0,
+        );
+    }
     let mut usb_active = usb_bank.is_some_and(|b| b.is_active());
     let mut usb_raw_buf: Vec<u8> = Vec::new();
     let mut usb_last_seq: u32 = 0;
@@ -1877,6 +1886,16 @@ extern "C" fn flash_main() -> ! {
             "[flash.video] path=/data/flash/video-0001.webm bytes={} frames={}",
             video_bytes.len(),
             record_frames_done
+        );
+    }
+
+    if usb_bank.is_some() {
+        let _ = sex_pdx::pdx_call_checked(
+            sex_pdx::usb_uvc::CLIENT_NOTIFY_SLOT,
+            sex_pdx::usb_uvc::OP_CLIENT_STOP,
+            0,
+            0,
+            0,
         );
     }
 
