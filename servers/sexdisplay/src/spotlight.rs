@@ -14,39 +14,38 @@ use crate::desk_theme::current as desk;
 
 const SHELL_PD: u32 = 3;
 
-/// Largest cached Spotlight app icon side (`48` px, keeping static BSS compact ~125 KiB).
-const ICON_CAP: usize = 48;
+/// Compact zero-heap Spotlight icon rasterizer scratch buffer (`36` px, 1 slot, ~11 KiB BSS),
+/// keeping `sexdisplay`'s static footprint minimal for 1 GiB memory-pressure gates.
+const ICON_CAP: usize = 36;
 
-struct IconCache {
-    /// Cached pixel side per `CATALOG` index (`0` = not yet rasterized).
-    sides: [usize; spotlight::CATALOG_LEN],
-    /// True if `sex_icons::draw` succeeded for this slot at `sides[idx]`.
-    valid: [bool; spotlight::CATALOG_LEN],
-    /// Non-premultiplied `0xAARRGGBB` rasterized brand icons.
-    pixels: [[u32; ICON_CAP * ICON_CAP]; spotlight::CATALOG_LEN],
-    /// Reusable `sex_icons` rasterizer scratch buffers.
+struct IconScratch {
+    cat_id: u16,
+    side: usize,
+    valid: bool,
+    pixels: [u32; ICON_CAP * ICON_CAP],
     acc: [i32; sex_font::raster::scratch_len(ICON_CAP, ICON_CAP)],
     mask: [u8; ICON_CAP * ICON_CAP],
 }
 
-static mut ICON_CACHE: IconCache = IconCache {
-    sides: [0; spotlight::CATALOG_LEN],
-    valid: [false; spotlight::CATALOG_LEN],
-    pixels: [[0; ICON_CAP * ICON_CAP]; spotlight::CATALOG_LEN],
+static mut ICON_SCRATCH: IconScratch = IconScratch {
+    cat_id: u16::MAX,
+    side: 0,
+    valid: false,
+    pixels: [0; ICON_CAP * ICON_CAP],
     acc: [0; sex_font::raster::scratch_len(ICON_CAP, ICON_CAP)],
     mask: [0; ICON_CAP * ICON_CAP],
 };
 
-/// Returns the cached `side x side` non-premultiplied `0xAARRGGBB` SexOS vector
-/// brand icon for `CATALOG[cat_idx]`, rasterizing it once per `(cat_idx, side)`.
+/// Returns the `side x side` non-premultiplied `0xAARRGGBB` SexOS vector
+/// brand icon for `CATALOG[cat_idx]`.
 #[allow(static_mut_refs)]
 fn cached_app_icon(cat_idx: usize, icon_name: &str, side: usize) -> Option<(&'static [u32], usize)> {
     let side = side.min(ICON_CAP);
     if cat_idx >= spotlight::CATALOG_LEN || side == 0 {
         return None;
     }
-    let c = unsafe { &mut ICON_CACHE };
-    if c.sides[cat_idx] != side {
+    let c = unsafe { &mut ICON_SCRATCH };
+    if c.cat_id as usize != cat_idx || c.side != side {
         let ok = sex_icons::find(sex_icons::Kind::App, icon_name).is_some()
             && sex_icons::draw(
                 sex_icons::Kind::App,
@@ -55,13 +54,14 @@ fn cached_app_icon(cat_idx: usize, icon_name: &str, side: usize) -> Option<(&'st
                 &sex_icons::Palette::BRAND,
                 &mut c.acc,
                 &mut c.mask[..side * side],
-                &mut c.pixels[cat_idx][..side * side],
+                &mut c.pixels[..side * side],
             );
-        c.sides[cat_idx] = side;
-        c.valid[cat_idx] = ok;
+        c.cat_id = cat_idx as u16;
+        c.side = side;
+        c.valid = ok;
     }
-    if c.valid[cat_idx] {
-        Some((&c.pixels[cat_idx][..side * side], side))
+    if c.valid {
+        Some((&c.pixels[..side * side], side))
     } else {
         None
     }
@@ -495,12 +495,14 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         draw_text(fb, w, h, total, lbl, tx, ty, ink, sc, r.2.saturating_sub(4 * s));
     }
 
-    // 4. App Icon Grid (5 columns x 2 rows)
+    // 4. App Icon Grid (5 columns x 4 rows)
     let (order, count) = filter_catalog(st.category, st.query.as_str());
     let shown = count.min(spotlight::GRID_COLS * spotlight::GRID_ROWS);
     if shown == 0 {
         let msg: &[u8] = if calc.is_some() {
             b"Calculator result ready above"
+        } else if !st.query.as_str().trim().is_empty() {
+            b"Press Enter to run program directly"
         } else {
             b"No matching apps found"
         };

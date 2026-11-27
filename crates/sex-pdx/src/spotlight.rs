@@ -21,13 +21,13 @@ pub const OP_SPOTLIGHT_QUERY: u64 = 0x2FE;
 /// Maximum ASCII characters kept in the Spotlight search input.
 pub const QUERY_MAX: usize = 24;
 
-/// Logical overlay dimensions at 1x scale (`~640x490`).
-pub const PANEL_W: usize = 640;
-pub const PANEL_H: usize = 490;
+/// Logical overlay dimensions at 1x scale (`~720x540`).
+pub const PANEL_W: usize = 720;
+pub const PANEL_H: usize = 540;
 
-/// Grid dimensions: 4 columns x 3 rows = 12 prominent SexOS apps.
-pub const GRID_COLS: usize = 4;
-pub const GRID_ROWS: usize = 3;
+/// Grid dimensions: 5 columns x 4 rows = 20 visible SexOS apps per view.
+pub const GRID_COLS: usize = 5;
+pub const GRID_ROWS: usize = 4;
 
 /// Search bar placeholder text.
 pub const PLACEHOLDER: &str = "Search apps, calculate, or run...";
@@ -115,14 +115,16 @@ pub enum LaunchTarget {
     Quil,
     /// PD Graph / Mesh visualizer (`open_mesh_in_active_scene`).
     PdGraph,
-    /// Files manager (`program_start_own("files")` with Linen fallback).
+    /// Files manager (`program_start_own("loom")` with Linen fallback).
     Files,
-    /// System Settings (`program_start_own("settings")` with scene settings fallback).
+    /// System Settings (`program_start_own("tatami")` with scene settings fallback).
     Settings,
-    /// Audio mixer / player (`program_start_own("play")` with Quick Volume fallback).
+    /// Audio/video player (`program_start_own("qupid")` with Quick Volume fallback).
     Audio,
     /// Named ELF program launched via `program_start_own(name)`.
     Program(&'static str),
+    /// Direct custom program launch using the typed query when no catalog app matched.
+    QueryProgram(Query),
 }
 
 /// Descriptor for one app tile in the Spotlight grid.
@@ -141,8 +143,10 @@ pub struct SpotlightApp {
     pub target: LaunchTarget,
 }
 
-/// Curated SexOS Spotlight catalog — every tile launches a real catalog app.
-pub const CATALOG: [SpotlightApp; 12] = [
+/// Curated SexOS Spotlight catalog — every tile launches a real shipped SexOS program.
+/// First 20 entries populate the default 5x4 "All" grid; all entries are searchable and
+/// browsable via category pills.
+pub const CATALOG: [SpotlightApp; 40] = [
     SpotlightApp {
         id: "tailor",
         name: "Tailor AI",
@@ -150,7 +154,7 @@ pub const CATALOG: [SpotlightApp; 12] = [
         monogram: "AI",
         category: Category::AiDev,
         badge_rgb: 0x008B_5CF6,
-        keywords: "tailor ai assistant chat llm gemini agent",
+        keywords: "tailor ai assistant chat llm gemini claude codex agent",
         target: LaunchTarget::Program("tailor"),
     },
     SpotlightApp {
@@ -164,13 +168,33 @@ pub const CATALOG: [SpotlightApp; 12] = [
         target: LaunchTarget::Browser,
     },
     SpotlightApp {
+        id: "brootlite",
+        name: "BrootLite",
+        icon: "splicy",
+        monogram: "BL",
+        category: Category::Media,
+        badge_rgb: 0x007C_3AED,
+        keywords: "brootlite stremio movies tv swarm torrent stream media",
+        target: LaunchTarget::Program("brootlite"),
+    },
+    SpotlightApp {
+        id: "qupid",
+        name: "Qupid",
+        icon: "qupid",
+        monogram: "QP",
+        category: Category::Media,
+        badge_rgb: 0x00EC_4899,
+        keywords: "qupid music audio video player media sound mixer volume play",
+        target: LaunchTarget::Audio,
+    },
+    SpotlightApp {
         id: "flash",
         name: "Flash",
         icon: "mirror",
         monogram: "FL",
         category: Category::Media,
         badge_rgb: 0x00F4_3F5E,
-        keywords: "flash webcam camera video photo capture mirror",
+        keywords: "flash camera webcam photo booth video capture mirror",
         target: LaunchTarget::Program("flash"),
     },
     SpotlightApp {
@@ -185,7 +209,7 @@ pub const CATALOG: [SpotlightApp; 12] = [
     },
     SpotlightApp {
         id: "files",
-        name: "Files",
+        name: "Loom",
         icon: "loom",
         monogram: "FS",
         category: Category::Apps,
@@ -204,8 +228,18 @@ pub const CATALOG: [SpotlightApp; 12] = [
         target: LaunchTarget::Quil,
     },
     SpotlightApp {
+        id: "swingers",
+        name: "Swingers",
+        icon: "mesh",
+        monogram: "SW",
+        category: Category::Media,
+        badge_rgb: 0x00D9_46EF,
+        keywords: "swingers torrent p2p magnet download",
+        target: LaunchTarget::Program("swingers"),
+    },
+    SpotlightApp {
         id: "settings",
-        name: "Settings",
+        name: "Tatami",
         icon: "tatami",
         monogram: "ST",
         category: Category::System,
@@ -215,7 +249,7 @@ pub const CATALOG: [SpotlightApp; 12] = [
     },
     SpotlightApp {
         id: "pd-graph",
-        name: "PD Graph",
+        name: "Mesh",
         icon: "mesh",
         monogram: "PD",
         category: Category::System,
@@ -224,24 +258,14 @@ pub const CATALOG: [SpotlightApp; 12] = [
         target: LaunchTarget::PdGraph,
     },
     SpotlightApp {
-        id: "audio",
-        name: "Audio",
-        icon: "qupid",
-        monogram: "AU",
-        category: Category::Media,
-        badge_rgb: 0x00EC_4899,
-        keywords: "audio sound mixer volume music play qupid",
-        target: LaunchTarget::Audio,
-    },
-    SpotlightApp {
-        id: "store",
-        name: "Store",
+        id: "sexshop",
+        name: "SexShop",
         icon: "sexshop",
-        monogram: "SR",
+        monogram: "SS",
         category: Category::System,
         badge_rgb: 0x0014_B8A6,
         keywords: "store sexshop shop packages install apps software",
-        target: LaunchTarget::Program("store"),
+        target: LaunchTarget::Program("sexshop"),
     },
     SpotlightApp {
         id: "moan",
@@ -254,14 +278,274 @@ pub const CATALOG: [SpotlightApp; 12] = [
         target: LaunchTarget::Program("moan"),
     },
     SpotlightApp {
+        id: "cabaret",
+        name: "Cabaret",
+        icon: "splicy",
+        monogram: "CB",
+        category: Category::Media,
+        badge_rgb: 0x00F9_7316,
+        keywords: "cabaret live broadcast stream obs recorder studio video",
+        target: LaunchTarget::Program("cabaret"),
+    },
+    SpotlightApp {
         id: "polyamour",
         name: "Polyamour",
         icon: "polyamour",
         monogram: "3D",
         category: Category::Apps,
         badge_rgb: 0x0038_BDF8,
-        keywords: "polyamour 3d modeler sculpt cad mesh",
+        keywords: "polyamour 3d modeler sculpt cad mesh blender",
         target: LaunchTarget::Program("polyamour"),
+    },
+    SpotlightApp {
+        id: "gossip",
+        name: "Gossip",
+        icon: "bell",
+        monogram: "GS",
+        category: Category::Media,
+        badge_rgb: 0x00FB_7185,
+        keywords: "gossip rss atom opml feeds podcasts news reader",
+        target: LaunchTarget::Program("gossip"),
+    },
+    SpotlightApp {
+        id: "vellum",
+        name: "Vellum",
+        icon: "vellum",
+        monogram: "VL",
+        category: Category::Apps,
+        badge_rgb: 0x00EF_4444,
+        keywords: "vellum pdf document reader viewer",
+        target: LaunchTarget::Program("vellum"),
+    },
+    SpotlightApp {
+        id: "flirt",
+        name: "Flirt",
+        icon: "flirt",
+        monogram: "FT",
+        category: Category::Apps,
+        badge_rgb: 0x00F4_72B6,
+        keywords: "flirt talk chat messaging social",
+        target: LaunchTarget::Program("flirt"),
+    },
+    SpotlightApp {
+        id: "gaze",
+        name: "Gaze",
+        icon: "gaze",
+        monogram: "GZ",
+        category: Category::Media,
+        badge_rgb: 0x0006_B6D4,
+        keywords: "gaze view image photo gallery svg jxl picture",
+        target: LaunchTarget::Program("gaze"),
+    },
+    SpotlightApp {
+        id: "batik",
+        name: "Batik",
+        icon: "gaze",
+        monogram: "BT",
+        category: Category::Media,
+        badge_rgb: 0x00C0_84FC,
+        keywords: "batik paint draw image editor layers art",
+        target: LaunchTarget::Program("batik"),
+    },
+    SpotlightApp {
+        id: "abacus",
+        name: "Abacus",
+        icon: "abacus",
+        monogram: "AB",
+        category: Category::Apps,
+        badge_rgb: 0x0022_C55E,
+        keywords: "abacus calculator math compute",
+        target: LaunchTarget::Program("abacus"),
+    },
+    SpotlightApp {
+        id: "date",
+        name: "Date",
+        icon: "date",
+        monogram: "DT",
+        category: Category::Apps,
+        badge_rgb: 0x00E8_79F9,
+        keywords: "date calendar schedule events agenda",
+        target: LaunchTarget::Program("date"),
+    },
+    SpotlightApp {
+        id: "assuit",
+        name: "Assuit",
+        icon: "assuit",
+        monogram: "AS",
+        category: Category::Apps,
+        badge_rgb: 0x003B_82F6,
+        keywords: "assuit word processor docx writer document",
+        target: LaunchTarget::Program("assuit"),
+    },
+    SpotlightApp {
+        id: "spreadeagle",
+        name: "Spreadeagle",
+        icon: "spreadeagle",
+        monogram: "SE",
+        category: Category::Apps,
+        badge_rgb: 0x0010_B981,
+        keywords: "spreadeagle spreadsheet excel xlsx sheets table",
+        target: LaunchTarget::Program("spreadeagle"),
+    },
+    SpotlightApp {
+        id: "gestalt",
+        name: "Gestalt",
+        icon: "gestalt",
+        monogram: "GT",
+        category: Category::Apps,
+        badge_rgb: 0x00F5_9E0B,
+        keywords: "gestalt vector svg illustrator paths design",
+        target: LaunchTarget::Program("gestalt"),
+    },
+    SpotlightApp {
+        id: "burlesque",
+        name: "Burlesque",
+        icon: "vellum",
+        monogram: "BQ",
+        category: Category::Apps,
+        badge_rgb: 0x00FB_923C,
+        keywords: "burlesque slides presentations deck keynote",
+        target: LaunchTarget::Program("burlesque"),
+    },
+    SpotlightApp {
+        id: "bodice",
+        name: "Bodice",
+        icon: "vellum",
+        monogram: "BD",
+        category: Category::Apps,
+        badge_rgb: 0x00A7_8BFA,
+        keywords: "bodice ebook epub comics books reader",
+        target: LaunchTarget::Program("bodice"),
+    },
+    SpotlightApp {
+        id: "jot",
+        name: "Jot",
+        icon: "jot",
+        monogram: "JT",
+        category: Category::Apps,
+        badge_rgb: 0x0081_8CF8,
+        keywords: "jot notes memo scratchpad quick",
+        target: LaunchTarget::Program("jot"),
+    },
+    SpotlightApp {
+        id: "filigree",
+        name: "Filigree",
+        icon: "quil",
+        monogram: "FG",
+        category: Category::Apps,
+        badge_rgb: 0x0094_A3B8,
+        keywords: "filigree fonts typography specimen",
+        target: LaunchTarget::Program("filigree"),
+    },
+    SpotlightApp {
+        id: "rendezvous",
+        name: "Rendezvous",
+        icon: "kaleidoscope",
+        monogram: "RV",
+        category: Category::Apps,
+        badge_rgb: 0x0034_D399,
+        keywords: "rendezvous maps navigation routes location",
+        target: LaunchTarget::Program("rendezvous"),
+    },
+    SpotlightApp {
+        id: "chastity",
+        name: "Chastity",
+        icon: "tatami",
+        monogram: "CH",
+        category: Category::System,
+        badge_rgb: 0x00F4_3F5E,
+        keywords: "chastity password vault keepass kdbx secrets",
+        target: LaunchTarget::Program("chastity"),
+    },
+    SpotlightApp {
+        id: "corset",
+        name: "Corset",
+        icon: "tatami",
+        monogram: "CS",
+        category: Category::System,
+        badge_rgb: 0x0064_748B,
+        keywords: "corset disks partitions format storage",
+        target: LaunchTarget::Program("corset"),
+    },
+    SpotlightApp {
+        id: "aftercare",
+        name: "Aftercare",
+        icon: "loom",
+        monogram: "AC",
+        category: Category::System,
+        badge_rgb: 0x002D_D4BF,
+        keywords: "aftercare backup encrypted snapshots restore",
+        target: LaunchTarget::Program("aftercare"),
+    },
+    SpotlightApp {
+        id: "climax",
+        name: "Climax",
+        icon: "mesh",
+        monogram: "CX",
+        category: Category::System,
+        badge_rgb: 0x00EF_4444,
+        keywords: "climax benchmark thermal stress cpu gpu",
+        target: LaunchTarget::Program("climax"),
+    },
+    SpotlightApp {
+        id: "hookup",
+        name: "Hookup",
+        icon: "flirt",
+        monogram: "HK",
+        category: Category::System,
+        badge_rgb: 0x0038_BDF8,
+        keywords: "hookup phone link kdeconnect mobile sync",
+        target: LaunchTarget::Program("hookup"),
+    },
+    SpotlightApp {
+        id: "lurk",
+        name: "Lurk",
+        icon: "mirror",
+        monogram: "LK",
+        category: Category::System,
+        badge_rgb: 0x0063_66F1,
+        keywords: "lurk vnc rfb remote desktop viewer",
+        target: LaunchTarget::Program("lurk"),
+    },
+    SpotlightApp {
+        id: "needle",
+        name: "Needle",
+        icon: "vellum",
+        monogram: "ND",
+        category: Category::System,
+        badge_rgb: 0x008B_5CF6,
+        keywords: "needle print scan ipp printer scanner",
+        target: LaunchTarget::Program("needle"),
+    },
+    SpotlightApp {
+        id: "drag",
+        name: "Drag",
+        icon: "spindle",
+        monogram: "VM",
+        category: Category::AiDev,
+        badge_rgb: 0x004F_46E5,
+        keywords: "drag vm virtual machine linux kvm vmm",
+        target: LaunchTarget::Program("drag"),
+    },
+    SpotlightApp {
+        id: "velvet",
+        name: "Velvet",
+        icon: "polyamour",
+        monogram: "VV",
+        category: Category::Apps,
+        badge_rgb: 0x00EC_4899,
+        keywords: "velvet games solitaire chess arcade",
+        target: LaunchTarget::Program("velvet"),
+    },
+    SpotlightApp {
+        id: "driftspark",
+        name: "Driftspark",
+        icon: "splicy",
+        monogram: "DS",
+        category: Category::Media,
+        badge_rgb: 0x00F9_7316,
+        keywords: "driftspark game arcade racing sdl2",
+        target: LaunchTarget::Program("driftspark"),
     },
 ];
 
@@ -362,6 +646,7 @@ pub fn key_char(code: u8, shift: bool) -> Option<u8> {
         (0x0B, true) => Some(b')'),
         (0x06, true) => Some(b'%'),
         (0x0C, false) | (0x4A, _) => Some(b'-'),
+        (0x0C, true) => Some(b'_'),
         (0x34, false) => Some(b'.'),
         (0x35, false) => Some(b'/'),
         (0x02..=0x0A, false) => Some(b'1' + (code - 0x02)),
@@ -653,7 +938,7 @@ pub fn eval_calc(query: &str) -> Option<CalcResult> {
 
     if frac_part != 0 {
         push(&mut res, b'.');
-        let mut f = [
+        let f = [
             b'0' + ((frac_part / 1000) % 10) as u8,
             b'0' + ((frac_part / 100) % 10) as u8,
             b'0' + ((frac_part / 10) % 10) as u8,
@@ -771,7 +1056,7 @@ pub enum Hit {
 }
 
 impl Layout {
-    /// Computes the centered, screen-clamped `~640x490` logical px Spotlight layout.
+    /// Computes the centered, screen-clamped `~720x540` logical px Spotlight layout.
     pub fn new(screen_w: usize, screen_h: usize, bar_h: usize, scale: u32) -> Option<Self> {
         let sc = scale.clamp(1, 3);
         let s = sc as usize;
@@ -817,7 +1102,7 @@ impl Layout {
         let footer_h = 34 * s;
         let footer = (px + pad, py + ph - footer_h, inner_w, footer_h);
 
-        // 4. App Icon Grid (4 columns x 3 rows)
+        // 4. App Icon Grid (5 columns x 4 rows)
         let grid_y = pill_y + pill_h + 14 * s;
         let grid_h = footer.1.saturating_sub(grid_y + 10 * s);
         let grid_area = (inner_x, grid_y, inner_w, grid_h);
@@ -988,15 +1273,22 @@ impl Controller {
             return KeyOutcome::Consumed;
         }
 
-        // Enter launches the currently selected tile (if any) and closes Spotlight.
+        // Enter launches the currently selected tile (if any), or runs the typed query
+        // directly as a program name when there are 0 catalog matches, and closes Spotlight.
         if code == 0x1C || code == 0x9C {
             if value == 1 {
                 let (order, count) = self.filtered();
                 if count > 0 {
-                    let sel = (self.state.selected as usize).min(count - 1);
+                    let shown = count.min(GRID_COLS * GRID_ROWS);
+                    let sel = (self.state.selected as usize).min(shown - 1);
                     let target = CATALOG[order[sel]].target;
                     self.close();
                     return KeyOutcome::Launch(target);
+                }
+                let q = self.state.query;
+                if !q.as_str().trim().is_empty() && eval_calc(q.as_str()).is_none() {
+                    self.close();
+                    return KeyOutcome::Launch(LaunchTarget::QueryProgram(q));
                 }
             }
             return KeyOutcome::Consumed;
@@ -1021,26 +1313,27 @@ impl Controller {
             return KeyOutcome::Redraw;
         }
 
-        // Arrow keys navigate the 2D app grid.
+        // Arrow keys navigate the visible 2D app grid.
         let (_, count) = self.filtered();
+        let shown = count.min(GRID_COLS * GRID_ROWS);
         let is_left = matches!(code, 0x4B | 0x69);
         let is_right = matches!(code, 0x4D | 0x6A);
         let is_up = matches!(code, 0x48 | 0x67);
         let is_down = matches!(code, 0x50 | 0x6C);
         if is_left || is_right || is_up || is_down {
-            if count == 0 {
+            if shown == 0 {
                 return KeyOutcome::Consumed;
             }
-            let cur = (self.state.selected as usize).min(count - 1);
+            let cur = (self.state.selected as usize).min(shown - 1);
             let next = if is_left {
-                if cur == 0 { count - 1 } else { cur - 1 }
+                if cur == 0 { shown - 1 } else { cur - 1 }
             } else if is_right {
-                if cur + 1 >= count { 0 } else { cur + 1 }
+                if cur + 1 >= shown { 0 } else { cur + 1 }
             } else if is_up {
                 if cur >= GRID_COLS { cur - GRID_COLS } else { cur }
             } else {
                 // Down
-                if cur + GRID_COLS < count { cur + GRID_COLS } else { cur }
+                if cur + GRID_COLS < shown { cur + GRID_COLS } else { cur }
             };
             if next != cur {
                 self.state.selected = next as u8;
@@ -1080,7 +1373,8 @@ impl Controller {
             return ClickOutcome::Dismiss;
         };
         let (order, count) = self.filtered();
-        match layout.hit(px, py, count) {
+        let shown = count.min(GRID_COLS * GRID_ROWS);
+        match layout.hit(px, py, shown) {
             Hit::Outside => {
                 self.close();
                 ClickOutcome::Dismiss
@@ -1095,7 +1389,7 @@ impl Controller {
                 }
             }
             Hit::Tile(idx) => {
-                if idx < count {
+                if idx < shown {
                     let target = CATALOG[order[idx]].target;
                     self.close();
                     ClickOutcome::Launch(target)
@@ -1127,5 +1421,83 @@ impl Controller {
             return true;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flagship_apps_found_by_query_and_category() {
+        let cases: &[(&str, Category, &str, LaunchTarget)] = &[
+            ("brootlite", Category::Media, "brootlite", LaunchTarget::Program("brootlite")),
+            ("qupid", Category::Media, "qupid", LaunchTarget::Audio),
+            ("flash", Category::Media, "flash", LaunchTarget::Program("flash")),
+            ("tailor", Category::AiDev, "tailor", LaunchTarget::Program("tailor")),
+            ("kaleidoscope", Category::Apps, "kaleidoscope", LaunchTarget::Browser),
+            ("tatami", Category::System, "settings", LaunchTarget::Settings),
+            ("swingers", Category::Media, "swingers", LaunchTarget::Program("swingers")),
+        ];
+        for &(query, cat, expected_id, expected_target) in cases {
+            let (order_all, n_all) = filter_catalog(Category::All, query);
+            assert!(n_all >= 1, "expected match in All for {}", query);
+            assert_eq!(CATALOG[order_all[0]].id, expected_id);
+            assert_eq!(CATALOG[order_all[0]].target, expected_target);
+
+            let (order_cat, n_cat) = filter_catalog(cat, query);
+            assert!(n_cat >= 1, "expected match in {:?} for {}", cat, query);
+            assert_eq!(CATALOG[order_cat[0]].id, expected_id);
+        }
+    }
+
+    #[test]
+    fn wire_round_trip_for_all_valid_tile_indices() {
+        let max_tiles = GRID_COLS * GRID_ROWS;
+        let mut q = Query::new();
+        for &b in b"brootlite" {
+            assert!(q.push(b));
+        }
+        let (q0, q1, q2) = q.pack_words();
+        for idx in 0..max_tiles {
+            let st = SpotlightState {
+                open: true,
+                category: Category::ALL[idx % Category::ALL.len()],
+                selected: idx as u8,
+                hover_tile: Some(idx as u8),
+                hover_cat: None,
+                query: q,
+            };
+            let (w0, _, _) = st.wire();
+            assert_eq!(SpotlightState::decode(w0, q0, q1, q2), Some(st));
+        }
+    }
+
+    #[test]
+    fn direct_custom_program_launch_when_no_catalog_match() {
+        let mut ctrl = Controller::new();
+        ctrl.open();
+        // Type "mytool" -> scancodes: m=0x32, y=0x15, t=0x14, o=0x18, o=0x18, l=0x26
+        for &code in &[0x32u8, 0x15, 0x14, 0x18, 0x18, 0x26] {
+            assert_eq!(ctrl.handle_key(code, 1, false, false), KeyOutcome::Redraw);
+        }
+        assert_eq!(ctrl.state().query.as_str(), "mytool");
+        let (_, count) = ctrl.filtered();
+        assert_eq!(count, 0);
+
+        let expected_q = ctrl.state().query;
+        assert_eq!(
+            ctrl.handle_key(0x1C, 1, false, false),
+            KeyOutcome::Launch(LaunchTarget::QueryProgram(expected_q))
+        );
+        assert!(!ctrl.is_open());
+
+        // Arithmetic expressions with 0 catalog matches should NOT launch a program on Enter.
+        ctrl.open();
+        assert_eq!(ctrl.handle_key(0x03, 1, false, false), KeyOutcome::Redraw); // '2'
+        assert_eq!(ctrl.handle_key(0x0D, 1, false, true), KeyOutcome::Redraw);  // '+'
+        assert_eq!(ctrl.handle_key(0x03, 1, false, false), KeyOutcome::Redraw); // '2'
+        assert_eq!(ctrl.handle_key(0x1C, 1, false, false), KeyOutcome::Consumed);
+        assert!(ctrl.is_open());
     }
 }
