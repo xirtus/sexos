@@ -67,6 +67,15 @@ fn live_search_filtering_and_backspace() {
     assert_eq!(CATALOG[order[0]].id, "moan");
     assert_eq!(CATALOG[order[0]].target, LaunchTarget::Program("moan"));
 
+    // Search "splicy", "fcp", and "video editor" -> Splicy video editor.
+    for query in ["splicy", "fcp", "video editor"] {
+        let (order, n) = filter_catalog(Category::All, query);
+        assert!(n >= 1, "expected match for '{}'", query);
+        assert_eq!(CATALOG[order[0]].id, "splicy", "query '{}'", query);
+        assert_eq!(CATALOG[order[0]].category, Category::Media);
+        assert_eq!(CATALOG[order[0]].target, LaunchTarget::Program("splicy"));
+    }
+
     // Search "polyamour" and "3d" -> Polyamour.
     let (order, n) = filter_catalog(Category::All, "polyamour");
     assert_eq!(n, 1);

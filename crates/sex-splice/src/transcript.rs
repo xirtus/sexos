@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Editing by transcript: delete words and their frames and sound go with them.
 //!
 //! A transcript belongs to one source file and its times are source times, so it stays
@@ -40,10 +41,132 @@ pub fn norm(text: &str) -> String {
     text.chars().filter(|c| c.is_alphanumeric() || *c == '\'').flat_map(char::to_lowercase).collect()
 }
 
+fn leading_punct(text: &str, keep_leading_apos: bool) -> &str {
+    let pred = |c: char| c.is_alphanumeric() || (keep_leading_apos && c == '\'');
+    let idx = text.find(pred).unwrap_or(text.len());
+    &text[..idx]
+}
+
+fn trailing_punct(text: &str, keep_trailing_apos: bool) -> &str {
+    let pred = |c: char| c.is_alphanumeric() || (keep_trailing_apos && c == '\'');
+    let idx = text
+        .rfind(pred)
+        .map(|i| i + text[i..].chars().next().map_or(0, char::len_utf8))
+        .unwrap_or(0);
+    &text[idx..]
+}
+
+fn match_word_token(word_text: &str, target_norm: &str, allow_possessive: bool) -> Option<bool> {
+    let raw = norm(word_text);
+    if raw == target_norm {
+        return Some(false);
+    }
+    let stripped = if !target_norm.starts_with('\'') && !target_norm.ends_with('\'') {
+        raw.trim_matches('\'')
+    } else {
+        raw.as_str()
+    };
+    if stripped == target_norm {
+        return Some(false);
+    }
+    if allow_possessive
+        && !target_norm.ends_with("'s")
+        && stripped.strip_prefix(target_norm) == Some("'s")
+    {
+        return Some(true);
+    }
+    None
+}
+
 impl Transcript {
     pub fn is_filler(&self, i: usize) -> bool {
         let n = norm(&self.words[i].text);
         FILLERS.iter().any(|f| *f == n)
+    }
+
+    /// Case-insensitively find single-word or multi-word phrases via [`norm`] and replace them in
+    /// place while preserving leading/trailing punctuation on edge words and keeping exact
+    /// [`Word::source`] timings (splitting proportionally across the matched span when the
+    /// replacement word count differs; adapted from Scarlet's `fixWord`, MIT).
+    ///
+    /// Returns the number of phrase occurrences replaced.
+    pub fn fix_word(&mut self, find: &str, replace: &str) -> usize {
+        let find_norm: Vec<String> = find
+            .split_whitespace()
+            .map(norm)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let rep_tokens: Vec<&str> = replace.split_whitespace().collect();
+        if find_norm.is_empty() || rep_tokens.is_empty() {
+            return 0;
+        }
+
+        let m = find_norm.len();
+        let r = rep_tokens.len();
+        let keep_lead_apos = find_norm[0].starts_with('\'');
+        let keep_trail_apos = find_norm[m - 1].ends_with('\'');
+        let mut replaced = 0usize;
+        let mut i = 0usize;
+
+        while i + m <= self.words.len() {
+            let mut possessive_tail = false;
+            let mut all_match = true;
+            for k in 0..m {
+                match match_word_token(&self.words[i + k].text, &find_norm[k], k + 1 == m) {
+                    Some(poss) => {
+                        if k + 1 == m {
+                            possessive_tail = poss;
+                        }
+                    }
+                    None => {
+                        all_match = false;
+                        break;
+                    }
+                }
+            }
+            if !all_match {
+                i += 1;
+                continue;
+            }
+
+            let lead = String::from(leading_punct(&self.words[i].text, keep_lead_apos));
+            let trail = String::from(trailing_punct(&self.words[i + m - 1].text, keep_trail_apos));
+            let span_start = self.words[i].source.start;
+            let span_end = self.words[i + m - 1].source.end;
+            let total = span_end - span_start;
+
+            let mut new_words = Vec::with_capacity(r);
+            for (k, &tok) in rep_tokens.iter().enumerate() {
+                let mut text = String::new();
+                if k == 0 && !lead.is_empty() && !tok.starts_with(lead.as_str()) {
+                    text.push_str(&lead);
+                }
+                text.push_str(tok);
+                if k + 1 == r {
+                    if possessive_tail && !tok.ends_with("'s") && !tok.ends_with("'S") {
+                        text.push_str("'s");
+                    }
+                    if !trail.is_empty() && !text.ends_with(trail.as_str()) {
+                        text.push_str(&trail);
+                    }
+                }
+
+                let source = if r == m {
+                    self.words[i + k].source
+                } else {
+                    let s = span_start + ((total as i128 * k as i128) / r as i128) as Micros;
+                    let e = span_start + ((total as i128 * (k + 1) as i128) / r as i128) as Micros;
+                    Range::new(s, e)
+                };
+                new_words.push(Word { text, source });
+            }
+
+            self.words.splice(i..i + m, new_words);
+            replaced += 1;
+            i += r;
+        }
+
+        replaced
     }
 
     /// Leave out words `first..=last`. The cut runs from the first word to the start of the
@@ -146,3 +269,111 @@ pub fn ripple_ops(tl: &Timeline, cuts: &[SourceCut]) -> Vec<Op> {
     }
     merged.into_iter().rev().map(|range| Op::RippleDelete { range }).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    fn w(text: &str, start: Micros, end: Micros) -> Word {
+        Word { text: String::from(text), source: Range::new(start, end) }
+    }
+
+    #[test]
+    fn fix_word_preserves_edge_punctuation_and_exact_timings() {
+        let mut tr = Transcript {
+            media: 1,
+            words: vec![
+                w("\"Scarlett,\"", 100_000, 500_000),
+                w("meets", 550_000, 800_000),
+                w("scarlett!", 850_000, 1_300_000),
+                w("(SCARLETT).", 1_400_000, 1_900_000),
+            ],
+        };
+
+        let n = tr.fix_word("scarlett", "Splicy");
+        assert_eq!(n, 3);
+        assert_eq!(
+            tr.words,
+            vec![
+                w("\"Splicy,\"", 100_000, 500_000),
+                w("meets", 550_000, 800_000),
+                w("Splicy!", 850_000, 1_300_000),
+                w("(Splicy).", 1_400_000, 1_900_000),
+            ]
+        );
+    }
+
+    #[test]
+    fn fix_word_splits_and_merges_multi_word_phrases_proportionally() {
+        // 2 words -> 1 word merges source span and combines outer edge punctuation.
+        let mut tr = Transcript {
+            media: 1,
+            words: vec![
+                w("“sex", 200_000, 450_000),
+                w("os,”", 500_000, 800_000),
+                w("runs", 900_000, 1_200_000),
+            ],
+        };
+        assert_eq!(tr.fix_word("Sex OS", "SexOS"), 1);
+        assert_eq!(
+            tr.words,
+            vec![
+                w("“SexOS,”", 200_000, 800_000),
+                w("runs", 900_000, 1_200_000),
+            ]
+        );
+
+        // 1 word -> 3 words splits 200_000..800_000 into 3 equal 200_000us slices, keeping edge quotes!
+        assert_eq!(tr.fix_word("sexos", "Splicy Video Editor"), 1);
+        assert_eq!(
+            tr.words,
+            vec![
+                w("“Splicy", 200_000, 400_000),
+                w("Video", 400_000, 600_000),
+                w("Editor,”", 600_000, 800_000),
+                w("runs", 900_000, 1_200_000),
+            ]
+        );
+
+        // 2 words -> 2 words preserves each original word's exact Range (including inter-word gap).
+        let mut same_len = Transcript {
+            media: 1,
+            words: vec![w("old", 100, 200), w("name,", 250, 400)],
+        };
+        assert_eq!(same_len.fix_word("old name", "Splicy Core"), 1);
+        assert_eq!(
+            same_len.words,
+            vec![w("Splicy", 100, 200), w("Core,", 250, 400)]
+        );
+
+        // Self-expanding replacement ("Splicy" -> "Splicy Pro") terminates cleanly without re-matching.
+        assert_eq!(same_len.fix_word("splicy", "Splicy Pro"), 1);
+        assert_eq!(same_len.words.len(), 3);
+        assert_eq!(same_len.fix_word("", "anything"), 0);
+        assert_eq!(same_len.fix_word("splicy", "   "), 0);
+    }
+
+    #[test]
+    fn fix_word_preserves_possessives_and_single_quotes() {
+        let mut tr = Transcript {
+            media: 1,
+            words: vec![
+                w("'Scarlett',", 0, 400_000),
+                w("Scarlett's.", 500_000, 900_000),
+                w("'90s!", 1_000_000, 1_400_000),
+            ],
+        };
+        assert_eq!(tr.fix_word("scarlett", "Splicy"), 2);
+        assert_eq!(tr.fix_word("'90s", "1990s"), 1);
+        assert_eq!(
+            tr.words,
+            vec![
+                w("'Splicy',", 0, 400_000),
+                w("Splicy's.", 500_000, 900_000),
+                w("1990s!", 1_000_000, 1_400_000),
+            ]
+        );
+    }
+}
+

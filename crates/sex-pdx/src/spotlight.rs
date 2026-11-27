@@ -146,7 +146,7 @@ pub struct SpotlightApp {
 /// Curated SexOS Spotlight catalog — every tile launches a real shipped SexOS program.
 /// First 20 entries populate the default 5x4 "All" grid; all entries are searchable and
 /// browsable via category pills.
-pub const CATALOG: [SpotlightApp; 41] = [
+pub const CATALOG: [SpotlightApp; 42] = [
     SpotlightApp {
         id: "tailor",
         name: "Tailor AI",
@@ -286,6 +286,16 @@ pub const CATALOG: [SpotlightApp; 41] = [
         badge_rgb: 0x00E1_1D48,
         keywords: "moan daw synth audio music studio midi",
         target: LaunchTarget::Program("moan"),
+    },
+    SpotlightApp {
+        id: "splicy",
+        name: "Splicy",
+        icon: "splicy",
+        monogram: "SP",
+        category: Category::Media,
+        badge_rgb: 0x00FF_2D7A,
+        keywords: "splicy video editor fcp premiere film cut timeline transcript nle",
+        target: LaunchTarget::Program("splicy"),
     },
     SpotlightApp {
         id: "cabaret",
@@ -738,7 +748,12 @@ pub fn filter_catalog(category: Category, query: &str) -> ([usize; CATALOG_LEN],
         } else {
             let by_name = score_text(trimmed, app.name).map(|v| v * 2);
             let by_id = score_text(trimmed, app.id).map(|v| v * 2);
-            let by_kw = app.keywords.split(' ').filter_map(|w| score_text(trimmed, w)).max();
+            let by_kw = app
+                .keywords
+                .split(' ')
+                .filter_map(|w| score_text(trimmed, w))
+                .max()
+                .or_else(|| trimmed.contains(' ').then(|| score_text(trimmed, app.keywords)).flatten());
             match by_name.max(by_id).max(by_kw) {
                 Some(v) => v,
                 None => continue,
@@ -1444,6 +1459,7 @@ mod tests {
             ("brootlite", Category::Media, "brootlite", LaunchTarget::Program("brootlite")),
             ("qupid", Category::Media, "qupid", LaunchTarget::Audio),
             ("flash", Category::Media, "flash", LaunchTarget::Program("flash")),
+            ("splicy", Category::Media, "splicy", LaunchTarget::Program("splicy")),
             ("tailor", Category::AiDev, "tailor", LaunchTarget::Program("tailor")),
             ("kaleidoscope", Category::Apps, "kaleidoscope", LaunchTarget::Browser),
             ("tatami", Category::System, "settings", LaunchTarget::Settings),

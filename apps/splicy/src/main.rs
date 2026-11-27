@@ -24,6 +24,7 @@ mod program {
     use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
+    use sex_app::sound::Sound;
     use sex_app::{files, Event, Nav, Window};
     use sex_media::export::{Config, Exporter, Format, RATE};
     use sex_media::recording::Drain;
@@ -31,11 +32,11 @@ mod program {
     use sex_pdx::app_key::Key;
     use sex_pdx::app_pointer::Kind;
     use sex_splice::export::{export_pictures, sound_pieces, Frames, Pictures, SoundPiece};
-    use sex_splice::{Micros, SECOND};
+    use sex_splice::{Micros, TrackKind, SECOND};
     use splicy::cache::{CacheConfig, CachedFrame, FrameCache};
     use splicy::media::{Library, Peaks, Thumb};
-    use splicy::view::View;
-    use splicy::{words, AuditionMode, Editor};
+    use splicy::view::{CardHit, ToolbarHit, TrackSwitchHit, TransportHit, View};
+    use splicy::{words, AuditionMode, Editor, ToolKind};
 
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -98,34 +99,47 @@ mod program {
 
     impl Grabber {
         fn show(&mut self, source: Micros) -> Result<(), sex_media::Error> {
+            self.show_mode(source, true)
+        }
+
+        fn show_mode(&mut self, source: Micros, cache_frame: bool) -> Result<(), sex_media::Error> {
             let want = source / 1000;
             if self.at_ms >= 0 && want >= self.at_ms && want < self.at_ms + self.frame_ms {
                 return Ok(());
             }
-            let tol_us = (self.frame_ms * 500).max(500);
-            if let Some(hit) = self.cache.get(0, source, tol_us, false) {
-                if hit.pixels.len() == self.picture.len() {
-                    self.picture.copy_from_slice(&hit.pixels);
-                    self.at_ms = hit.source_us / 1000;
-                    return Ok(());
+            if cache_frame {
+                let tol_us = (self.frame_ms * 500).max(500);
+                if let Some(hit) = self.cache.get(0, source, tol_us, false) {
+                    if hit.pixels.len() == self.picture.len() {
+                        self.picture.copy_from_slice(&hit.pixels);
+                        self.at_ms = hit.source_us / 1000;
+                        return Ok(());
+                    }
                 }
             }
             if self.at_ms < 0 || want < self.at_ms || want > self.at_ms + 2000 {
                 self.dec.seek(want.max(0) as u64)?;
             }
+            let started = sex_pdx::get_ticks();
             for _ in 0..2000 {
                 match self.dec.next(&mut self.picture, self.w, self.h, &mut self.pcm)? {
                     Next::Picture { at_ms } => {
                         self.at_ms = at_ms.max(0);
                         if at_ms + self.frame_ms / 2 >= want {
-                            self.cache.insert(CachedFrame::new(
-                                0,
-                                self.at_ms * 1000,
-                                self.w,
-                                self.h,
-                                false,
-                                self.picture.clone(),
-                            ));
+                            if cache_frame {
+                                self.cache.insert(CachedFrame::new(
+                                    0,
+                                    self.at_ms * 1000,
+                                    self.w,
+                                    self.h,
+                                    false,
+                                    self.picture.clone(),
+                                ));
+                            }
+                            return Ok(());
+                        }
+                        // During live playback, yield once decode budget exceeds 24 ms so UI & audio never starve.
+                        if !cache_frame && sex_pdx::get_ticks().saturating_sub(started) >= 24 {
                             return Ok(());
                         }
                     }
@@ -281,6 +295,165 @@ mod program {
         }
     }
 
+    /// Zero-seek RAM-backed 48 kHz stereo audio engine over SexOS `Bell` (`Sound`).
+    /// Reads decoded samples straight from `Library::pcm` through `sound_pieces(tl, RATE)`
+    /// with a 750 ms ring lookahead and hardware `played_total()` clock lock.
+    struct LiveAudio {
+        sound: Sound,
+        pieces: Vec<SoundPiece>,
+        piece: usize,
+        written: u64,
+        base_us: Micros,
+        played_base: u64,
+        last_played: u64,
+        moved_tick: u64,
+        version_idx: usize,
+        rate: i8,
+        active: bool,
+        scratch: Vec<[i16; 2]>,
+    }
+
+    impl LiveAudio {
+        fn open(tl: &sex_splice::Timeline, version_idx: usize) -> Option<Self> {
+            let sound = Sound::open()?;
+            let now = sex_pdx::get_ticks();
+            Some(Self {
+                sound,
+                pieces: sound_pieces(tl, RATE),
+                piece: 0,
+                written: 0,
+                base_us: 0,
+                played_base: 0,
+                last_played: 0,
+                moved_tick: now,
+                version_idx,
+                rate: 0,
+                active: false,
+                scratch: Vec::with_capacity(4096),
+            })
+        }
+
+        fn invalidate(&mut self) {
+            self.active = false;
+        }
+
+        fn stop(&mut self) {
+            if self.active {
+                self.sound.pause(true);
+                self.sound.skip();
+                self.active = false;
+                self.rate = 0;
+            }
+        }
+
+        fn feed(&mut self, tl: &sex_splice::Timeline, lib: &Library, version_idx: usize, playhead: Micros, rate: i8) {
+            if rate <= 0 {
+                self.stop();
+                return;
+            }
+            if !self.active || self.version_idx != version_idx || self.rate != rate {
+                self.sound.reopen();
+                self.sound.set_volume(100);
+                let ring_hz = if rate == 1 { 0 } else { RATE * (rate as u32) };
+                self.sound.set_rate(ring_hz);
+                self.sound.pause(false);
+                self.sound.skip();
+                self.played_base = self.sound.written_total();
+                self.last_played = self.sound.played_total();
+                self.moved_tick = sex_pdx::get_ticks();
+                self.base_us = playhead.max(0);
+                self.pieces = sound_pieces(tl, RATE);
+                let start_sample = (playhead.max(0) as u64 * RATE as u64) / SECOND as u64;
+                self.written = start_sample;
+                self.piece = self
+                    .pieces
+                    .iter()
+                    .position(|p| p.at + p.samples > start_sample)
+                    .unwrap_or(self.pieces.len());
+                self.version_idx = version_idx;
+                self.rate = rate;
+                self.active = true;
+            }
+
+            let total = (tl.duration().max(0) as u64 * RATE as u64) / SECOND as u64;
+            let current_sample = (playhead.max(0) as u64 * RATE as u64) / SECOND as u64;
+            let lookahead = (RATE as u64 * 750 / 1000) * (rate as u64);
+            let until = (current_sample + lookahead).min(total);
+
+            while self.written < until && self.sound.room() >= 256 {
+                self.scratch.clear();
+                let max_chunk = self.sound.room().min(4096);
+                let p = self.pieces.get(self.piece).copied();
+                match p {
+                    Some(p) if self.written >= p.at + p.samples => {
+                        self.piece += 1;
+                        continue;
+                    }
+                    Some(p) if self.written >= p.at => {
+                        let from = (p.source + (self.written - p.at)) as usize;
+                        let room = ((p.at + p.samples).min(until) - self.written) as usize;
+                        let want = room.min(max_chunk);
+                        if let Some(src_pcm) = lib.pcm.get(&p.media) {
+                            if from < src_pcm.len() {
+                                let avail = want.min(src_pcm.len() - from);
+                                if p.volume == 1000 {
+                                    self.scratch.extend_from_slice(&src_pcm[from..from + avail]);
+                                } else {
+                                    let vol = p.volume as i32;
+                                    for s in &src_pcm[from..from + avail] {
+                                        let l = (s[0] as i32 * vol / 1000).clamp(-32768, 32767) as i16;
+                                        let r = (s[1] as i32 * vol / 1000).clamp(-32768, 32767) as i16;
+                                        self.scratch.push([l, r]);
+                                    }
+                                }
+                            }
+                        }
+                        if self.scratch.len() < want {
+                            self.scratch.resize(want.max(1), [0, 0]);
+                        }
+                    }
+                    Some(p) => {
+                        let gap = ((p.at.min(until) - self.written) as usize).min(max_chunk);
+                        self.scratch.resize(gap.max(1), [0, 0]);
+                    }
+                    None => {
+                        let rem = ((until - self.written) as usize).min(max_chunk);
+                        self.scratch.resize(rem.max(1), [0, 0]);
+                    }
+                }
+                let wrote = self.sound.write(&self.scratch);
+                if wrote == 0 {
+                    break;
+                }
+                self.written += wrote as u64;
+            }
+        }
+
+        fn clock_us(&mut self) -> Option<Micros> {
+            if !self.active || self.rate <= 0 {
+                return None;
+            }
+            let now_tick = sex_pdx::get_ticks();
+            let played = self.sound.played_total();
+            if played != self.last_played {
+                self.last_played = played;
+                self.moved_tick = now_tick;
+            }
+            if played <= self.played_base {
+                return None;
+            }
+            let pending = self.sound.written_total().saturating_sub(played);
+            if pending > 0 && now_tick.saturating_sub(self.moved_tick) > 750 {
+                return None;
+            }
+            let frames_heard = played - self.played_base;
+            let heard_us = (frames_heard as i128 * SECOND as i128 / RATE as i128) as Micros;
+            let interp_ms = now_tick.saturating_sub(self.moved_tick).min(43) as i64;
+            let interp_us = interp_ms * 1000 * (self.rate as i64);
+            Some(self.base_us + heard_us + interp_us)
+        }
+    }
+
     struct App {
         window: Window,
         path: Vec<u8>,
@@ -289,23 +462,101 @@ mod program {
         ed: Editor,
         view: View,
         grab: Option<Grabber>,
+        audio: Option<LiveAudio>,
         lib: Library,
         has_sound: bool,
         playhead: Micros,
+        last_tick_ms: u64,
+        next_frame_tick: u64,
+        dragging_timeline: bool,
+        dragging_text: bool,
         message: String,
     }
 
     impl App {
+        fn sync_audio(&mut self) {
+            if let Some(audio) = self.audio.as_mut() {
+                let ver = self.ed.history.head();
+                audio.feed(self.ed.timeline(), &self.lib, ver, self.playhead, self.ed.shuttle_rate);
+            }
+        }
+
+        fn seek_playhead(&mut self, to: Micros) {
+            self.playhead = to.clamp(0, self.ed.timeline().duration());
+            if let Some(audio) = self.audio.as_mut() {
+                audio.invalidate();
+            }
+        }
+
+        fn stop_playback(&mut self) {
+            self.ed.shuttle_pause();
+            if let Some(audio) = self.audio.as_mut() {
+                audio.stop();
+            }
+        }
+
+        fn toggle_play_pause(&mut self) {
+            let dur = self.ed.timeline().duration();
+            if self.ed.shuttle_rate == 0 {
+                let stop_at = self.ed.out_point.filter(|&o| o > self.ed.in_point.unwrap_or(0)).unwrap_or(dur);
+                if self.playhead >= stop_at || self.playhead >= dur {
+                    self.playhead = self.ed.in_point.unwrap_or(0).clamp(0, dur);
+                }
+                if let Some(audio) = self.audio.as_mut() {
+                    audio.invalidate();
+                }
+                self.ed.shuttle_rate = 1;
+                let now = sex_pdx::get_ticks();
+                self.last_tick_ms = now;
+                self.next_frame_tick = now;
+                self.message = "Playing (1x)".into();
+            } else {
+                self.stop_playback();
+                self.message = "Paused".into();
+            }
+            self.sync_audio();
+        }
+
+        fn step_frames(&mut self, frames: i64) {
+            self.stop_playback();
+            self.seek_playhead(self.playhead + self.frame_step_us() * frames);
+            if let Some(i) = self.ed.word_at_time(self.playhead) {
+                self.ed.place(i, false);
+            }
+        }
+
+        fn run_cleanup(&mut self) {
+            let n = self.ed.suggest_cleanup_with(self.lib.levels.get(&self.ed.transcript.media));
+            sex_pdx::serial_record!("[splicy.cleanup] cards={}", n);
+            self.message = format!("{n} suggestion{} to look at", if n == 1 { "" } else { "s" });
+        }
+
         fn draw(&mut self) {
-            if let (Some(g), Some((media, s))) = (self.grab.as_mut(), sex_splice::export::picture_at(self.ed.timeline(), self.playhead)) {
-                let _ = media;
-                let _ = g.show(s);
+            self.sync_audio();
+            let playing = self.ed.shuttle_rate != 0;
+            let v_enabled = self
+                .ed
+                .timeline()
+                .tracks
+                .iter()
+                .find(|t| t.kind == TrackKind::Video)
+                .and_then(|t| t.clips.iter().find(|c| c.at <= self.playhead && self.playhead < c.end()))
+                .is_none_or(|c| c.enabled);
+            if v_enabled {
+                if let (Some(g), Some((media, s))) = (self.grab.as_mut(), sex_splice::export::picture_at(self.ed.timeline(), self.playhead)) {
+                    let _ = media;
+                    let _ = g.show_mode(s, !playing);
+                }
             }
             if self.view.vu.visible {
                 self.view.vu.update_from_library(self.ed.timeline(), &self.lib, self.playhead, 40_000);
             }
             let (w, h) = self.window.size();
-            let picture = self.grab.as_ref().map(|g| (&g.picture[..], g.w, g.h));
+            let picture = if v_enabled {
+                self.grab.as_ref().map(|g| (&g.picture[..], g.w, g.h))
+            } else {
+                None
+            };
             self.view.paint(self.window.pixels(), w, h, &self.ed, &self.lib, picture, self.playhead, &self.message);
             self.window.show_pixels(w, h);
         }
@@ -328,14 +579,53 @@ mod program {
 
         fn follow_caret(&mut self) {
             if let Some(t) = self.ed.caret_time() {
-                self.playhead = t;
+                self.seek_playhead(t);
+            }
+        }
+
+        fn frame_step_us(&self) -> Micros {
+            let tl = self.ed.timeline();
+            (tl.fps_den as i64 * SECOND / tl.fps_num.max(1) as i64).max(16_000)
+        }
+
+        fn step_shuttle(&mut self) {
+            let rate = self.ed.shuttle_rate;
+            if rate == 0 {
+                return;
+            }
+            let now_ms = sex_pdx::get_ticks();
+            let dt_ms = now_ms.saturating_sub(self.last_tick_ms).clamp(1, 200);
+            self.last_tick_ms = now_ms;
+            let dur = self.ed.timeline().duration();
+            let stop_end = match (self.ed.in_point, self.ed.out_point) {
+                (_, Some(out)) if rate > 0 && self.playhead < out => out.min(dur),
+                _ => dur,
+            };
+            let stop_start = match self.ed.in_point {
+                Some(inp) if rate < 0 && self.playhead > inp => inp.max(0),
+                _ => 0,
+            };
+            self.sync_audio();
+            let raw_next = if let Some(hw_us) = self.audio.as_mut().and_then(|a| a.clock_us()) {
+                hw_us.max(self.playhead)
+            } else {
+                self.playhead + (dt_ms as i64) * 1000 * (rate as i64)
+            };
+            let next = raw_next.clamp(stop_start, stop_end);
+            self.playhead = next;
+            if let Some(i) = self.ed.word_at_time(next) {
+                self.ed.place(i, false);
+            }
+            if (rate < 0 && next <= stop_start) || (rate > 0 && next >= stop_end) {
+                self.stop_playback();
             }
         }
 
         fn key(&mut self, key: Key) {
             self.message.clear();
-            let ch = sex_app::typed(Key { control: false, shift: false, ..key });
+            let ch = sex_app::typed(Key { control: false, shift: false, alt: false, ..key });
             if key.control {
+                self.stop_playback();
                 match ch {
                     Some(b'z') => {
                         self.ed.undo();
@@ -351,6 +641,7 @@ mod program {
                 return;
             }
             if let Some(nav) = sex_app::nav(key) {
+                self.stop_playback();
                 match nav {
                     Nav::Left => self.ed.move_caret(-1, key.shift),
                     Nav::Right => self.ed.move_caret(1, key.shift),
@@ -364,7 +655,11 @@ mod program {
                 return;
             }
             match (key.code, ch) {
-                (0x0E, _) => self.cut(),
+                (0x39, _) | (_, Some(b' ')) => self.toggle_play_pause(),
+                (0x0E, _) => {
+                    self.stop_playback();
+                    self.cut();
+                }
                 (0x0F, _) => self.ed.next_card(),
                 (0x1C, _) => match self.ed.accept() {
                     Ok(true) => {
@@ -377,21 +672,41 @@ mod program {
                 (0x01, _) => {
                     if self.ed.skip() {
                         sex_pdx::serial_record!("[splicy.suggestion] skipped=1");
+                    } else if self.ed.shuttle_rate != 0 {
+                        self.stop_playback();
+                        self.message = "Paused".into();
                     }
                 }
                 (_, Some(b's')) => self.ed.select_sentence(),
-                (_, Some(b'c')) => {
-                    let n = self.ed.suggest_cleanup_with(self.lib.levels.get(&self.ed.transcript.media));
-                    sex_pdx::serial_record!("[splicy.cleanup] cards={}", n);
-                    self.message = format!("{n} suggestion{} to look at", if n == 1 { "" } else { "s" });
+                (_, Some(b'c')) => self.run_cleanup(),
+                (_, Some(b'm')) => {
+                    if let Some(ti) = self.ed.timeline().tracks.iter().position(|t| t.kind == TrackKind::Audio) {
+                        let muted = self.ed.toggle_track_muted(ti);
+                        self.message = if muted { "Audio track muted".into() } else { "Audio track unmuted".into() };
+                        self.report();
+                    }
                 }
+                (_, Some(b',')) => self.step_frames(-1),
+                (_, Some(b'.')) => self.step_frames(1),
+                (_, Some(b'v')) if key.shift => match self.ed.toggle_clip_enabled_at(self.playhead) {
+                    Ok(true) => {
+                        self.message = "Toggled clip enabled state".into();
+                        self.report();
+                    }
+                    Ok(false) => self.message = "No clip under playhead.".into(),
+                    Err(_) => self.message = "Cannot toggle clip there.".into(),
+                },
                 (_, Some(b'v')) => {
                     self.view.vu.visible = !self.view.vu.visible;
                     self.message = if self.view.vu.visible { "VU meter strip on".into() } else { "VU meter strip off".into() };
                 }
-                (_, Some(b'\\')) => self.preview_join(),
-                (_, Some(c @ (b'j' | b'l'))) => {
-                    // A quarter second: the next voice leads in early (J) or the last one carries on (L).
+                (_, Some(b'\\')) => {
+                    self.stop_playback();
+                    self.preview_join();
+                }
+                (_, Some(c @ (b'j' | b'l'))) if key.alt => {
+                    self.stop_playback();
+                    // Alt+J / Alt+L: split edit (J cut / L cut).
                     let shift = if c == b'j' { -SECOND / 4 } else { SECOND / 4 };
                     match self.ed.split_edit(shift) {
                         Ok(at) => {
@@ -401,6 +716,71 @@ mod program {
                         }
                         Err(e) => self.message = format!("No split edit there: {e:?}"),
                     }
+                }
+                (_, Some(b'j')) => {
+                    let rate = self.ed.shuttle_reverse();
+                    let now = sex_pdx::get_ticks();
+                    self.last_tick_ms = now;
+                    self.next_frame_tick = now;
+                    if let Some(audio) = self.audio.as_mut() {
+                        audio.invalidate();
+                    }
+                    self.sync_audio();
+                    self.message = format!("Shuttle {}x reverse", -rate);
+                }
+                (_, Some(b'k')) => {
+                    self.stop_playback();
+                    self.message = "Paused (0x)".into();
+                }
+                (_, Some(b'l')) => {
+                    let dur = self.ed.timeline().duration();
+                    if self.ed.shuttle_rate == 0 && self.playhead >= dur {
+                        self.playhead = self.ed.in_point.unwrap_or(0);
+                    }
+                    let rate = self.ed.shuttle_forward();
+                    let now = sex_pdx::get_ticks();
+                    self.last_tick_ms = now;
+                    self.next_frame_tick = now;
+                    if let Some(audio) = self.audio.as_mut() {
+                        audio.invalidate();
+                    }
+                    self.sync_audio();
+                    self.message = format!("Shuttle {rate}x forward");
+                }
+                (_, Some(b'i')) => {
+                    self.ed.mark_in(self.playhead);
+                    self.message = "Marked In point".into();
+                }
+                (_, Some(b'o')) => {
+                    self.ed.mark_out(self.playhead);
+                    self.message = "Marked Out point".into();
+                }
+                (_, Some(b'x')) => {
+                    self.ed.clear_in_out();
+                    self.message = "Cleared In/Out marks".into();
+                }
+                (_, Some(b'b')) => match self.ed.blade_at(self.playhead) {
+                    Ok(true) => {
+                        self.message = "Blade cut at playhead".into();
+                        self.report();
+                    }
+                    Ok(false) => self.message = "No clip spans the playhead.".into(),
+                    Err(_) => self.message = "Cannot blade there.".into(),
+                },
+                (_, Some(b'a')) => {
+                    self.ed.active_tool = ToolKind::Select;
+                    self.message = "Select tool (A)".into();
+                }
+                (_, Some(b't')) => {
+                    self.ed.active_tool = ToolKind::Trim;
+                    self.message = "Trim tool (T)".into();
+                }
+                (_, Some(b'p')) => {
+                    self.view.layout = self.view.layout.toggle();
+                    self.message = match self.view.layout {
+                        splicy::LayoutMode::FinalCut => "Layout: Final Cut Pro".into(),
+                        splicy::LayoutMode::Premiere => "Layout: Premiere".into(),
+                    };
                 }
                 (_, Some(b'=')) => {
                     let w = self.window.size().0 as i32;
@@ -644,19 +1024,22 @@ mod program {
                 }
                 Ok(Next::Sound { frames, at_ms }) => {
                     let sound = &pcm[..frames.min(pcm.len())];
-                    peaks.add(at_ms.max(0) * 1000, sound, RATE);
-                    meter.add(at_ms.max(0) * 1000, sound, RATE);
+                    let at_us = at_ms.max(0) * 1000;
+                    peaks.add(at_us, sound, RATE);
+                    meter.add(at_us, sound, RATE);
+                    lib.append_pcm(media, at_us, sound, RATE);
                 }
                 Ok(Next::End) | Err(_) => break,
                 _ => {}
             }
         }
         sex_pdx::serial_record!(
-            "[splicy.scan] thumbs={} peaks={} loudest={} ms={}",
+            "[splicy.scan] thumbs={} peaks={} loudest={} ms={} pcm_frames={}",
             lib.thumbs.get(&media).map_or(0, |t| t.len()),
             peaks.v.len(),
             peaks.v.iter().max().copied().unwrap_or(0),
-            sex_pdx::get_ticks() - started
+            sex_pdx::get_ticks() - started,
+            lib.pcm.get(&media).map_or(0, |p| p.len())
         );
         lib.peaks.insert(media, peaks);
         lib.levels.insert(media, meter.levels());
@@ -741,29 +1124,216 @@ mod program {
         let ed = Editor::open(&name, duration, fps, has_sound, transcript);
         say(&mut window, "Reading the clip for the timeline...");
         let lib = scan(&path, len, ed.transcript.media, dims.0, dims.1, (duration / 1000) as u64);
-        let mut app = App { window, path, len, name, ed, view: View::default(), grab, lib, has_sound, playhead: 0, message: String::new() };
+        let audio = if has_sound {
+            LiveAudio::open(ed.timeline(), ed.history.head())
+        } else {
+            None
+        };
+        let now_tick = sex_pdx::get_ticks();
+        let mut app = App {
+            window,
+            path,
+            len,
+            name,
+            ed,
+            view: View::default(),
+            grab,
+            audio,
+            lib,
+            has_sound,
+            playhead: 0,
+            last_tick_ms: now_tick,
+            next_frame_tick: now_tick,
+            dragging_timeline: false,
+            dragging_text: false,
+            message: String::new(),
+        };
         app.report();
         app.draw();
         loop {
-            match app.window.next() {
+            let ev = if app.ed.shuttle_rate != 0 {
+                let frame_ms = (app.frame_step_us() / 1000).clamp(16, 40) as u64;
+                let now = sex_pdx::get_ticks();
+                let wait_ms = app.next_frame_tick.saturating_sub(now);
+                let polled = if wait_ms == 0 {
+                    app.window.poll()
+                } else {
+                    app.window.next_within(wait_ms)
+                };
+                match polled {
+                    Some(ev) => ev,
+                    None => {
+                        let after = sex_pdx::get_ticks();
+                        app.next_frame_tick = (app.next_frame_tick + frame_ms).max(after + 1);
+                        app.step_shuttle();
+                        app.draw();
+                        continue;
+                    }
+                }
+            } else {
+                app.window.next()
+            };
+            match ev {
                 Event::Close => app.window.close_now(),
                 Event::Resize { .. } => {}
                 Event::Key(key) => app.key(key),
                 Event::Pointer(p) => match p.kind {
                     Kind::Down { button: 0 } => {
+                        app.dragging_timeline = false;
+                        app.dragging_text = false;
                         let (w, h) = app.window.size();
+                        let (wi, hi) = (w as i32, h as i32);
                         let (x, y) = (p.x as i32, p.y as i32);
-                        if let Some(i) = app.view.word_at(&app.ed, w as i32, h as i32, x, y) {
+                        if let Some(hit) = app.view.toolbar_hit(wi, hi, x, y) {
+                            match hit {
+                                ToolbarHit::Layout(mode) => {
+                                    app.view.layout = mode;
+                                    app.message = match mode {
+                                        splicy::LayoutMode::FinalCut => "Layout: Final Cut Pro".into(),
+                                        splicy::LayoutMode::Premiere => "Layout: Premiere".into(),
+                                    };
+                                }
+                                ToolbarHit::Tool(tool) => {
+                                    app.ed.active_tool = tool;
+                                    app.message = format!("{} tool", tool.label());
+                                }
+                                ToolbarHit::ToggleVu => {
+                                    app.view.vu.visible = !app.view.vu.visible;
+                                }
+                                ToolbarHit::ToggleInspector => {
+                                    app.view.show_inspector = !app.view.show_inspector;
+                                }
+                            }
+                        } else if let Some(th) = app.view.transport_hit(wi, hi, x, y) {
+                            match th {
+                                TransportHit::PlayPause => app.toggle_play_pause(),
+                                TransportHit::Start => {
+                                    app.stop_playback();
+                                    app.playhead = app.ed.in_point.unwrap_or(0);
+                                    if let Some(i) = app.ed.word_at_time(app.playhead) {
+                                        app.ed.place(i, false);
+                                    }
+                                    app.message = "Jumped to start".into();
+                                }
+                                TransportHit::End => {
+                                    app.stop_playback();
+                                    let dur = app.ed.timeline().duration();
+                                    app.playhead = app.ed.out_point.unwrap_or(dur);
+                                    if let Some(i) = app.ed.word_at_time(app.playhead) {
+                                        app.ed.place(i, false);
+                                    }
+                                    app.message = "Jumped to end".into();
+                                }
+                                TransportHit::StepBack => app.step_frames(-1),
+                                TransportHit::StepFwd => app.step_frames(1),
+                                TransportHit::CleanupOrAudition => {
+                                    if !app.ed.joins().is_empty() {
+                                        app.stop_playback();
+                                        app.preview_join();
+                                    } else {
+                                        app.run_cleanup();
+                                    }
+                                }
+                            }
+                        } else if app.view.player_hit(wi, hi, x, y) {
+                            app.toggle_play_pause();
+                        } else if let Some(ch) = app.view.card_hit(&app.ed, wi, hi, x, y) {
+                            match ch {
+                                CardHit::RunCleanup => app.run_cleanup(),
+                                CardHit::Select(idx) => {
+                                    app.ed.card = idx;
+                                    if let Some(&id) = app.ed.pending().get(idx) {
+                                        if let Some(s) = app.ed.suggestions.get(id) {
+                                            if let Some(cut) = s.cuts.first() {
+                                                if let Some(t) = app
+                                                    .ed
+                                                    .timeline()
+                                                    .tracks
+                                                    .iter()
+                                                    .flat_map(|tr| tr.clips.iter())
+                                                    .find_map(|cl| cl.timeline_at(cut.range.start))
+                                                {
+                                                    app.stop_playback();
+                                                    app.playhead = t;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                CardHit::Accept(idx) => {
+                                    app.ed.card = idx;
+                                    match app.ed.accept() {
+                                        Ok(true) => {
+                                            sex_pdx::serial_record!("[splicy.suggestion] taken=1");
+                                            app.report();
+                                        }
+                                        Ok(false) => {}
+                                        Err(_) => app.message = "That suggestion no longer fits the edit.".into(),
+                                    }
+                                }
+                                CardHit::Skip(idx) => {
+                                    app.ed.card = idx;
+                                    if app.ed.skip() {
+                                        sex_pdx::serial_record!("[splicy.suggestion] skipped=1");
+                                    }
+                                }
+                            }
+                        } else if let Some(sw) = app.view.track_switch_hit(app.ed.timeline(), wi, hi, x, y) {
+                            match sw {
+                                TrackSwitchHit::ToggleMute(ti) => {
+                                    let muted = app.ed.toggle_track_muted(ti);
+                                    app.message = if muted { "Audio track muted".into() } else { "Audio track unmuted".into() };
+                                    app.report();
+                                }
+                                TrackSwitchHit::ToggleVideo(ti) => {
+                                    if let Ok(vis) = app.ed.toggle_track_enabled(ti) {
+                                        app.message = if vis { "Video track shown".into() } else { "Video track hidden".into() };
+                                        app.report();
+                                    }
+                                }
+                            }
+                        } else if let Some(i) = app.view.word_at(&app.ed, wi, hi, x, y) {
+                            app.stop_playback();
                             app.ed.place(i, false);
                             app.follow_caret();
-                        } else if let Some(t) = app.view.time_at(app.ed.timeline(), w as i32, h as i32, x, y) {
-                            // A click on the ruler or the tracks moves the playhead there,
-                            // and the transcript's caret to the word playing then.
+                            app.dragging_text = true;
+                        } else if let Some(t) = app.view.time_at(app.ed.timeline(), wi, hi, x, y) {
+                            app.stop_playback();
                             app.playhead = t;
                             if let Some(i) = app.ed.word_at_time(t) {
                                 app.ed.place(i, false);
                             }
+                            if app.ed.active_tool == ToolKind::Blade && app.view.areas(wi, hi).tracks.contains(x, y) {
+                                if let Ok(true) = app.ed.blade_at(t) {
+                                    app.message = "Blade cut".into();
+                                    app.report();
+                                }
+                            } else {
+                                app.dragging_timeline = true;
+                            }
                         }
+                    }
+                    Kind::Move => {
+                        if app.dragging_timeline {
+                            let (w, h) = app.window.size();
+                            let t = app.view.scrub_time_at_x(app.ed.timeline(), w as i32, h as i32, p.x as i32);
+                            app.playhead = t;
+                            if let Some(i) = app.ed.word_at_time(t) {
+                                app.ed.place(i, false);
+                            }
+                        } else if app.dragging_text {
+                            let (w, h) = app.window.size();
+                            if let Some(i) = app.view.word_at(&app.ed, w as i32, h as i32, p.x as i32, p.y as i32) {
+                                app.ed.place(i, true);
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
+                    Kind::Up { .. } | Kind::Leave => {
+                        app.dragging_timeline = false;
+                        app.dragging_text = false;
+                        continue;
                     }
                     Kind::Wheel { steps } => {
                         let (w, h) = app.window.size();
