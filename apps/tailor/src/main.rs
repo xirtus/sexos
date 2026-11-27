@@ -11,6 +11,7 @@
 #![no_main]
 
 extern crate alloc;
+mod ui;
 
 use alloc::format;
 use alloc::string::String;
@@ -302,9 +303,11 @@ struct AppState {
     runner: SexToolRunner,
     transcript: String,
     input: String,
+    input_selected: bool,
     status: String,
     scroll_lines: usize,
     stream: Option<ActiveStream>,
+    ui: ui::TailorUi,
 }
 
 impl AppState {
@@ -636,56 +639,32 @@ impl AppState {
         None
     }
 
-    fn render(&self, window: &mut Window) {
+    fn render(&mut self, window: &mut Window) {
         let p = self.agent.provider();
-        let key_badge = if self.vault.has_key(p) { "key:ok" } else { "key:none" };
-        let ws_label = if self.workspace_root.is_empty() {
-            "(run folder)"
-        } else {
-            &self.workspace_root
-        };
-        let header = format!(
-            "Tailor · {} ({}) · {} · ws: {}\n----------------------------------------------------------------\n",
-            p.display_name(),
-            self.agent.model(),
-            key_badge,
-            ws_label
+        let has_key = self.vault.has_key(p);
+        let model = self.agent.model();
+        let streaming = self.stream.is_some();
+        let pending_approval = self.agent.pending_approval().is_some();
+        self.ui.render(
+            window,
+            p,
+            model,
+            has_key,
+            streaming,
+            pending_approval,
+            &self.transcript,
+            self.scroll_lines,
+            &self.input,
+            self.input_selected,
+            &self.status,
         );
-        let footer = format!(
-            "\n----------------------------------------------------------------\n> {}|\n{}",
-            self.input, self.status
-        );
-
-        let budget = (sex_pdx::text_region::BYTES as usize)
-            .saturating_sub(header.len() + footer.len() + 16);
-
-        let lines: Vec<&str> = self.transcript.lines().collect();
-        let end = lines.len().saturating_sub(self.scroll_lines);
-        let mut chosen = Vec::new();
-        let mut used = 0usize;
-        for line in lines[..end].iter().rev() {
-            let cost = line.len() + 1;
-            if used + cost > budget {
-                break;
-            }
-            used += cost;
-            chosen.push(*line);
-        }
-        chosen.reverse();
-        let body = chosen.join("\n");
-
-        let mut frame = String::with_capacity(header.len() + body.len() + footer.len());
-        frame.push_str(&header);
-        frame.push_str(&body);
-        frame.push_str(&footer);
-        window.show(frame.as_bytes());
     }
 }
 
 fn parse_launch_args(raw: &[u8]) -> (String, Provider) {
     let text = core::str::from_utf8(raw).unwrap_or("");
     let mut workspace = String::new();
-    let mut provider = Provider::Gemini;
+    let mut provider = Provider::ClaudeDeepSeek;
     for word in text.split_whitespace() {
         if let Some(p) = Provider::from_name(word) {
             provider = p;
@@ -714,18 +693,20 @@ pub extern "C" fn _start() -> ! {
         runner: SexToolRunner::new(),
         transcript: String::new(),
         input: String::new(),
+        input_selected: false,
         status: String::from("Loading keys into Shibari vault..."),
         scroll_lines: 0,
         stream: None,
+        ui: ui::TailorUi::new(),
     };
     app.push_log("Tailor — Native Multi-Provider AI Coding Agent for SexOS.");
-    app.push_log("Providers: /provider claude | claude-deepseek | gemini | codex");
-    app.push_log("Keys & models: /key <provider> <secret>   /model <model-id>   /help");
+    app.push_log("Click a provider pill above (Claude / DeepSeek / Codex / Gemini), or type:");
+    app.push_log("  /key claude-deepseek <api-key>   |   /key claude <api-key>   |   /model <id>");
     app.render(&mut window);
 
     let loaded = app.vault.load_from_files(&mut window);
     app.status = format!(
-        "Ready ({} key(s) loaded in Shibari). Type a prompt or /help.",
+        "Ready ({} key(s) in Shibari). Type a prompt or /help.",
         loaded
     );
     app.render(&mut window);
@@ -750,21 +731,103 @@ pub extern "C" fn _start() -> ! {
                     sex_pdx::serial_record!("[tailor.closed]");
                     window.close();
                 }
+                Event::Resize { .. } => {
+                    dirty = true;
+                }
+                Event::Pointer(p) => match p.kind {
+                    sex_pdx::app_pointer::Kind::Down { button: 0 } => {
+                        let px = p.x as i32;
+                        let py = p.y as i32;
+                        if let Some(hit) = app.ui.hits.iter().find(|h| h.contains(px, py)).copied() {
+                            match hit.action {
+                                ui::HitAction::Provider(prov) => {
+                                    app.agent.set_provider(prov);
+                                    app.status = format!(
+                                        "Switched to {} ({}) [key={}]",
+                                        prov.display_name(),
+                                        app.agent.model(),
+                                        if app.vault.has_key(prov) { "ok" } else { "missing" }
+                                    );
+                                    app.push_log(&format!("[tailor] {}", app.status));
+                                    dirty = true;
+                                }
+                                ui::HitAction::Approve if app.stream.is_none() => {
+                                    app.input = String::from("/approve");
+                                    app.handle_submit(&mut window);
+                                    dirty = true;
+                                }
+                                ui::HitAction::Deny if app.stream.is_none() => {
+                                    app.input = String::from("/deny");
+                                    app.handle_submit(&mut window);
+                                    dirty = true;
+                                }
+                                ui::HitAction::Send if app.stream.is_none() => {
+                                    app.handle_submit(&mut window);
+                                    app.input_selected = false;
+                                    dirty = true;
+                                }
+                                ui::HitAction::Clear => {
+                                    app.input.clear();
+                                    app.input_selected = false;
+                                    app.status = String::from("Input cleared.");
+                                    dirty = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    sex_pdx::app_pointer::Kind::Wheel { steps } => {
+                        if steps > 0 {
+                            app.scroll_lines = app.scroll_lines.saturating_add(3);
+                        } else if steps < 0 {
+                            app.scroll_lines = app.scroll_lines.saturating_sub(3);
+                        }
+                        dirty = true;
+                    }
+                    _ => {}
+                },
+                Event::Key(key) if key.control && key.code == 0x1E => {
+                    // Ctrl+A: select all prompt text
+                    app.input_selected = !app.input.is_empty();
+                    dirty = true;
+                }
+                Event::Key(key) if key.control && key.code == 0x2F => {
+                    // Ctrl+V: paste clipboard into prompt
+                    if app.stream.is_none() {
+                        if let Ok(clip) = sex_app::clipboard::paste(&mut window) {
+                            if app.input_selected {
+                                app.input.clear();
+                                app.input_selected = false;
+                            }
+                            for ch in clip.chars() {
+                                if !ch.is_control() && app.input.len() < 1024 {
+                                    app.input.push(ch);
+                                }
+                            }
+                            app.status = String::from("Pasted from clipboard.");
+                            dirty = true;
+                        }
+                    }
+                }
                 Event::Key(key) if key.control && key.code == 0x2e => {
-                    // Ctrl+C: cancel active stream or clear input.
+                    // Ctrl+C: cancel active stream, or copy prompt/transcript to clipboard.
                     if let Some(mut active) = app.stream.take() {
                         active.duplex.close(&mut window);
                         app.push_log("\n[cancelled]");
                         app.status = String::from("Stream cancelled.");
-                    } else {
-                        app.input.clear();
-                        app.status = String::from("Input cleared.");
+                    } else if !app.input.is_empty() {
+                        let _ = sex_app::clipboard::copy(&mut window, &app.input);
+                        app.status = String::from("Copied prompt to clipboard.");
+                    } else if !app.transcript.is_empty() {
+                        let _ = sex_app::clipboard::copy(&mut window, &app.transcript);
+                        app.status = String::from("Copied transcript to clipboard.");
                     }
                     dirty = true;
                 }
                 Event::Key(key) if key.code == 0x1C => {
                     // Enter
                     if app.stream.is_none() {
+                        app.input_selected = false;
                         app.handle_submit(&mut window);
                         dirty = true;
                     }
@@ -772,7 +835,12 @@ pub extern "C" fn _start() -> ! {
                 Event::Key(key) if key.code == 0x0E => {
                     // Backspace
                     if app.stream.is_none() {
-                        app.input.pop();
+                        if app.input_selected {
+                            app.input.clear();
+                            app.input_selected = false;
+                        } else {
+                            app.input.pop();
+                        }
                         dirty = true;
                     }
                 }
@@ -789,6 +857,10 @@ pub extern "C" fn _start() -> ! {
                         if app.stream.is_none() {
                             if let Some(ch) = sex_app::text(key) {
                                 if !ch.is_control() && app.input.len() < 1024 {
+                                    if app.input_selected {
+                                        app.input.clear();
+                                        app.input_selected = false;
+                                    }
                                     app.input.push(ch);
                                     dirty = true;
                                 }

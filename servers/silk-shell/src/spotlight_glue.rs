@@ -100,7 +100,7 @@ unsafe fn dispatch_launch(target: LaunchTarget) {
             }
         }
         LaunchTarget::Audio => {
-            if !launch_named_program("play", false) {
+            if !launch_named_program("qupid", true) {
                 crate::tray_toggle(sex_pdx::tray::Menu::Quick);
             }
         }
