@@ -14,3 +14,8 @@ many instances and statics cost pages in each at boot (the 2026-11-25 200 KiB st
 broke the Qupid Kodi gate). Spindle has no heap (its allocator returns null, so master's
 `Vec::try_reserve` path always said "out of memory"). The buffer now comes from
 `program_memory::grow` the first time a hot swap arrives, up to 16 MiB, kept for the run.
+
+Follow-up (CI's new tether-gate hot-swap step caught it): Spindle is a BOOT app, not a
+program row, so `program_memory::grow` was refused ("out of memory"). BOOT now reserves
+a service arena (`service_memory::reserve`) for each Spindle incarnation; pages exist
+only once a hot swap asks for them.
