@@ -1,0 +1,20 @@
+[package]
+name = "brootlite"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "BrootLite: native Stremio v3 / Swarm / Kodi media discovery app for SexOS"
+
+[[bin]]
+name = "brootlite"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-font = { path = "../../crates/sex-font" }
+sex-theme = { path = "../../crates/sex-theme" }
+sex-fetch = { path = "../../crates/sex-fetch" }
+sex-image = { path = "../../crates/sex-image" }
+sex-media = { path = "../../crates/sex-media" }
+sex-kodi = { path = "../../crates/sex-kodi" }

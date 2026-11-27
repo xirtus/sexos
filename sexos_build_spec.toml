@@ -123,7 +123,8 @@ crates = [
   "apps/corset/Cargo.toml",
   "apps/filigree/Cargo.toml",
   "apps/cabaret/Cargo.toml",
-  "apps/tailor/Cargo.toml"
+  "apps/tailor/Cargo.toml",
+  "apps/brootlite/Cargo.toml"
 ]
 
 [[stage]]
@@ -1096,6 +1097,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/tailor/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/tailor"
 dest_artifact = "iso_root/programs/tailor"
+
+# BrootLite: native Stremio v3 / Swarm P2P / Kodi media discovery app on sex-app.
+[[stage]]
+id = "build_brootlite"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/brootlite/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/brootlite"
+dest_artifact = "iso_root/programs/brootlite"
 
 [[stage]]
 id = "copy_limine_cfg"
