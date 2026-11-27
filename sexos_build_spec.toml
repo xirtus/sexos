@@ -124,7 +124,8 @@ crates = [
   "apps/filigree/Cargo.toml",
   "apps/cabaret/Cargo.toml",
   "apps/tailor/Cargo.toml",
-  "apps/brootlite/Cargo.toml"
+  "apps/brootlite/Cargo.toml",
+  "apps/tether/Cargo.toml"
 ]
 
 [[stage]]
@@ -1106,6 +1107,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/brootlite/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/brootlite"
 dest_artifact = "iso_root/programs/brootlite"
+
+# Tether: dedicated native SexOS GUI app for Antigravity over ACP + remote control.
+[[stage]]
+id = "build_tether"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/tether/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/tether"
+dest_artifact = "iso_root/programs/tether"
 
 [[stage]]
 id = "copy_limine_cfg"

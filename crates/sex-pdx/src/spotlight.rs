@@ -146,7 +146,7 @@ pub struct SpotlightApp {
 /// Curated SexOS Spotlight catalog — every tile launches a real shipped SexOS program.
 /// First 20 entries populate the default 5x4 "All" grid; all entries are searchable and
 /// browsable via category pills.
-pub const CATALOG: [SpotlightApp; 40] = [
+pub const CATALOG: [SpotlightApp; 41] = [
     SpotlightApp {
         id: "tailor",
         name: "Tailor AI",
@@ -156,6 +156,16 @@ pub const CATALOG: [SpotlightApp; 40] = [
         badge_rgb: 0x008B_5CF6,
         keywords: "tailor ai assistant chat llm gemini claude codex agent",
         target: LaunchTarget::Program("tailor"),
+    },
+    SpotlightApp {
+        id: "tether",
+        name: "Tether",
+        icon: "flirt",
+        monogram: "TH",
+        category: Category::AiDev,
+        badge_rgb: 0x00C6_A0F6,
+        keywords: "tether antigravity acp remote agent bridge waves snapshots hotswap",
+        target: LaunchTarget::Program("tether"),
     },
     SpotlightApp {
         id: "kaleidoscope",

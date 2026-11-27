@@ -9347,6 +9347,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "tether"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-font",
+ "sex-pdx",
+ "sex-theme",
+ "shibari",
+ "tether-proto",
+]
+
+[[package]]
+name = "tether-bridge"
+version = "0.1.0"
+dependencies = [
+ "tether-proto",
+]
+
+[[package]]
+name = "tether-proto"
+version = "0.1.0"
+
+[[package]]
 name = "textwrap"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

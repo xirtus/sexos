@@ -74,6 +74,7 @@ fn program_needs_network(name: &str) -> bool {
         name,
         "kaleidoscope"
             | "tailor"
+            | "tether"
             | "flirt"
             | "gossip"
             | "sexshop"

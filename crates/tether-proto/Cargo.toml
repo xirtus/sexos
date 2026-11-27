@@ -1,0 +1,8 @@
+[package]
+name = "tether-proto"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Tether v2 multiplexed binary + ACP/RPC protocol shared by SexOS apps/tether and host tether-bridge"
+
+[dependencies]

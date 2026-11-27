@@ -1,0 +1,9 @@
+[package]
+name = "tether-bridge"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Host-side SexOS Tether v2 bridge: Antigravity ACP multiplexer + SexOS MCP server + wave/lease coordinator"
+
+[dependencies]
+tether-proto = { path = "../../crates/tether-proto" }
