@@ -29,7 +29,8 @@ PINS = (
 
     ('timed', 'servers/sexusb/src/main.rs', '106109a782232ae003f34f8554c995c5426e21f70afa76837d2edb1c4eafe0ec'),  # USB UVC ring wiring (quiet predicate unchanged; Gemini #827), 2026-11-26
 
-    ('timed', 'kernel/src/init.rs', 'fn-v1:334ae5d6a21f68aff6c37043a500c1384550b132c65c0782bc42918a194b0432'),  # unconditional Files slot 6, sexuvc spawn, Spindle power::PROFILE, hotswap captures (no wait change; Gemini #827), 2026-11-26
+    ('timed', 'kernel/src/init.rs', 'fn-v1:334ae5d6a21f68aff6c37043a500c1384550b132c65c0782bc42918a194b0432'),
+    ('timed', 'kernel/src/init.rs', 'fn-v1:46a358e1f1281b874df47bae06890c938ac5aa89cdecbb227a8c4a057bf55d49'),  # Spindle power::RESTART_ONLY for `restart` after a tethered update (no wait change), 2026-11-27  # unconditional Files slot 6, sexuvc spawn, Spindle power::PROFILE, hotswap captures (no wait change; Gemini #827), 2026-11-26
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:8779db0221aab125b06bff4e13ce43265f334898ef1f5c1800e12dc129f40c4c'),  # service stacks grow on touch before the fault is parked (no wait change), 2026-11-23
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:230bcac20c18ce4eddb3b3a8232622d432edeff676b47f448b791bd48abf9615'),  # #466 (cld on entry, PKU gates) merged with #456's hot-plug tick (x17 PR sweep; union of two reviewed versions), 2026-11-21
 

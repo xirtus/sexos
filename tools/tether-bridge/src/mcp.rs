@@ -34,6 +34,7 @@ const TOOLS_LIST_JSON: &str = r#"[
   {"name":"sexos_input","description":"Inject gated synthetic pointer/keyboard input into SexOS (requires Full Control + visible indicator).","inputSchema":{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"text":{"type":"string"}},"required":["kind"]}},
   {"name":"sexos_snapshot_create","description":"Create a named SexOS snapshot checkpoint before risky edits or deploys (requires Dev mode).","inputSchema":{"type":"object","properties":{"label":{"type":"string"}},"required":["label"]}},
   {"name":"sexos_snapshot_restore","description":"Restore a previously created SexOS snapshot checkpoint (requires Dev mode).","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+  {"name":"sexos_ota_push","description":"Signed A/B system update of SexOS (requires Full Control). dir = a release folder on this host holding sexos-update.txt, sexos-update.sig and sexos-boot.img (tools/sexos-release sign); they are streamed to SexOS, then Files checks the release signature and version and writes the system slot that is not running, tried once at the next start with automatic fallback. apply=false only checks whether the index is good and newer. Without dir, uses files already on SexOS (index/sig/image paths).","inputSchema":{"type":"object","properties":{"dir":{"type":"string","description":"Host folder with the signed release"},"apply":{"type":"boolean","description":"false: only check (default true)"},"index":{"type":"string"},"sig":{"type":"string"},"image":{"type":"string"}}}},
   {"name":"sexos_wave_review","description":"Push a Wave Review summary and unified diff to the SexOS Tether GUI for human approval.","inputSchema":{"type":"object","properties":{"wave":{"type":"string"},"summary":{"type":"string"},"diff":{"type":"string"}},"required":["wave","summary"]}}
 ]"#;
 
@@ -55,6 +56,7 @@ fn map_tool_to_rpc(tool_name: &str) -> Option<&'static str> {
         "sexos_snapshot_create" => Some("snapshot_create"),
         "sexos_snapshot_restore" => Some("snapshot_restore"),
         "sexos_wave_review" => Some("wave_review"),
+        "sexos_ota_push" => Some("ota_push"),
         _ => None,
     }
 }

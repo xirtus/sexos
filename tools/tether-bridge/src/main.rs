@@ -40,6 +40,9 @@ fn main() {
     let mut mock_acp = false;
     let mut acp_cmd = vec![String::from("agy"), String::from("acp")];
     let mut positional = Vec::new();
+    let mut agent = String::from("antigravity");
+    let mut claude_cmd: Vec<String> = Vec::new();
+    let mut workdir: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -63,6 +66,18 @@ fn main() {
             "--mock-acp" => {
                 mock_acp = true;
                 i += 1;
+            }
+            "--agent" if i + 1 < args.len() => {
+                agent = args[i + 1].to_ascii_lowercase();
+                i += 2;
+            }
+            "--claude-cmd" if i + 1 < args.len() => {
+                claude_cmd = args[i + 1].split_whitespace().map(String::from).collect();
+                i += 2;
+            }
+            "--workdir" if i + 1 < args.len() => {
+                workdir = Some(args[i + 1].clone());
+                i += 2;
             }
             "--acp-cmd" if i + 1 < args.len() => {
                 acp_cmd = args[i + 1].split_whitespace().map(String::from).collect();
@@ -89,6 +104,9 @@ fn main() {
                 pin: final_pin,
                 acp_cmd,
                 mock_acp,
+                agent,
+                claude_cmd,
+                workdir,
             })
         }
         "mcp" => mcp::run_mcp_stdio(&control_addr),

@@ -39,6 +39,10 @@ use ui::{
 };
 
 const TRAY_ID: u8 = 0;
+/// The agents the host bridge can run behind ACP (`tether/agent`): its own names, and
+/// what the toolbar shows. Claude and Antigravity both drive SexOS through the bridge's
+/// MCP tools, gated by this app's capability tier and kill switch.
+const AGENTS: [(&str, &str); 2] = [("antigravity", "Antigravity"), ("claude", "Claude")];
 const MAX_READ_BYTES: usize = 256 * 1024;
 const CONFIG_PATH: &[u8] = b"tether.cfg";
 /// Send a Ping every 10s so `sexnet`'s 30s smoltcp inactivity timeout never drops an idle link.
@@ -106,6 +110,8 @@ struct TetherApp {
     capability: CapabilityMode,
     kill_switch: bool,
     agent_name: String,
+    /// Which of `AGENTS` the bridge runs.
+    agent: usize,
     session_id: String,
     next_acp_id: u64,
     left_tab: LeftTab,
@@ -148,6 +154,7 @@ impl TetherApp {
             capability: CapabilityMode::Observe,
             kill_switch: false,
             agent_name: String::from("Antigravity"),
+            agent: 0,
             session_id: String::new(),
             next_acp_id: 1,
             left_tab: LeftTab::Waves,
@@ -185,8 +192,8 @@ impl TetherApp {
     fn save_config(&self, window: &mut Window) {
         let pin = self.current_pin();
         let data = format!(
-            "host={}\nport={}\npin={}\ncapability={}\n",
-            self.host, self.port, pin, self.capability as u8
+            "host={}\nport={}\npin={}\ncapability={}\nagent={}\n",
+            self.host, self.port, pin, self.capability as u8, AGENTS[self.agent].0
         );
         let _ = files::write(window, CONFIG_PATH, data.as_bytes());
         let _ = files::sync(window);
@@ -297,6 +304,26 @@ impl TetherApp {
             );
         }
         self.update_tray();
+    }
+
+    /// Asks the bridge for the chosen agent, then opens an ACP session with it.
+    fn start_agent(&mut self, window: &mut Window) {
+        let id = self.next_acp_id;
+        self.next_acp_id += 1;
+        self.send_acp(window, format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"tether/agent\",\"params\":{{\"agent\":\"{}\"}}}}", id, AGENTS[self.agent].0));
+        self.agent_name = String::from(AGENTS[self.agent].1);
+        self.session_id.clear();
+        let id = self.next_acp_id;
+        self.next_acp_id += 1;
+        self.send_acp(window, acp_initialize(id, "SexOS Tether", "0.1.0"));
+    }
+
+    fn select_agent(&mut self, window: &mut Window, which: usize) {
+        self.agent = which % AGENTS.len();
+        self.status_line = format!("Agent -> {}", AGENTS[self.agent].1);
+        self.push_chat(format!("Switching to {}...", AGENTS[self.agent].1));
+        self.save_config(window);
+        if self.phase == ConnPhase::Live { self.start_agent(window); } else { self.agent_name = String::from(AGENTS[self.agent].1); }
     }
 
     fn toggle_kill_switch(&mut self, window: &mut Window) {
@@ -432,11 +459,9 @@ impl TetherApp {
                 self.last_ping_tick = now;
                 self.phase = ConnPhase::Live;
                 self.status_line = format!("Paired & live with {}:{}", self.host, self.port);
-                self.push_console("Authenticated! Initializing Antigravity ACP session...");
+                self.push_console(format!("Authenticated! Initializing {} ACP session...", AGENTS[self.agent].1));
                 self.update_tray();
-                let id = self.next_acp_id;
-                self.next_acp_id += 1;
-                self.send_acp(window, acp_initialize(id, "SexOS Tether", "0.1.0"));
+                self.start_agent(window);
             }
             FrameKind::AuthErr => {
                 let msg = String::from_utf8_lossy(&frame.payload).into_owned();
@@ -1043,6 +1068,37 @@ impl TetherApp {
                 self.push_chat(format!("[rpc] Wave Review ready: {} (open Diff Review tab)", wave));
                 rpc_ok_json(id, "{\"queued_for_review\":true}")
             }
+            RpcMethod::OtaPush => {
+                // Files checks the release signature, the version and the image, then writes
+                // the slot that is not running and points the boot menu at it for one try.
+                let index = json_get_str(req_json, "index").unwrap_or_else(|| String::from("/sexos-update.txt"));
+                let sig = json_get_str(req_json, "sig").unwrap_or_else(|| String::from("/sexos-update.sig"));
+                let image = json_get_str(req_json, "image").unwrap_or_else(|| String::from("/sexos-boot.img"));
+                let apply = json_get_bool(req_json, "apply") != Some(false);
+                let mut paths = Vec::new();
+                paths.extend_from_slice(index.as_bytes());
+                paths.push(0);
+                paths.extend_from_slice(sig.as_bytes());
+                if apply {
+                    paths.push(0);
+                    paths.extend_from_slice(image.as_bytes());
+                }
+                self.push_console(format!("[ota] {} {}", if apply { "applying" } else { "checking" }, index));
+                let mut out = vec![0u8; 4096];
+                match files::update(window, &paths, &mut out) {
+                    Ok((status, n)) => {
+                        let report = String::from_utf8_lossy(&out[..n]).into_owned();
+                        self.push_console(format!("[ota] {}", report.trim()));
+                        let state = match status { sex_pdx::fs::OK => if apply { "written" } else { "available" }, sex_pdx::fs::EXISTS => "current", _ => "refused" };
+                        if status == sex_pdx::fs::DENIED {
+                            rpc_err_json(id, "ota_refused", report.trim())
+                        } else {
+                            rpc_ok_json(id, &format!("{{\"state\":\"{}\",\"report\":\"{}\"}}", state, json_escape(report.trim())))
+                        }
+                    }
+                    Err(e) => rpc_err_json(id, "fs_error", &format!("update failed: {:?}", e)),
+                }
+            }
             other => rpc_err_json(
                 id,
                 "not_yet_wired",
@@ -1063,6 +1119,14 @@ impl TetherApp {
         }
         self.input.clear();
 
+        if let Some(rest) = text.strip_prefix("/agent") {
+            let want = rest.trim();
+            match AGENTS.iter().position(|(k, n)| want.eq_ignore_ascii_case(k) || want.eq_ignore_ascii_case(n)) {
+                Some(i) => self.select_agent(window, i),
+                None => self.push_chat("Usage: /agent claude | /agent antigravity"),
+            }
+            return;
+        }
         if let Some(rest) = text.strip_prefix("/connect ") {
             let mut parts = rest.split_whitespace();
             if let Some(target) = parts.next() {
@@ -1126,6 +1190,7 @@ impl TetherApp {
                 }
             }
             HitAction::CycleCapability => self.cycle_capability(window),
+            HitAction::CycleAgent => self.select_agent(window, self.agent + 1),
             HitAction::ToggleKillSwitch => self.toggle_kill_switch(window),
             HitAction::LeftTab(t) => self.left_tab = t,
             HitAction::CenterTab(t) => self.center_tab = t,
@@ -1187,6 +1252,7 @@ impl TetherApp {
             self.phase == ConnPhase::Live,
             &host_label,
             &self.agent_name,
+            AGENTS[self.agent].1,
             self.capability,
             self.kill_switch,
             self.left_tab,
@@ -1280,6 +1346,15 @@ fn execute_hotswap(id: u64, server: &str, pd: u32, elf: &[u8]) -> String {
             &format!("OP_HOTSWAP failed for '{}' (pd={}) with status {}", server, pd, code),
         ),
     }
+}
+
+/// The agent `tether.cfg` names (`agent=claude`), as an index into `AGENTS`.
+fn load_agent(window: &mut Window) -> usize {
+    let mut buf = [0u8; 1024];
+    let Ok(n) = files::read(window, CONFIG_PATH, &mut buf) else { return 0 };
+    core::str::from_utf8(&buf[..n]).unwrap_or("").lines()
+        .find_map(|l| l.trim().strip_prefix("agent=")).and_then(|v| AGENTS.iter().position(|(k, _)| *k == v.trim()))
+        .unwrap_or(0)
 }
 
 fn load_config(window: &mut Window) -> (String, u16, Option<String>, CapabilityMode) {
@@ -1382,10 +1457,13 @@ pub extern "C" fn _start() -> ! {
     let owner = Owner(window.target);
     let mut app = TetherApp::new(owner, host, port, pin);
     app.capability = initial_cap;
+    app.agent = load_agent(&mut window);
+    app.agent_name = String::from(AGENTS[app.agent].1);
     if has_cli_override {
         app.save_config(&mut window);
     }
-    app.push_chat("SexOS Tether v2 — Antigravity ACP Client & Remote Machine Control");
+    app.push_chat("SexOS Tether v2 — Antigravity / Claude ACP client & remote machine control");
+    app.push_chat("Agent: click the agent pill or type /agent claude | /agent antigravity");
     app.push_chat("On your Mac/host:  tether-bridge serve");
     app.push_chat("Here:              /connect <HOST_IP> <6_DIGIT_PIN>   (or click Host pill)");
     app.update_tray();

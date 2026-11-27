@@ -13,8 +13,9 @@
 //!
 //! Each line the other side sends back is run as if typed, and shown first as
 //! `remote> LINE`, so the person sees every command. A few commands that write disks or
-//! boot entries (`install go`, `update`, `format`) are refused from the tether: those stay
-//! the person's to type. `tether off` or closing Spindle ends it; `tether`
+//! boot entries (`install go`, `format`) are refused from the tether: those stay the
+//! person's to type. `update` is allowed: Files applies only an image signed by this
+//! system's release key, newer than it, into the other slot, tried once with fallback. `tether off` or closing Spindle ends it; `tether`
 //! alone says whether it is up. The host side is `scripts/tether_host.py`.
 //!
 //! `tether sweep HOST [ROUNDS]` runs Wi-Fi transfer trials instead (see [`SHAPES`]): each
@@ -376,13 +377,14 @@ fn parse_port(digits: &[u8]) -> Option<u16> {
     if (1..=65535).contains(&p) { Some(p as u16) } else { None }
 }
 
-/// Commands the tether may not run: they write disks or boot entries.
+/// Commands the tether may not run: they write disks or boot entries unchecked. (`update`
+/// is not one: its image must carry the release signature, and a failed try falls back.)
 pub fn refused(line: &[u8]) -> bool {
     let mut words = line.split(|b| b.is_ascii_whitespace()).filter(|w| !w.is_empty());
     match words.next() {
         // Files runs the install when `go` is any of its words.
         Some(b"install") => words.any(|w| w == b"go"),
-        Some(b"update") | Some(b"format") | Some(b"mkfs") => true,
+        Some(b"format") | Some(b"mkfs") => true,
         _ => false,
     }
 }

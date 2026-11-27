@@ -84,6 +84,7 @@ pub struct PendingWaveReview {
 pub enum HitAction {
     ToggleConnect,
     CycleCapability,
+    CycleAgent,
     ToggleKillSwitch,
     LeftTab(LeftTab),
     CenterTab(CenterTab),
@@ -249,6 +250,7 @@ impl TetherUi {
         connected: bool,
         host_label: &str,
         agent_name: &str,
+        agent_choice: &str,
         capability: CapabilityMode,
         kill_switch: bool,
         left_tab: LeftTab,
@@ -327,6 +329,16 @@ impl TetherUi {
             h: 28,
             action: HitAction::CycleCapability,
         });
+
+        // Agent pill: which agent the host bridge runs (Antigravity or Claude).
+        let agent_x = cap_x + cap_w + 10;
+        let agent_w = 126i32;
+        if agent_x + agent_w < w as i32 - 130 {
+            fill_rounded_rect(buf, w, h, agent_x, 8, agent_w, 28, 8, BG_ELEVATED);
+            let label = format!("Agent: {}", agent_choice);
+            self.draw_text(buf, w, h, agent_x + 10, 14, agent_w - 16, 13, &label, LAVENDER);
+            self.hits.push(HitBox { x: agent_x, y: 8, w: agent_w, h: 28, action: HitAction::CycleAgent });
+        }
 
         // Kill switch button (right-aligned)
         let kill_w = 108i32;

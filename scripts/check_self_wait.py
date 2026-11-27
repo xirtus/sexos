@@ -223,7 +223,9 @@ ACPI_AUX_COHORTS=(
  # x17 trackpad: ACPI _HID/_CID match ignores case (wait loop unchanged), 2026-11-26
  ('2dd1de9e1bb4de69e2e1cca06d56bc130d04173dc47a50caa4d57039257d34de','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'),
  # x17 trackpad + battery/lid ref unwrap, _BIF fallback, 16th SSDT & _CST diagnostics + power::PROFILE (wait loop unchanged), 2026-11-26
- ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','58d75780cd168c6538c0388da110fbc966e13b7cd169b20a012070ee75821884'))
+ ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','58d75780cd168c6538c0388da110fbc966e13b7cd169b20a012070ee75821884'),
+ # power::RESTART_ONLY for Spindle's `restart` (wait loop unchanged), 2026-11-27
+ ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','1e34e043d5df4cda6048d2214d4c874784e00be0f2d143eb979b24f97b6701f0'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')

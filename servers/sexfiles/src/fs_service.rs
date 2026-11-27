@@ -828,6 +828,10 @@ fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRA
 fn is_settings(binding: &Binding) -> bool {
     binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"tatami")
 }
+/// The run is the system-installed Tether's: bound to `/data/tether` (see `program_is`).
+fn is_system_tether(binding: &Binding) -> bool {
+    binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"tether")
+}
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
 }
@@ -897,7 +901,10 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's. Tatami Settings may also
             // invoke the safe partition installer (`w::INSTALL`).
-            if matches!(r.kind, w::UPDATE | w::MOUNT)
+            // The system-installed Tether may apply a signed update (Full Control on its
+            // side): Files still checks the release signature, the version and the image.
+            if r.kind == w::MOUNT
+                || (r.kind == w::UPDATE && !bound.is_some_and(|b| is_system_tether(&b)))
                 || (r.kind == w::INSTALL && !bound.is_some_and(|b| is_settings(&b)))
             {
                 return w::reply(r.seq, w::DENIED, 0);
