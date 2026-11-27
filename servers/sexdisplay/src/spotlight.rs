@@ -14,25 +14,30 @@ use crate::desk_theme::current as desk;
 
 const SHELL_PD: u32 = 3;
 
-/// Largest cached Spotlight app icon side (`48` px, keeping static BSS compact ~125 KiB).
-const ICON_CAP: usize = 48;
+/// Largest cached Spotlight app icon side (`36` px) x `20` visible grid slots (~103 KiB BSS),
+/// keeping `sexdisplay`'s static footprint compact for 1 GiB memory-pressure gates.
+const ICON_CAP: usize = 36;
+const ICON_SLOTS: usize = spotlight::GRID_COLS * spotlight::GRID_ROWS;
 
 struct IconCache {
-    /// Cached pixel side per `CATALOG` index (`0` = not yet rasterized).
-    sides: [usize; spotlight::CATALOG_LEN],
-    /// True if `sex_icons::draw` succeeded for this slot at `sides[idx]`.
-    valid: [bool; spotlight::CATALOG_LEN],
+    /// `CATALOG` index currently held in each slot (`u16::MAX` = empty).
+    cat_ids: [u16; ICON_SLOTS],
+    /// Cached pixel side per slot (`0` = not yet rasterized).
+    sides: [usize; ICON_SLOTS],
+    /// True if `sex_icons::draw` succeeded for this slot.
+    valid: [bool; ICON_SLOTS],
     /// Non-premultiplied `0xAARRGGBB` rasterized brand icons.
-    pixels: [[u32; ICON_CAP * ICON_CAP]; spotlight::CATALOG_LEN],
+    pixels: [[u32; ICON_CAP * ICON_CAP]; ICON_SLOTS],
     /// Reusable `sex_icons` rasterizer scratch buffers.
     acc: [i32; sex_font::raster::scratch_len(ICON_CAP, ICON_CAP)],
     mask: [u8; ICON_CAP * ICON_CAP],
 }
 
 static mut ICON_CACHE: IconCache = IconCache {
-    sides: [0; spotlight::CATALOG_LEN],
-    valid: [false; spotlight::CATALOG_LEN],
-    pixels: [[0; ICON_CAP * ICON_CAP]; spotlight::CATALOG_LEN],
+    cat_ids: [u16::MAX; ICON_SLOTS],
+    sides: [0; ICON_SLOTS],
+    valid: [false; ICON_SLOTS],
+    pixels: [[0; ICON_CAP * ICON_CAP]; ICON_SLOTS],
     acc: [0; sex_font::raster::scratch_len(ICON_CAP, ICON_CAP)],
     mask: [0; ICON_CAP * ICON_CAP],
 };
@@ -45,8 +50,9 @@ fn cached_app_icon(cat_idx: usize, icon_name: &str, side: usize) -> Option<(&'st
     if cat_idx >= spotlight::CATALOG_LEN || side == 0 {
         return None;
     }
+    let slot = cat_idx % ICON_SLOTS;
     let c = unsafe { &mut ICON_CACHE };
-    if c.sides[cat_idx] != side {
+    if c.cat_ids[slot] as usize != cat_idx || c.sides[slot] != side {
         let ok = sex_icons::find(sex_icons::Kind::App, icon_name).is_some()
             && sex_icons::draw(
                 sex_icons::Kind::App,
@@ -55,13 +61,14 @@ fn cached_app_icon(cat_idx: usize, icon_name: &str, side: usize) -> Option<(&'st
                 &sex_icons::Palette::BRAND,
                 &mut c.acc,
                 &mut c.mask[..side * side],
-                &mut c.pixels[cat_idx][..side * side],
+                &mut c.pixels[slot][..side * side],
             );
-        c.sides[cat_idx] = side;
-        c.valid[cat_idx] = ok;
+        c.cat_ids[slot] = cat_idx as u16;
+        c.sides[slot] = side;
+        c.valid[slot] = ok;
     }
-    if c.valid[cat_idx] {
-        Some((&c.pixels[cat_idx][..side * side], side))
+    if c.valid[slot] {
+        Some((&c.pixels[slot][..side * side], side))
     } else {
         None
     }
