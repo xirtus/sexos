@@ -936,7 +936,9 @@ fn build_gemini_body(system_prompt: &str, messages: &[Message], tools: &[ToolSpe
     }
 
     let mut contents = Vec::new();
-    for msg in messages {
+    let mut i = 0;
+    while i < messages.len() {
+        let msg = &messages[i];
         match msg.role {
             Role::User => {
                 contents.push(JsonValue::object(vec![
@@ -949,6 +951,7 @@ fn build_gemini_body(system_prompt: &str, messages: &[Message], tools: &[ToolSpe
                         )])]),
                     ),
                 ]));
+                i += 1;
             }
             Role::Assistant => {
                 let mut parts = Vec::new();
@@ -959,13 +962,21 @@ fn build_gemini_body(system_prompt: &str, messages: &[Message], tools: &[ToolSpe
                     )]));
                 }
                 for tc in &msg.tool_calls {
-                    parts.push(JsonValue::object(vec![(
-                        String::from("functionCall"),
-                        JsonValue::object(vec![
-                            (String::from("name"), JsonValue::str(tc.name.as_str())),
-                            (String::from("args"), tc.arguments.clone()),
-                        ]),
-                    )]));
+                    let sig = tc
+                        .thought_signature
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("skip_thought_signature_validator");
+                    parts.push(JsonValue::object(vec![
+                        (
+                            String::from("functionCall"),
+                            JsonValue::object(vec![
+                                (String::from("name"), JsonValue::str(tc.name.as_str())),
+                                (String::from("args"), tc.arguments.clone()),
+                            ]),
+                        ),
+                        (String::from("thoughtSignature"), JsonValue::str(sig)),
+                    ]));
                 }
                 if !parts.is_empty() {
                     contents.push(JsonValue::object(vec![
@@ -973,33 +984,38 @@ fn build_gemini_body(system_prompt: &str, messages: &[Message], tools: &[ToolSpe
                         (String::from("parts"), JsonValue::array(parts)),
                     ]));
                 }
+                i += 1;
             }
             Role::Tool => {
-                if let Some(ref res) = msg.tool_result {
+                let mut resp_parts = Vec::new();
+                while i < messages.len() && messages[i].role == Role::Tool {
+                    if let Some(ref res) = messages[i].tool_result {
+                        resp_parts.push(JsonValue::object(vec![(
+                            String::from("functionResponse"),
+                            JsonValue::object(vec![
+                                (String::from("name"), JsonValue::str(res.name.as_str())),
+                                (
+                                    String::from("response"),
+                                    JsonValue::object(vec![
+                                        (
+                                            String::from("output"),
+                                            JsonValue::str(res.output.as_str()),
+                                        ),
+                                        (
+                                            String::from("is_error"),
+                                            JsonValue::Bool(res.is_error),
+                                        ),
+                                    ]),
+                                ),
+                            ]),
+                        )]));
+                    }
+                    i += 1;
+                }
+                if !resp_parts.is_empty() {
                     contents.push(JsonValue::object(vec![
                         (String::from("role"), JsonValue::str("user")),
-                        (
-                            String::from("parts"),
-                            JsonValue::array(vec![JsonValue::object(vec![(
-                                String::from("functionResponse"),
-                                JsonValue::object(vec![
-                                    (String::from("name"), JsonValue::str(res.name.as_str())),
-                                    (
-                                        String::from("response"),
-                                        JsonValue::object(vec![
-                                            (
-                                                String::from("output"),
-                                                JsonValue::str(res.output.as_str()),
-                                            ),
-                                            (
-                                                String::from("is_error"),
-                                                JsonValue::Bool(res.is_error),
-                                            ),
-                                        ]),
-                                    ),
-                                ]),
-                            )])]),
-                        ),
+                        (String::from("parts"), JsonValue::array(resp_parts)),
                     ]));
                 }
             }
@@ -1416,6 +1432,15 @@ impl ProviderStreamParser {
                         out.push(StreamEvent::ThinkingDelta(String::from(text)));
                     } else if !text.is_empty() {
                         out.push(StreamEvent::TextDelta(String::from(text)));
+                    }
+                }
+                if let Some(sig) = part
+                    .get("thoughtSignature")
+                    .or_else(|| part.get("thought_signature"))
+                    .and_then(JsonValue::as_str)
+                {
+                    if !sig.is_empty() {
+                        out.push(StreamEvent::ThoughtSignature(String::from(sig)));
                     }
                 }
                 if let Some(fc) = part.get("functionCall") {

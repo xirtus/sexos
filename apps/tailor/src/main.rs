@@ -1712,6 +1712,7 @@ impl AppState {
                 self.status = format!("Thinking ({} chars)...", t.len());
                 false
             }
+            StreamEvent::ThoughtSignature(_) => false,
             StreamEvent::ToolCall { name, .. } => {
                 self.push_log(&format!("\n[requesting tool: {}]", name));
                 false

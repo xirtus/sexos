@@ -336,6 +336,7 @@ pub struct ToolCallRequest {
     pub id: String,
     pub name: String,
     pub arguments: JsonValue,
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -469,6 +470,7 @@ pub struct Agent {
     history: Vec<Message>,
     streaming_text: String,
     streaming_thinking: String,
+    pending_thought_signature: Option<String>,
     streaming_calls: Vec<ToolCallRequest>,
     pending_calls: VecDeque<ToolCallRequest>,
     awaiting_approval: Option<PendingApproval>,
@@ -492,6 +494,7 @@ impl Agent {
             history: Vec::new(),
             streaming_text: String::new(),
             streaming_thinking: String::new(),
+            pending_thought_signature: None,
             streaming_calls: Vec::new(),
             pending_calls: VecDeque::new(),
             awaiting_approval: None,
@@ -632,6 +635,11 @@ impl Agent {
         match event {
             StreamEvent::TextDelta(t) => self.streaming_text.push_str(t),
             StreamEvent::ThinkingDelta(t) => self.streaming_thinking.push_str(t),
+            StreamEvent::ThoughtSignature(sig) => {
+                if !sig.is_empty() {
+                    self.pending_thought_signature = Some(sig.clone());
+                }
+            }
             StreamEvent::ToolCall {
                 id,
                 name,
@@ -641,6 +649,7 @@ impl Agent {
                     id: id.clone(),
                     name: name.clone(),
                     arguments: arguments.clone(),
+                    thought_signature: self.pending_thought_signature.take(),
                 });
             }
             StreamEvent::Done { .. } | StreamEvent::Error(_) => {}
