@@ -44,8 +44,8 @@ use crate::stremio::{
     StreamItem, CINEMETA_BASE,
 };
 use crate::swarm::{
-    fetch_direct_source, fetch_feed, is_media_stream_url, search_swarm_indexers, swingers_get_arg,
-    SwarmResult,
+    fetch_direct_source, fetch_feed, is_media_stream_url, search_swarm_indexers,
+    swingers_stream_arg, SwarmResult,
 };
 
 #[panic_handler]
@@ -573,18 +573,32 @@ impl App {
                 &stream.info_hash
             };
             let copied = clipboard::copy(window, copy_src).is_ok();
-            let args = swingers_get_arg(&stream.info_hash, &stream.magnet_uri);
+            let args = swingers_stream_arg(&stream.info_hash, &stream.magnet_uri, 8990);
             match launch::run(b"swingers", args.as_bytes(), true, cookie) {
                 Ok(()) => {
-                    self.status_toast = if copied {
+                    self.launch_cookie = self.launch_cookie.wrapping_add(1);
+                    let qupid_cookie = self.launch_cookie;
+                    let qupid_ok = launch::run(
+                        b"qupid",
+                        b"http://127.0.0.1:8990/stream",
+                        true,
+                        qupid_cookie,
+                    )
+                    .is_ok();
+                    self.status_toast = if qupid_ok {
                         format!(
-                            "Launched Swingers P2P -> {} (copied)",
-                            truncate(&stream.display_title(), 36)
+                            "Streaming via Swingers -> Qupid · {}",
+                            truncate(&stream.display_title(), 34)
+                        )
+                    } else if copied {
+                        format!(
+                            "Swingers stream ready -> {} (copied)",
+                            truncate(&stream.display_title(), 34)
                         )
                     } else {
                         format!(
-                            "Launched Swingers P2P -> {}",
-                            truncate(&stream.display_title(), 40)
+                            "Swingers stream ready -> {}",
+                            truncate(&stream.display_title(), 38)
                         )
                     };
                 }
@@ -612,16 +626,30 @@ impl App {
                 &res.info_hash
             };
             let copied = clipboard::copy(window, copy_src).is_ok();
-            let args = swingers_get_arg(&res.info_hash, &res.magnet_uri);
+            let args = swingers_stream_arg(&res.info_hash, &res.magnet_uri, 8990);
             match launch::run(b"swingers", args.as_bytes(), true, cookie) {
                 Ok(()) => {
-                    self.status_toast = if copied {
+                    self.launch_cookie = self.launch_cookie.wrapping_add(1);
+                    let qupid_cookie = self.launch_cookie;
+                    let qupid_ok = launch::run(
+                        b"qupid",
+                        b"http://127.0.0.1:8990/stream",
+                        true,
+                        qupid_cookie,
+                    )
+                    .is_ok();
+                    self.status_toast = if qupid_ok {
                         format!(
-                            "Launched Swingers P2P -> {} (copied)",
-                            truncate(&res.title, 36)
+                            "Streaming via Swingers -> Qupid · {}",
+                            truncate(&res.title, 34)
+                        )
+                    } else if copied {
+                        format!(
+                            "Swingers stream ready -> {} (copied)",
+                            truncate(&res.title, 34)
                         )
                     } else {
-                        format!("Launched Swingers P2P -> {}", truncate(&res.title, 40))
+                        format!("Swingers stream ready -> {}", truncate(&res.title, 38))
                     };
                 }
                 Err(e) => {

@@ -10,6 +10,7 @@
 mod disk;
 mod net;
 mod remote;
+mod stream_http;
 
 use sex_torrent::create::{Creator, FileSpec, Options, Version};
 use sex_torrent::magnet::{Magnet, MagnetPeer};
@@ -44,6 +45,7 @@ pub fn random(out: &mut [u8]) {
 
 fn usage() -> ! {
     say("usage: swingers get MAGNET|FILE.torrent [--dir DIR] [--peer HOST:PORT]... [--seed-secs N] [--port P] [--anonymous] [--no-dht] [--dht-node HOST:PORT]...");
+    say("       swingers stream MAGNET|HASH|FILE.torrent [--port 8990] [--dir DIR] [--bt-port P] [--peer HOST:PORT]... [--no-dht] [--dht-node HOST:PORT]...");
     say("       swingers daemon [--dir DIR] [--port P] [--rpc PORT] [--user U --password P] [--no-dht] [--dht-node HOST:PORT]...");
     say("       swingers create PATH --out FILE.torrent [--v1|--v2|--hybrid] [--tracker URL]");
     std::process::exit(2)
@@ -53,6 +55,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("get") => get(&args[1..]),
+        Some("stream") => stream(&args[1..]),
         Some("create") => create(&args[1..]),
         Some("daemon") => daemon(&args[1..]),
         _ => usage(),
@@ -95,6 +98,42 @@ fn get(args: &[String]) {
     if dht { client.enable_dht(dht_nodes, routers); }
     if let Err(e) = client.add_source(&source, None, peers, None) { say(&format!("[swingers.failed] {e}")); std::process::exit(1) }
     client.run(Some(seed_secs));
+}
+
+/// `swingers stream <hash-or-magnet> [--port 8990]`: downloads the largest video file
+/// sequentially (header & footer first) and serves `GET /stream` with HTTP Range support
+/// on `127.0.0.1:<port>` for Qupid.
+fn stream(args: &[String]) {
+    let (mut source, mut dir, mut peers, mut http_port, mut bt_port) = (None, PathBuf::from("/tmp/swingers-stream"), Vec::new(), 8990u16, 6881u16);
+    let (mut dht, mut dht_nodes, mut routers) = (true, Vec::new(), true);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = PathBuf::from(it.next().unwrap_or_else(|| usage())),
+            "--port" => http_port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage()),
+            "--bt-port" => bt_port = it.next().and_then(|s| s.parse().ok()).unwrap_or_else(|| usage()),
+            "--peer" => peers.extend(host_port(it.next())),
+            "--no-dht" => dht = false,
+            "--dht-node" => { dht_nodes.extend(host_port(it.next())); routers = false; }
+            _ if source.is_none() => source = Some(a.clone()),
+            _ => usage(),
+        }
+    }
+    let source = source.unwrap_or_else(|| usage());
+    let _ = std::fs::create_dir_all(&dir);
+    let peer_id = PeerId::generate(false, &mut |b: &mut [u8]| random(b));
+    let mut client = net::Client::new(bt_port, dir, peer_id, false);
+    if dht { client.enable_dht(dht_nodes, routers); }
+    let key = match client.add_source(&source, None, peers, None) {
+        Ok((_, k, _)) => k,
+        Err(e) => { say(&format!("[swingers.failed] {e}")); std::process::exit(1) }
+    };
+    if let Err(e) = client.listen_stream(http_port, key) {
+        say(&format!("[swingers.failed] stream: {e}"));
+        std::process::exit(1);
+    }
+    say(&format!("[swingers.stream] listening on http://127.0.0.1:{http_port}/stream"));
+    client.run(None);
 }
 
 /// A torrent ready to add: what the engine needs plus what the program keeps.

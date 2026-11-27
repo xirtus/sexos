@@ -25,7 +25,7 @@
 //! always shows.
 use crate::fat::{self, Fat};
 use crate::gpt::{Extent, Gpt, Guid, TYPE_ESP, TYPE_SEXOS_BOOT};
-use crate::install::{compose, pad, MENU_BYTES, MENU_MARK, MENU_PATH};
+use crate::install::{compose, pad, pad_to, LEGACY_MENU_BYTES, MENU_BYTES, MENU_MARK, MENU_PATH};
 use crate::{BlockDev, Error, Window, SECTOR};
 use alloc::format;
 use alloc::string::String;
@@ -107,6 +107,10 @@ impl State {
     }
 }
 
+fn valid_menu_size(len: usize) -> bool {
+    len == MENU_BYTES || len == LEGACY_MENU_BYTES
+}
+
 /// `menu` with its state line and default entry replaced by `state`'s, same size.
 pub fn restate(menu: &[u8], state: &State) -> Result<Vec<u8>, Error> {
     State::parse(menu)?;
@@ -120,7 +124,12 @@ pub fn restate(menu: &[u8], state: &State) -> Result<Vec<u8>, Error> {
         out.push_str(line);
         out.push('\n');
     }
-    pad(out.into_bytes())
+    let bytes = out.into_bytes();
+    if valid_menu_size(menu.len()) && bytes.len() + 2 <= menu.len() {
+        pad_to(bytes, menu.len())
+    } else {
+        pad(bytes)
+    }
 }
 
 /// A signed index: which image, how big, its hash, and its version.
@@ -182,7 +191,7 @@ impl System {
             let mut w = Window::new(dev, esp.first, esp.sectors)?;
             let Ok(f) = Fat::open(&mut w) else { continue };
             let Ok(at) = f.extent(&mut w, MENU_PATH) else { continue };
-            if at.sectors as usize * SECTOR != MENU_BYTES { continue; }
+            if !valid_menu_size(at.sectors as usize * SECTOR) { continue; }
             let menu = fat::Extent { first_lba: at.first_lba + esp.first, sectors: at.sectors };
             return Ok(System { a: slots[0], b: slots[1], esp, menu });
         }
@@ -193,14 +202,23 @@ impl System {
     }
     pub fn slot(&self, s: Slot) -> (Extent, Guid) { match s { Slot::A => self.a, Slot::B => self.b } }
     pub fn read_menu<D: BlockDev + ?Sized>(&self, dev: &mut D) -> Result<Vec<u8>, Error> {
-        let mut m = vec![0u8; MENU_BYTES];
+        let len = self.menu.sectors as usize * SECTOR;
+        if !valid_menu_size(len) { return Err(Error::Invalid); }
+        let mut m = vec![0u8; len];
         dev.read(self.menu.first_lba, &mut m)?;
         Ok(m)
     }
-    /// Rewrites the menu in place: the same sectors, so the ESP's FAT never changes.
+    /// Rewrites the menu in place when its size matches the existing extent, or replaces
+    /// it atomically on the ESP FAT filesystem when upgrading from a legacy 16 KiB menu.
     pub fn write_menu<D: BlockDev + ?Sized>(&self, dev: &mut D, menu: &[u8]) -> Result<(), Error> {
-        if menu.len() != MENU_BYTES { return Err(Error::Invalid); }
-        dev.write(self.menu.first_lba, menu)
+        if !valid_menu_size(menu.len()) { return Err(Error::Invalid); }
+        if menu.len() == self.menu.sectors as usize * SECTOR {
+            return dev.write(self.menu.first_lba, menu);
+        }
+        let mut esp = Window::new(dev, self.esp.first, self.esp.sectors)?;
+        let f = Fat::open(&mut esp)?;
+        f.write_file(&mut esp, MENU_PATH, menu)?;
+        Ok(())
     }
 }
 
