@@ -1130,8 +1130,10 @@ impl Browser {
         }
         // A reader page's pictures come from the article's site.
         if base.starts_with("http") || base == "about:reader" {
+            let css_deadline = sex_pdx::get_ticks().saturating_add(4_000);
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
+                if i > 0 && sex_pdx::get_ticks() >= css_deadline { break; }
                 self.status = Some("Loading style…");
                 if i == 0 { self.draw(); }
                 self.next_kind = Some(sex_shields::Kind::Stylesheet);
@@ -1142,11 +1144,15 @@ impl Browser {
                 }
             }
             faces.extend(sex_html::page_font_faces(&dom, self.view.0).into_iter().map(|f| (base.clone(), f)));
-            self.load_fonts(faces);
+            if sex_pdx::get_ticks() < css_deadline {
+                self.load_fonts(faces);
+            }
+            let img_deadline = sex_pdx::get_ticks().saturating_add(4_000);
             let sources: Vec<String> = sex_html::image_sources(&dom).into_iter().map(String::from).collect();
             let mut seen: Vec<&str> = Vec::new();
             for src in sources.iter() {
                 if seen.len() >= MAX_IMAGES || seen.contains(&src.as_str()) { continue; }
+                if !seen.is_empty() && sex_pdx::get_ticks() >= img_deadline { break; }
                 seen.push(src);
                 let Some(abs) = sex_html::url::resolve(&base, src) else { continue };
                 self.status = Some("Loading pictures…");

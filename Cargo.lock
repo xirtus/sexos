@@ -9201,7 +9201,9 @@ name = "tailor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
  "shibari",
  "tailor-core",
 ]
