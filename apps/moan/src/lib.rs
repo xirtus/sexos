@@ -23,6 +23,28 @@ use moan_core::{midi::Instrument, Clip, Frame, Track, RATE};
 use weft::{Column, Command, Id, Layout, Menu, Response, Rows, TextStyle, Ui};
 pub const MAX_FRAMES: usize = RATE as usize * 60;
 pub const MAX_TRACKS: usize = 8;
+
+/// Logic Noir dark studio theme for Moan on SexOS (matches desktop Moan Studio).
+pub fn logic_noir_theme() -> weft::Theme {
+    let mut t = weft::Theme::dark().with_density(weft::Density::Compact);
+    t.palette.window = weft::Color::hex(0x1c1c1f);
+    t.palette.surface = weft::Color::hex(0x242428);
+    t.palette.field = weft::Color::hex(0x131316);
+    t.palette.control = weft::Color::hex(0x2e2e34);
+    t.palette.control_hover = weft::Color::hex(0x3c3c44);
+    t.palette.control_pressed = weft::Color::hex(0x18181c);
+    t.palette.border = weft::Color::hex(0x111114);
+    t.palette.text = weft::Color::hex(0xe6e6eb);
+    t.palette.text_dim = weft::Color::hex(0x94949e);
+    t.palette.text_disabled = weft::Color::hex(0x55555e);
+    t.palette.accent = weft::Color::hex(0x2d7aff);
+    t.palette.on_accent = weft::Color::hex(0xffffff);
+    t.palette.selection = weft::Color::hex(0x2d7aff);
+    t.palette.focus = weft::Color::hex(0x5294ff);
+    t.palette.danger = weft::Color::hex(0xe83630);
+    t.palette.on_danger = weft::Color::hex(0xffffff);
+    t
+}
 #[derive(Clone)]
 struct Snapshot {
     revision: u64,

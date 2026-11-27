@@ -49,19 +49,19 @@ pub fn render(session: &Session, view: View) -> (usize, Vec<u32>) {
 }
 pub fn render_at(session: &Session, view: View, cursor: usize) -> (usize, Vec<u32>) {
     let height = HEADER + ROW * session.tracks.len().min(crate::MAX_TRACKS).max(1);
-    let mut pixels = vec![0x111923; WIDTH * height];
+    let mut pixels = vec![0x141417; WIDTH * height];
     for x in 0..WIDTH {
         let a = view.frame(x);
         let b = view.frame((x + 1).min(WIDTH - 1));
         if a / RATE as usize != b / RATE as usize || x == 0 {
-            line(&mut pixels, height, x, 0, height, 0x344254);
+            line(&mut pixels, height, x, 0, height, 0x28282e);
         }
     }
     for (index, track) in session.tracks.iter().take(crate::MAX_TRACKS).enumerate() {
         let top = HEADER + index * ROW;
         let mid = top + ROW / 2;
         for x in 0..WIDTH {
-            pixel(&mut pixels, height, x, mid, 0x344254);
+            pixel(&mut pixels, height, x, mid, 0x28282e);
         }
         for clip in &track.clips {
             if clip.end() <= view.start || clip.start() >= view.start.saturating_add(view.span) {
