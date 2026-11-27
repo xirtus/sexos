@@ -20,6 +20,9 @@ rustc --edition 2021 --test -A dead_code apps/settings/src/about.rs -o "$out/set
 # Updates, Storage and About's version and image hash: Files' lines (sex_pdx::facts) as text.
 rustc --edition 2021 --test -A dead_code apps/settings/src/facts.rs -o "$out/settings-facts"
 "$out/settings-facts" -q
+# Live OTA update index parsing, URL builders and user-configurable dotfiles.conf.
+rustc --edition 2021 --test -A dead_code apps/settings/src/updates.rs -o "$out/settings-updates"
+"$out/settings-updates" -q
 rustc --edition 2021 --test -A dead_code --extern sex_config="$out/libsex_config.rlib" tests/shortcuts.rs -o "$out/shortcuts"
 "$out/shortcuts" -q
 rustc --edition 2021 --test -A dead_code tests/screen_state.rs -o "$out/screen-state" && "$out/screen-state" -q
