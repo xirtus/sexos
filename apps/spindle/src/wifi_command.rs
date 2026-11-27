@@ -54,12 +54,17 @@ pub struct Wifi {
     saved_pass_len: usize,
     pending_save: bool,
     connected: bool,
-    /// Boot-reconnect target SSID (or index when `auto_index > 0`).
+    /// Boot-reconnect target SSID (or index when `auto_index > 0`, or multi-network when `auto_multi`).
     auto_active: bool,
+    auto_multi: bool,
+    auto_scan_triggered: bool,
     auto_joined: bool,
     auto_polls: u8,
     auto_next_at: u64,
     auto_index: u64,
+    auto_best_idx: Option<u64>,
+    auto_best_known: usize,
+    auto_best_rssi: i8,
     auto_ssid: [u8; 32],
     auto_ssid_len: usize,
     auto_pass: [u8; ws::PASSWORD_MAX],
@@ -86,17 +91,22 @@ pub static mut WIFI: Wifi = Wifi {
     pending_save: false,
     connected: false,
     auto_active: false,
+    auto_multi: false,
+    auto_scan_triggered: false,
     auto_joined: false,
     auto_polls: 0,
     auto_next_at: 0,
     auto_index: 0,
+    auto_best_idx: None,
+    auto_best_known: usize::MAX,
+    auto_best_rssi: i8::MIN,
     auto_ssid: [0; 32],
     auto_ssid_len: 0,
     auto_pass: [0; ws::PASSWORD_MAX],
     auto_pass_len: 0,
 };
 
-const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | save [SSID [PASS]] | leave | ba on|off | replay on|off]";
+const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | saved | save [SSID [PASS]] | forget [SSID] | leave | ba on|off | replay on|off]";
 
 fn send(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, ws::OP, action, a, b);
@@ -241,13 +251,26 @@ impl Wifi {
 
     fn stop_auto(&mut self) {
         self.auto_active = false;
+        self.auto_multi = false;
+        self.auto_scan_triggered = false;
         self.auto_joined = false;
         self.auto_polls = 0;
         self.auto_index = 0;
+        self.auto_best_idx = None;
+        self.auto_best_known = usize::MAX;
+        self.auto_best_rssi = i8::MIN;
         self.auto_ssid = [0; 32];
         self.auto_ssid_len = 0;
         self.auto_pass = [0; ws::PASSWORD_MAX];
         self.auto_pass_len = 0;
+    }
+
+    /// Starts boot-time auto-reconnect against all saved known networks in `AUTOCONF`.
+    pub fn start_auto_join_known(&mut self, _sb: &mut crate::Scrollback) {
+        self.stop_auto();
+        self.auto_multi = true;
+        self.auto_active = true;
+        self.auto_next_at = 0;
     }
 
     /// Starts boot-time auto-reconnect by SSID (from `/data/wifi.conf`).
@@ -271,6 +294,28 @@ impl Wifi {
         self.auto_pass_len = pass.len();
         self.auto_active = true;
         self.auto_next_at = 0;
+    }
+
+    fn join_best_known(&mut self, sb: &mut crate::Scrollback) -> bool {
+        let Some(scan_idx) = self.auto_best_idx else { return false };
+        let known_idx = self.auto_best_known;
+        let known = unsafe { (*core::ptr::addr_of!(crate::autoconf::AUTOCONF)).known() };
+        if known_idx >= known.len() { return false; }
+        let entry = known.entries[known_idx];
+        self.auto_ssid = entry.ssid;
+        self.auto_ssid_len = entry.ssid_len as usize;
+        self.auto_pass = [0; ws::PASSWORD_MAX];
+        let pl = (entry.pass_len as usize).min(ws::PASSWORD_MAX);
+        self.auto_pass[..pl].copy_from_slice(&entry.pass[..pl]);
+        self.auto_pass_len = pl;
+        let mut msg = [0u8; 96];
+        let mut at = 0;
+        put(&mut msg, &mut at, b"boot-reconnect: joining saved Wi-Fi \"");
+        put(&mut msg, &mut at, entry.ssid_bytes());
+        put(&mut msg, &mut at, b"\"...");
+        sb.push(&msg[..at]);
+        self.begin_auto_join_idx(scan_idx);
+        true
     }
 
     fn begin_auto_join_idx(&mut self, idx0: u64) {
@@ -385,6 +430,10 @@ impl Wifi {
         let (action, a, scan, join) = match (words.next(), words.next(), words.next()) {
             (None, _, _) => (ws::STATE, 0, false, false),
             (Some(b"scan"), None, _) => (ws::SCAN, 0, true, false),
+            (Some(b"saved"), None, _) => {
+                unsafe { crate::autoconf::AUTOCONF.list_saved_wifi(sb); }
+                return;
+            }
             (Some(b"save"), None, _) => {
                 if self.saved_ssid_len == 0 {
                     sb.push(b"Wi-Fi: no joined network to save yet (run `wifi`, then `wifi join N [PASS]`, or `wifi save SSID [PASS]`).");
@@ -416,6 +465,16 @@ impl Wifi {
                 self.saved_pass[..pw.len()].copy_from_slice(pw);
                 self.saved_pass_len = pw.len();
                 unsafe { crate::autoconf::AUTOCONF.queue_save_wifi(ssid, pw, true); }
+                return;
+            }
+            (Some(b"forget"), Some(_), _) => {
+                // Everything after `forget ` (trimmed) is the SSID, supporting spaces.
+                let trimmed = args.trim_ascii();
+                let ssid = trimmed
+                    .strip_prefix(b"forget")
+                    .map(|r| r.trim_ascii())
+                    .unwrap_or(b"");
+                unsafe { crate::autoconf::AUTOCONF.queue_forget_wifi(ssid, sb); }
                 return;
             }
             (Some(b"leave") | Some(b"forget"), None, _) => {
@@ -495,25 +554,40 @@ impl Wifi {
                     self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
                     return true;
                 }
-                if s.phase == ws::READY && s.networks > 0 {
-                    if self.auto_index > 0 {
-                        if self.auto_index <= s.networks as u64 {
-                            self.begin_auto_join_idx(self.auto_index - 1);
+                if s.phase == ws::READY {
+                    if s.networks > 0 {
+                        if self.auto_index > 0 {
+                            if self.auto_index <= s.networks as u64 {
+                                self.begin_auto_join_idx(self.auto_index - 1);
+                            } else {
+                                self.stop_auto();
+                            }
                         } else {
-                            self.stop_auto();
+                            self.auto_best_idx = None;
+                            self.auto_best_known = usize::MAX;
+                            self.auto_best_rssi = i8::MIN;
+                            if self.ask(ws::NETWORK, 0, ws::PART_INFO) {
+                                self.waiting = Waiting::AutoNetwork { index: 0, part: ws::PART_INFO };
+                            } else {
+                                self.stop_auto();
+                            }
                         }
-                    } else if self.ask(ws::NETWORK, 0, ws::PART_INFO) {
-                        self.waiting = Waiting::AutoNetwork { index: 0, part: ws::PART_INFO };
-                    } else {
-                        self.stop_auto();
+                        return true;
                     }
-                    return true;
+                    // Empty scan while READY: trigger one fresh scan before retrying.
+                    if !self.auto_scan_triggered {
+                        self.auto_scan_triggered = true;
+                        let _ = send(ws::SCAN, 0, 0);
+                    }
                 }
-                // Still STARTING or SCANNING: poll again shortly.
+                // Still STARTING, SCANNING, or waiting for scan results: poll again shortly.
                 self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
             }
             Waiting::AutoNetwork { index, part } => {
                 if value == ws::MISSING {
+                    if self.auto_multi && self.join_best_known(sb) {
+                        return true;
+                    }
                     // Target SSID not in this scan; retry on next poll if budget remains.
                     self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
                     return true;
@@ -535,7 +609,21 @@ impl Wifi {
                     self.ssids[index as usize][..sl].copy_from_slice(&self.ssid[..sl]);
                     self.ssid_lens[index as usize] = sl as u8;
                 }
-                if ssid_len as usize == self.auto_ssid_len
+                if self.auto_multi {
+                    let scanned_ssid = &self.ssid[..ssid_len as usize];
+                    let known = unsafe { (*core::ptr::addr_of!(crate::autoconf::AUTOCONF)).known() };
+                    if let Some(known_idx) = known.find_index(scanned_ssid) {
+                        let rssi = self.info.rssi;
+                        let better = self.auto_best_idx.is_none()
+                            || rssi > self.auto_best_rssi
+                            || (rssi == self.auto_best_rssi && known_idx < self.auto_best_known);
+                        if better {
+                            self.auto_best_idx = Some(index);
+                            self.auto_best_known = known_idx;
+                            self.auto_best_rssi = rssi;
+                        }
+                    }
+                } else if ssid_len as usize == self.auto_ssid_len
                     && self.ssid[..self.auto_ssid_len] == self.auto_ssid[..self.auto_ssid_len]
                 {
                     self.begin_auto_join_idx(index);
@@ -543,6 +631,8 @@ impl Wifi {
                 }
                 if index + 1 < MAX_LISTED && self.ask(ws::NETWORK, index + 1, ws::PART_INFO) {
                     self.waiting = Waiting::AutoNetwork { index: index + 1, part: ws::PART_INFO };
+                } else if self.auto_multi && self.join_best_known(sb) {
+                    return true;
                 } else {
                     self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
                 }
