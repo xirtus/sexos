@@ -165,7 +165,7 @@ const RESUME_NONE: Resume = Resume { active: false, listening: false, host: [0; 
 enum Call { Plain, Send, Receive, State, Close }
 
 /// The largest server image a hot swap takes.
-const HOTSWAP_BUF_CAP: usize = 16 * 1024 * 1024;
+const HOTSWAP_BUF_CAP: usize = sex_pdx::crash_log::HOTSWAP_MAX_BYTES;
 /// Where a hot-swap image is gathered: pages this run asks for the first time one comes
 /// (Spindle has no heap, and a static would cost every Spindle its size at boot), kept
 /// for the next. (base, bytes held)
