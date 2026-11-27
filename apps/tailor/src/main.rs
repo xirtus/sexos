@@ -142,7 +142,8 @@ impl KeyVault {
                 continue;
             }
             let abs = format!("/data/tailor/{}", provider.key_filename());
-            let candidates = [abs.as_bytes(), provider.key_filename().as_bytes()];
+            let ventoy = format!("/media/Ventoy/tailor-{}", provider.key_filename());
+            let candidates = [abs.as_bytes(), ventoy.as_bytes(), provider.key_filename().as_bytes()];
             for path in candidates {
                 if let Ok(n) = files::read(window, path, &mut buf) {
                     if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
@@ -527,7 +528,7 @@ impl AppState {
         }
 
         if let Some(cmd) = trimmed.strip_prefix('/') {
-            self.handle_command(cmd);
+            self.handle_command(window, cmd);
             return;
         }
 
@@ -536,7 +537,7 @@ impl AppState {
         self.start_model_turn(window);
     }
 
-    fn handle_command(&mut self, cmd: &str) {
+    fn handle_command(&mut self, window: &mut Window, cmd: &str) {
         let mut parts = cmd.splitn(2, ' ');
         let verb = parts.next().unwrap_or("").trim();
         let rest = parts.next().unwrap_or("").trim();
@@ -554,7 +555,7 @@ impl AppState {
                     self.push_log(&format!("[tailor] {}", self.status));
                 }
                 None => {
-                    self.status = String::from("Usage: /provider gemini|claude|codex");
+                    self.status = String::from("Usage: /provider gemini|claude|claude-deepseek|codex");
                 }
             },
             "model" => {
@@ -573,16 +574,25 @@ impl AppState {
                 match (Provider::from_name(prov_str), secret.is_empty()) {
                     (Some(p), false) => match self.vault.store(p, secret.as_bytes()) {
                         Ok(()) => {
-                            self.status = format!(
-                                "Stored {} key in Shibari RAM vault.",
-                                p.display_name()
-                            );
+                            let saved = self.persist_key(window, p, secret.as_bytes());
+                            self.status = if let Some(where_saved) = saved {
+                                format!(
+                                    "Stored {} key in Shibari vault & saved to {}.",
+                                    p.display_name(),
+                                    where_saved
+                                )
+                            } else {
+                                format!(
+                                    "Stored {} key in Shibari RAM vault.",
+                                    p.display_name()
+                                )
+                            };
                             self.push_log(&format!("[tailor] {}", self.status));
                         }
                         Err(e) => self.status = String::from(e),
                     },
                     _ => {
-                        self.status = String::from("Usage: /key gemini|claude|codex <secret>");
+                        self.status = String::from("Usage: /key gemini|claude|claude-deepseek|codex <secret>");
                     }
                 }
             }
@@ -597,9 +607,9 @@ impl AppState {
             "help" => {
                 self.push_log(
                     "Commands:\n\
-                     /provider gemini|claude|codex   Switch AI provider\n\
+                     /provider gemini|claude|claude-deepseek|codex  Switch AI provider\n\
                      /model <name>                   Override model name\n\
-                     /key <provider> <secret>        Store API key in Shibari RAM vault\n\
+                     /key <provider> <secret>        Store & persist API key\n\
                      /approve (or y)                 Approve pending mutating tool\n\
                      /deny [reason] (or n)           Deny pending mutating tool\n\
                      /clear                          Clear conversation history\n\
@@ -610,6 +620,20 @@ impl AppState {
                 self.status = format!("Unknown command '/{}'. Try /help.", verb);
             }
         }
+    }
+
+    fn persist_key(&self, window: &mut Window, provider: Provider, secret: &[u8]) -> Option<String> {
+        let data_path = format!("/data/tailor/{}", provider.key_filename());
+        let ventoy_path = format!("/media/Ventoy/tailor-{}", provider.key_filename());
+        let local_path = String::from(provider.key_filename());
+        let _ = files::mkdir(window, b"/data");
+        let _ = files::mkdir(window, b"/data/tailor");
+        for path in [data_path, ventoy_path, local_path] {
+            if files::write(window, path.as_bytes(), secret).is_ok() {
+                return Some(path);
+            }
+        }
+        None
     }
 
     fn render(&self, window: &mut Window) {
