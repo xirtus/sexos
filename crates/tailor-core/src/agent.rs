@@ -13,8 +13,9 @@ use core::fmt::Write;
 use crate::diff::format_unified_diff;
 use crate::json::JsonValue;
 use crate::provider::{build_http_request, Provider, ProviderRequest};
+use crate::snapshot::{Snapshot, SnapshotEntry, SnapshotStore};
 use crate::sse::StreamEvent;
-use crate::traits::WorkspaceFs;
+use crate::traits::{AccessScope, WorkspaceFs};
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are Tailor, the native AI coding agent running inside SexOS (a capability-based SASOS microkernel). \
@@ -101,11 +102,22 @@ pub struct StepRecord {
     pub diff: Option<String>,
 }
 
+/// A queued request to spin up a parallel child subagent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubagentRequest {
+    pub id: String,
+    pub role: String,
+    pub prompt: String,
+    pub workspace: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
     ReadFile,
     WriteFile,
     PatchFile,
+    DeleteFile,
+    MoveFile,
     ListDir,
     FindByName,
     GrepSearch,
@@ -113,6 +125,7 @@ pub enum ToolKind {
     TaskBoundary,
     NotifyUser,
     HotswapServer,
+    SpawnSubagent,
 }
 
 impl ToolKind {
@@ -121,6 +134,8 @@ impl ToolKind {
             "read_file" | "view_file" => Some(Self::ReadFile),
             "write_file" | "write_to_file" => Some(Self::WriteFile),
             "patch_file" | "replace_file_content" => Some(Self::PatchFile),
+            "delete_file" => Some(Self::DeleteFile),
+            "move_file" => Some(Self::MoveFile),
             "list_dir" => Some(Self::ListDir),
             "find_by_name" => Some(Self::FindByName),
             "grep_search" => Some(Self::GrepSearch),
@@ -128,6 +143,7 @@ impl ToolKind {
             "task_boundary" => Some(Self::TaskBoundary),
             "notify_user" => Some(Self::NotifyUser),
             "hotswap_server" => Some(Self::HotswapServer),
+            "spawn_subagent" => Some(Self::SpawnSubagent),
             _ => None,
         }
     }
@@ -136,7 +152,12 @@ impl ToolKind {
     pub fn requires_approval(self) -> bool {
         matches!(
             self,
-            Self::WriteFile | Self::PatchFile | Self::RunCommand | Self::HotswapServer
+            Self::WriteFile
+                | Self::PatchFile
+                | Self::DeleteFile
+                | Self::MoveFile
+                | Self::RunCommand
+                | Self::HotswapServer
         )
     }
 }
@@ -321,6 +342,55 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
                 &["server", "binary_path"],
             ),
         },
+        ToolSpec {
+            name: String::from("delete_file"),
+            description: String::from(
+                "Delete a file in the granted workspace or allowed scope (requires human approval).",
+            ),
+            parameters_schema: schema_obj(
+                vec![("path", "string", "Path of the file to delete")],
+                &["path"],
+            ),
+        },
+        ToolSpec {
+            name: String::from("move_file"),
+            description: String::from(
+                "Move or rename a file (requires human approval).",
+            ),
+            parameters_schema: schema_obj(
+                vec![
+                    ("from", "string", "Source file path"),
+                    ("to", "string", "Destination file path"),
+                ],
+                &["from", "to"],
+            ),
+        },
+        ToolSpec {
+            name: String::from("spawn_subagent"),
+            description: String::from(
+                "Dispatch a parallel child subagent to handle a focused subtask.",
+            ),
+            parameters_schema: schema_obj(
+                vec![
+                    (
+                        "role",
+                        "string",
+                        "Short role title for the subagent (e.g. 'Test Runner', 'Code Reviewer')",
+                    ),
+                    (
+                        "prompt",
+                        "string",
+                        "Actionable task instructions for the subagent",
+                    ),
+                    (
+                        "workspace",
+                        "string",
+                        "Optional workspace path override for the subagent",
+                    ),
+                ],
+                &["role", "prompt"],
+            ),
+        },
     ]
 }
 
@@ -481,7 +551,10 @@ pub struct Agent {
     steps: Vec<StepRecord>,
     next_step_id: u64,
     approval_policy: ApprovalPolicy,
+    access_scope: AccessScope,
     artifacts: Vec<(String, String)>,
+    snapshots: SnapshotStore,
+    pending_subagents: VecDeque<SubagentRequest>,
 }
 
 impl Agent {
@@ -505,7 +578,10 @@ impl Agent {
             steps: Vec::new(),
             next_step_id: 1,
             approval_policy: ApprovalPolicy::AlwaysAsk,
+            access_scope: AccessScope::WorkspaceOnly,
             artifacts: Vec::new(),
+            snapshots: SnapshotStore::new(),
+            pending_subagents: VecDeque::new(),
         }
     }
 
@@ -577,6 +653,44 @@ impl Agent {
         self.approval_policy = policy;
     }
 
+    pub fn access_scope(&self) -> AccessScope {
+        self.access_scope
+    }
+
+    pub fn set_access_scope(&mut self, scope: AccessScope) {
+        self.access_scope = scope;
+    }
+
+    pub fn snapshots(&self) -> &[Snapshot] {
+        self.snapshots.list()
+    }
+
+    pub fn rollback_snapshot(&mut self, id: u64, ws: &mut dyn WorkspaceFs) -> Result<String, String> {
+        self.snapshots.restore(id, ws)
+    }
+
+    pub fn create_checkpoint(&mut self, label: &str, paths: &[String], ws: &mut dyn WorkspaceFs) -> u64 {
+        let mut entries = Vec::with_capacity(paths.len());
+        for path in paths {
+            let (existed, before) = match ws.read_file(path) {
+                Ok(content) => (true, content),
+                Err(_) => (false, String::new()),
+            };
+            let after = if existed { Some(before.clone()) } else { None };
+            entries.push(SnapshotEntry {
+                path: path.clone(),
+                existed,
+                before,
+                after,
+            });
+        }
+        self.snapshots.record(label, entries)
+    }
+
+    pub fn take_spawned_subagents(&mut self) -> Vec<SubagentRequest> {
+        self.pending_subagents.drain(..).collect()
+    }
+
     pub fn artifacts(&self) -> &[(String, String)] {
         &self.artifacts
     }
@@ -612,6 +726,8 @@ impl Agent {
         self.last_notification = None;
         self.steps.clear();
         self.artifacts.clear();
+        self.snapshots.clear();
+        self.pending_subagents.clear();
     }
 
     pub fn push_user_message(&mut self, text: impl Into<String>) {
@@ -896,13 +1012,28 @@ impl Agent {
                 let artifact = is_artifact_write(call);
                 match (path, content) {
                     (Some(p), Some(c)) => {
-                        let res = if artifact {
+                        if artifact {
                             self.set_artifact(p, c);
                             ws.write_artifact(p, c)
+                                .map(|_| format!("Wrote {} bytes to {}", c.len(), p))
                         } else {
-                            ws.write_file(p, c)
-                        };
-                        res.map(|_| format!("Wrote {} bytes to {}", c.len(), p))
+                            let (existed, before) = match ws.read_file(p) {
+                                Ok(prev) => (true, prev),
+                                Err(_) => (false, String::new()),
+                            };
+                            ws.write_file(p, c).map(|_| {
+                                self.snapshots.record(
+                                    format!("{} {}", call.name, p),
+                                    vec![SnapshotEntry {
+                                        path: String::from(p),
+                                        existed,
+                                        before,
+                                        after: Some(String::from(c)),
+                                    }],
+                                );
+                                format!("Wrote {} bytes to {}", c.len(), p)
+                            })
+                        }
                     }
                     _ => Err(String::from("Missing required arguments: path, content")),
                 }
@@ -912,10 +1043,89 @@ impl Agent {
                 let old_text = arg_str(call, &["old_text", "TargetContent"]);
                 let new_text = arg_str(call, &["new_text", "ReplacementContent"]);
                 match (path, old_text, new_text) {
-                    (Some(p), Some(old), Some(new)) => apply_patch(ws, p, old, new),
+                    (Some(p), Some(old), Some(new)) => {
+                        apply_patch(ws, p, old, new).map(|(before, updated, msg)| {
+                            self.snapshots.record(
+                                format!("{} {}", call.name, p),
+                                vec![SnapshotEntry {
+                                    path: String::from(p),
+                                    existed: true,
+                                    before,
+                                    after: Some(updated),
+                                }],
+                            );
+                            msg
+                        })
+                    }
                     _ => Err(String::from(
                         "Missing required arguments: path, old_text, new_text",
                     )),
+                }
+            }
+            Some(ToolKind::DeleteFile) => {
+                let path = arg_str(call, &["path", "TargetFile"]);
+                match path {
+                    Some(p) => {
+                        let (existed, before) = match ws.read_file(p) {
+                            Ok(prev) => (true, prev),
+                            Err(_) => (false, String::new()),
+                        };
+                        ws.delete_file(p).map(|_| {
+                            self.snapshots.record(
+                                format!("delete_file {}", p),
+                                vec![SnapshotEntry {
+                                    path: String::from(p),
+                                    existed,
+                                    before,
+                                    after: None,
+                                }],
+                            );
+                            format!("Deleted {}", p)
+                        })
+                    }
+                    None => Err(String::from("Missing required argument: path")),
+                }
+            }
+            Some(ToolKind::MoveFile) => {
+                let from = arg_str(call, &["from", "source", "src"]);
+                let to = arg_str(call, &["to", "destination", "dst"]);
+                match (from, to) {
+                    (Some(src), Some(dst)) => {
+                        let (from_existed, from_before) = match ws.read_file(src) {
+                            Ok(prev) => (true, prev),
+                            Err(_) => (false, String::new()),
+                        };
+                        let (to_existed, to_before) = match ws.read_file(dst) {
+                            Ok(prev) => (true, prev),
+                            Err(_) => (false, String::new()),
+                        };
+                        ws.move_file(src, dst).map(|_| {
+                            let moved_content = if from_existed {
+                                Some(from_before.clone())
+                            } else {
+                                ws.read_file(dst).ok()
+                            };
+                            self.snapshots.record(
+                                format!("move_file {} -> {}", src, dst),
+                                vec![
+                                    SnapshotEntry {
+                                        path: String::from(src),
+                                        existed: from_existed,
+                                        before: from_before,
+                                        after: None,
+                                    },
+                                    SnapshotEntry {
+                                        path: String::from(dst),
+                                        existed: to_existed,
+                                        before: to_before,
+                                        after: moved_content,
+                                    },
+                                ],
+                            );
+                            format!("Moved {} -> {}", src, dst)
+                        })
+                    }
+                    _ => Err(String::from("Missing required arguments: from, to")),
                 }
             }
             Some(ToolKind::RunCommand) => {
@@ -984,6 +1194,23 @@ impl Agent {
                     _ => Err(String::from(
                         "Missing required arguments: server, binary_path",
                     )),
+                }
+            }
+            Some(ToolKind::SpawnSubagent) => {
+                let role = arg_str(call, &["role", "Role"]);
+                let prompt = arg_str(call, &["prompt", "Prompt"]);
+                let workspace = arg_str(call, &["workspace", "Workspace"]).map(String::from);
+                match (role, prompt) {
+                    (Some(r), Some(p)) => {
+                        self.pending_subagents.push_back(SubagentRequest {
+                            id: call.id.clone(),
+                            role: String::from(r),
+                            prompt: String::from(p),
+                            workspace,
+                        });
+                        Ok(format!("Dispatched subagent '{}' (id: {})", r, call.id))
+                    }
+                    _ => Err(String::from("Missing required arguments: role, prompt")),
                 }
             }
             None => Err(format!("Unknown tool: {}", call.name)),
@@ -1100,6 +1327,16 @@ fn preview_diff(call: &ToolCallRequest, ws: &mut dyn WorkspaceFs) -> Option<Stri
                 Some(diff)
             }
         }
+        Some(ToolKind::DeleteFile) => {
+            let path = arg_str(call, &["path", "TargetFile"])?;
+            let current = ws.read_file(path).ok()?;
+            let diff = format_unified_diff(path, &current, "");
+            if diff.is_empty() {
+                None
+            } else {
+                Some(diff)
+            }
+        }
         _ => None,
     }
 }
@@ -1135,6 +1372,15 @@ fn summarize_tool_call(call: &ToolCallRequest) -> String {
             let path = arg_str(call, &["path", "TargetFile"]).unwrap_or("?");
             format!("patch_file({})", path)
         }
+        Some(ToolKind::DeleteFile) => {
+            let path = arg_str(call, &["path", "TargetFile"]).unwrap_or("?");
+            format!("delete_file({})", path)
+        }
+        Some(ToolKind::MoveFile) => {
+            let from = arg_str(call, &["from", "source", "src"]).unwrap_or("?");
+            let to = arg_str(call, &["to", "destination", "dst"]).unwrap_or("?");
+            format!("move_file({} -> {})", from, to)
+        }
         Some(ToolKind::RunCommand) => {
             let prog = arg_str(call, &["program", "CommandLine"]).unwrap_or("?");
             let args = arg_str(call, &["args"]).unwrap_or("");
@@ -1152,6 +1398,10 @@ fn summarize_tool_call(call: &ToolCallRequest) -> String {
             let bin = arg_str(call, &["binary_path"]).unwrap_or("?");
             format!("hotswap_server({} <- {})", srv, bin)
         }
+        Some(ToolKind::SpawnSubagent) => {
+            let role = arg_str(call, &["role", "Role"]).unwrap_or("?");
+            format!("spawn_subagent({})", role)
+        }
         _ => format!("{}({})", call.name, call.arguments.to_json_string()),
     }
 }
@@ -1161,7 +1411,7 @@ fn apply_patch(
     path: &str,
     old_text: &str,
     new_text: &str,
-) -> Result<String, String> {
+) -> Result<(String, String, String), String> {
     if old_text.is_empty() {
         return Err(String::from("old_text must not be empty"));
     }
@@ -1178,7 +1428,8 @@ fn apply_patch(
     }
     let updated = current.replacen(old_text, new_text, 1);
     ws.write_file(path, &updated)?;
-    Ok(format!("Patched {} ({} bytes)", path, updated.len()))
+    let msg = format!("Patched {} ({} bytes)", path, updated.len());
+    Ok((current, updated, msg))
 }
 
 #[cfg(test)]
@@ -1190,6 +1441,7 @@ mod tests {
     struct MemWorkspace {
         files: BTreeMap<String, String>,
         artifacts: BTreeMap<String, String>,
+        scope: AccessScope,
     }
 
     impl MemWorkspace {
@@ -1197,6 +1449,7 @@ mod tests {
             Self {
                 files: BTreeMap::new(),
                 artifacts: BTreeMap::new(),
+                scope: AccessScope::WorkspaceOnly,
             }
         }
     }
@@ -1257,6 +1510,30 @@ mod tests {
             self.artifacts
                 .insert(String::from(name), String::from(content));
             Ok(())
+        }
+
+        fn delete_file(&mut self, path: &str) -> Result<(), String> {
+            self.files
+                .remove(path)
+                .map(|_| ())
+                .ok_or_else(|| format!("not found: {}", path))
+        }
+
+        fn move_file(&mut self, from: &str, to: &str) -> Result<(), String> {
+            let content = self
+                .files
+                .remove(from)
+                .ok_or_else(|| format!("not found: {}", from))?;
+            self.files.insert(String::from(to), content);
+            Ok(())
+        }
+
+        fn set_access_scope(&mut self, scope: AccessScope) {
+            self.scope = scope;
+        }
+
+        fn access_scope(&self) -> AccessScope {
+            self.scope
         }
     }
 
@@ -1529,5 +1806,148 @@ mod tests {
             other => panic!("expected Turbo auto-approve, got {:?}", other),
         }
         assert!(ws.read_file("src/main.rs").unwrap().contains("println!"));
+    }
+
+    #[test]
+    fn auto_snapshots_delete_move_and_rollback_work() {
+        let mut ws = MemWorkspace::new();
+        ws.write_file("a.txt", "hello\n").unwrap();
+        let mut runner = MockRunner::new();
+        let mut agent = Agent::new(Provider::Claude);
+
+        // Verify AccessScope default and setter.
+        assert_eq!(agent.access_scope(), AccessScope::WorkspaceOnly);
+        agent.set_access_scope(AccessScope::FullSystem);
+        assert_eq!(agent.access_scope(), AccessScope::FullSystem);
+
+        // Create a manual checkpoint before edits.
+        let cp_id = agent.create_checkpoint("before edits", &[String::from("a.txt")], &mut ws);
+        assert_eq!(cp_id, 1);
+        assert_eq!(agent.snapshots().len(), 1);
+
+        // Test move_file requires approval, records snapshot, and rolls back cleanly.
+        agent.on_stream_event(&StreamEvent::ToolCall {
+            id: String::from("m1"),
+            name: String::from("move_file"),
+            arguments: JsonValue::object(vec![
+                (String::from("from"), JsonValue::str("a.txt")),
+                (String::from("to"), JsonValue::str("b.txt")),
+            ]),
+        });
+        agent.on_stream_event(&StreamEvent::ToolCall {
+            id: String::from("d1"),
+            name: String::from("delete_file"),
+            arguments: JsonValue::object(vec![(String::from("path"), JsonValue::str("b.txt"))]),
+        });
+        agent.finish_model_turn();
+
+        match agent.step_tools_fs(&mut ws, &mut runner) {
+            AgentStep::AwaitingApproval(p) => {
+                assert_eq!(p.call.name, "move_file");
+                assert!(p.summary.contains("a.txt -> b.txt"));
+            }
+            other => panic!("expected move_file approval gate, got {:?}", other),
+        }
+        match agent.resolve_approval_fs(ApprovalDecision::Approved, &mut ws, &mut runner) {
+            AgentStep::ToolExecuted(res) => assert!(!res.is_error),
+            other => panic!("expected move_file execution, got {:?}", other),
+        }
+        assert!(ws.read_file("a.txt").is_err());
+        assert_eq!(ws.read_file("b.txt").unwrap(), "hello\n");
+        let move_snap_id = agent.snapshots().last().unwrap().id;
+
+        // Next tool: delete_file requires approval with unified diff preview.
+        match agent.step_tools_fs(&mut ws, &mut runner) {
+            AgentStep::AwaitingApproval(p) => {
+                assert_eq!(p.call.name, "delete_file");
+                assert!(p.diff.unwrap().contains("-hello"));
+            }
+            other => panic!("expected delete_file approval gate, got {:?}", other),
+        }
+        match agent.resolve_approval_fs(ApprovalDecision::Approved, &mut ws, &mut runner) {
+            AgentStep::ToolExecuted(res) => assert!(!res.is_error),
+            other => panic!("expected delete_file execution, got {:?}", other),
+        }
+        assert!(ws.read_file("b.txt").is_err());
+        let del_snap_id = agent.snapshots().last().unwrap().id;
+
+        // Rollback delete_file -> b.txt returns.
+        agent.rollback_snapshot(del_snap_id, &mut ws).unwrap();
+        assert_eq!(ws.read_file("b.txt").unwrap(), "hello\n");
+
+        // Rollback move_file -> a.txt returns and b.txt is deleted!
+        agent.rollback_snapshot(move_snap_id, &mut ws).unwrap();
+        assert_eq!(ws.read_file("a.txt").unwrap(), "hello\n");
+        assert!(ws.read_file("b.txt").is_err());
+
+        // Write a brand new file in Turbo mode, then rollback -> new file deleted.
+        agent.set_approval_policy(ApprovalPolicy::Turbo);
+        agent.on_stream_event(&StreamEvent::ToolCall {
+            id: String::from("w1"),
+            name: String::from("write_file"),
+            arguments: JsonValue::object(vec![
+                (String::from("path"), JsonValue::str("new.txt")),
+                (String::from("content"), JsonValue::str("brand new\n")),
+            ]),
+        });
+        agent.finish_model_turn();
+        match agent.step_tools_fs(&mut ws, &mut runner) {
+            AgentStep::ToolExecuted(res) => assert!(!res.is_error),
+            other => panic!("expected write_file execution, got {:?}", other),
+        }
+        assert_eq!(ws.read_file("new.txt").unwrap(), "brand new\n");
+        let write_snap_id = agent.snapshots().last().unwrap().id;
+        agent.rollback_snapshot(write_snap_id, &mut ws).unwrap();
+        assert!(ws.read_file("new.txt").is_err());
+    }
+
+    #[test]
+    fn spawn_subagent_queues_requests_without_approval_gate() {
+        let mut ws = MemWorkspace::new();
+        let mut runner = MockRunner::new();
+        let mut agent = Agent::new(Provider::Gemini);
+        assert_eq!(agent.approval_policy(), ApprovalPolicy::AlwaysAsk);
+
+        // Verify tool spec is registered in builtin_tools.
+        assert!(agent.tools().iter().any(|t| t.name == "spawn_subagent"));
+        assert!(agent.tools().iter().any(|t| t.name == "delete_file"));
+        assert!(agent.tools().iter().any(|t| t.name == "move_file"));
+
+        agent.on_stream_event(&StreamEvent::ToolCall {
+            id: String::from("sub1"),
+            name: String::from("spawn_subagent"),
+            arguments: JsonValue::object(vec![
+                (String::from("role"), JsonValue::str("Test Runner")),
+                (String::from("prompt"), JsonValue::str("Run cargo test")),
+                (String::from("workspace"), JsonValue::str("/tmp/ws")),
+            ]),
+        });
+        agent.finish_model_turn();
+
+        // Must execute immediately without pausing for approval even under AlwaysAsk.
+        match agent.step_tools_fs(&mut ws, &mut runner) {
+            AgentStep::ToolExecuted(res) => {
+                assert!(!res.is_error);
+                assert!(res.output.contains("Dispatched subagent 'Test Runner'"));
+            }
+            other => panic!("expected immediate spawn_subagent execution, got {:?}", other),
+        }
+        assert_eq!(agent.steps().len(), 1);
+        assert_eq!(agent.steps()[0].tool_name, "spawn_subagent");
+        assert_eq!(agent.steps()[0].status, StepStatus::Done);
+
+        let spawned = agent.take_spawned_subagents();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(
+            spawned[0],
+            SubagentRequest {
+                id: String::from("sub1"),
+                role: String::from("Test Runner"),
+                prompt: String::from("Run cargo test"),
+                workspace: Some(String::from("/tmp/ws")),
+            }
+        );
+        // Draining again returns empty.
+        assert!(agent.take_spawned_subagents().is_empty());
     }
 }

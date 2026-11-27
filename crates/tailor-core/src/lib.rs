@@ -19,13 +19,14 @@ pub mod diff;
 pub mod json;
 pub mod provider;
 pub mod skills;
+pub mod snapshot;
 pub mod sse;
 pub mod traits;
 
 pub use agent::{
     builtin_tools, Agent, AgentMode, AgentStep, ApprovalDecision, ApprovalPolicy, Message,
-    NotifyUser, PendingApproval, Role, StepRecord, StepStatus, TaskBoundary, ToolCallRequest,
-    ToolKind, ToolResult, ToolRunner, ToolSpec, Workspace, DEFAULT_SYSTEM_PROMPT,
+    NotifyUser, PendingApproval, Role, StepRecord, StepStatus, SubagentRequest, TaskBoundary,
+    ToolCallRequest, ToolKind, ToolResult, ToolRunner, ToolSpec, Workspace, DEFAULT_SYSTEM_PROMPT,
 };
 pub use diff::{compute_diff, format_unified_diff, DiffHunk, DiffLine, DiffLineKind};
 pub use json::{JsonError, JsonValue};
@@ -37,5 +38,8 @@ pub use provider::{
     ProviderRequest, ProviderStreamParser,
 };
 pub use skills::{format_skills_prompt, parse_skill_md, SkillDoc};
+pub use snapshot::{Snapshot, SnapshotEntry, SnapshotStore};
 pub use sse::{HttpSseDecoder, SseError, SseMessage, StreamEvent};
-pub use traits::{CommandOutput, CommandRunner, GrepMatch, HttpStream, HttpTransport, WorkspaceFs};
+pub use traits::{
+    AccessScope, CommandOutput, CommandRunner, GrepMatch, HttpStream, HttpTransport, WorkspaceFs,
+};

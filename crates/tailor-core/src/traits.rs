@@ -29,6 +29,29 @@ pub trait HttpTransport {
     fn start_stream(&mut self, req: &ProviderRequest) -> Result<Box<dyn HttpStream>, String>;
 }
 
+/// Filesystem access scope controlling whether the agent is restricted to the
+/// granted workspace or permitted to access the wider host filesystem.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessScope {
+    WorkspaceOnly,
+    FullSystem,
+}
+
+impl Default for AccessScope {
+    fn default() -> Self {
+        Self::WorkspaceOnly
+    }
+}
+
+impl AccessScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WorkspaceOnly => "Workspace Only",
+            Self::FullSystem => "Full System",
+        }
+    }
+}
+
 /// Extended workspace filesystem trait adding search and artifact helpers with
 /// default fallbacks so existing [`Workspace`] implementations remain compatible.
 pub trait WorkspaceFs: Workspace {
@@ -46,6 +69,20 @@ pub trait WorkspaceFs: Workspace {
 
     fn write_artifact(&mut self, name: &str, content: &str) -> Result<(), String> {
         self.write_file(name, content)
+    }
+
+    fn delete_file(&mut self, _path: &str) -> Result<(), String> {
+        Err(String::from("delete_file not supported"))
+    }
+
+    fn move_file(&mut self, _from: &str, _to: &str) -> Result<(), String> {
+        Err(String::from("move_file not supported"))
+    }
+
+    fn set_access_scope(&mut self, _scope: AccessScope) {}
+
+    fn access_scope(&self) -> AccessScope {
+        AccessScope::WorkspaceOnly
     }
 }
 
@@ -120,6 +157,14 @@ mod tests {
         let mut ws = DummyWs(BTreeMap::new());
         assert!(ws.find_by_name(".", "*.rs").is_err());
         assert!(ws.grep_search(".", "fn").is_err());
+        assert!(ws.delete_file("a.rs").is_err());
+        assert!(ws.move_file("a.rs", "b.rs").is_err());
+        assert_eq!(ws.access_scope(), AccessScope::WorkspaceOnly);
+        ws.set_access_scope(AccessScope::FullSystem);
+        assert_eq!(ws.access_scope(), AccessScope::WorkspaceOnly);
+        assert_eq!(AccessScope::default(), AccessScope::WorkspaceOnly);
+        assert_eq!(AccessScope::WorkspaceOnly.label(), "Workspace Only");
+        assert_eq!(AccessScope::FullSystem.label(), "Full System");
         ws.write_artifact("plan.md", "# Plan").unwrap();
         assert_eq!(ws.read_artifact("plan.md").unwrap(), "# Plan");
 

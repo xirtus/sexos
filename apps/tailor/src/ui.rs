@@ -18,7 +18,7 @@ use sex_font::Font;
 use sex_theme::candy_ui::{
     draw_candy_button, fill_rounded_rect, mix_rgb, ButtonState, ButtonStyle, CandyPalette,
 };
-use tailor_core::{AgentMode, ApprovalPolicy, Provider, StepRecord, StepStatus, TaskBoundary};
+use tailor_core::{AccessScope, AgentMode, ApprovalPolicy, Provider, Snapshot, TaskBoundary};
 
 // Antigravity Obsidian + Candy Lavender palette constants (0x00RRGGBB)
 const BG_CANVAS: u32 = 0x000B_0D14;
@@ -51,11 +51,20 @@ pub const QUICK_PROMPTS: [&str; 3] = [
     "Review recent changes",
 ];
 
+pub const SPACES: [(&str, &str); 5] = [
+    ("@/", "@/"),
+    ("/data", "/data"),
+    ("/bin", "/bin"),
+    ("/media/Ventoy", "Ventoy"),
+    ("/projects", "projects"),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftTab {
+    Agents,
     Files,
+    Snaps,
     Artifacts,
-    Steps,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +90,17 @@ pub struct ProviderStatusInfo {
     pub auth_kind: &'static str,
 }
 
+#[derive(Clone, Debug)]
+pub struct AgentSessionInfo {
+    pub title: String,
+    pub workspace_dir: String,
+    pub step_count: usize,
+    pub snapshot_count: usize,
+    pub has_pending_prompt: bool,
+    pub active: bool,
+    pub streaming: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitAction {
     Provider(Provider),
@@ -88,16 +108,23 @@ pub enum HitAction {
     SelectModel(usize),
     RefreshModels,
     CyclePolicy,
+    ToggleAccessScope,
     ToggleSettings,
     ReloadCreds,
     ToggleProxy,
     CloseOverlays,
     Clear,
     LeftTab(LeftTab),
+    NewSession,
+    SelectSession(usize),
+    RunSession(usize),
+    SelectSpace(usize),
     RefreshFiles,
     OpenFile(usize),
+    CreateCheckpoint,
+    ViewSnapshotDiff(u64),
+    RollbackSnapshot(u64),
     OpenArtifact(usize),
-    SelectStep(usize),
     CenterTab(CenterTab),
     QuickPrompt(usize),
     FocusInput,
@@ -127,9 +154,11 @@ pub struct RenderState<'a> {
     pub model_id: &'a str,
     pub model_display: &'a str,
     pub approval_policy: ApprovalPolicy,
+    pub access_scope: AccessScope,
     pub providers: &'a [ProviderStatusInfo],
     pub models: &'a [ModelInfo],
     pub proxy_base: Option<&'a str>,
+    pub acp_bridge_url: Option<&'a str>,
     pub streaming: bool,
     pub task_boundary: Option<&'a TaskBoundary>,
     pub pending_approval: Option<&'a str>,
@@ -142,15 +171,16 @@ pub struct RenderState<'a> {
     pub workspace_root: &'a str,
     pub left_tab: LeftTab,
     pub center_tab: CenterTab,
+    pub sessions: &'a [AgentSessionInfo],
     pub workspace_files: &'a [String],
     pub open_file_name: Option<&'a str>,
     pub open_file_content: &'a str,
+    pub snapshots: &'a [Snapshot],
     pub artifact_names: &'a [String],
     pub active_artifact_name: Option<&'a str>,
     pub active_artifact_content: &'a str,
     pub active_diff_title: &'a str,
     pub active_diff_content: &'a str,
-    pub steps: &'a [StepRecord],
     pub center_scroll: usize,
     pub model_picker_open: bool,
     pub settings_open: bool,
@@ -367,6 +397,9 @@ impl TailorUi {
     }
 
     fn is_provider_connected(&self, state: &RenderState<'_>, prov: Provider) -> bool {
+        if prov == Provider::Antigravity {
+            return state.acp_bridge_url.is_some() || state.proxy_base.is_some();
+        }
         if state.proxy_base.is_some() {
             return true;
         }
@@ -400,7 +433,7 @@ impl TailorUi {
         let body_h = (h as i32 - body_y).max(80);
 
         if w >= 720 {
-            let left_w = if w >= 960 { 192 } else { 172 };
+            let left_w = if w >= 960 { 196 } else { 176 };
             let right_w = if w >= 1240 {
                 440
             } else if w >= 1024 {
@@ -465,7 +498,7 @@ impl TailorUi {
         rx -= 6;
 
         // Settings / Accounts button with connection dot
-        let settings_w = 82;
+        let settings_w = 78;
         rx -= settings_w;
         let active_conn = self.is_provider_connected(state, state.provider);
         let settings_bg = if state.settings_open { BG_ACTIVE_ROW } else { BG_ELEVATED };
@@ -476,12 +509,12 @@ impl TailorUi {
             buf,
             bw,
             bh,
-            rx + 11,
+            rx + 10,
             22,
             3,
             if active_conn { COL_EMERALD } else { COL_AMBER },
         );
-        self.draw_text(buf, bw, bh, rx + 20, 15, settings_w - 22, 11, "Settings", TEXT_PRIMARY);
+        self.draw_text(buf, bw, bh, rx + 18, 15, settings_w - 20, 11, "Settings", TEXT_PRIMARY);
         self.hits.push(HitBox {
             x: rx,
             y: 9,
@@ -491,18 +524,38 @@ impl TailorUi {
         });
         rx -= 6;
 
+        // Access Scope pill (Workspace <-> Full Sys)
+        let (scope_lbl, scope_col, scope_bg) = match state.access_scope {
+            AccessScope::WorkspaceOnly => ("Workspace", COL_SKY, BG_ELEVATED),
+            AccessScope::FullSystem => ("Full Sys", COL_ROSE, 0x002C_141C),
+        };
+        let scope_w = 78;
+        rx -= scope_w;
+        fill_rounded_rect(buf, bw, bh, rx, 9, scope_w, 26, 6, scope_bg);
+        stroke_rect(buf, bw, bh, rx, 9, scope_w, 26, mix_rgb(BORDER_SUBTLE, scope_col, 130));
+        fill_circle(buf, bw, bh, rx + 10, 22, 3, scope_col);
+        self.draw_text(buf, bw, bh, rx + 18, 15, scope_w - 20, 11, scope_lbl, scope_col);
+        self.hits.push(HitBox {
+            x: rx,
+            y: 9,
+            w: scope_w,
+            h: 26,
+            action: HitAction::ToggleAccessScope,
+        });
+        rx -= 6;
+
         // Approval Policy pill (Ask / Auto / Turbo)
         let (pol_lbl, pol_col) = match state.approval_policy {
             ApprovalPolicy::AlwaysAsk => ("Ask", COL_AMBER),
             ApprovalPolicy::AutoSafe => ("Auto", COL_SKY),
             ApprovalPolicy::Turbo => ("Turbo", COL_PURPLE),
         };
-        let pol_w = 54;
+        let pol_w = 52;
         rx -= pol_w;
         fill_rounded_rect(buf, bw, bh, rx, 9, pol_w, 26, 6, BG_ELEVATED);
         stroke_rect(buf, bw, bh, rx, 9, pol_w, 26, mix_rgb(BORDER_SUBTLE, pol_col, 110));
-        fill_circle(buf, bw, bh, rx + 10, 22, 3, pol_col);
-        self.draw_text(buf, bw, bh, rx + 18, 15, pol_w - 20, 11, pol_lbl, pol_col);
+        fill_circle(buf, bw, bh, rx + 9, 22, 3, pol_col);
+        self.draw_text(buf, bw, bh, rx + 17, 15, pol_w - 19, 11, pol_lbl, pol_col);
         self.hits.push(HitBox {
             x: rx,
             y: 9,
@@ -513,13 +566,13 @@ impl TailorUi {
         rx -= 6;
 
         // Model Selector Pill
-        let model_pill_w = if bw >= 920 { 156 } else if bw >= 720 { 126 } else { 112 };
+        let model_pill_w = if bw >= 1024 { 146 } else if bw >= 720 { 116 } else { 104 };
         rx -= model_pill_w;
         let mp_bg = if state.model_picker_open { BG_ACTIVE_ROW } else { BG_ELEVATED };
         let mp_border = if state.model_picker_open { LAVENDER } else { LAVENDER_DIM };
         fill_rounded_rect(buf, bw, bh, rx, 9, model_pill_w, 26, 6, mp_bg);
         stroke_rect(buf, bw, bh, rx, 9, model_pill_w, 26, mp_border);
-        let max_mchars = ((model_pill_w - 26) / 6).max(6) as usize;
+        let max_mchars = ((model_pill_w - 24) / 6).max(6) as usize;
         let m_label = format!("{} v", truncate_str(state.model_display, max_mchars));
         self.draw_text(buf, bw, bh, rx + 8, 15, model_pill_w - 12, 11, &m_label, TEXT_PRIMARY);
         self.hits.push(HitBox {
@@ -590,30 +643,31 @@ impl TailorUi {
         fill_rect(buf, bw, bh, x, y, w, h, BG_PANE);
         fill_rect(buf, bw, bh, x + w - 1, y, 1, h, BORDER_SUBTLE);
 
-        // Segmented tabs: Files | Artifacts | Steps
+        // Segmented tabs: Agents | Files | Snaps | Art.
         let tab_h = 30;
         fill_rect(buf, bw, bh, x, y + tab_h - 1, w - 1, 1, BORDER_SUBTLE);
         let tabs = [
+            (LeftTab::Agents, "Agents"),
             (LeftTab::Files, "Files"),
+            (LeftTab::Snaps, "Snaps"),
             (LeftTab::Artifacts, "Art."),
-            (LeftTab::Steps, "Steps"),
         ];
-        let tw = (w - 12) / 3;
+        let tw = (w - 8) / 4;
         for (i, (tab, lbl)) in tabs.iter().enumerate() {
-            let tx = x + 6 + (i as i32) * tw;
+            let tx = x + 4 + (i as i32) * tw;
             let active = state.left_tab == *tab;
             if active {
                 fill_rounded_rect(buf, bw, bh, tx, y + 4, tw - 2, 22, 5, BG_ACTIVE_ROW);
-                fill_rect(buf, bw, bh, tx + 4, y + tab_h - 2, tw - 10, 2, LAVENDER);
+                fill_rect(buf, bw, bh, tx + 3, y + tab_h - 2, tw - 8, 2, LAVENDER);
             }
             self.draw_text(
                 buf,
                 bw,
                 bh,
-                tx + 8,
-                y + 8,
-                tw - 10,
-                11,
+                tx + 4,
+                y + 9,
+                tw - 6,
+                10,
                 lbl,
                 if active { TEXT_PRIMARY } else { TEXT_MUTED },
             );
@@ -630,6 +684,94 @@ impl TailorUi {
         let max_y = y + h - 8;
 
         match state.left_tab {
+            LeftTab::Agents => {
+                self.draw_text(buf, bw, bh, x + 10, content_y + 2, w - 68, 11, "AGENTS", TEXT_DIM);
+                let nbx = x + w - 54;
+                fill_rounded_rect(buf, bw, bh, nbx, content_y - 1, 46, 18, 4, BG_ELEVATED);
+                stroke_rect(buf, bw, bh, nbx, content_y - 1, 46, 18, LAVENDER_DIM);
+                self.draw_text(buf, bw, bh, nbx + 6, content_y + 2, 38, 10, "+ New", LAVENDER);
+                self.hits.push(HitBox {
+                    x: nbx,
+                    y: content_y - 1,
+                    w: 46,
+                    h: 18,
+                    action: HitAction::NewSession,
+                });
+
+                let mut ry = content_y + 24;
+                for (idx, sess) in state.sessions.iter().enumerate() {
+                    let card_h = 40;
+                    if ry + card_h > max_y {
+                        break;
+                    }
+                    let bg = if sess.active { BG_ACTIVE_ROW } else { BG_CARD };
+                    let border = if sess.active { LAVENDER_DIM } else { BORDER_SUBTLE };
+                    fill_rounded_rect(buf, bw, bh, x + 6, ry, w - 13, card_h, 6, bg);
+                    stroke_rect(buf, bw, bh, x + 6, ry, w - 13, card_h, border);
+
+                    let dot_col = if sess.streaming {
+                        COL_SKY
+                    } else if sess.has_pending_prompt {
+                        COL_AMBER
+                    } else if sess.active {
+                        LAVENDER
+                    } else {
+                        TEXT_DIM
+                    };
+                    fill_circle(buf, bw, bh, x + 15, ry + 13, 3, dot_col);
+
+                    let run_reserve = if sess.has_pending_prompt { 38 } else { 0 };
+                    let max_tchars = ((w - 30 - run_reserve) / 6).max(6) as usize;
+                    let title_disp = truncate_str(&sess.title, max_tchars);
+                    self.draw_text(
+                        buf,
+                        bw,
+                        bh,
+                        x + 23,
+                        ry + 6,
+                        w - 30 - run_reserve,
+                        11,
+                        &title_disp,
+                        if sess.active { TEXT_PRIMARY } else { TEXT_MUTED },
+                    );
+
+                    let ws_short = if sess.workspace_dir.is_empty() {
+                        "."
+                    } else {
+                        sess.workspace_dir.as_str()
+                    };
+                    let sub = format!(
+                        "{} · {}st {}sn",
+                        truncate_str(ws_short, 10),
+                        sess.step_count,
+                        sess.snapshot_count
+                    );
+                    self.draw_text(buf, bw, bh, x + 14, ry + 22, w - 24, 10, &sub, TEXT_DIM);
+
+                    self.hits.push(HitBox {
+                        x: x + 6,
+                        y: ry,
+                        w: w - 13,
+                        h: card_h,
+                        action: HitAction::SelectSession(idx),
+                    });
+
+                    if sess.has_pending_prompt {
+                        let rbx = x + w - 43;
+                        fill_rounded_rect(buf, bw, bh, rbx, ry + 5, 32, 16, 4, 0x001B_5E3B);
+                        stroke_rect(buf, bw, bh, rbx, ry + 5, 32, 16, COL_EMERALD);
+                        self.draw_text(buf, bw, bh, rbx + 5, ry + 7, 26, 10, "Run", TEXT_PRIMARY);
+                        self.hits.push(HitBox {
+                            x: rbx,
+                            y: ry + 5,
+                            w: 32,
+                            h: 16,
+                            action: HitAction::RunSession(idx),
+                        });
+                    }
+                    ry += card_h + 5;
+                }
+            }
             LeftTab::Files => {
                 // Header + Refresh button
                 let ws_lbl = if state.workspace_root.is_empty() {
@@ -659,7 +801,44 @@ impl TailorUi {
                     action: HitAction::RefreshFiles,
                 });
 
-                let mut ry = content_y + 24;
+                // Spaces Quick-Switcher chips (@/, /data, /bin, /media/Ventoy, /projects)
+                let mut sx = x + 6;
+                let mut sy = content_y + 22;
+                for (idx, (path, label)) in SPACES.iter().enumerate() {
+                    let chip_w = (label.len() as i32 * 6 + 12).max(28);
+                    if sx + chip_w > x + w - 6 && sx > x + 6 {
+                        sx = x + 6;
+                        sy += 21;
+                    }
+                    let is_cur = state.workspace_root == *path;
+                    let cbg = if is_cur { BG_ACTIVE_ROW } else { BG_ELEVATED };
+                    let cbd = if is_cur { LAVENDER } else { BORDER_SUBTLE };
+                    fill_rounded_rect(buf, bw, bh, sx, sy, chip_w, 18, 4, cbg);
+                    stroke_rect(buf, bw, bh, sx, sy, chip_w, 18, cbd);
+                    self.draw_text(
+                        buf,
+                        bw,
+                        bh,
+                        sx + 5,
+                        sy + 3,
+                        chip_w - 6,
+                        10,
+                        label,
+                        if is_cur { LAVENDER } else { TEXT_MUTED },
+                    );
+                    self.hits.push(HitBox {
+                        x: sx,
+                        y: sy,
+                        w: chip_w,
+                        h: 18,
+                        action: HitAction::SelectSpace(idx),
+                    });
+                    sx += chip_w + 4;
+                }
+
+                let mut ry = sy + 24;
+                fill_rect(buf, bw, bh, x + 6, ry - 4, w - 13, 1, BORDER_SUBTLE);
+
                 if state.workspace_files.is_empty() {
                     self.draw_text(
                         buf,
@@ -680,7 +859,7 @@ impl TailorUi {
                         ry + 18,
                         w - 20,
                         10,
-                        "Click Sync to refresh",
+                        "Click a Space or Sync",
                         TEXT_DIM,
                     );
                 } else {
@@ -713,6 +892,91 @@ impl TailorUi {
                             action: HitAction::OpenFile(idx),
                         });
                         ry += 23;
+                    }
+                }
+            }
+            LeftTab::Snaps => {
+                self.draw_text(buf, bw, bh, x + 10, content_y + 2, w - 68, 11, "SNAPSHOTS", TEXT_DIM);
+                let sbx = x + w - 54;
+                fill_rounded_rect(buf, bw, bh, sbx, content_y - 1, 46, 18, 4, BG_ELEVATED);
+                stroke_rect(buf, bw, bh, sbx, content_y - 1, 46, 18, LAVENDER_DIM);
+                self.draw_text(buf, bw, bh, sbx + 5, content_y + 2, 40, 10, "+ Snap", LAVENDER);
+                self.hits.push(HitBox {
+                    x: sbx,
+                    y: content_y - 1,
+                    w: 46,
+                    h: 18,
+                    action: HitAction::CreateCheckpoint,
+                });
+
+                let mut ry = content_y + 24;
+                if state.snapshots.is_empty() {
+                    self.draw_text(
+                        buf,
+                        bw,
+                        bh,
+                        x + 10,
+                        ry,
+                        w - 20,
+                        11,
+                        "No snapshots yet.",
+                        TEXT_DIM,
+                    );
+                    self.draw_text(
+                        buf,
+                        bw,
+                        bh,
+                        x + 10,
+                        ry + 18,
+                        w - 20,
+                        10,
+                        "Auto-saved before edits",
+                        TEXT_DIM,
+                    );
+                } else {
+                    for snap in state.snapshots.iter().rev() {
+                        let card_h = 46;
+                        if ry + card_h > max_y {
+                            break;
+                        }
+                        fill_rounded_rect(buf, bw, bh, x + 6, ry, w - 13, card_h, 6, BG_CARD);
+                        stroke_rect(buf, bw, bh, x + 6, ry, w - 13, card_h, BORDER_SUBTLE);
+
+                        let hdr = format!("#{} {}", snap.id, snap.label);
+                        let hdr_disp = truncate_str(&hdr, ((w - 22) / 6).max(8) as usize);
+                        self.draw_text(buf, bw, bh, x + 12, ry + 5, w - 22, 11, &hdr_disp, TEXT_PRIMARY);
+
+                        let cnt = snap.entries.len();
+                        let cnt_txt = format!("{} {}", cnt, if cnt == 1 { "file" } else { "files" });
+                        self.draw_text(buf, bw, bh, x + 12, ry + 26, 62, 10, &cnt_txt, TEXT_DIM);
+
+                        // Diff button
+                        let dx = x + w - 92;
+                        fill_rounded_rect(buf, bw, bh, dx, ry + 23, 36, 18, 4, BG_ELEVATED);
+                        stroke_rect(buf, bw, bh, dx, ry + 23, 36, 18, BORDER_SUBTLE);
+                        self.draw_text(buf, bw, bh, dx + 7, ry + 26, 28, 10, "Diff", COL_SKY);
+                        self.hits.push(HitBox {
+                            x: dx,
+                            y: ry + 23,
+                            w: 36,
+                            h: 18,
+                            action: HitAction::ViewSnapshotDiff(snap.id),
+                        });
+
+                        // Undo button
+                        let ux = dx + 40;
+                        fill_rounded_rect(buf, bw, bh, ux, ry + 23, 40, 18, 4, 0x0026_1E10);
+                        stroke_rect(buf, bw, bh, ux, ry + 23, 40, 18, COL_AMBER);
+                        self.draw_text(buf, bw, bh, ux + 6, ry + 26, 32, 10, "Undo", COL_AMBER);
+                        self.hits.push(HitBox {
+                            x: ux,
+                            y: ry + 23,
+                            w: 40,
+                            h: 18,
+                            action: HitAction::RollbackSnapshot(snap.id),
+                        });
+
+                        ry += card_h + 5;
                     }
                 }
             }
@@ -760,63 +1024,6 @@ impl TailorUi {
                         action: HitAction::OpenArtifact(idx),
                     });
                     ry += 26;
-                }
-            }
-            LeftTab::Steps => {
-                self.draw_text(
-                    buf,
-                    bw,
-                    bh,
-                    x + 10,
-                    content_y + 2,
-                    w - 20,
-                    11,
-                    "AGENT STEPS",
-                    TEXT_DIM,
-                );
-                let mut ry = content_y + 22;
-                if state.steps.is_empty() {
-                    self.draw_text(
-                        buf,
-                        bw,
-                        bh,
-                        x + 10,
-                        ry,
-                        w - 20,
-                        11,
-                        "No tool steps yet.",
-                        TEXT_DIM,
-                    );
-                } else {
-                    for (idx, step) in state.steps.iter().rev().enumerate() {
-                        if ry + 28 > max_y {
-                            break;
-                        }
-                        let orig_idx = state.steps.len() - 1 - idx;
-                        let dot_col = match step.status {
-                            StepStatus::Done => COL_EMERALD,
-                            StepStatus::Running | StepStatus::Pending => COL_SKY,
-                            StepStatus::Waiting => COL_AMBER,
-                            StepStatus::Error | StepStatus::Denied => COL_ROSE,
-                        };
-                        fill_rounded_rect(buf, bw, bh, x + 6, ry, w - 13, 26, 5, BG_CARD);
-                        fill_circle(buf, bw, bh, x + 15, ry + 13, 3, dot_col);
-                        let label = if !step.title.is_empty() {
-                            step.title.as_str()
-                        } else {
-                            step.tool_name.as_str()
-                        };
-                        let disp = truncate_str(label, ((w - 30) / 6).max(8) as usize);
-                        self.draw_text(buf, bw, bh, x + 24, ry + 6, w - 30, 11, &disp, TEXT_PRIMARY);
-                        self.hits.push(HitBox {
-                            x: x + 6,
-                            y: ry,
-                            w: w - 13,
-                            h: 26,
-                            action: HitAction::SelectStep(orig_idx),
-                        });
-                        ry += 29;
-                    }
                 }
             }
         }
@@ -993,12 +1200,13 @@ impl TailorUi {
         cy += 24;
 
         let ws_line = format!(
-            "Workspace: {}   |   Model: {}",
+            "Space: {}  |  Scope: {}  |  Model: {}",
             if state.workspace_root.is_empty() {
                 "."
             } else {
                 state.workspace_root
             },
+            state.access_scope.label(),
             state.model_display
         );
         self.draw_text(buf, bw, bh, x + 16, cy, w - 32, 11, &ws_line, TEXT_MUTED);
@@ -1631,8 +1839,8 @@ impl TailorUi {
             action: HitAction::CloseOverlays,
         });
 
-        let mw = (bw as i32 - 32).min(500).max(300);
-        let mh = (bh as i32 - 48).min(380).max(280);
+        let mw = (bw as i32 - 32).min(520).max(300);
+        let mh = (bh as i32 - 36).min(434).max(310);
         let mx = (bw as i32 - mw) / 2;
         let my = (bh as i32 - mh) / 2;
 
@@ -1661,9 +1869,9 @@ impl TailorUi {
         fill_rect(buf, bw, bh, mx + 1, my + 40, mw - 2, 1, BORDER_SUBTLE);
 
         // Providers list
-        let mut ry = my + 50;
+        let mut ry = my + 48;
         for info in state.providers {
-            if ry + 34 > my + mh - 108 {
+            if ry + 34 > my + mh - 144 {
                 break;
             }
             let is_active = info.provider == state.provider;
@@ -1688,7 +1896,7 @@ impl TailorUi {
                 32,
                 if is_active { LAVENDER_DIM } else { BORDER_SUBTLE },
             );
-            let conn = info.connected || state.proxy_base.is_some();
+            let conn = self.is_provider_connected(state, info.provider);
             fill_circle(
                 buf,
                 bw,
@@ -1699,11 +1907,11 @@ impl TailorUi {
                 if conn { COL_EMERALD } else { TEXT_DIM },
             );
             let title = format!("{} ({})", info.label, info.subtitle);
-            self.draw_text(buf, bw, bh, mx + 38, ry + 4, mw - 210, 12, &title, TEXT_PRIMARY);
+            self.draw_text(buf, bw, bh, mx + 38, ry + 4, mw - 134, 12, &title, TEXT_PRIMARY);
             let status_txt = if conn {
                 format!("CONNECTED · {}", info.auth_kind)
             } else {
-                String::from("NOT CONNECTED")
+                format!("NOT CONNECTED · {}", info.auth_kind)
             };
             self.draw_text(
                 buf,
@@ -1711,7 +1919,7 @@ impl TailorUi {
                 bh,
                 mx + 38,
                 ry + 18,
-                mw - 210,
+                mw - 134,
                 10,
                 &status_txt,
                 if conn { COL_EMERALD } else { TEXT_DIM },
@@ -1747,18 +1955,19 @@ impl TailorUi {
                 h: 22,
                 action: HitAction::Provider(info.provider),
             });
-            ry += 36;
+            ry += 35;
         }
 
-        // Proxy Mode Row
-        ry += 6;
-        fill_rounded_rect(buf, bw, bh, mx + 14, ry, mw - 28, 34, 6, BG_CARD);
-        stroke_rect(buf, bw, bh, mx + 14, ry, mw - 28, 34, BORDER_SUBTLE);
-        let proxy_txt = match state.proxy_base {
-            Some(url) => format!("Proxy (CLIProxyAPI-Rust): {}", url),
-            None => String::from("Proxy (CLIProxyAPI-Rust): Off (127.0.0.1:8317)"),
+        // ACP Bridge / Proxy Mode Row
+        ry += 4;
+        fill_rounded_rect(buf, bw, bh, mx + 14, ry, mw - 28, 32, 6, BG_CARD);
+        stroke_rect(buf, bw, bh, mx + 14, ry, mw - 28, 32, BORDER_SUBTLE);
+        let bridge_txt = match (state.acp_bridge_url, state.proxy_base) {
+            (Some(acp), _) => format!("ACP Bridge (acp.conf): {}", acp),
+            (None, Some(url)) => format!("Proxy / ACP Bridge: {}", url),
+            (None, None) => String::from("Proxy / ACP Bridge: Off (set /proxy or acp.conf)"),
         };
-        self.draw_text(buf, bw, bh, mx + 24, ry + 11, mw - 120, 11, &proxy_txt, TEXT_PRIMARY);
+        self.draw_text(buf, bw, bh, mx + 24, ry + 10, mw - 120, 11, &bridge_txt, TEXT_PRIMARY);
         let px = mx + mw - 84;
         let proxy_on = state.proxy_base.is_some();
         fill_rounded_rect(
@@ -1766,7 +1975,7 @@ impl TailorUi {
             bw,
             bh,
             px,
-            ry + 6,
+            ry + 5,
             62,
             22,
             5,
@@ -1777,7 +1986,7 @@ impl TailorUi {
             bw,
             bh,
             px + 14,
-            ry + 11,
+            ry + 10,
             50,
             11,
             if proxy_on { "On" } else { "Enable" },
@@ -1785,14 +1994,85 @@ impl TailorUi {
         );
         self.hits.push(HitBox {
             x: px,
-            y: ry + 6,
+            y: ry + 5,
             w: 62,
             h: 22,
             action: HitAction::ToggleProxy,
         });
 
+        // Access Scope Grant Toggle Row
+        ry += 36;
+        let full_sys = state.access_scope == AccessScope::FullSystem;
+        fill_rounded_rect(
+            buf,
+            bw,
+            bh,
+            mx + 14,
+            ry,
+            mw - 28,
+            32,
+            6,
+            if full_sys { 0x002C_141C } else { BG_CARD },
+        );
+        stroke_rect(
+            buf,
+            bw,
+            bh,
+            mx + 14,
+            ry,
+            mw - 28,
+            32,
+            if full_sys { COL_ROSE } else { BORDER_SUBTLE },
+        );
+        let scope_txt = if full_sys {
+            "Access Scope: Full System (@/, /data, /bin, /projects)"
+        } else {
+            "Access Scope: Workspace Only (confined to active space)"
+        };
+        self.draw_text(
+            buf,
+            bw,
+            bh,
+            mx + 24,
+            ry + 10,
+            mw - 124,
+            11,
+            scope_txt,
+            if full_sys { COL_ROSE } else { TEXT_PRIMARY },
+        );
+        let sx = mx + mw - 88;
+        fill_rounded_rect(
+            buf,
+            bw,
+            bh,
+            sx,
+            ry + 5,
+            66,
+            22,
+            5,
+            if full_sys { 0x004C_1D24 } else { BG_ELEVATED },
+        );
+        self.draw_text(
+            buf,
+            bw,
+            bh,
+            sx + 8,
+            ry + 10,
+            54,
+            11,
+            if full_sys { "Restrict" } else { "Full Sys" },
+            if full_sys { COL_ROSE } else { COL_SKY },
+        );
+        self.hits.push(HitBox {
+            x: sx,
+            y: ry + 5,
+            w: 66,
+            h: 22,
+            action: HitAction::ToggleAccessScope,
+        });
+
         // Reload /data/tailor button + CLI hint
-        let act_y = ry + 42;
+        let act_y = ry + 38;
         fill_rounded_rect(buf, bw, bh, mx + 14, act_y, 168, 28, 6, BG_ACTIVE_ROW);
         stroke_rect(buf, bw, bh, mx + 14, act_y, 168, 28, LAVENDER);
         self.draw_text(
@@ -1819,10 +2099,10 @@ impl TailorUi {
             bw,
             bh,
             mx + 14,
-            act_y + 35,
+            act_y + 34,
             mw - 28,
             10,
-            "CLI: /key <provider> <token>  |  /proxy <url>  |  /model <id>",
+            "CLI: /key <prov> <tok> | /acp <url> | /proxy <url> | /scope full",
             TEXT_DIM,
         );
     }
