@@ -20,6 +20,7 @@
 #![no_main]
 
 extern crate alloc;
+mod brootlite;
 mod captions;
 mod encode_proof;
 mod kodi;
