@@ -724,6 +724,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "brootlite"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-fetch",
+ "sex-font",
+ "sex-image",
+ "sex-kodi",
+ "sex-media",
+ "sex-pdx",
+ "sex-theme",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
