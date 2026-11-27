@@ -247,7 +247,7 @@ impl TextPainter {
         text: &str,
         color: u32,
     ) {
-        let Some(font) = self.font else {
+        let Some(font) = self.font.as_ref() else {
             return;
         };
         let px_size = px_h.max(10) as usize;
