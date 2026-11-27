@@ -1,0 +1,20 @@
+[package]
+name = "moan-studio-sexos"
+version = "0.4.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Moan Studio — Logic Noir egui DAW for SexOS with Muse AI, Ariel Vocal Synth, EuropaRack Modular, and Bell audio"
+
+[[bin]]
+name = "moan-studio"
+path = "src/main.rs"
+
+[dependencies]
+sex-egui = { path = "../../crates/sex-egui" }
+egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
+moan-core = { path = "../../crates/moan-core" }
+moan-gen = { path = "../../crates/moan-gen" }
+moan-modular = { path = "../../crates/moan-modular" }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-app = { path = "../../crates/sex-app" }

@@ -37,7 +37,9 @@ pub const MIN_STORE_SECTORS: u64 = 1024 * MIB;
 pub const MIN_REPLACE_SECTORS: u64 = 2 * SLOT_SECTORS + MIN_STORE_SECTORS;
 /// The menu Limine reads, at a fixed size so updates can rewrite it in place.
 pub const MENU_PATH: &str = "/EFI/BOOT/LIMINE.CFG";
-pub const MENU_BYTES: usize = 16 * 1024;
+pub const MENU_BYTES: usize = 64 * 1024;
+/// Previous fixed menu size (16 KiB), accepted when updating already-installed disks.
+pub const LEGACY_MENU_BYTES: usize = 16 * 1024;
 pub const LOADER_PATH: &str = "/EFI/SEXOS/BOOTX64.EFI";
 pub const FALLBACK_PATH: &str = "/EFI/BOOT/BOOTX64.EFI";
 /// The first line of every menu SexOS writes; a menu without it belongs to someone else.
@@ -590,10 +592,15 @@ pub fn compose(image_cfg: &str, slot: Guid, extra: &[String], state: &crate::upd
 }
 
 /// Fills a menu out to its fixed size with one comment line.
-pub(crate) fn pad(mut bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
-    if bytes.len() + 2 > MENU_BYTES { return Err(Error::NoSpace); }
+pub(crate) fn pad(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
+    pad_to(bytes, MENU_BYTES)
+}
+
+/// Fills a menu out to `target` bytes with one comment line.
+pub(crate) fn pad_to(mut bytes: Vec<u8>, target: usize) -> Result<Vec<u8>, Error> {
+    if bytes.len() + 2 > target { return Err(Error::NoSpace); }
     bytes.push(b'#');
-    bytes.resize(MENU_BYTES - 1, b' ');
+    bytes.resize(target - 1, b' ');
     bytes.push(b'\n');
     Ok(bytes)
 }

@@ -5178,6 +5178,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "moan-studio-sexos"
+version = "0.4.0"
+dependencies = [
+ "egui",
+ "moan-core",
+ "moan-gen",
+ "moan-modular",
+ "sex-app",
+ "sex-egui",
+]
+
+[[package]]
 name = "moangen"
 version = "0.1.0"
 dependencies = [

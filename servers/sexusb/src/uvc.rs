@@ -42,6 +42,8 @@ pub(super) struct Uvc {
     ring: Ring,
     packets: u64,
     errors: u32,
+    logged_hdr: bool,
+    logged_payload: bool,
 }
 
 fn notify(up: bool) {
@@ -109,12 +111,14 @@ impl Usb {
             ring: Ring::empty(),
             packets: 0,
             errors: 0,
+            logged_hdr: false,
+            logged_payload: false,
         });
 
         let route = self.uvc_region != 0;
         log!(
-            "[sexusb.uvc.published] slot={} vendor={:#06x} product={:#06x} route={} formats={} max_payload={}",
-            slot, vendor, product, route as u8, info.format_count, info.max_payload
+            "[sexusb.uvc.published] slot={} vendor={:#06x} product={:#06x} bcd={:#06x} route={} formats={} max_payload={}",
+            slot, vendor, product, cam.bcd_uvc, route as u8, info.format_count, info.max_payload
         );
         if route {
             unsafe { Shared::at(self.uvc_region as *mut u8) }.set_camera(Some(&info));
@@ -167,25 +171,62 @@ impl Usb {
         self.select(self.dev[i].ctl);
         let slot = self.dev[i].slot;
         let buf = self.dev[i].mem.unwrap().buf;
-
-        // 1. VS_PROBE SET_CUR -> GET_CUR -> VS_COMMIT SET_CUR (26-byte UVC 1.0/1.1 probe/commit).
-        let probe = uvc_stream::build_probe_commit(cmd.format_index, cmd.frame_index, cmd.fps);
-        unsafe { core::ptr::copy_nonoverlapping(probe.as_ptr(), buf.1 as *mut u8, probe.len()); }
         let iface = u.cam.stream_iface as u16;
-        let _ = self.get(i, uvc_stream::BM_REQ_SET_IFACE, uvc_stream::REQ_SET_CUR, uvc_stream::VS_PROBE_CONTROL, iface, buf.0, 26);
+
+        // 0. Reset streaming interface to alt 0 before probing (required by many UVC 1.1/1.5 cameras).
+        let _ = self.set(i, 0x01, 0x0B, 0, iface);
+
+        // 1. VS_PROBE SET_CUR -> GET_CUR -> VS_COMMIT SET_CUR using UVC version block size:
+        //    26 bytes (UVC 1.0), 34 bytes (UVC 1.1, e.g. 0c45:6d18), or 48 bytes (UVC 1.5).
+        //    Sending 26 bytes to a UVC 1.1/1.5 camera stalls SET_CUR and leaves it emitting
+        //    12-byte header-only isochronous packets.
+        let probe = uvc_stream::build_probe_commit_48(cmd.format_index, cmd.frame_index, cmd.fps);
+        let pref = u.cam.probe_len();
+        let candidates = [pref, 34u16, 26u16, 48u16];
+        let mut plen = pref;
+        let mut set_ok = false;
+        for (idx, &cand) in candidates.iter().enumerate() {
+            if candidates[..idx].contains(&cand) {
+                continue;
+            }
+            unsafe { core::ptr::copy_nonoverlapping(probe.as_ptr(), buf.1 as *mut u8, cand as usize); }
+            if self.get(i, uvc_stream::BM_REQ_SET_IFACE, uvc_stream::REQ_SET_CUR, uvc_stream::VS_PROBE_CONTROL, iface, buf.0, cand).is_ok() {
+                plen = cand;
+                set_ok = true;
+                break;
+            }
+        }
+
         let mut need_payload = u.cam.max_payload(u.speed);
-        if let Ok(got) = self.get(i, uvc_stream::BM_REQ_GET_IFACE, uvc_stream::REQ_GET_CUR, uvc_stream::VS_PROBE_CONTROL, iface, buf.0, 26) {
-            let reply = unsafe { core::slice::from_raw_parts(buf.1 as *const u8, (got as usize).min(26)) };
-            if let Some((_, max_payload)) = uvc_stream::parse_probe_response(reply) {
-                if max_payload > 0 {
-                    need_payload = max_payload;
+        let mut max_frame = 0u32;
+        let mut got_len = 0u32;
+        let mut commit_ok = false;
+        if let Ok(got) = self.get(i, uvc_stream::BM_REQ_GET_IFACE, uvc_stream::REQ_GET_CUR, uvc_stream::VS_PROBE_CONTROL, iface, buf.0, plen) {
+            got_len = got;
+            let reply = unsafe { core::slice::from_raw_parts(buf.1 as *const u8, (got as usize).min(48)) };
+            if let Some((mf, mp)) = uvc_stream::parse_probe_response(reply) {
+                max_frame = mf;
+                if mp > 0 {
+                    need_payload = mp;
                 }
             }
-            let _ = self.get(i, uvc_stream::BM_REQ_SET_IFACE, uvc_stream::REQ_SET_CUR, uvc_stream::VS_COMMIT_CONTROL, iface, buf.0, 26);
+            // Copy the device's GET_CUR reply back unchanged to VS_COMMIT_CONTROL.
+            commit_ok = self.get(i, uvc_stream::BM_REQ_SET_IFACE, uvc_stream::REQ_SET_CUR, uvc_stream::VS_COMMIT_CONTROL, iface, buf.0, plen).is_ok();
         } else {
-            unsafe { core::ptr::copy_nonoverlapping(probe.as_ptr(), buf.1 as *mut u8, probe.len()); }
-            let _ = self.get(i, uvc_stream::BM_REQ_SET_IFACE, uvc_stream::REQ_SET_CUR, uvc_stream::VS_COMMIT_CONTROL, iface, buf.0, 26);
+            unsafe { core::ptr::copy_nonoverlapping(probe.as_ptr(), buf.1 as *mut u8, plen as usize); }
+            commit_ok = self.get(i, uvc_stream::BM_REQ_SET_IFACE, uvc_stream::REQ_SET_CUR, uvc_stream::VS_COMMIT_CONTROL, iface, buf.0, plen).is_ok();
         }
+        let committed_fmt = unsafe { core::ptr::read_volatile((buf.1 + 2) as *const u8) };
+        let committed_frame = unsafe { core::ptr::read_volatile((buf.1 + 3) as *const u8) };
+        let committed_iv = unsafe {
+            let p = (buf.1 + 4) as *const u8;
+            u32::from_le_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
+        };
+        log!(
+            "[sexusb.uvc.probe] slot={} bcd={:#06x} plen={} set_ok={} get_len={} commit_ok={} fmt={} frame={} iv={} max_frame={} max_payload={}",
+            slot, u.cam.bcd_uvc, plen, set_ok as u8, got_len, commit_ok as u8,
+            committed_fmt, committed_frame, committed_iv, max_frame, need_payload
+        );
 
         // 2. Pick the smallest alt-setting whose ESIT payload covers `need_payload`.
         let mut alt_table = [(0u8, 0u32); uvc_scan::MAX_ALTS];
@@ -244,6 +285,8 @@ impl Usb {
         u.ep_params = ep_params;
         u.td_len = td_len;
         u.running = true;
+        u.logged_hdr = false;
+        u.logged_payload = false;
         for _ in 0..UVC_IN_FLIGHT {
             self.uvc_queue(&mut u);
         }
@@ -310,8 +353,26 @@ impl Usb {
                         reasm.feed(raw, |flags, seq, chunk| shared.push_chunk(flags, seq, chunk));
                     }
                     u.packets += 1;
+                    let hdr_info = if raw.len() >= 2 { raw[1] } else { 0 };
+                    if !u.logged_hdr && raw.len() >= 2 {
+                        u.logged_hdr = true;
+                        log!(
+                            "[sexusb.uvc.hdr] slot={} packet={} len={} hlen={} info={:#04x}",
+                            slot, u.packets, raw.len(), raw[0], hdr_info
+                        );
+                    }
+                    if !u.logged_payload && raw.len() > 12 {
+                        u.logged_payload = true;
+                        log!(
+                            "[sexusb.uvc.payload] slot={} packet={} len={} hlen={} info={:#04x}",
+                            slot, u.packets, raw.len(), raw[0], hdr_info
+                        );
+                    }
                     if u.packets == 1 || (u.packets <= 1024 && u.packets.is_power_of_two()) {
-                        log!("[sexusb.uvc.packets] slot={} packets={} last_len={}", slot, u.packets, raw.len());
+                        log!(
+                            "[sexusb.uvc.packets] slot={} packets={} last_len={} info={:#04x}",
+                            slot, u.packets, raw.len(), hdr_info
+                        );
                     }
                 }
             }

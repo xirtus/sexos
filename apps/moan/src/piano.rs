@@ -23,18 +23,18 @@ pub fn render_width(pattern: Option<&Pattern>, width: usize) -> Vec<u32> {
     let width = width.clamp(160, 4096);
     let keyboard = width * KEYBOARD / WIDTH;
     let grid = width - keyboard;
-    let mut pixels = vec![0x121b28; width * HEIGHT];
+    let mut pixels = vec![0x121215; width * HEIGHT];
     for y in 0..HEIGHT {
         let key = key(y);
         let black = [1, 3, 6, 8, 10].contains(&(key % 12));
         for x in 0..width {
             pixels[y * width + x] =
                 if y % ROW == 0 || x >= keyboard && (x - keyboard) * STEPS % grid < STEPS {
-                    0x39465c
+                    0x28282e
                 } else if black {
-                    0x182233
+                    0x121215
                 } else {
-                    0x212e41
+                    0x18181c
                 };
         }
     }

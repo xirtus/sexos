@@ -122,6 +122,14 @@ impl Disk {
         Ok(None)
     }
 
+    /// Reads `len` bytes from `file` starting at `offset` (used by `swingers stream`).
+    pub fn read_file_range(&mut self, file: usize, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        if len == 0 { return Ok(Vec::new()); }
+        let f = self.file(file, false)?;
+        let _ = f.flush();
+        Self::read_at(f, offset, len as u32)
+    }
+
     /// Flushes and closes every open file (before hashing them for the record).
     pub fn close(&mut self) {
         for f in self.open.values_mut() { let _ = f.flush(); }

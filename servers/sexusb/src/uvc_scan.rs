@@ -38,6 +38,8 @@ pub struct FormatInfo { pub index: u8, pub format: Format, pub frames: u8, pub m
 pub struct Camera {
     pub control_iface: u8,
     pub stream_iface: u8,
+    /// UVC specification version in BCD from the VC_HEADER descriptor (e.g. 0x0100, 0x0110, 0x0150).
+    pub bcd_uvc: u16,
     pub alts: [Alt; MAX_ALTS],
     pub alt_count: usize,
     pub formats: [Option<FormatInfo>; MAX_FORMATS],
@@ -52,6 +54,12 @@ impl Camera {
     pub fn max_payload(&self, speed: u32) -> u32 { self.alts().iter().map(|a| a.endpoint(speed).esit_payload()).max().unwrap_or(0) }
     /// Bulk streaming (alt 0 carries the endpoint) needs no isochronous bandwidth.
     pub fn bulk(&self) -> bool { self.alts().iter().any(|a| !a.isoch) }
+    /// VS_PROBE / VS_COMMIT control block size per UVC spec: 26 (1.0), 34 (1.1), 48 (1.5).
+    pub fn probe_len(&self) -> u16 {
+        if self.bcd_uvc >= 0x0150 { 48 }
+        else if self.bcd_uvc >= 0x0110 { 34 }
+        else { 26 }
+    }
 }
 
 const GUID_YUY2: [u8; 4] = *b"YUY2";
@@ -89,6 +97,10 @@ pub fn scan(cfg: &[u8]) -> Option<Camera> {
             }
             0x30 if len >= 4 => {
                 if let Some(k) = last_alt { cam.alts[k].companion = Some((d[2], d[3])); }
+            }
+            // Class-specific VideoControl: VC_HEADER (0x01) carries bcdUVC at bytes 3..5.
+            0x24 if len >= 5 && class == CLASS_VIDEO && sub == SUB_CONTROL && iface == cam.control_iface && d[2] == 0x01 => {
+                cam.bcd_uvc = u16::from_le_bytes([d[3], d[4]]);
             }
             // Class-specific VideoStreaming: formats (uncompressed 0x04, MJPEG 0x06) and frames.
             0x24 if len >= 3 && class == CLASS_VIDEO && sub == SUB_STREAMING && iface == cam.stream_iface => match d[2] {

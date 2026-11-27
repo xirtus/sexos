@@ -130,3 +130,86 @@ fn update_tries_the_other_slot_once() {
     assert!(run(Command::new("sgdisk").arg("-v").arg(&file)).contains("No problems found"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn legacy_16k_menu_upgrades_to_64k_on_large_dual_slot_update() {
+    use crate::fat::{self, Fat};
+    use crate::install::pad_to;
+
+    // Build a realistic ~10 KiB limine.cfg (like SexOS with many MODULE_PATH entries)
+    // where Slot B + Slot A fallback (~20 KiB) exceeds the old 16 KiB MENU_BYTES limit.
+    let mut big_cfg = String::from("TIMEOUT=3\nSERIAL=yes\n\n:SexOS\n    PROTOCOL=limine\n    KERNEL_PATH=boot:///KERNEL\n");
+    for i in 0..110 {
+        big_cfg.push_str(&format!("    MODULE_PATH=boot:///SERVERS/MOD{i:03}    # service module {i:03}\n"));
+    }
+    assert!(big_cfg.len() > 6_000 && big_cfg.len() < 10_000, "cfg len={}", big_cfg.len());
+
+    // Pure-Rust FAT32 boot image (40 MiB).
+    let make_img = |cfg: &str, kernel_tag: &[u8]| -> Vec<u8> {
+        let mut img = MemDev(vec![0u8; 40 << 20]);
+        fat::format_fat32(&mut img, b"SEXOS      ").unwrap();
+        let f = Fat::open(&mut img).unwrap();
+        f.mkdir_p(&mut img, "/EFI/BOOT").unwrap();
+        f.write_file(&mut img, "/LIMINE.CFG", cfg.as_bytes()).unwrap();
+        f.write_file(&mut img, "/EFI/BOOT/BOOTX64.EFI", &[0x5Au8; 4096]).unwrap();
+        f.write_file(&mut img, "/KERNEL", kernel_tag).unwrap();
+        img.0
+    };
+    let img_v1 = make_img(&big_cfg, b"kernel-v1");
+    let img_v2 = make_img(&big_cfg, b"kernel-v2");
+
+    // Install on a fresh 2 GiB virtual disk.
+    let mut d = MemDev(vec![0u8; 2 << 30]);
+    let mut p = install::plan(&mut d, Mode::WholeDisk, &seeds(42)).unwrap();
+    install::apply(&mut d, &mut p, &mut MemDev(img_v1.clone()), &mut |_| {}).unwrap();
+
+    // Downgrade the ESP's LIMINE.CFG to a legacy 16 KiB file to simulate an already-installed disk.
+    {
+        let mut esp = Window::new(&mut d, p.esp.first, p.esp.sectors).unwrap();
+        let f = Fat::open(&mut esp).unwrap();
+        let cur = f.read_file(&mut esp, MENU_PATH).unwrap();
+        assert_eq!(cur.len(), MENU_BYTES);
+        let text = core::str::from_utf8(&cur).unwrap();
+        let mut stripped = String::new();
+        for line in text.lines() {
+            if line.starts_with('#') && line.len() > 64 && line[1..].bytes().all(|b| b == b' ') { continue; }
+            stripped.push_str(line);
+            stripped.push('\n');
+        }
+        let legacy = pad_to(stripped.into_bytes(), LEGACY_MENU_BYTES).unwrap();
+        assert_eq!(legacy.len(), LEGACY_MENU_BYTES);
+        f.write_file(&mut esp, MENU_PATH, &legacy).unwrap();
+    }
+
+    // System::find accepts the legacy 16 KiB menu, and restate keeps it 16 KiB in place.
+    let sys_legacy = System::find(&mut d).unwrap();
+    assert_eq!(sys_legacy.menu.sectors as usize * SECTOR, LEGACY_MENU_BYTES);
+    let old_menu = sys_legacy.read_menu(&mut d).unwrap();
+    assert_eq!(old_menu.len(), LEGACY_MENU_BYTES);
+    let restated_legacy = restate(&old_menu, &State::fresh()).unwrap();
+    assert_eq!(restated_legacy.len(), LEGACY_MENU_BYTES);
+    sys_legacy.write_menu(&mut d, &restated_legacy).unwrap();
+
+    // OTA update with a ~10 KiB limine.cfg produces a ~20 KiB dual-slot menu (Slot B + Slot A),
+    // which previously failed with Error::NoSpace under 16 KiB, and now upgrades cleanly to 64 KiB.
+    let idx = index_for(&img_v2, 2);
+    let index = verify_index(&idx, &sign(&idx), &key().pk).unwrap();
+    let slot = apply(&mut d, &sys_legacy, p.slot_a_guid, &index, &mut MemDev(img_v2), &mut |_| {}).unwrap();
+    assert_eq!(slot, Slot::B);
+
+    // Re-finding the system discovers the new 64 KiB menu cleanly.
+    let sys_new = System::find(&mut d).unwrap();
+    assert_eq!(sys_new.menu.sectors as usize * SECTOR, MENU_BYTES);
+    let upgraded = sys_new.read_menu(&mut d).unwrap();
+    assert_eq!(upgraded.len(), MENU_BYTES);
+    let text = core::str::from_utf8(&upgraded).unwrap();
+    assert!(text.contains(PREVIOUS_TITLE), "missing previous slot fallback");
+    assert_eq!(State::parse(&upgraded).unwrap().trial, Trial::Pending);
+
+    // Subsequent in-place restate works at 64 KiB.
+    let started = State::parse(&upgraded).unwrap().on_start(Slot::B).unwrap();
+    let restated_64k = restate(&upgraded, &started).unwrap();
+    assert_eq!(restated_64k.len(), MENU_BYTES);
+    sys_new.write_menu(&mut d, &restated_64k).unwrap();
+    assert_eq!(State::parse(&sys_new.read_menu(&mut d).unwrap()).unwrap().trial, Trial::Started);
+}

@@ -64,6 +64,7 @@ members = [
     "apps/chastity",
     "apps/chastity-probe",
     "apps/tassel",
+    "apps/moan-studio",
     "crates/sex-organize",
     "crates/sex-html",
     "crates/sex-js",
@@ -545,6 +546,8 @@ opt-level = "s"
 [profile.release.package.filmcraft-time]
 opt-level = "s"
 [profile.release.package.filmcraft-tts]
+opt-level = "s"
+[profile.release.package.spindle]
 opt-level = "s"
 
 # Big programs (#305), named by their build stage (sexos_build_spec.toml `profile`).

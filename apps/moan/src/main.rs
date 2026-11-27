@@ -9,7 +9,7 @@ mod guest {
     use moan_core::{Frame, RATE};
     use sex_app::{files, sound::Sound};
     use sex_voice::{Message as VoiceMessage, Operation as VoiceOperation, Submit as VoiceSubmit, JobState};
-    use weft::{sexos::App, Response, Strings, Theme};
+    use weft::{sexos::App, Response, Strings};
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
         sex_pdx::serial_record!("[moan.fatal] {}", info);
@@ -407,8 +407,8 @@ mod guest {
     }
     extern "C" fn main() -> ! {
         let mut app = App::open(
-            "Moan",
-            Theme::dark().with_density(weft::Density::Compact),
+            "Moan Studio",
+            moan::logic_noir_theme(),
             Strings::new("en"),
         );
         let mut studio = Studio::build(&mut app.ui);
