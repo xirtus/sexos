@@ -250,71 +250,83 @@ impl TextPainter {
         let Some(font) = self.font else {
             return;
         };
-        let scale = font.scale(px_h.max(10) as u32);
-        let baseline = y + (px_h * 4 / 5);
+        let px_size = px_h.max(10) as usize;
+        let size = (px_size * 64) as u32;
+        let asc = font.ascender(size);
+        let line_h = ((font.ascender(size) - font.descender(size)) / FX + 2).max(px_size as i32) as usize;
         let limit = (x + max_w).min(bw as i32);
         let cr = ((color >> 16) & 0xFF) as u32;
         let cg = ((color >> 8) & 0xFF) as u32;
         let cb = (color & 0xFF) as u32;
+        let pad = 2usize;
         let mut pen = x * FX;
+        let mut prev = None;
         for ch in text.chars() {
             if pen / FX >= limit - 6 {
                 break;
             }
-            let Some(id) = font.glyph(ch) else {
+            let Some(id) = font.glyph(ch as u32) else {
                 pen += (px_h / 2) * FX;
+                prev = None;
                 continue;
             };
-            let adv = font.advance(id, scale);
-            if let Some(m) = font.measure(id, scale) {
-                let gw = m.width as usize;
-                let gh = m.height as usize;
-                if gw > 0 && gh > 0 && gw <= 64 && gh <= 64 {
-                    let slen = scratch_len(gw, gh);
-                    if self.acc.len() < slen {
-                        self.acc.resize(slen, 0);
+            if let Some(p) = prev {
+                pen += font.kerning(p, id, size);
+            }
+            let adv = font.advance(id, size);
+            let gx0 = (pen / FX) - pad as i32;
+            let gw = ((adv / FX).max(0) as usize + 2 * pad + 2).min(64);
+            if gw > 0 && line_h > 0 && line_h <= 64 {
+                let slen = scratch_len(gw, line_h);
+                if self.acc.len() < slen {
+                    self.acc.resize(slen, 0);
+                }
+                if self.glyph.len() < gw * line_h {
+                    self.glyph.resize(gw * line_h, 0);
+                }
+                for b in &mut self.glyph[..gw * line_h] {
+                    *b = 0;
+                }
+                let sub = pen - (pen / FX) * FX + pad as i32 * FX;
+                font.draw(
+                    id,
+                    size,
+                    sub,
+                    asc + FX,
+                    gw,
+                    line_h,
+                    &mut self.acc[..slen],
+                    &mut self.glyph[..gw * line_h],
+                );
+                for row in 0..line_h {
+                    let py = y + row as i32;
+                    if py < 0 || py >= bh as i32 {
+                        continue;
                     }
-                    if self.glyph.len() < gw * gh {
-                        self.glyph.resize(gw * gh, 0);
-                    }
-                    font.rasterize(
-                        id,
-                        scale,
-                        &m,
-                        &mut self.acc[..slen],
-                        &mut self.glyph[..gw * gh],
-                    );
-                    let gx0 = (pen / FX) + m.left;
-                    let gy0 = baseline + m.top;
-                    for row in 0..gh {
-                        let py = gy0 + row as i32;
-                        if py < 0 || py >= bh as i32 {
+                    let row_off = py as usize * bw;
+                    for col in 0..gw {
+                        let px = gx0 + col as i32;
+                        if px < 0 || px >= limit {
                             continue;
                         }
-                        let row_off = py as usize * bw;
-                        for col in 0..gw {
-                            let px = gx0 + col as i32;
-                            if px < 0 || px >= limit {
-                                continue;
-                            }
-                            let a = self.glyph[row * gw + col] as u32;
-                            if a == 0 {
-                                continue;
-                            }
-                            let dst = buf[row_off + px as usize];
-                            let dr = (dst >> 16) & 0xFF;
-                            let dg = (dst >> 8) & 0xFF;
-                            let db = dst & 0xFF;
-                            let inv = 255 - a;
-                            let nr = (cr * a + dr * inv) / 255;
-                            let ng = (cg * a + dg * inv) / 255;
-                            let nb = (cb * a + db * inv) / 255;
-                            buf[row_off + px as usize] = (nr << 16) | (ng << 8) | nb;
+                        let a = self.glyph[row * gw + col] as u32;
+                        if a == 0 {
+                            continue;
                         }
+                        let dst = buf[row_off + px as usize];
+                        let dr = (dst >> 16) & 0xFF;
+                        let dg = (dst >> 8) & 0xFF;
+                        let db = dst & 0xFF;
+                        let inv = 255 - a;
+                        let nr = (cr * a + dr * inv) / 255;
+                        let ng = (cg * a + dg * inv) / 255;
+                        let nb = (cb * a + db * inv) / 255;
+                        buf[row_off + px as usize] = (nr << 16) | (ng << 8) | nb;
                     }
                 }
             }
             pen += adv;
+            prev = Some(id);
         }
     }
 }
@@ -693,7 +705,7 @@ impl App {
             let prog_x = (w as i32 / 2).saturating_sub(110).max(296);
             let prog_w = (w as i32 - prog_x - 24).clamp(80, 260);
             let elapsed = e.elapsed_ms().min(t.ms);
-            fill_rounded_rect(buf, w, h, prog_x, ty + 42, prog_w, 6, 3, pal.surface_hover);
+            fill_rounded_rect(buf, w, h, prog_x, ty + 42, prog_w, 6, 3, pal.well);
             if t.ms > 0 {
                 let fill_w = ((elapsed as u128 * prog_w as u128) / t.ms as u128) as i32;
                 if fill_w > 0 {
@@ -703,7 +715,7 @@ impl App {
             let time_str = format!("{} / {}", clock(elapsed), clock(t.ms));
             self.painter.draw(buf, w, h, prog_x + prog_w - 86, ty + 24, 86, 11, &time_str, pal.text_dim);
         } else {
-            fill_rounded_rect(buf, w, h, 18, ty + 10, 38, 38, 8, pal.surface_hover);
+            fill_rounded_rect(buf, w, h, 18, ty + 10, 38, 38, 8, pal.well);
             self.painter.draw(buf, w, h, 66, ty + 18, 220, 13, "Not Playing", pal.text_dim);
         }
 
