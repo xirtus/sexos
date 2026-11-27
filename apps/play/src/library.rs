@@ -385,16 +385,30 @@ enum SidebarTab {
     Songs,
     Albums,
     Queue,
+    Stremio,
+    Swarm,
+    Kodi,
 }
 
 impl SidebarTab {
-    const ALL: [Self; 4] = [Self::ListenNow, Self::Songs, Self::Albums, Self::Queue];
+    const ALL: [Self; 7] = [
+        Self::ListenNow,
+        Self::Songs,
+        Self::Albums,
+        Self::Queue,
+        Self::Stremio,
+        Self::Swarm,
+        Self::Kodi,
+    ];
     fn label(self) -> &'static str {
         match self {
             Self::ListenNow => "Listen Now",
             Self::Songs => "Songs",
             Self::Albums => "Albums",
             Self::Queue => "Up Next",
+            Self::Stremio => "Stremio",
+            Self::Swarm => "Swarm P2P",
+            Self::Kodi => "Kodi Add-ons",
         }
     }
     fn next(self) -> Self {
@@ -402,7 +416,10 @@ impl SidebarTab {
             Self::ListenNow => Self::Songs,
             Self::Songs => Self::Albums,
             Self::Albums => Self::Queue,
-            Self::Queue => Self::ListenNow,
+            Self::Queue => Self::Stremio,
+            Self::Stremio => Self::Swarm,
+            Self::Swarm => Self::Kodi,
+            Self::Kodi => Self::ListenNow,
         }
     }
 }
@@ -437,6 +454,7 @@ struct App {
     chosen: usize,
     queue: Vec<usize>,
     tab: SidebarTab,
+    pack: crate::brootlite::ProviderPack,
     painter: TextPainter,
     hits: Vec<HitBox>,
     dirty: bool,
@@ -445,12 +463,13 @@ struct App {
 }
 
 impl App {
-    fn new(tracks: Vec<Track>) -> Self {
+    fn new(tracks: Vec<Track>, pack: crate::brootlite::ProviderPack) -> Self {
         Self {
             tracks,
             chosen: 0,
             queue: Vec::new(),
             tab: SidebarTab::Songs,
+            pack,
             painter: TextPainter::new(),
             hits: Vec::new(),
             dirty: true,
@@ -613,7 +632,101 @@ impl App {
         let visible = self.visible_indices();
         let hearing = e.hearing();
 
-        if visible.is_empty() {
+        if matches!(self.tab, SidebarTab::Stremio | SidebarTab::Swarm | SidebarTab::Kodi) {
+            let mut ry = panel_y + 14;
+            let cx = panel_x + 18;
+            let max_w = (panel_w - 36).max(120);
+            match self.tab {
+                SidebarTab::Stremio => {
+                    let head = if self.pack.stremio_addons.is_empty() {
+                        String::from("Stremio v3 Add-ons (No provider_pack.json loaded)")
+                    } else {
+                        format!(
+                            "Stremio v3 Add-ons — {} ({} loaded)",
+                            self.pack.name,
+                            self.pack.stremio_addons.len()
+                        )
+                    };
+                    self.painter.draw(buf, w, h, cx, ry, max_w, 16, &head, pal.accent);
+                    ry += 28;
+                    if self.pack.stremio_addons.is_empty() {
+                        self.painter.draw(
+                            buf, w, h, cx, ry, max_w, 13,
+                            "Place your private provider_pack.json in /data/qupid/provider_pack.json",
+                            pal.text,
+                        );
+                        self.painter.draw(
+                            buf, w, h, cx, ry + 22, max_w, 12,
+                            "(or /media/Ventoy/provider_pack.json on live USB) to load Stremio addons.",
+                            pal.text_dim,
+                        );
+                    } else {
+                        for addon in &self.pack.stremio_addons {
+                            if ry + 54 > panel_y + panel_h { break; }
+                            draw_candy_selection_row(buf, w, h, cx - 6, ry, max_w + 12, 48, 8, &pal);
+                            self.painter.draw(buf, w, h, cx + 8, ry + 6, max_w - 16, 14, &addon.name, pal.text);
+                            self.painter.draw(buf, w, h, cx + 8, ry + 24, max_w - 16, 11, &addon.description, pal.text_dim);
+                            ry += 56;
+                        }
+                    }
+                }
+                SidebarTab::Swarm => {
+                    let head = format!(
+                        "Swarm P2P & Magnet Streaming — {} indexers · {} trackers",
+                        self.pack.swarm_indexers.len(),
+                        self.pack.tracker_count
+                    );
+                    self.painter.draw(buf, w, h, cx, ry, max_w, 16, &head, pal.accent);
+                    ry += 28;
+                    if self.pack.swarm_indexers.is_empty() {
+                        self.painter.draw(
+                            buf, w, h, cx, ry, max_w, 13,
+                            "Place provider_pack.json in /data/qupid/ to load Swarm indexers & trackers.",
+                            pal.text,
+                        );
+                        self.painter.draw(
+                            buf, w, h, cx, ry + 22, max_w, 12,
+                            "Direct magnet engine: run +net swingers get MAGNET",
+                            pal.text_dim,
+                        );
+                    } else {
+                        for idx in &self.pack.swarm_indexers {
+                            if ry + 42 > panel_y + panel_h { break; }
+                            draw_candy_selection_row(buf, w, h, cx - 6, ry, max_w + 12, 36, 8, &pal);
+                            let line = format!("{}  [{}]", idx.name, idx.kind);
+                            self.painter.draw(buf, w, h, cx + 8, ry + 9, max_w - 16, 13, &line, pal.text);
+                            ry += 42;
+                        }
+                        for feed in self.pack.featured_feeds.iter().take(4) {
+                            if ry + 28 > panel_y + panel_h { break; }
+                            let line = format!("Feed: {}", feed.label);
+                            self.painter.draw(buf, w, h, cx + 4, ry + 4, max_w - 12, 12, &line, pal.text_dim);
+                            ry += 24;
+                        }
+                    }
+                }
+                SidebarTab::Kodi => {
+                    self.painter.draw(buf, w, h, cx, ry, max_w, 16, "Kodi Video & Audio Add-ons (sex-kodi)", pal.accent);
+                    ry += 28;
+                    self.painter.draw(
+                        buf, w, h, cx, ry, max_w, 13,
+                        "Browse repos:   run +net qupid --addons",
+                        pal.text,
+                    );
+                    self.painter.draw(
+                        buf, w, h, cx, ry + 24, max_w, 13,
+                        "Add repo zip:   run +net qupid --add-repo https://.../repo.zip",
+                        pal.text,
+                    );
+                    self.painter.draw(
+                        buf, w, h, cx, ry + 48, max_w, 13,
+                        "Install addon:  run +net qupid --install plugin.video.example",
+                        pal.text_dim,
+                    );
+                }
+                _ => {}
+            }
+        } else if visible.is_empty() {
             let cy = panel_y + (panel_h / 2).saturating_sub(42);
             let cx = panel_x + 28;
             let heading = if self.tab == SidebarTab::Queue {
@@ -791,7 +904,8 @@ pub fn run(window: &mut Window, refs: &[&[u8]]) -> ! {
             }
         }
     };
-    let mut app = App::new(tracks);
+    let pack = crate::brootlite::ProviderPack::load(window);
+    let mut app = App::new(tracks, pack);
     let mut e = Engine {
         sound,
         cur: None,

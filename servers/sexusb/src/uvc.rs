@@ -310,6 +310,16 @@ impl Usb {
                         reasm.feed(raw, |flags, seq, chunk| shared.push_chunk(flags, seq, chunk));
                     }
                     u.packets += 1;
+                    if u.packets == 1 || (u.packets <= 1024 && u.packets.is_power_of_two()) {
+                        log!("[sexusb.uvc.packets] slot={} packets={} last_len={}", slot, u.packets, raw.len());
+                    }
+                }
+            }
+            CC_RING_UNDERRUN | CC_RING_OVERRUN if u.running => {
+                // An overrun/underrun event means the Isoch ring drained to 0 in-flight TRBs:
+                // refill a full burst (minus the 1 queued below) so the 125us schedule stays fed.
+                for _ in 0..UVC_IN_FLIGHT.saturating_sub(1) {
+                    self.uvc_queue(&mut u);
                 }
             }
             CC_MISSED_SERVICE | CC_RING_UNDERRUN | CC_RING_OVERRUN => {}
