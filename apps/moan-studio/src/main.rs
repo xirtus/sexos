@@ -3,8 +3,10 @@
 //! Ariel Formant Vocal Synth (`moan-core`), EuropaRack Modular (`moan-modular`),
 //! and native Bell 48 kHz stereo audio playback (`sex-app`).
 
+mod extras;
+
 use egui::{
-    pos2, vec2, Align2, Color32, CornerRadius, FontId, Rect, RichText, Sense, Shape, Stroke,
+    pos2, vec2, Align2, Color32, CornerRadius, FontId, Key, Rect, RichText, Sense, Shape, Stroke,
     StrokeKind, Ui,
 };
 use moan_core::vocal::{self, VoiceParams};
@@ -67,6 +69,7 @@ fn apply_noir_theme(ctx: &egui::Context) {
     v.widgets.active.corner_radius = r;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, HAIRLINE);
     v.window_stroke = Stroke::new(1.0, Color32::from_rgb(0x38, 0x38, 0x40));
+    extras::install_geist_fonts(ctx);
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = vec2(5.0, 4.0);
@@ -105,13 +108,14 @@ struct Track {
     mute: bool,
     solo: bool,
     rec: bool,
-    monitor: bool,
     volume_db: f32,
     pan: f32,
     notes: Vec<MidiNote>,
     pcm: Option<Arc<Vec<Frame>>>,
     peaks: Vec<f32>,
     meter: f32,
+    synth_phase: f32,
+    synth_env: f32,
 }
 
 impl Track {
@@ -127,13 +131,14 @@ impl Track {
             mute: false,
             solo: false,
             rec: false,
-            monitor: false,
             volume_db: -3.5,
             pan: 0.0,
             notes: Vec::new(),
             pcm: Some(pcm),
             peaks,
             meter: 0.0,
+            synth_phase: 0.0,
+            synth_env: 0.0,
         }
     }
 }
@@ -261,9 +266,13 @@ struct StudioApp {
     show_library: bool,
     show_inspector: bool,
     show_bottom: bool,
+    show_events: bool,
     bottom: BottomView,
     library_search: String,
     status: String,
+    typing: extras::MusicalTypingState,
+    sampler: extras::QuickSamplerState,
+    undo_stack: Vec<Vec<Track>>,
 
     // Muse AI Studio
     show_muse: bool,
@@ -314,13 +323,14 @@ impl StudioApp {
                 mute: false,
                 solo: false,
                 rec: false,
-                monitor: false,
                 volume_db: -3.2,
                 pan: -0.1,
                 notes: demo_notes(60, &[0, 4, 7, 11, 12, 11, 7, 4]),
                 pcm: None,
                 peaks: Vec::new(),
                 meter: 0.42,
+                synth_phase: 0.0,
+                synth_env: 0.0,
             },
             Track {
                 name: "Steinway Grand Piano".into(),
@@ -332,13 +342,14 @@ impl StudioApp {
                 mute: false,
                 solo: false,
                 rec: false,
-                monitor: false,
                 volume_db: -2.7,
                 pan: 0.15,
                 notes: demo_notes(48, &[0, 7, 12, 16]),
                 pcm: None,
                 peaks: Vec::new(),
                 meter: 0.36,
+                synth_phase: 0.0,
+                synth_env: 0.0,
             },
             Track {
                 name: "Analog Pad".into(),
@@ -350,13 +361,14 @@ impl StudioApp {
                 mute: false,
                 solo: false,
                 rec: false,
-                monitor: false,
                 volume_db: -5.6,
                 pan: 0.0,
                 notes: demo_notes(55, &[0, 5, 7, 12]),
                 pcm: None,
                 peaks: Vec::new(),
                 meter: 0.28,
+                synth_phase: 0.0,
+                synth_env: 0.0,
             },
             Track {
                 name: "Drummer".into(),
@@ -368,13 +380,14 @@ impl StudioApp {
                 mute: false,
                 solo: false,
                 rec: false,
-                monitor: false,
                 volume_db: -4.0,
                 pan: 0.0,
                 notes: demo_notes(36, &[0, 6, 2, 6, 0, 6, 2, 10]),
                 pcm: None,
                 peaks: Vec::new(),
                 meter: 0.55,
+                synth_phase: 0.0,
+                synth_env: 0.0,
             },
             Track::from_audio(
                 "Electric Bass",
@@ -410,9 +423,13 @@ impl StudioApp {
             show_library: true,
             show_inspector: true,
             show_bottom: true,
+            show_events: false,
             bottom: BottomView::Mixer,
             library_search: String::new(),
-            status: "Moan Studio Logic Noir ready on SexOS".into(),
+            status: "Press K for Musical Typing • Q Quick Sampler • Space Play • Shift+M Muse".into(),
+            typing: extras::MusicalTypingState::default(),
+            sampler: extras::QuickSamplerState::default(),
+            undo_stack: Vec::new(),
             show_muse: false,
             muse_tab: MuseTab::CreateSong,
             muse_prompt: "dark noir synthwave, analog bass, shimmering pads, crisp drums".into(),
@@ -453,76 +470,306 @@ impl StudioApp {
         ((secs * RATE as f64) as usize).clamp(RATE as usize, RATE as usize * 30)
     }
 
+    fn push_undo(&mut self) {
+        self.undo_stack.push(self.tracks.clone());
+        if self.undo_stack.len() > 24 {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    fn record_live_note(&mut self, pitch: u8, vel: u8) {
+        if self.recording {
+            if let Some(t) = self.tracks.get_mut(self.selected) {
+                t.notes.push(MidiNote {
+                    start_beat: (self.playhead_beats * 4.0).round() / 4.0,
+                    len_beats: 0.5,
+                    pitch,
+                    vel,
+                });
+            }
+        }
+    }
+
+    fn handle_hotkeys(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (mods, pressed_keys, released_keys) = ctx.input(|i| {
+            let mut p = Vec::new();
+            let mut r = Vec::new();
+            for ev in &i.events {
+                if let egui::Event::Key { key, pressed, repeat, .. } = ev {
+                    if *pressed && !*repeat {
+                        p.push(*key);
+                    } else if !*pressed {
+                        r.push(*key);
+                    }
+                }
+            }
+            (i.modifiers, p, r)
+        });
+
+        let cmd = mods.command || mods.ctrl;
+
+        // If Musical Typing is open, route piano keys A..; + Z/X octave + C/V velocity + Tab sustain
+        if self.typing.open {
+            let root = self.typing.root_midi();
+            for &k in &released_keys {
+                if let Some(&(_, semi, _, _)) = extras::TYPING_KEYS.iter().find(|x| x.0 == k) {
+                    self.typing.release(root + semi);
+                }
+                if k == Key::Tab {
+                    self.typing.sustain = false;
+                }
+            }
+            for &k in &pressed_keys {
+                if k == Key::Escape || (cmd && k == Key::K) {
+                    self.typing.open = false;
+                    self.status = "Musical Typing closed".into();
+                    continue;
+                }
+                if k == Key::Space {
+                    self.playing = !self.playing;
+                    continue;
+                }
+                if k == Key::Tab {
+                    self.typing.sustain = true;
+                    continue;
+                }
+                if k == Key::Z {
+                    self.typing.octave = (self.typing.octave - 1).clamp(1, 6);
+                    continue;
+                }
+                if k == Key::X {
+                    self.typing.octave = (self.typing.octave + 1).clamp(1, 6);
+                    continue;
+                }
+                if k == Key::C {
+                    self.typing.velocity = self.typing.velocity.saturating_sub(15).max(15);
+                    continue;
+                }
+                if k == Key::V {
+                    self.typing.velocity = self.typing.velocity.saturating_add(15).min(127);
+                    continue;
+                }
+                if let Some(&(_, semi, _, _)) = extras::TYPING_KEYS.iter().find(|x| x.0 == k) {
+                    let pitch = root + semi;
+                    self.typing.trigger(pitch);
+                    let vel = self.typing.velocity;
+                    self.record_live_note(pitch, vel);
+                    self.status = format!("Playing {} (vel {vel})", extras::pitch_name(pitch));
+                }
+            }
+            return;
+        }
+
+        for &k in &pressed_keys {
+            if cmd {
+                match k {
+                    Key::K => {
+                        self.typing.open = !self.typing.open;
+                        self.status = "Musical Typing (A–; plays notes, Z/X octave, Esc closes)".into();
+                    }
+                    Key::D => {
+                        if let Some(t) = self.tracks.get(self.selected).cloned() {
+                            self.push_undo();
+                            let mut dup = t;
+                            dup.name = format!("{} Copy", dup.name);
+                            self.tracks.insert(self.selected + 1, dup);
+                            self.selected += 1;
+                            self.status = "Duplicated selected track".into();
+                        }
+                    }
+                    Key::Z => {
+                        if let Some(prev) = self.undo_stack.pop() {
+                            self.tracks = prev;
+                            self.selected = self.selected.min(self.tracks.len().saturating_sub(1));
+                            self.status = "Undo".into();
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            if mods.shift {
+                match k {
+                    Key::M => self.show_muse = !self.show_muse,
+                    Key::A => self.show_ariel = !self.show_ariel,
+                    Key::R => self.show_rack = !self.show_rack,
+                    Key::ArrowUp => self.tempo = (self.tempo + 1.0).clamp(40.0, 240.0),
+                    Key::ArrowDown => self.tempo = (self.tempo - 1.0).clamp(40.0, 240.0),
+                    _ => {}
+                }
+                continue;
+            }
+            match k {
+                Key::Space => self.playing = !self.playing,
+                Key::Enter => {
+                    self.playhead_beats = 0.0;
+                    self.play_frame = 0;
+                }
+                Key::K => {
+                    self.typing.open = true;
+                    self.status = "Musical Typing open (A–; plays notes, Z/X octave, Esc closes)".into();
+                }
+                Key::Q => self.sampler.open = !self.sampler.open,
+                Key::Y => self.show_library = !self.show_library,
+                Key::I => self.show_inspector = !self.show_inspector,
+                Key::X => {
+                    if self.show_bottom && self.bottom == BottomView::Mixer {
+                        self.show_bottom = false;
+                    } else {
+                        self.show_bottom = true;
+                        self.bottom = BottomView::Mixer;
+                    }
+                }
+                Key::P | Key::E => {
+                    if self.show_bottom && self.bottom == BottomView::PianoRoll {
+                        self.show_bottom = false;
+                    } else {
+                        self.show_bottom = true;
+                        self.bottom = BottomView::PianoRoll;
+                    }
+                }
+                Key::D => self.show_events = !self.show_events,
+                Key::C => self.cycle = !self.cycle,
+                Key::R => {
+                    self.recording = !self.recording;
+                    if self.recording {
+                        self.playing = true;
+                    }
+                }
+                Key::M => {
+                    if let Some(t) = self.tracks.get_mut(self.selected) {
+                        t.mute = !t.mute;
+                    }
+                }
+                Key::S => {
+                    if let Some(t) = self.tracks.get_mut(self.selected) {
+                        t.solo = !t.solo;
+                    }
+                }
+                Key::ArrowUp => {
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                    }
+                }
+                Key::ArrowDown => {
+                    if self.selected + 1 < self.tracks.len() {
+                        self.selected += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn pump_audio(&mut self, ctx: &egui::Context) {
-        if !self.playing {
+        let live_typing = self.typing.has_sound();
+        if !self.playing && !live_typing {
             return;
         }
         let dt = ctx.input(|i| i.stable_dt).clamp(0.008, 0.05);
-        self.playhead_beats += dt * (self.tempo / 60.0);
-        if self.playhead_beats >= 48.0 {
-            self.playhead_beats = 0.0;
-            self.play_frame = 0;
+        if self.playing {
+            self.playhead_beats += dt * (self.tempo / 60.0);
+            let loop_end = if self.cycle { 16.0 } else { 48.0 };
+            if self.playhead_beats >= loop_end {
+                self.playhead_beats = 0.0;
+                self.play_frame = 0;
+            }
         }
         let any_solo = self.tracks.iter().any(|t| t.solo);
-        let mut peak_l = 0.0f32;
         #[cfg(target_os = "hermit")]
         {
             if let Some(sound) = &mut self.sound {
-                let want = sound.room().min(2048);
+                // Keep a generous 6144-frame (~128 ms) cushion in Bell's ring so UI repaints
+                // never underrun or click.
+                let room = sound.room();
+                let want = if room > 4096 { room.min(6144) } else { 0 };
                 if want > 0 {
                     let mut mix = vec![[0i32; 2]; want];
-                    for t in &mut self.tracks {
-                        let active = !t.mute && (!any_solo || t.solo);
-                        if !active {
-                            t.meter *= 0.85;
-                            continue;
-                        }
-                        let gain = 10.0f32.powf(t.volume_db / 20.0);
-                        let mut tr_peak = 0.0f32;
-                        if let Some(pcm) = &t.pcm {
-                            if !pcm.is_empty() {
+                    let rate_f = RATE as f32;
+                    let beats_per_frame = self.tempo / (60.0 * rate_f);
+                    let tau = std::f32::consts::TAU;
+
+                    if self.playing {
+                        for t in &mut self.tracks {
+                            let active = !t.mute && (!any_solo || t.solo);
+                            if !active {
+                                t.meter *= 0.85;
+                                t.synth_env *= 0.9;
+                                continue;
+                            }
+                            let gain = 10.0f32.powf(t.volume_db / 20.0);
+                            let pan_l = ((1.0 - t.pan) * 0.5).clamp(0.0, 1.0).sqrt();
+                            let pan_r = ((1.0 + t.pan) * 0.5).clamp(0.0, 1.0).sqrt();
+                            let mut tr_peak = 0.0f32;
+                            if let Some(pcm) = &t.pcm {
+                                if !pcm.is_empty() {
+                                    let len = pcm.len();
+                                    for i in 0..want {
+                                        let f = pcm[(self.play_frame + i) % len];
+                                        let l = (f[0] as f32 * gain * pan_l) as i32;
+                                        let r = (f[1] as f32 * gain * pan_r) as i32;
+                                        mix[i][0] += l;
+                                        mix[i][1] += r;
+                                        tr_peak = tr_peak.max((l as f32 / 32768.0).abs());
+                                    }
+                                }
+                            } else {
+                                // Click-free continuous-phase poly-harmonic synth with smooth 10ms envelope
+                                let start_beat = self.play_frame as f32 * beats_per_frame;
                                 for i in 0..want {
-                                    let f = pcm[(self.play_frame + i) % pcm.len()];
-                                    let l = (f[0] as f32 * gain) as i32;
-                                    let r = (f[1] as f32 * gain) as i32;
-                                    mix[i][0] += l;
-                                    mix[i][1] += r;
-                                    tr_peak = tr_peak.max((l as f32 / 32768.0).abs());
+                                    let beat = (start_beat + i as f32 * beats_per_frame) % 48.0;
+                                    let active_note = t.notes.iter().find(|n| {
+                                        beat >= n.start_beat && beat < n.start_beat + n.len_beats
+                                    });
+                                    let target_env = if active_note.is_some() { 1.0 } else { 0.0 };
+                                    // Smooth ~10 ms attack / ~25 ms release prevents all clicks
+                                    let coeff = if target_env > t.synth_env { 0.0022 } else { 0.0009 };
+                                    t.synth_env += (target_env - t.synth_env) * coeff;
+                                    if t.synth_env > 0.001 {
+                                        if let Some(n) = active_note {
+                                            let freq = 440.0 * 2.0f32.powf((n.pitch as f32 - 69.0) / 12.0);
+                                            t.synth_phase = (t.synth_phase + freq / rate_f) % 1.0;
+                                        }
+                                        let ph = t.synth_phase * tau;
+                                        let sig = ph.sin() * 0.72 + (ph * 2.0).sin() * 0.20 + (ph * 3.0).sin() * 0.08;
+                                        let amp = sig * t.synth_env * 3800.0 * gain;
+                                        let l = (amp * pan_l) as i32;
+                                        let r = (amp * pan_r) as i32;
+                                        mix[i][0] += l;
+                                        mix[i][1] += r;
+                                        tr_peak = tr_peak.max((l as f32 / 32768.0).abs());
+                                    }
                                 }
                             }
-                        } else {
-                            // Lightweight sine preview for MIDI tracks
-                            let beat = self.playhead_beats;
-                            let active_note = t.notes.iter().find(|n| {
-                                beat >= n.start_beat && beat <= n.start_beat + n.len_beats
-                            });
-                            if let Some(n) = active_note {
-                                let freq = 440.0 * 2.0f32.powf((n.pitch as f32 - 69.0) / 12.0);
-                                for i in 0..want {
-                                    let ph = ((self.play_frame + i) as f32 * freq / RATE as f32)
-                                        * std::f32::consts::TAU;
-                                    let s = (ph.sin() * 4200.0 * gain) as i32;
-                                    mix[i][0] += s;
-                                    mix[i][1] += s;
-                                    tr_peak = tr_peak.max((s as f32 / 32768.0).abs());
-                                }
-                            }
+                            t.meter = (t.meter * 0.7 + tr_peak * 0.3).clamp(0.0, 1.0);
                         }
-                        t.meter = (t.meter * 0.7 + tr_peak * 0.3).clamp(0.0, 1.0);
-                        peak_l = peak_l.max(t.meter);
                     }
+
+                    // Mix live Musical Typing voices right into the same click-free Bell stream
+                    if live_typing {
+                        self.typing.mix_into(&mut mix, rate_f);
+                    }
+
                     let master_gain = 10.0f32.powf((self.master_db + self.stereo_out_db) / 20.0);
                     let frames: Vec<Frame> = mix
                         .into_iter()
                         .map(|[l, r]| {
-                            [
-                                (l as f32 * master_gain).clamp(-32767.0, 32767.0) as i16,
-                                (r as f32 * master_gain).clamp(-32767.0, 32767.0) as i16,
-                            ]
+                            // Soft-knee limiter prevents harsh clipping
+                            let soft = |v: i32| -> i16 {
+                                let x = (v as f32 * master_gain) / 32767.0;
+                                let y = x / (1.0 + x.abs() * 0.35);
+                                (y.clamp(-0.98, 0.98) * 32767.0) as i16
+                            };
+                            [soft(l), soft(r)]
                         })
                         .collect();
                     let written = sound.write(&frames);
-                    self.play_frame = self.play_frame.wrapping_add(written);
+                    if self.playing {
+                        self.play_frame = self.play_frame.wrapping_add(written);
+                    }
                 }
             }
         }
@@ -531,12 +778,142 @@ impl StudioApp {
             for (idx, t) in self.tracks.iter_mut().enumerate() {
                 let active = !t.mute && (!any_solo || t.solo);
                 let phase = (self.playhead_beats * 3.1 + idx as f32 * 1.3).sin().abs();
-                t.meter = if active { (0.25 + phase * 0.6).min(0.95) } else { 0.0 };
-                peak_l = peak_l.max(t.meter);
+                t.meter = if self.playing && active { (0.25 + phase * 0.6).min(0.95) } else { 0.0 };
             }
         }
-        let _ = peak_l;
         ctx.request_repaint();
+    }
+
+    fn draw_menu_bar(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Moan Studio").strong().color(TEXT).size(11.5));
+            ui.separator();
+            ui.menu_button("File", |ui| {
+                if ui.button("New Project").clicked() {
+                    self.push_undo();
+                    *self = StudioApp::new();
+                    self.themed = true;
+                    ui.close();
+                }
+                if ui.button("Rewind to Bar 1  (Enter)").clicked() {
+                    self.playhead_beats = 0.0;
+                    self.play_frame = 0;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Edit", |ui| {
+                if ui.button("Undo  (Ctrl+Z)").clicked() {
+                    if let Some(prev) = self.undo_stack.pop() {
+                        self.tracks = prev;
+                    }
+                    ui.close();
+                }
+                if ui.button("Duplicate Track  (Ctrl+D)").clicked() {
+                    if let Some(t) = self.tracks.get(self.selected).cloned() {
+                        self.push_undo();
+                        let mut dup = t;
+                        dup.name = format!("{} Copy", dup.name);
+                        self.tracks.insert(self.selected + 1, dup);
+                        self.selected += 1;
+                    }
+                    ui.close();
+                }
+            });
+            ui.menu_button("Track", |ui| {
+                if ui.button("New Instrument Track").clicked() {
+                    self.push_undo();
+                    let idx = self.tracks.len() + 1;
+                    self.tracks.push(Track {
+                        name: format!("Synth {idx}"),
+                        kind: TrackKind::Instrument,
+                        color: ACCENT_BLUE,
+                        instrument: "Synth".into(),
+                        fx: vec!["Channel EQ".into()],
+                        send: Some("Bus 1".into()),
+                        mute: false,
+                        solo: false,
+                        rec: false,
+                        volume_db: -3.0,
+                        pan: 0.0,
+                        notes: demo_notes(60, &[0, 3, 7, 10]),
+                        pcm: None,
+                        peaks: Vec::new(),
+                        meter: 0.0,
+                        synth_phase: 0.0,
+                        synth_env: 0.0,
+                    });
+                    self.selected = self.tracks.len() - 1;
+                    ui.close();
+                }
+                if ui.button("Mute Track  (M)").clicked() {
+                    if let Some(t) = self.tracks.get_mut(self.selected) { t.mute = !t.mute; }
+                    ui.close();
+                }
+                if ui.button("Solo Track  (S)").clicked() {
+                    if let Some(t) = self.tracks.get_mut(self.selected) { t.solo = !t.solo; }
+                    ui.close();
+                }
+            });
+            ui.menu_button("View", |ui| {
+                ui.checkbox(&mut self.show_library, "Library  (Y)");
+                ui.checkbox(&mut self.show_inspector, "Inspector  (I)");
+                ui.checkbox(&mut self.show_events, "Event List  (D)");
+                if ui.button("Mixer  (X)").clicked() {
+                    self.show_bottom = true;
+                    self.bottom = BottomView::Mixer;
+                    ui.close();
+                }
+                if ui.button("Piano Roll  (P)").clicked() {
+                    self.show_bottom = true;
+                    self.bottom = BottomView::PianoRoll;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Window", |ui| {
+                ui.checkbox(&mut self.typing.open, "Musical Typing  (K)");
+                ui.checkbox(&mut self.sampler.open, "Quick Sampler  (Q)");
+                ui.separator();
+                ui.checkbox(&mut self.show_muse, "✦ Muse AI Studio  (Shift+M)");
+                ui.checkbox(&mut self.show_ariel, "◉ Ariel Vocal Synth  (Shift+A)");
+                ui.checkbox(&mut self.show_rack, "⚡ EuropaRack Modular  (Shift+R)");
+            });
+        });
+    }
+
+    fn draw_event_list(&mut self, ui: &mut Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(RichText::new("Event List  (D)").strong().color(TEXT));
+        });
+        ui.separator();
+        if let Some(t) = self.tracks.get_mut(self.selected) {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("{} • {} events", t.name, t.notes.len())).color(TEXT_DIM).size(11.0));
+            });
+            ui.add_space(4.0);
+            let mut remove_idx = None;
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for (idx, n) in t.notes.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        let bar = (n.start_beat / 4.0).floor() as u32 + 1;
+                        let beat = (n.start_beat % 4.0).floor() as u32 + 1;
+                        ui.label(RichText::new(format!("{bar:02}.{beat}")).monospace().size(10.5).color(TEXT_DIM));
+                        ui.label(RichText::new(extras::pitch_name(n.pitch)).monospace().size(10.5).color(ACCENT_ARIEL));
+                        ui.label(RichText::new(format!("v{}", n.vel)).monospace().size(10.0).color(TEXT_DIM));
+                        if ui.small_button("×").clicked() {
+                            remove_idx = Some(idx);
+                        }
+                    });
+                }
+            });
+            if let Some(idx) = remove_idx {
+                t.notes.remove(idx);
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut Ui) {
@@ -545,10 +922,14 @@ impl StudioApp {
             apply_noir_theme(&ctx);
             self.themed = true;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) && !ctx.egui_wants_keyboard_input() {
-            self.playing = !self.playing;
-        }
+        self.handle_hotkeys(&ctx);
         self.pump_audio(&ctx);
+
+        // 0. macOS-style Top Menu Bar
+        egui::Panel::top("menu_bar")
+            .exact_size(24.0)
+            .frame(egui::Frame::new().fill(Color32::from_rgb(0x1b, 0x1b, 0x1e)))
+            .show(ui, |ui| self.draw_menu_bar(ui));
 
         // 1. Top Control Bar
         egui::Panel::top("control_bar")
@@ -574,6 +955,15 @@ impl StudioApp {
                 .show(ui, |ui| self.draw_inspector(ui));
         }
 
+        // 3b. Right Event List Sidebar (D)
+        if self.show_events {
+            egui::Panel::right("event_list")
+                .exact_size(210.0)
+                .resizable(false)
+                .frame(egui::Frame::new().fill(PANEL_DARK))
+                .show(ui, |ui| self.draw_event_list(ui));
+        }
+
         // 4. Bottom Mixer or Piano Roll
         if self.show_bottom {
             egui::Panel::bottom("bottom_pane")
@@ -591,10 +981,25 @@ impl StudioApp {
             .frame(egui::Frame::new().fill(LANE_BG))
             .show(ui, |ui| self.draw_tracks_area(ui));
 
-        // 6. Moan Studio Power Suite Floating Windows
+        // 6. Moan Studio Power Suite + Musical Typing + Quick Sampler Floating Windows
         self.draw_muse_window(&ctx);
         self.draw_ariel_window(&ctx);
         self.draw_rack_window(&ctx);
+
+        let mut recorded = Vec::new();
+        extras::draw_musical_typing_window(&ctx, &mut self.typing, &mut |pitch, vel| {
+            recorded.push((pitch, vel));
+        });
+        for (pitch, vel) in recorded {
+            self.record_live_note(pitch, vel);
+        }
+
+        let sel_peaks = self
+            .tracks
+            .get(self.selected)
+            .map(|t| t.peaks.clone())
+            .unwrap_or_default();
+        extras::draw_quick_sampler_window(&ctx, &mut self.sampler, &sel_peaks);
     }
 
     fn draw_control_bar(&mut self, ui: &mut Ui) {
@@ -717,12 +1122,20 @@ impl StudioApp {
             FontId::monospace(11.5),
             TEXT_DIM,
         );
-        g.text(
+        let bpm_r = Rect::from_center_size(
             pos2(lcd_rect.center().x + 12.0, lcd_rect.top() + 11.0),
+            vec2(96.0, 20.0),
+        );
+        let bpm_resp = ui.interact(bpm_r, egui::Id::unique("lcd_bpm_drag"), Sense::drag());
+        if bpm_resp.dragged() {
+            self.tempo = (self.tempo - bpm_resp.drag_delta().y * 0.25).clamp(40.0, 240.0);
+        }
+        g.text(
+            bpm_r.center(),
             Align2::CENTER_CENTER,
             format!("{:.2} BPM", self.tempo),
             FontId::monospace(12.5),
-            TEXT,
+            if bpm_resp.hovered() || bpm_resp.dragged() { ACCENT_BLUE } else { TEXT },
         );
         g.text(
             pos2(lcd_rect.center().x + 12.0, lcd_rect.bottom() - 10.0),
@@ -992,13 +1405,14 @@ impl StudioApp {
                 mute: false,
                 solo: false,
                 rec: false,
-                monitor: false,
                 volume_db: -3.0,
                 pan: 0.0,
                 notes: demo_notes(60, &[0, 3, 7, 10]),
                 pcm: None,
                 peaks: Vec::new(),
                 meter: 0.0,
+                synth_phase: 0.0,
+                synth_env: 0.0,
             });
             self.selected = self.tracks.len() - 1;
         }
