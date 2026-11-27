@@ -25,6 +25,10 @@ enum Waiting {
     Password { index: u64, part: u64 },
     /// Part `part` of why the last try failed (`ws::WHY`).
     Why { part: u64 },
+    /// Boot-reconnect polling `ws::STATE` until scan is ready or join connects.
+    AutoState,
+    /// Boot-reconnect walking scanned networks to match `auto_ssid`.
+    AutoNetwork { index: u64, part: u64 },
 }
 
 pub struct Wifi {
@@ -40,6 +44,26 @@ pub struct Wifi {
     password_len: usize,
     why: [u8; ws::WHY_BYTES],
     why_len: usize,
+    /// Last scanned SSIDs (index 0..32) so `wifi join N` knows the SSID to save.
+    ssids: [[u8; 32]; 32],
+    ssid_lens: [u8; 32],
+    /// Credentials for the last `wifi join` (for auto-save and `wifi save`).
+    saved_ssid: [u8; 32],
+    saved_ssid_len: usize,
+    saved_pass: [u8; ws::PASSWORD_MAX],
+    saved_pass_len: usize,
+    pending_save: bool,
+    connected: bool,
+    /// Boot-reconnect target SSID (or index when `auto_index > 0`).
+    auto_active: bool,
+    auto_joined: bool,
+    auto_polls: u8,
+    auto_next_at: u64,
+    auto_index: u64,
+    auto_ssid: [u8; 32],
+    auto_ssid_len: usize,
+    auto_pass: [u8; ws::PASSWORD_MAX],
+    auto_pass_len: usize,
 }
 pub static mut WIFI: Wifi = Wifi {
     waiting: Waiting::Nothing,
@@ -53,9 +77,26 @@ pub static mut WIFI: Wifi = Wifi {
     password_len: 0,
     why: [0; ws::WHY_BYTES],
     why_len: 0,
+    ssids: [[0; 32]; 32],
+    ssid_lens: [0; 32],
+    saved_ssid: [0; 32],
+    saved_ssid_len: 0,
+    saved_pass: [0; ws::PASSWORD_MAX],
+    saved_pass_len: 0,
+    pending_save: false,
+    connected: false,
+    auto_active: false,
+    auto_joined: false,
+    auto_polls: 0,
+    auto_next_at: 0,
+    auto_index: 0,
+    auto_ssid: [0; 32],
+    auto_ssid_len: 0,
+    auto_pass: [0; ws::PASSWORD_MAX],
+    auto_pass_len: 0,
 };
 
-const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | leave | ba on|off | replay on|off]";
+const USAGE: &[u8] = b"Use: wifi [scan | join N [PASSPHRASE] | save [SSID [PASS]] | leave | ba on|off | replay on|off]";
 
 fn send(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_NET, ws::OP, action, a, b);
@@ -160,15 +201,16 @@ fn network_line(shown: u64, info: ws::Info, bssid: &[u8], ssid: &[u8], out: &mut
     at
 }
 
-/// `line` without a `wifi join N PASSPHRASE`'s passphrase (for the history).
+/// `line` without a `wifi join N PASSPHRASE` or `wifi save SSID PASSPHRASE`'s passphrase (for the history).
 pub fn without_passphrase(line: &[u8]) -> &[u8] {
     let mut words = line.split(|&b| b == b' ').filter(|w| !w.is_empty());
-    if words.next() != Some(b"wifi") || words.next() != Some(b"join") { return line; }
+    if words.next() != Some(b"wifi") { return line; }
+    if !matches!(words.next(), Some(b"join" | b"save")) { return line; }
     let pw = passphrase(line);
     if pw.is_empty() { line } else { &line[..line.len() - pw.len()] }
 }
 
-/// The passphrase: everything after `join N `.
+/// The passphrase: everything after `join N ` (or `save SSID `).
 fn passphrase(args: &[u8]) -> &[u8] {
     let mut rest = args;
     let skip = if args.trim_ascii_start().starts_with(b"wifi") { 3 } else { 2 };
@@ -180,6 +222,9 @@ fn passphrase(args: &[u8]) -> &[u8] {
     if rest.first() == Some(&b' ') { &rest[1..] } else { rest }
 }
 
+const AUTO_POLL_MS: u64 = 1_500;
+const AUTO_MAX_POLLS: u8 = 20;
+
 impl Wifi {
     fn ask(&mut self, action: u64, a: u64, b: u64) -> bool {
         self.asked = (action, a, b);
@@ -187,23 +232,131 @@ impl Wifi {
         self.tries = 0;
         send(action, a, b)
     }
+    /// True once Wi-Fi has reached `ASSOCIATED` or `CONNECTED`.
+    pub fn is_connected(&self) -> bool { self.connected }
+    /// True while boot-reconnect is waiting for scan / joining / connecting.
+    pub fn auto_joining(&self) -> bool { self.auto_active }
     /// Spindle's loop polls while a reply is due (it may never come; see `RESEND_TICKS`).
-    pub fn busy(&self) -> bool { self.waiting != Waiting::Nothing }
+    pub fn busy(&self) -> bool { self.waiting != Waiting::Nothing || self.auto_active }
+
+    fn stop_auto(&mut self) {
+        self.auto_active = false;
+        self.auto_joined = false;
+        self.auto_polls = 0;
+        self.auto_index = 0;
+        self.auto_ssid = [0; 32];
+        self.auto_ssid_len = 0;
+        self.auto_pass = [0; ws::PASSWORD_MAX];
+        self.auto_pass_len = 0;
+    }
+
+    /// Starts boot-time auto-reconnect by SSID (from `/data/wifi.conf`).
+    pub fn start_auto_join_ssid(&mut self, ssid: &[u8], pass: &[u8], _sb: &mut crate::Scrollback) {
+        if ssid.is_empty() || ssid.len() > 32 || pass.len() > ws::PASSWORD_MAX { return; }
+        self.stop_auto();
+        self.auto_ssid[..ssid.len()].copy_from_slice(ssid);
+        self.auto_ssid_len = ssid.len();
+        self.auto_pass[..pass.len()].copy_from_slice(pass);
+        self.auto_pass_len = pass.len();
+        self.auto_active = true;
+        self.auto_next_at = 0;
+    }
+
+    /// Starts boot-time auto-reconnect by 1-based scan index (from `/data/wifi.conf`).
+    pub fn start_auto_join_index(&mut self, index: u64, pass: &[u8], _sb: &mut crate::Scrollback) {
+        if !(1..=MAX_LISTED).contains(&index) || pass.len() > ws::PASSWORD_MAX { return; }
+        self.stop_auto();
+        self.auto_index = index;
+        self.auto_pass[..pass.len()].copy_from_slice(pass);
+        self.auto_pass_len = pass.len();
+        self.auto_active = true;
+        self.auto_next_at = 0;
+    }
+
+    fn begin_auto_join_idx(&mut self, idx0: u64) {
+        self.auto_joined = true;
+        self.auto_polls = 0;
+        if self.auto_pass_len >= ws::PASSWORD_MIN {
+            self.password = [0; ws::PASSWORD_MAX];
+            self.password[..self.auto_pass_len].copy_from_slice(&self.auto_pass[..self.auto_pass_len]);
+            self.password_len = self.auto_pass_len;
+            if self.send_password(idx0, 0) {
+                self.waiting = Waiting::Password { index: idx0, part: 0 };
+            } else {
+                self.stop_auto();
+            }
+        } else if self.ask(ws::JOIN, idx0, 0) {
+            self.waiting = Waiting::State { scan: false, join: true, leave: false };
+        } else {
+            self.stop_auto();
+        }
+    }
+
+    fn remember_join(&mut self, idx0: u64, pw: &[u8]) {
+        self.saved_ssid = [0; 32];
+        self.saved_ssid_len = 0;
+        if (idx0 as usize) < self.ssids.len() {
+            let sl = self.ssid_lens[idx0 as usize] as usize;
+            if sl > 0 && sl <= 32 {
+                self.saved_ssid[..sl].copy_from_slice(&self.ssids[idx0 as usize][..sl]);
+                self.saved_ssid_len = sl;
+            }
+        }
+        self.saved_pass = [0; ws::PASSWORD_MAX];
+        let pl = pw.len().min(ws::PASSWORD_MAX);
+        self.saved_pass[..pl].copy_from_slice(&pw[..pl]);
+        self.saved_pass_len = pl;
+        self.pending_save = self.saved_ssid_len > 0;
+    }
+
+    fn flush_pending_save(&mut self) {
+        if self.pending_save && self.saved_ssid_len > 0 {
+            self.pending_save = false;
+            unsafe {
+                crate::autoconf::AUTOCONF.queue_save_wifi(
+                    &self.saved_ssid[..self.saved_ssid_len],
+                    &self.saved_pass[..self.saved_pass_len],
+                    false,
+                );
+            }
+        }
+    }
+
     /// Asks again for an answer that never came. Only queries and passphrase parts are
     /// repeated: a repeated scan, join or leave would act twice, so those just end.
     pub fn step(&mut self, sb: &mut crate::Scrollback) {
-        if self.waiting == Waiting::Nothing { return; }
         let now = sex_pdx::get_ticks();
+        if self.waiting == Waiting::Nothing {
+            if self.auto_active && now >= self.auto_next_at {
+                if self.auto_polls >= AUTO_MAX_POLLS {
+                    self.stop_auto();
+                    return;
+                }
+                self.auto_polls += 1;
+                if self.ask(ws::STATE, 0, 0) {
+                    self.waiting = Waiting::AutoState;
+                } else {
+                    self.stop_auto();
+                }
+            }
+            return;
+        }
         if now.saturating_sub(self.asked_at) < RESEND_TICKS { return; }
         let repeatable = match self.waiting {
             Waiting::State { scan, join, leave } => !scan && !join && !leave,
-            Waiting::Network { .. } | Waiting::Password { .. } | Waiting::Why { .. } => true,
+            Waiting::Network { .. } | Waiting::Password { .. } | Waiting::Why { .. }
+            | Waiting::AutoState | Waiting::AutoNetwork { .. } => true,
             Waiting::Nothing => false,
         };
         if !repeatable || self.tries >= RESENDS {
+            let was_auto = matches!(self.waiting, Waiting::AutoState | Waiting::AutoNetwork { .. });
             if matches!(self.waiting, Waiting::Password { .. }) { self.forget(); }
             self.waiting = Waiting::Nothing;
-            sb.push(b"Wi-Fi: no answer from the network service; type wifi to see where it is.");
+            if was_auto {
+                self.stop_auto();
+            } else {
+                sb.push(b"Wi-Fi: no answer from the network service; type wifi to see where it is.");
+            }
             return;
         }
         self.tries += 1;
@@ -232,7 +385,43 @@ impl Wifi {
         let (action, a, scan, join) = match (words.next(), words.next(), words.next()) {
             (None, _, _) => (ws::STATE, 0, false, false),
             (Some(b"scan"), None, _) => (ws::SCAN, 0, true, false),
+            (Some(b"save"), None, _) => {
+                if self.saved_ssid_len == 0 {
+                    sb.push(b"Wi-Fi: no joined network to save yet (run `wifi`, then `wifi join N [PASS]`, or `wifi save SSID [PASS]`).");
+                    return;
+                }
+                unsafe {
+                    crate::autoconf::AUTOCONF.queue_save_wifi(
+                        &self.saved_ssid[..self.saved_ssid_len],
+                        &self.saved_pass[..self.saved_pass_len],
+                        true,
+                    );
+                }
+                return;
+            }
+            (Some(b"save"), Some(ssid), rest) => {
+                if ssid.len() > 32 {
+                    sb.push(b"Wi-Fi: SSID must be at most 32 bytes.");
+                    return;
+                }
+                let pw = if rest.is_none() { &b""[..] } else { passphrase(args) };
+                if !pw.is_empty() && !(ws::PASSWORD_MIN..=ws::PASSWORD_MAX).contains(&pw.len()) {
+                    sb.push(b"Wi-Fi: a Wi-Fi passphrase has 8 to 63 characters.");
+                    return;
+                }
+                self.saved_ssid = [0; 32];
+                self.saved_ssid[..ssid.len()].copy_from_slice(ssid);
+                self.saved_ssid_len = ssid.len();
+                self.saved_pass = [0; ws::PASSWORD_MAX];
+                self.saved_pass[..pw.len()].copy_from_slice(pw);
+                self.saved_pass_len = pw.len();
+                unsafe { crate::autoconf::AUTOCONF.queue_save_wifi(ssid, pw, true); }
+                return;
+            }
             (Some(b"leave") | Some(b"forget"), None, _) => {
+                self.connected = false;
+                self.pending_save = false;
+                self.stop_auto();
                 if self.ask(ws::LEAVE, 0, 0) { self.waiting = Waiting::State { scan: false, join: false, leave: true }; }
                 else { sb.push(b"Wi-Fi: the network service is unreachable."); }
                 return;
@@ -245,13 +434,18 @@ impl Wifi {
             }
             (Some(b"join"), Some(n), rest) => {
                 let Some(n) = parse(n) else { sb.push(USAGE); return; };
-                if rest.is_none() { (ws::JOIN, n - 1, false, true) } else {
+                self.stop_auto();
+                if rest.is_none() {
+                    self.remember_join(n - 1, b"");
+                    (ws::JOIN, n - 1, false, true)
+                } else {
                     // Everything after N is the passphrase (it may hold spaces).
                     let pw = passphrase(args);
                     if !(ws::PASSWORD_MIN..=ws::PASSWORD_MAX).contains(&pw.len()) {
                         sb.push(b"Wi-Fi: a Wi-Fi passphrase has 8 to 63 characters.");
                         return;
                     }
+                    self.remember_join(n - 1, pw);
                     self.password = [0; ws::PASSWORD_MAX];
                     self.password[..pw.len()].copy_from_slice(pw);
                     self.password_len = pw.len();
@@ -269,13 +463,102 @@ impl Wifi {
     pub fn receive(&mut self, caller: u32, value: u64, sb: &mut crate::Scrollback) -> bool {
         if caller != NET_PD || self.waiting == Waiting::Nothing || !ws::is_reply(value) { return false; }
         let waiting = core::mem::replace(&mut self.waiting, Waiting::Nothing);
-        if value == ws::REFUSED { self.forget(); sb.push(b"Wi-Fi: the network service refused that."); return true; }
-        if value == ws::NEEDS_PASSWORD { sb.push(b"Wi-Fi: that network needs its passphrase: wifi join N PASSPHRASE"); return true; }
+        if value == ws::REFUSED {
+            self.forget();
+            self.pending_save = false;
+            if matches!(waiting, Waiting::AutoState | Waiting::AutoNetwork { .. }) { self.stop_auto(); return true; }
+            sb.push(b"Wi-Fi: the network service refused that.");
+            return true;
+        }
+        if value == ws::NEEDS_PASSWORD {
+            self.pending_save = false;
+            if self.auto_active { self.stop_auto(); }
+            sb.push(b"Wi-Fi: that network needs its passphrase: wifi join N PASSPHRASE");
+            return true;
+        }
         let mut line = [0u8; 128];
         match waiting {
             Waiting::Nothing => return false,
+            Waiting::AutoState => {
+                let s = ws::State::of(value);
+                self.connected = matches!(s.phase, ws::ASSOCIATED | ws::CONNECTED);
+                if self.connected {
+                    self.stop_auto();
+                    sb.push(b"boot-reconnect: Wi-Fi connected.");
+                    return true;
+                }
+                if s.phase == ws::NONE || s.phase == ws::FAILED {
+                    self.stop_auto();
+                    return true;
+                }
+                if self.auto_joined {
+                    self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
+                    return true;
+                }
+                if s.phase == ws::READY && s.networks > 0 {
+                    if self.auto_index > 0 {
+                        if self.auto_index <= s.networks as u64 {
+                            self.begin_auto_join_idx(self.auto_index - 1);
+                        } else {
+                            self.stop_auto();
+                        }
+                    } else if self.ask(ws::NETWORK, 0, ws::PART_INFO) {
+                        self.waiting = Waiting::AutoNetwork { index: 0, part: ws::PART_INFO };
+                    } else {
+                        self.stop_auto();
+                    }
+                    return true;
+                }
+                // Still STARTING or SCANNING: poll again shortly.
+                self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
+            }
+            Waiting::AutoNetwork { index, part } => {
+                if value == ws::MISSING {
+                    // Target SSID not in this scan; retry on next poll if budget remains.
+                    self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
+                    return true;
+                }
+                match part {
+                    ws::PART_INFO => { self.info = ws::Info::of(value); self.ssid = [0; 35]; }
+                    ws::PART_BSSID => ws::word_bytes(value, &mut self.bssid),
+                    p => ws::word_bytes(value, &mut self.ssid[((p - ws::PART_SSID) * 7) as usize..]),
+                }
+                let ssid_len = (self.info.ssid_len as u64).min(32);
+                let last = ws::PART_SSID + (ssid_len + 6) / 7;
+                let next = part + 1;
+                if next < last.max(ws::PART_SSID) && self.ask(ws::NETWORK, index, next) {
+                    self.waiting = Waiting::AutoNetwork { index, part: next };
+                    return true;
+                }
+                if (index as usize) < self.ssids.len() {
+                    let sl = ssid_len as usize;
+                    self.ssids[index as usize][..sl].copy_from_slice(&self.ssid[..sl]);
+                    self.ssid_lens[index as usize] = sl as u8;
+                }
+                if ssid_len as usize == self.auto_ssid_len
+                    && self.ssid[..self.auto_ssid_len] == self.auto_ssid[..self.auto_ssid_len]
+                {
+                    self.begin_auto_join_idx(index);
+                    return true;
+                }
+                if index + 1 < MAX_LISTED && self.ask(ws::NETWORK, index + 1, ws::PART_INFO) {
+                    self.waiting = Waiting::AutoNetwork { index: index + 1, part: ws::PART_INFO };
+                } else {
+                    self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS;
+                }
+            }
             Waiting::State { scan, join, leave } => {
                 let s = ws::State::of(value);
+                self.connected = matches!(s.phase, ws::ASSOCIATED | ws::CONNECTED);
+                if join && !matches!(s.phase, ws::NONE | ws::FAILED) {
+                    self.flush_pending_save();
+                } else if self.connected {
+                    self.flush_pending_save();
+                }
+                if self.auto_active {
+                    if self.connected { self.stop_auto(); }
+                    else { self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS; }
+                }
                 let n = state_line(s, scan, join, leave, &mut line);
                 sb.push(&line[..n]);
                 sex_pdx::serial_record!("[spindle.wifi] phase={} networks={} scans={} channels={}", s.phase, s.networks, s.scans, s.channels);
@@ -346,6 +629,11 @@ impl Wifi {
                 if next < last.max(ws::PART_SSID) && self.ask(ws::NETWORK, index, next) {
                     self.waiting = Waiting::Network { index, part: next };
                     return true;
+                }
+                if (index as usize) < self.ssids.len() {
+                    let sl = ssid_len as usize;
+                    self.ssids[index as usize][..sl].copy_from_slice(&self.ssid[..sl]);
+                    self.ssid_lens[index as usize] = sl as u8;
                 }
                 let n = network_line(index + 1, self.info, &self.bssid, &self.ssid[..ssid_len as usize], &mut line);
                 sb.push(&line[..n]);

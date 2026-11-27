@@ -190,6 +190,26 @@ const PUSHFILE_IDLE: PushfileRx = PushfileRx {
     expected_len: 0, received: 0, expected_fnv: 0, fnv: log::FNV64_OFFSET,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PullPhase { Idle, Stat, Reading }
+
+const PULL_CHUNK_BYTES: usize = 1024;
+const PULL_OUT_HEADROOM: usize = PULL_CHUNK_BYTES * 2 + 64;
+
+struct PullfileTx {
+    phase: PullPhase,
+    fs_submitted: bool,
+    path: [u8; log::PUSHFILE_MAX_PATH],
+    path_len: usize,
+    total_len: u64,
+    offset: u64,
+    fnv: u64,
+}
+const PULLFILE_IDLE: PullfileTx = PullfileTx {
+    phase: PullPhase::Idle, fs_submitted: false, path: [0; log::PUSHFILE_MAX_PATH], path_len: 0,
+    total_len: 0, offset: 0, fnv: log::FNV64_OFFSET,
+};
+
 pub struct Tether {
     phase: Phase,
     seq: u32,
@@ -227,6 +247,7 @@ pub struct Tether {
     sweep: Sweep,
     hotswap: HotswapRx,
     pushfile: PushfileRx,
+    pullfile: PullfileTx,
     /// Control tether to reconnect automatically after a `tether sweep` completes.
     resume: Resume,
 }
@@ -240,6 +261,7 @@ pub static mut TETHER: Tether = Tether {
     sweep: SWEEP_IDLE,
     hotswap: HOTSWAP_IDLE,
     pushfile: PUSHFILE_IDLE,
+    pullfile: PULLFILE_IDLE,
     resume: RESUME_NONE,
 };
 
@@ -508,6 +530,7 @@ impl Tether {
         self.sent = false;
         self.hotswap_reset();
         self.pushfile_reset();
+        self.pullfile_reset();
     }
 
     fn hotswap_reset(&mut self) {
@@ -531,10 +554,45 @@ impl Tether {
         self.pushfile.fnv = log::FNV64_OFFSET;
     }
 
+    fn pullfile_reset(&mut self) {
+        self.pullfile.phase = PullPhase::Idle;
+        self.pullfile.fs_submitted = false;
+        self.pullfile.path_len = 0;
+        self.pullfile.total_len = 0;
+        self.pullfile.offset = 0;
+        self.pullfile.fnv = log::FNV64_OFFSET;
+    }
+
+    /// `pull-file <path>`: streams `<path>` back over the live tether TCP stream in framed hex lines.
+    pub fn pull_file(&mut self, args: &[u8], sb: &mut Scrollback) {
+        let path = trim(args);
+        if path.is_empty() {
+            sb.push(b"Usage: pull-file <path>");
+            return;
+        }
+        if self.phase != Phase::Live || self.sweep.active {
+            sb.push(b"pull-file: err tether is not active.");
+            return;
+        }
+        if self.pullfile.phase != PullPhase::Idle {
+            sb.push(b"pull-file: err a pull-file transfer is already in progress.");
+            return;
+        }
+        if path.len() > log::PUSHFILE_MAX_PATH || path.iter().any(|&b| b <= b' ' || b == 0x7f) {
+            sb.push(b"pull-file: err invalid path.");
+            return;
+        }
+        self.pullfile_reset();
+        self.pullfile.path[..path.len()].copy_from_slice(path);
+        self.pullfile.path_len = path.len();
+        self.pullfile.phase = PullPhase::Stat;
+    }
+
     fn end(&mut self) {
         // A call still out is answered and dropped by `receive` (phase Close).
         self.hotswap_reset();
         self.pushfile_reset();
+        self.pullfile_reset();
         self.phase = Phase::Close;
         self.next_at = 0;
     }
@@ -583,6 +641,7 @@ impl Tether {
             }
             return;
         }
+        if self.pullfile.phase != PullPhase::Idle { return; }
         let kept = sb.retained() as u32;
         let oldest = sb.total_lines.saturating_sub(kept);
         if self.lines_sent < oldest {
@@ -651,6 +710,7 @@ impl Tether {
             Phase::CloseListener => self.net_call_on(LISTEN_FLOW, w::CLOSE, 0, Call::Close),
             Phase::Live => {
                 self.step_pushfile(sb);
+                self.step_pullfile(sb);
                 if self.out_len == 0 { self.fill(sb); }
                 let push_rx = matches!(self.pushfile.phase, PushPhase::Ready | PushPhase::Discard);
                 let push_wait = matches!(self.pushfile.phase, PushPhase::Opening | PushPhase::Writing)
@@ -769,7 +829,10 @@ impl Tether {
                         self.sweep.live_at = now;
                         self.sweep.progress_at = now + s.idle_ms;
                     } else {
-                    say!(sb, "tether: up to {}:{}. Commands from there show as remote> lines; tether off ends it.", host, self.port);
+                        say!(sb, "tether: up to {}:{}. Commands from there show as remote> lines; tether off ends it.", host, self.port);
+                        if !self.listening && self.host_len > 0 {
+                            unsafe { crate::autoconf::AUTOCONF.queue_save_tether(&self.host[..self.host_len], self.port); }
+                        }
                     }
                     sex_pdx::serial_record!("[spindle.tether.up] port={}", self.port);
                 }
@@ -846,6 +909,128 @@ impl Tether {
             _ => {}
         }
         true
+    }
+
+    fn put_hex_line(&mut self, bytes: &[u8]) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        self.put(b"@@PULL-CHUNK ");
+        for &b in bytes {
+            if self.out_len + 2 > OUT_MAX { break; }
+            self.out[self.out_len] = HEX[(b >> 4) as usize];
+            self.out[self.out_len + 1] = HEX[(b & 0x0f) as usize];
+            self.out_len += 2;
+        }
+        self.put(b"\n");
+    }
+
+    fn emit_pull_err(&mut self, path: &[u8], reason: &str, status: u8, sb: &mut Scrollback) {
+        let pstr = core::str::from_utf8(path).unwrap_or("?");
+        self.put(b"@@PULL-ERR ");
+        self.put(path);
+        let mut t = Text { buf: [0; 160], len: 0 };
+        let _ = core::fmt::Write::write_fmt(&mut t, format_args!(" {} (status={})\n", reason, status));
+        let (b, n) = (t.buf, t.len);
+        self.put(&b[..n]);
+        say!(sb, "pull-file: err {} {} (status={})", pstr, reason, status);
+    }
+
+    fn step_pullfile(&mut self, sb: &mut Scrollback) {
+        if self.pullfile.phase == PullPhase::Idle || self.log_at != usize::MAX { return; }
+        match self.pullfile.phase {
+            PullPhase::Idle => {}
+            PullPhase::Stat => {
+                if !self.pullfile.fs_submitted {
+                    if OUT_MAX - self.out_len < 320 { return; }
+                    if unsafe { crate::fs_commands::FS.busy() || crate::play_command::PLAY.busy() } { return; }
+                    let path = self.pullfile.path;
+                    let plen = self.pullfile.path_len;
+                    if unsafe { crate::fs_commands::FS.start_pull_stat(&path[..plen]) } {
+                        self.pullfile.fs_submitted = true;
+                    } else {
+                        self.emit_pull_err(&path[..plen], "filesystem unavailable", 0, sb);
+                        self.pullfile_reset();
+                    }
+                    return;
+                }
+                let Some((st, size)) = (unsafe { crate::fs_commands::PULLFILE_STAT.take() }) else { return };
+                self.pullfile.fs_submitted = false;
+                let path = self.pullfile.path;
+                let plen = self.pullfile.path_len;
+                if st != sex_pdx::fs::OK {
+                    self.emit_pull_err(&path[..plen], "stat failed", st, sb);
+                    self.pullfile_reset();
+                    return;
+                }
+                self.pullfile.total_len = size;
+                self.pullfile.offset = 0;
+                self.pullfile.fnv = log::FNV64_OFFSET;
+                self.put(b"@@PULL-BEGIN ");
+                self.put(&path[..plen]);
+                let mut t = Text { buf: [0; 160], len: 0 };
+                let _ = core::fmt::Write::write_fmt(&mut t, format_args!(" {}\n", size));
+                let (b, n) = (t.buf, t.len);
+                self.put(&b[..n]);
+                if size == 0 {
+                    let mut end = Text { buf: [0; 160], len: 0 };
+                    let _ = core::fmt::Write::write_fmt(&mut end, format_args!("@@PULL-END {:016x}\n", self.pullfile.fnv));
+                    let (eb, en) = (end.buf, end.len);
+                    self.put(&eb[..en]);
+                    let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                    say!(sb, "pull-file: ok {} (0 bytes)", pstr);
+                    self.pullfile_reset();
+                    return;
+                }
+                self.pullfile.phase = PullPhase::Reading;
+            }
+            PullPhase::Reading => {
+                if !self.pullfile.fs_submitted {
+                    if OUT_MAX - self.out_len < PULL_OUT_HEADROOM { return; }
+                    if unsafe { crate::fs_commands::FS.busy() || crate::play_command::PLAY.busy() } { return; }
+                    let rem = self.pullfile.total_len.saturating_sub(self.pullfile.offset);
+                    let want = rem.min(PULL_CHUNK_BYTES as u64);
+                    let path = self.pullfile.path;
+                    let plen = self.pullfile.path_len;
+                    if unsafe { crate::fs_commands::FS.start_pull_read(&path[..plen], self.pullfile.offset, want) } {
+                        self.pullfile.fs_submitted = true;
+                    } else {
+                        self.emit_pull_err(&path[..plen], "read start failed", 0, sb);
+                        self.pullfile_reset();
+                    }
+                    return;
+                }
+                let Some((st, got)) = (unsafe { crate::fs_commands::PULLFILE_READ.take() }) else { return };
+                self.pullfile.fs_submitted = false;
+                let path = self.pullfile.path;
+                let plen = self.pullfile.path_len;
+                if st != sex_pdx::fs::OK {
+                    self.emit_pull_err(&path[..plen], "read failed", st, sb);
+                    self.pullfile_reset();
+                    return;
+                }
+                let n = got.min(PULL_CHUNK_BYTES);
+                if n > 0 {
+                    let ok = crate::fs_commands::Client::with_pull_bytes(n, |chunk| {
+                        self.pullfile.fnv = log::fnv64_update(self.pullfile.fnv, chunk);
+                        self.put_hex_line(chunk);
+                    });
+                    if !ok {
+                        self.emit_pull_err(&path[..plen], "region unavailable", 0, sb);
+                        self.pullfile_reset();
+                        return;
+                    }
+                    self.pullfile.offset += n as u64;
+                }
+                if self.pullfile.offset >= self.pullfile.total_len || n == 0 {
+                    let mut end = Text { buf: [0; 160], len: 0 };
+                    let _ = core::fmt::Write::write_fmt(&mut end, format_args!("@@PULL-END {:016x}\n", self.pullfile.fnv));
+                    let (eb, en) = (end.buf, end.len);
+                    self.put(&eb[..en]);
+                    let pstr = core::str::from_utf8(&path[..plen]).unwrap_or("?");
+                    say!(sb, "pull-file: ok {} ({} bytes)", pstr, self.pullfile.offset);
+                    self.pullfile_reset();
+                }
+            }
+        }
     }
 
     fn step_pushfile(&mut self, sb: &mut Scrollback) {

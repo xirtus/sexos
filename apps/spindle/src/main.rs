@@ -105,6 +105,7 @@ mod volume_command;
 mod wifi_command;
 mod hw_command;
 mod tether_command;
+mod autoconf;
 mod calc_command;
 mod complete;
 mod silk_command;
@@ -850,8 +851,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     }
     if cmd.is_empty() { return true; }
     if unsafe{capture_command::CAPTURE.busy()}&&cmd!=b"capture-cancel"&&cmd!=b"record-stop"{sb.push(b"Capture owns the file buffer. Escape cancels; Close stays available.");return true}
-    // The session is being written to disk: the command runs as soon as that ends.
-    if unsafe{session_command::SESSION.io_busy()}{
+    // The session or autoconf is using the file buffer: the command runs as soon as that ends.
+    if unsafe{session_command::SESSION.io_busy()||autoconf::AUTOCONF.io_busy()}{
         if line.len()>CMD_MAX||unsafe{HELD_LEN}!=0{sb.push(b"The disk is saving the session for a moment. Try again.");return true}
         unsafe{HELD[..line.len()].copy_from_slice(line);HELD_LEN=line.len();}
         serial_println!("[spindle.cmd.held] len={}",line.len());
@@ -862,6 +863,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     if unsafe{tether_command::TETHER.sweeping()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"A Wi-Fi sweep is running: tether off first, then try again.");return true}
     let recognized = match cmd {
         b"tether"=>{unsafe{let busy=fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy();(*core::ptr::addr_of_mut!(tether_command::TETHER)).command(args,sb,busy);}true},
+        b"pull-file"=>{unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).pull_file(args,sb);}true},
+        b"boot-reconnect"=>{unsafe{(*core::ptr::addr_of_mut!(autoconf::AUTOCONF)).trigger_reconnect(sb);}true},
         b"hotswap"=>{tether_command::hotswap_command(args,sb);true},
         b"play"=>{unsafe{play_command::PLAY.command(args,sb);}true},
         b"sweep"=>{sweep_command::command(args,sb);true},
@@ -2550,7 +2553,7 @@ pub extern "C" fn _start() -> ! {
     assert!(catalog.task_id!=0,"SPINDLE_EXACT_NETWORK_TASK");
     assert_eq!(sex_pdx::device_network_config(sex_pdx::SLOT_NET),Err(sex_pdx::pci_command::DENIED),"SPINDLE_ROUTE_HAS_NO_NIC_METADATA");
     sex_pdx::serial_record!("[spindle.net.idle] target={} task={} explicit_intent=1 nic_metadata=0",catalog.target_pd,catalog.task_id);
-    unsafe{HISTORY_IO.init(catalog.target_pd);session_command::SESSION.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO.bind(catalog.target_pd);if let Ok(region)=sex_pdx::text_region_client(){DISPLAY_IO.use_region(region);}}
+    unsafe{HISTORY_IO.init(catalog.target_pd);session_command::SESSION.init(catalog.target_pd);autoconf::AUTOCONF.init(catalog.target_pd);HISTORY_STATUS=sex_pdx::spindle_status::Publisher::new(catalog.target_pd,catalog.task_id);DISPLAY_IO.bind(catalog.target_pd);if let Ok(region)=sex_pdx::text_region_client(){DISPLAY_IO.use_region(region);}}
     sex_pdx::serial_record!("[spindle.incarnation.start] target={} task={} surface={} fresh=1",catalog.target_pd,catalog.task_id,catalog.surface_id);
     serial_println!("[spindle.init.start]");
     serial_println!("[spindle.boot]");
@@ -2894,11 +2897,11 @@ pub extern "C" fn _start() -> ! {
         if unsafe{capture_command::CAPTURE.step(sb,!DISPLAY_IO.pending())}{unsafe{content_render(&line,sb);}}
         if unsafe{fs_commands::FS.send(sb)}{}
         {
-            let idle=unsafe{!fs_commands::FS.busy()&&!play_command::PLAY.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
+            let idle=unsafe{!fs_commands::FS.busy()&&!autoconf::AUTOCONF.io_busy()&&!play_command::PLAY.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
             // A line held while the session file was busy runs before the session opens more.
             if unsafe{session_command::SESSION.step(idle&&HELD_LEN==0,sb)}{unsafe{content_render(&line,sb);}}
         }
-        if unsafe{HELD_LEN!=0&&!session_command::SESSION.io_busy()}{
+        if unsafe{HELD_LEN!=0&&!session_command::SESSION.io_busy()&&!autoconf::AUTOCONF.io_busy()}{
             let held=unsafe{let n=HELD_LEN;HELD_LEN=0;let mut b=[0u8;CMD_MAX];b[..n].copy_from_slice(&HELD[..n]);(b,n)};
             let ok=dispatch(&held.0[..held.1],sb,hist,&mut ev);
             serial_println!("[spindle.cmd.held.run] len={} ok={}",held.1,ok as u8);
@@ -2914,15 +2917,16 @@ pub extern "C" fn _start() -> ! {
             let before=sb.total_lines;
             unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb,fetch_command::FETCH.region_in_use());}
             unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).step(sb);}
-            let files_free=unsafe{!session_command::SESSION.io_busy()&&!play_command::PLAY.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
+            let files_free=unsafe{!session_command::SESSION.io_busy()&&!autoconf::AUTOCONF.io_busy()&&!play_command::PLAY.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
             hw_command::tick(sb,files_free);
-            if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()}{
+            unsafe{(*core::ptr::addr_of_mut!(autoconf::AUTOCONF)).step(files_free&&!fs_commands::FS.busy(),sb);}
+            if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()&&!autoconf::AUTOCONF.io_busy()}{
                 let mut remote=[0u8;tether_command::CMD_MAX];
                 if let Some(n)=unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).next_command(&mut remote)}{run_remote(&remote[..n],sb,hist,&mut ev);}
             }
             if sb.total_lines!=before{unsafe{content_render(&line,sb);}}
         }
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||play_command::PLAY.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()||(*core::ptr::addr_of!(wifi_command::WIFI)).busy()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||play_command::PLAY.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||autoconf::AUTOCONF.busy()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()||(*core::ptr::addr_of!(wifi_command::WIFI)).busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
@@ -2931,6 +2935,7 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id==1&&unsafe{fetch_command::FETCH.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).receive(msg.caller_pd,msg.arg0,sb)}{if sb.total_lines!=capture_lines{unsafe{content_render(&line,sb);}}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{session_command::SESSION.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
+        if msg.type_id==1&&msg.caller_pd==11&&unsafe{autoconf::AUTOCONF.receive(msg.arg0,sb)}{if sb.total_lines!=capture_lines{unsafe{content_render(&line,sb);}}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{play_command::PLAY.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{

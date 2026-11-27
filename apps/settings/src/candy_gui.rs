@@ -521,6 +521,63 @@ pub struct PrefSnapshot {
     pub keybinds: KeybindProfile,
 }
 
+/// Default upstream repositories shown in the Updates & Dotfiles panel.
+pub const SYSTEM_REPO: &str = "xirtus/sexos";
+pub const DOTFILES_REPO: &str = "xirtus/sexosdotfiles";
+
+/// Zero-heap state for the Tatami Software Update & Private Dotfiles Sync panel.
+pub struct UpdatesState {
+    pub system_checked: bool,
+    pub system_status: [u8; 96],
+    pub system_status_len: usize,
+    pub dotfiles_synced: bool,
+    pub dotfiles_auto_sync: bool,
+    pub dotfiles_status: [u8; 96],
+    pub dotfiles_status_len: usize,
+}
+
+impl UpdatesState {
+    pub const fn new() -> Self {
+        Self {
+            system_checked: false,
+            system_status: [0; 96],
+            system_status_len: 0,
+            dotfiles_synced: false,
+            dotfiles_auto_sync: true,
+            dotfiles_status: [0; 96],
+            dotfiles_status_len: 0,
+        }
+    }
+
+    pub fn set_system_status(&mut self, msg: &[u8]) {
+        let n = msg.len().min(self.system_status.len());
+        self.system_status[..n].copy_from_slice(&msg[..n]);
+        self.system_status_len = n;
+    }
+
+    pub fn system_status_bytes(&self) -> &[u8] {
+        if self.system_status_len > 0 {
+            &self.system_status[..self.system_status_len]
+        } else {
+            b"Ready - click Check Update or run 'update' in Spindle."
+        }
+    }
+
+    pub fn set_dotfiles_status(&mut self, msg: &[u8]) {
+        let n = msg.len().min(self.dotfiles_status.len());
+        self.dotfiles_status[..n].copy_from_slice(&msg[..n]);
+        self.dotfiles_status_len = n;
+    }
+
+    pub fn dotfiles_status_bytes(&self) -> &[u8] {
+        if self.dotfiles_status_len > 0 {
+            &self.dotfiles_status[..self.dotfiles_status_len]
+        } else {
+            b"Repo: xirtus/sexosdotfiles (private) - click Sync or Pull."
+        }
+    }
+}
+
 /// Interactive hitbox action emitted on click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
@@ -542,6 +599,11 @@ pub enum UiAction {
     InstallRefresh,
     InstallPlan,
     InstallExecute,
+    CheckSystemUpdate,
+    RefreshUpdates,
+    SyncDotfiles,
+    PullDotfiles,
+    ToggleDotfilesAutoSync,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -573,6 +635,7 @@ pub struct GuiState {
     pub hits: [Option<HitRect>; MAX_HITS],
     pub hit_count: usize,
     pub install: InstallState,
+    pub updates: UpdatesState,
 }
 
 impl GuiState {
@@ -590,6 +653,7 @@ impl GuiState {
             hits: [None; MAX_HITS],
             hit_count: 0,
             install: InstallState::new(),
+            updates: UpdatesState::new(),
         }
     }
 
@@ -808,7 +872,11 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
         SidebarView::SystemPage(idx) => {
             let (pages, n) = model::pages();
             if idx < n {
-                model::page_title(pages[idx]).as_bytes()
+                if pages[idx] == "updates" {
+                    b"Software Update & Private Dotfiles"
+                } else {
+                    model::page_title(pages[idx]).as_bytes()
+                }
             } else {
                 b"System"
             }
@@ -904,6 +972,9 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
         SidebarView::Keybinds => render_keybinds(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
         SidebarView::Profiles => render_profiles(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
         SidebarView::Install => render_install(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
+        SidebarView::SystemPage(idx) if idx < page_count && pages[idx] == "updates" => {
+            render_updates(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch)
+        }
         SidebarView::SystemPage(_) => render_system_page(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
     }
 
@@ -1565,6 +1636,148 @@ fn render_install(
     }
 }
 
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_updates(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    ch: i32,
+) {
+    let max_y = y + ch;
+    let info = &m.info[..m.info_len];
+
+    // 1. SexOS System Update Card (xirtus/sexos A/B slot update).
+    let sys_h = (ch - 196).clamp(160, 236);
+    draw_candy_panel(buf, w, h, x, y, cw, sys_h, 10, pal);
+    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, sys_h - 12, 2, pal.accent);
+    draw_text(buf, w, h, g, x + 14, y + 10, cw - 130, b"SexOS System (xirtus/sexos A/B Slot)", pal.text);
+
+    let (slot_badge, slot_col): (&[u8], u32) = if contains_bytes(info, b"slot A") {
+        (b"SLOT A", 0x0034_D399)
+    } else if contains_bytes(info, b"slot B") {
+        (b"SLOT B", 0x0060_A5FA)
+    } else if contains_bytes(info, b"USB stick") {
+        (b"LIVE USB", 0x00F5_9E0B)
+    } else {
+        (b"A/B SLOT", pal.accent)
+    };
+    draw_candy_badge(buf, w, h, x + cw - 92, y + 8, 80, 20, slot_col, pal);
+    draw_text(buf, w, h, g, x + cw - 84, y + 10, 68, slot_badge, 0x0010_0C1C);
+
+    let mut ly = y + 36;
+    let info_bottom = y + sys_h - 62;
+    if !info.is_empty() {
+        for line in info.split(|&b| b == b'\n') {
+            if ly + 16 > info_bottom {
+                break;
+            }
+            if !line.is_empty() {
+                draw_text(buf, w, h, g, x + 14, ly, cw - 28, line, pal.text_dim);
+                ly += 17;
+            }
+        }
+    } else {
+        draw_text(
+            buf,
+            w,
+            h,
+            g,
+            x + 14,
+            ly,
+            cw - 28,
+            b"Atomic A/B system updates from github.com/xirtus/sexos.",
+            pal.text_dim,
+        );
+        ly += 18;
+        draw_text(
+            buf,
+            w,
+            h,
+            g,
+            x + 14,
+            ly,
+            cw - 28,
+            b"Signed releases verify before switching the inactive slot.",
+            pal.text_dim,
+        );
+    }
+
+    draw_text(buf, w, h, g, x + 14, y + sys_h - 56, cw - 28, gui.updates.system_status_bytes(), pal.accent);
+
+    let sys_btn_y = y + sys_h - 36;
+    let chk_w = 134;
+    let chk_act = UiAction::CheckSystemUpdate;
+    draw_candy_button(buf, w, h, x + 14, sys_btn_y, chk_w, 26, 8, ButtonStyle::Primary, gui.btn_state(chk_act), pal);
+    draw_text(buf, w, h, g, x + 26, sys_btn_y + 5, chk_w - 20, b"Check Update", pal.text_on_accent);
+    gui.push_hit(x + 14, sys_btn_y, chk_w, 26, chk_act);
+
+    let ref_x = x + 14 + chk_w + 10;
+    let ref_w = 128;
+    let ref_act = UiAction::RefreshUpdates;
+    draw_candy_button(buf, w, h, ref_x, sys_btn_y, ref_w, 26, 8, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
+    draw_text(buf, w, h, g, ref_x + 14, sys_btn_y + 5, ref_w - 20, b"Refresh Slot", pal.text);
+    gui.push_hit(ref_x, sys_btn_y, ref_w, 26, ref_act);
+
+    y += sys_h + 12;
+
+    // 2. Private Dotfiles Sync Card (xirtus/sexosdotfiles).
+    let dot_h = (max_y - y).clamp(132, 176);
+    draw_candy_panel(buf, w, h, x, y, cw, dot_h, 10, pal);
+    let dot_col = if gui.updates.dotfiles_synced { 0x0034_D399 } else { pal.accent };
+    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, dot_h - 12, 2, dot_col);
+    draw_text(buf, w, h, g, x + 14, y + 10, cw - 130, b"Private Dotfiles (xirtus/sexosdotfiles)", pal.text);
+
+    let dot_badge: &[u8] = if gui.updates.dotfiles_synced { b"SYNCED" } else { b"READY" };
+    draw_candy_badge(buf, w, h, x + cw - 86, y + 8, 74, 20, dot_col, pal);
+    draw_text(buf, w, h, g, x + cw - 76, y + 10, 60, dot_badge, 0x0010_0C1C);
+
+    draw_text(
+        buf,
+        w,
+        h,
+        g,
+        x + 14,
+        y + 34,
+        cw - 28,
+        b"Sync Candy Lavender themes, keybinds & Spindle config via xirtus/sexosdotfiles.",
+        pal.text_dim,
+    );
+    draw_text(buf, w, h, g, x + 14, y + 54, cw - 28, gui.updates.dotfiles_status_bytes(), pal.accent);
+
+    // Auto-sync toggle row.
+    let tog_y = y + 76;
+    draw_text(buf, w, h, g, x + 14, tog_y + 2, cw - 90, b"Auto-sync private dotfiles on login", pal.text);
+    let tog_act = UiAction::ToggleDotfilesAutoSync;
+    draw_candy_toggle(buf, w, h, x + cw - 62, tog_y, 46, 22, gui.updates.dotfiles_auto_sync, gui.btn_state(tog_act), pal);
+    gui.push_hit(x + cw - 66, tog_y - 2, 54, 26, tog_act);
+
+    // Sync & Pull buttons.
+    let dot_btn_y = y + dot_h - 34;
+    let sync_w = 134;
+    let sync_act = UiAction::SyncDotfiles;
+    draw_candy_button(buf, w, h, x + 14, dot_btn_y, sync_w, 26, 8, ButtonStyle::Primary, gui.btn_state(sync_act), pal);
+    draw_text(buf, w, h, g, x + 24, dot_btn_y + 5, sync_w - 18, b"Sync Dotfiles", pal.text_on_accent);
+    gui.push_hit(x + 14, dot_btn_y, sync_w, 26, sync_act);
+
+    let pull_x = x + 14 + sync_w + 10;
+    let pull_w = 124;
+    let pull_act = UiAction::PullDotfiles;
+    draw_candy_button(buf, w, h, pull_x, dot_btn_y, pull_w, 26, 8, ButtonStyle::Normal, gui.btn_state(pull_act), pal);
+    draw_text(buf, w, h, g, pull_x + 16, dot_btn_y + 5, pull_w - 20, b"Pull Latest", pal.text);
+    gui.push_hit(pull_x, dot_btn_y, pull_w, 26, pull_act);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1691,6 +1904,35 @@ mod tests {
         assert!(has(UiAction::InstallRefresh), "missing Refresh button hitbox");
         assert!(has(UiAction::InstallPlan), "missing Plan Install button hitbox");
         assert!(has(UiAction::InstallExecute), "missing Install Now button hitbox");
+    }
+
+    #[test]
+    fn updates_gui_renders_system_ab_and_dotfiles_controls() {
+        let cfg = Config::new();
+        let mut m = Model::new(cfg);
+        let (pages, count) = model::pages();
+        let updates_idx = pages[..count].iter().position(|&p| p == "updates").expect("updates page exists");
+        m.page = updates_idx;
+        m.set_info(b"  Running from system slot A.\n  Version: 12 (the last update that passed its trial)\n");
+
+        let mut gui = GuiState::new();
+        gui.view = SidebarView::SystemPage(updates_idx);
+        gui.updates.set_system_status(b"Checked xirtus/sexos A/B slot.");
+        gui.updates.set_dotfiles_status(b"Synced xirtus/sexosdotfiles.");
+        gui.updates.dotfiles_synced = true;
+
+        let mut g = Glyphs::new();
+        let mut buf = vec![0u32; 900 * 600];
+        render_gui(&mut buf, 900, 600, &mut g, &mut gui, &m);
+
+        let has = |act: UiAction| gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == act);
+        assert!(has(UiAction::CheckSystemUpdate), "missing Check Update hitbox");
+        assert!(has(UiAction::RefreshUpdates), "missing Refresh Slot hitbox");
+        assert!(has(UiAction::SyncDotfiles), "missing Sync Dotfiles hitbox");
+        assert!(has(UiAction::PullDotfiles), "missing Pull Latest hitbox");
+        assert!(has(UiAction::ToggleDotfilesAutoSync), "missing Auto-sync toggle hitbox");
+        assert_eq!(SYSTEM_REPO, "xirtus/sexos");
+        assert_eq!(DOTFILES_REPO, "xirtus/sexosdotfiles");
     }
 }
 

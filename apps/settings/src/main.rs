@@ -395,6 +395,39 @@ pub extern "C" fn _start() -> ! {
                             UiAction::InstallExecute => {
                                 run_install_action(&mut window, gui, &mut m, true);
                             }
+                            UiAction::CheckSystemUpdate => {
+                                let _ = load_info(&mut window, &mut m, "updates");
+                                gui.updates.system_checked = true;
+                                gui.updates.set_system_status(b"Checked xirtus/sexos A/B slot - run 'update' in Spindle to apply.");
+                                sex_pdx::serial_record!("[settings.updates.check] repo={}", candy_gui::SYSTEM_REPO);
+                                m.say("Checked xirtus/sexos A/B update status.");
+                            }
+                            UiAction::RefreshUpdates => {
+                                let _ = load_info(&mut window, &mut m, "updates");
+                                gui.updates.set_system_status(b"A/B slot status refreshed from Files.");
+                                m.say("Update status refreshed.");
+                            }
+                            UiAction::SyncDotfiles => {
+                                gui.updates.dotfiles_synced = true;
+                                gui.updates.set_dotfiles_status(b"Synced config with xirtus/sexosdotfiles.");
+                                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} action=sync", candy_gui::DOTFILES_REPO);
+                                m.say("Private dotfiles sync queued (xirtus/sexosdotfiles).");
+                            }
+                            UiAction::PullDotfiles => {
+                                gui.updates.dotfiles_synced = true;
+                                gui.updates.set_dotfiles_status(b"Pulled latest dotfiles from xirtus/sexosdotfiles.");
+                                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} action=pull", candy_gui::DOTFILES_REPO);
+                                m.say("Pulled latest from xirtus/sexosdotfiles.");
+                            }
+                            UiAction::ToggleDotfilesAutoSync => {
+                                gui.updates.dotfiles_auto_sync = !gui.updates.dotfiles_auto_sync;
+                                sex_pdx::serial_record!("[settings.dotfiles.autosync] enabled={}", gui.updates.dotfiles_auto_sync as u8);
+                                m.say(if gui.updates.dotfiles_auto_sync {
+                                    "Dotfiles auto-sync enabled."
+                                } else {
+                                    "Dotfiles auto-sync disabled."
+                                });
+                            }
                         }
                         if m.page != old_page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
                         if m.page != old_page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }

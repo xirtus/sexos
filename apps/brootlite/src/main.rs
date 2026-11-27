@@ -21,12 +21,13 @@ mod draw;
 mod poster_cache;
 mod provider;
 mod stremio;
+mod swarm;
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
-use sex_app::{files, launch, Event, Window};
+use sex_app::{clipboard, files, launch, Event, Window};
 use sex_kodi::manager::{Manager as KodiManager, Net as KodiNet, Store as KodiStore};
 use sex_pdx::app_pointer::Kind as PtrKind;
 
@@ -41,6 +42,10 @@ use crate::provider::ProviderPack;
 use crate::stremio::{
     fetch_catalog, fetch_streams, http_get, search_catalog, CatalogItem, CatalogKind, MediaType,
     StreamItem, CINEMETA_BASE,
+};
+use crate::swarm::{
+    fetch_direct_source, fetch_feed, is_media_stream_url, search_swarm_indexers, swingers_get_arg,
+    SwarmResult,
 };
 
 #[panic_handler]
@@ -71,7 +76,7 @@ impl Tab {
         match self {
             Tab::Board => "Board",
             Tab::Discover => "Discover",
-            Tab::Swarm => "Search / Swarm",
+            Tab::Swarm => "Swarm / Feeds",
             Tab::Kodi => "Kodi Add-ons",
             Tab::Library => "Library",
         }
@@ -98,6 +103,13 @@ impl Tab {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveSwarmView {
+    Search,
+    FeaturedFeed(usize),
+    DirectSource(usize),
+}
+
 /// Interactive click targets recorded during each frame's render pass.
 #[derive(Clone, Debug)]
 enum HitAction {
@@ -113,8 +125,9 @@ enum HitAction {
     PlayStream(usize),
     FocusSearch,
     RunSearch,
-    LaunchFeed(usize),
-    LaunchSwarmIndexer(usize),
+    LoadFeaturedFeed(usize),
+    LoadDirectSource(usize),
+    PlaySwarmResult(usize),
     RefreshKodi,
     LaunchKodiUi,
     PlayLibraryFile(usize),
@@ -210,6 +223,8 @@ struct App {
     search_focused: bool,
     search_results: Vec<CatalogItem>,
     search_status: String,
+    swarm_view: ActiveSwarmView,
+    swarm_results: Vec<SwarmResult>,
     swarm_scroll_y: i32,
 
     // Kodi Add-ons state
@@ -243,10 +258,12 @@ impl App {
             String::from("Public Cinemeta mode · Add provider_pack.json for custom addons/Swarm")
         } else {
             format!(
-                "Loaded {} ({} addons, {} Swarm indexers)",
+                "Loaded {} ({} addons, {} indexers, {} feeds, {} direct)",
                 pack.source_path,
                 pack.stremio_addons.len(),
-                pack.swarm_indexers.len()
+                pack.swarm_indexers.len(),
+                pack.featured_feeds.len(),
+                pack.direct_sources.len()
             )
         };
         Self {
@@ -265,7 +282,11 @@ impl App {
             search_query: String::new(),
             search_focused: false,
             search_results: Vec::new(),
-            search_status: String::from("Type a movie/series title and press Enter to search"),
+            search_status: String::from(
+                "Click a Featured Feed or Direct Source above, or type a query and press Enter",
+            ),
+            swarm_view: ActiveSwarmView::Search,
+            swarm_results: Vec::new(),
             swarm_scroll_y: 0,
             kodi,
             kodi_status,
@@ -352,13 +373,17 @@ impl App {
 
     fn run_search(&mut self, window: &mut Window) {
         let q = self.search_query.trim().to_string();
+        self.swarm_view = ActiveSwarmView::Search;
+        self.swarm_scroll_y = 0;
         if q.is_empty() {
             self.search_results.clear();
-            self.search_status = String::from("Enter a title to search Cinemeta & Swarm indexers");
+            self.swarm_results.clear();
+            self.search_status =
+                String::from("Enter a title to search Cinemeta & configured Swarm indexers");
             self.dirty = true;
             return;
         }
-        self.search_status = format!("Searching Cinemeta for \"{}\"...", q);
+        self.search_status = format!("Searching Cinemeta & Swarm indexers for \"{}\"...", q);
         self.dirty = true;
         self.render(window);
 
@@ -369,12 +394,92 @@ impl App {
         if let Ok(series) = search_catalog(window, MediaType::Series, &q) {
             combined.extend(series.into_iter().take(12));
         }
-        self.search_status = if combined.is_empty() {
-            format!("No catalog matches for \"{}\" (check +net)", q)
+        let (swarm_items, swarm_msg) = search_swarm_indexers(window, &self.pack, &q);
+
+        self.search_status = if combined.is_empty() && swarm_items.is_empty() {
+            format!("No matches for \"{}\" ({})", q, swarm_msg)
         } else {
-            format!("{} catalog result(s) for \"{}\"", combined.len(), q)
+            format!(
+                "{} catalog + {} for \"{}\"",
+                combined.len(),
+                swarm_msg,
+                q
+            )
         };
         self.search_results = combined;
+        self.swarm_results = swarm_items;
+        self.dirty = true;
+    }
+
+    fn load_featured_feed(&mut self, window: &mut Window, idx: usize) {
+        let Some(feed) = self.pack.featured_feeds.get(idx).cloned() else {
+            return;
+        };
+        self.tab = Tab::Swarm;
+        self.detail = None;
+        self.search_focused = false;
+        self.swarm_view = ActiveSwarmView::FeaturedFeed(idx);
+        self.swarm_scroll_y = 0;
+        self.search_status = format!("Fetching feed \"{}\"...", feed.label);
+        self.dirty = true;
+        self.render(window);
+
+        match fetch_feed(window, &feed, &self.pack.trackers) {
+            Ok(items) => {
+                let count = items.len();
+                self.swarm_results = items;
+                self.search_status = if count == 0 {
+                    format!("{} · 0 items returned", feed.label)
+                } else {
+                    format!("{} · {} live item(s) — click any item to launch", feed.label, count)
+                };
+                self.status_toast = format!("Loaded feed: {} ({} items)", feed.label, count);
+            }
+            Err(err) => {
+                self.swarm_results.clear();
+                self.search_status = format!(
+                    "Feed \"{}\" failed ({}) — ensure +net is enabled",
+                    feed.label, err
+                );
+                self.status_toast = format!("Feed error: {}", err);
+            }
+        }
+        self.dirty = true;
+    }
+
+    fn load_direct_source(&mut self, window: &mut Window, idx: usize) {
+        let Some(src) = self.pack.direct_sources.get(idx).cloned() else {
+            return;
+        };
+        self.tab = Tab::Swarm;
+        self.detail = None;
+        self.search_focused = false;
+        self.swarm_view = ActiveSwarmView::DirectSource(idx);
+        self.swarm_scroll_y = 0;
+        self.search_status = format!("Fetching direct source \"{}\"...", src.name);
+        self.dirty = true;
+        self.render(window);
+
+        match fetch_direct_source(window, &src) {
+            Ok(items) => {
+                let count = items.len();
+                self.swarm_results = items;
+                self.search_status = if count == 0 {
+                    format!("{} · 0 items returned", src.name)
+                } else {
+                    format!("{} · {} live item(s) — click any item to open", src.name, count)
+                };
+                self.status_toast = format!("Loaded source: {} ({} items)", src.name, count);
+            }
+            Err(err) => {
+                self.swarm_results.clear();
+                self.search_status = format!(
+                    "Source \"{}\" failed ({}) — ensure +net is enabled",
+                    src.name, err
+                );
+                self.status_toast = format!("Direct source error: {}", err);
+            }
+        }
         self.dirty = true;
     }
 
@@ -428,37 +533,137 @@ impl App {
         self.dirty = true;
     }
 
-    fn launch_playback(&mut self, stream: &StreamItem) {
+    fn launch_playback(&mut self, window: &mut Window, stream: &StreamItem) {
         self.launch_cookie = self.launch_cookie.wrapping_add(1);
         let cookie = self.launch_cookie;
         if stream.is_direct && !stream.url.is_empty() {
-            match launch::run(b"qupid", stream.url.as_bytes(), true, cookie) {
+            let copied = clipboard::copy(window, &stream.url).is_ok();
+            let (prog, prog_label) = if is_media_stream_url(&stream.url) {
+                (b"qupid".as_slice(), "Qupid")
+            } else {
+                (b"kaleidoscope".as_slice(), "Kaleidoscope")
+            };
+            match launch::run(prog, stream.url.as_bytes(), true, cookie) {
                 Ok(()) => {
-                    self.status_toast = format!("Launched Qupid -> {}", truncate(&stream.url, 48));
+                    self.status_toast = if copied {
+                        format!(
+                            "Launched {} -> {} (copied)",
+                            prog_label,
+                            truncate(&stream.url, 40)
+                        )
+                    } else {
+                        format!("Launched {} -> {}", prog_label, truncate(&stream.url, 44))
+                    };
                 }
-                Err(_) => {
-                    self.status_toast = format!(
-                        "Direct HTTP ready (run +net qupid {})",
-                        truncate(&stream.url, 42)
-                    );
+                Err(e) => {
+                    self.status_toast = if copied {
+                        format!(
+                            "Launch {} failed ({:?}) · URL copied to clipboard",
+                            prog_label, e
+                        )
+                    } else {
+                        format!("Launch {} failed ({:?})", prog_label, e)
+                    };
                 }
             }
-        } else if !stream.magnet_uri.is_empty() {
-            let args = format!("get {}", stream.magnet_uri);
+        } else if !stream.info_hash.is_empty() || !stream.magnet_uri.is_empty() {
+            let copy_src = if !stream.magnet_uri.is_empty() {
+                &stream.magnet_uri
+            } else {
+                &stream.info_hash
+            };
+            let copied = clipboard::copy(window, copy_src).is_ok();
+            let args = swingers_get_arg(&stream.info_hash, &stream.magnet_uri);
             match launch::run(b"swingers", args.as_bytes(), true, cookie) {
                 Ok(()) => {
-                    self.status_toast =
-                        format!("Launched Swingers P2P -> {}", truncate(&stream.display_title(), 40));
+                    self.status_toast = if copied {
+                        format!(
+                            "Launched Swingers P2P -> {} (copied)",
+                            truncate(&stream.display_title(), 36)
+                        )
+                    } else {
+                        format!(
+                            "Launched Swingers P2P -> {}",
+                            truncate(&stream.display_title(), 40)
+                        )
+                    };
                 }
-                Err(_) => {
-                    self.status_toast = format!(
-                        "Magnet ready (run +net swingers get {})",
-                        truncate(&stream.info_hash, 20)
-                    );
+                Err(e) => {
+                    self.status_toast = if copied {
+                        format!("Launch Swingers failed ({:?}) · magnet copied", e)
+                    } else {
+                        format!("Launch Swingers failed ({:?})", e)
+                    };
                 }
             }
         } else {
             self.status_toast = String::from("Stream has no playable URL or infoHash");
+        }
+        self.dirty = true;
+    }
+
+    fn launch_swarm_result(&mut self, window: &mut Window, res: &SwarmResult) {
+        self.launch_cookie = self.launch_cookie.wrapping_add(1);
+        let cookie = self.launch_cookie;
+        if res.has_magnet() || !res.info_hash.is_empty() {
+            let copy_src = if !res.magnet_uri.is_empty() {
+                &res.magnet_uri
+            } else {
+                &res.info_hash
+            };
+            let copied = clipboard::copy(window, copy_src).is_ok();
+            let args = swingers_get_arg(&res.info_hash, &res.magnet_uri);
+            match launch::run(b"swingers", args.as_bytes(), true, cookie) {
+                Ok(()) => {
+                    self.status_toast = if copied {
+                        format!(
+                            "Launched Swingers P2P -> {} (copied)",
+                            truncate(&res.title, 36)
+                        )
+                    } else {
+                        format!("Launched Swingers P2P -> {}", truncate(&res.title, 40))
+                    };
+                }
+                Err(e) => {
+                    self.status_toast = if copied {
+                        format!("Launch Swingers failed ({:?}) · magnet copied", e)
+                    } else {
+                        format!("Launch Swingers failed ({:?})", e)
+                    };
+                }
+            }
+        } else if res.has_direct() {
+            let copied = clipboard::copy(window, &res.direct_url).is_ok();
+            let (prog, prog_label) = if res.is_direct_media_stream() {
+                (b"qupid".as_slice(), "Qupid")
+            } else {
+                (b"kaleidoscope".as_slice(), "Kaleidoscope")
+            };
+            match launch::run(prog, res.direct_url.as_bytes(), true, cookie) {
+                Ok(()) => {
+                    self.status_toast = if copied {
+                        format!(
+                            "Launched {} -> {} (copied)",
+                            prog_label,
+                            truncate(&res.title, 36)
+                        )
+                    } else {
+                        format!("Launched {} -> {}", prog_label, truncate(&res.title, 40))
+                    };
+                }
+                Err(e) => {
+                    self.status_toast = if copied {
+                        format!(
+                            "Launch {} failed ({:?}) · URL copied to clipboard",
+                            prog_label, e
+                        )
+                    } else {
+                        format!("Launch {} failed ({:?})", prog_label, e)
+                    };
+                }
+            }
+        } else {
+            self.status_toast = String::from("Item has no magnet or direct URL");
         }
         self.dirty = true;
     }
@@ -469,8 +674,8 @@ impl App {
             Ok(()) => {
                 self.status_toast = format!("Launched {} ({})", label, truncate(arg, 44));
             }
-            Err(_) => {
-                self.status_toast = format!("{} target: {}", label, truncate(arg, 50));
+            Err(e) => {
+                self.status_toast = format!("Launch {} failed ({:?})", label, e);
             }
         }
         self.dirty = true;
@@ -548,7 +753,7 @@ impl App {
                     .as_ref()
                     .and_then(|d| d.streams.get(idx).cloned());
                 if let Some(stream) = chosen {
-                    self.launch_playback(&stream);
+                    self.launch_playback(window, &stream);
                 }
             }
             HitAction::FocusSearch => {
@@ -558,20 +763,15 @@ impl App {
             HitAction::RunSearch => {
                 self.run_search(window);
             }
-            HitAction::LaunchFeed(idx) => {
-                if let Some(feed) = self.pack.featured_feeds.get(idx).cloned() {
-                    self.launch_url_or_file(b"kaleidoscope", &feed.url, &feed.label);
-                }
+            HitAction::LoadFeaturedFeed(idx) => {
+                self.load_featured_feed(window, idx);
             }
-            HitAction::LaunchSwarmIndexer(idx) => {
-                if let Some(ix) = self.pack.swarm_indexers.get(idx).cloned() {
-                    let q = if self.search_query.trim().is_empty() {
-                        "1080p"
-                    } else {
-                        self.search_query.trim()
-                    };
-                    let url = ix.build_query_url(q);
-                    self.launch_url_or_file(b"kaleidoscope", &url, &ix.name);
+            HitAction::LoadDirectSource(idx) => {
+                self.load_direct_source(window, idx);
+            }
+            HitAction::PlaySwarmResult(idx) => {
+                if let Some(res) = self.swarm_results.get(idx).cloned() {
+                    self.launch_swarm_result(window, &res);
                 }
             }
             HitAction::RefreshKodi => {
@@ -1000,7 +1200,77 @@ impl App {
                 false,
             );
         }
-        y += 92;
+        y += 88;
+
+        // Clickable Featured Feeds & Direct Sources quick-launch pills on Board tab.
+        if !self.pack.featured_feeds.is_empty() || !self.pack.direct_sources.is_empty() {
+            self.tp.draw(
+                buf,
+                bw,
+                bh,
+                x,
+                y,
+                w,
+                14,
+                "Live Feeds & Direct Sources",
+                ACCENT_CYAN,
+                true,
+            );
+            y += 22;
+            let mut px = x;
+            let row_limit = x + w;
+            let feed_labels: Vec<(usize, String)> = self
+                .pack
+                .featured_feeds
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (i, f.label.clone()))
+                .collect();
+            for (idx, label) in feed_labels {
+                let short = truncate(&label, 22);
+                let pw = (self.tp.measure(&short, 12, false) + 22).max(76);
+                if px + pw > row_limit && px > x {
+                    px = x;
+                    y += 32;
+                }
+                if y + 28 < area.y + area.h - 140 {
+                    let r = Rect::new(px, y, pw, 26);
+                    let hovered = self.detail.is_none() && r.contains(self.mouse_x, self.mouse_y);
+                    draw_pill(buf, bw, bh, &mut self.tp, r, &short, false, hovered);
+                    self.hits.push(HitZone {
+                        rect: r,
+                        action: HitAction::LoadFeaturedFeed(idx),
+                    });
+                    px += pw + 6;
+                }
+            }
+            let direct_labels: Vec<(usize, String)> = self
+                .pack
+                .direct_sources
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.name.clone()))
+                .collect();
+            for (idx, name) in direct_labels {
+                let short = truncate(&name, 22);
+                let pw = (self.tp.measure(&short, 12, false) + 22).max(76);
+                if px + pw > row_limit && px > x {
+                    px = x;
+                    y += 32;
+                }
+                if y + 28 < area.y + area.h - 140 {
+                    let r = Rect::new(px, y, pw, 26);
+                    let hovered = self.detail.is_none() && r.contains(self.mouse_x, self.mouse_y);
+                    draw_pill(buf, bw, bh, &mut self.tp, r, &short, false, hovered);
+                    self.hits.push(HitZone {
+                        rect: r,
+                        action: HitAction::LoadDirectSource(idx),
+                    });
+                    px += pw + 6;
+                }
+            }
+            y += 36;
+        }
 
         // Quick-access preview strip of Discover posters.
         self.tp.draw(
@@ -1108,7 +1378,65 @@ impl App {
             action: HitAction::RefreshDiscover,
         });
 
-        y += 38;
+        y += 36;
+
+        // Unified provider_pack quick-switch row: active stream addons badge + quick jump to Featured Feeds.
+        let stream_addon_count = self
+            .pack
+            .stremio_addons
+            .iter()
+            .filter(|a| a.supports_stream)
+            .count();
+        if stream_addon_count > 0 || !self.pack.featured_feeds.is_empty() {
+            let mut qx = x;
+            if stream_addon_count > 0 {
+                let badge_lbl = format!("{} Stream Addons", stream_addon_count);
+                qx += draw_badge(
+                    buf,
+                    bw,
+                    bh,
+                    &mut self.tp,
+                    qx,
+                    y + 2,
+                    &badge_lbl,
+                    ACCENT_EMERALD_DIM,
+                    ACCENT_EMERALD,
+                ) + 8;
+            }
+            let feeds_btn_w = 104i32;
+            let max_feed_x = x + w - feeds_btn_w - 8;
+            let quick_feeds: Vec<(usize, String)> = self
+                .pack
+                .featured_feeds
+                .iter()
+                .enumerate()
+                .take(4)
+                .map(|(i, f)| (i, f.label.clone()))
+                .collect();
+            for (idx, label) in quick_feeds {
+                let short = truncate(&label, 18);
+                let pw = (self.tp.measure(&short, 12, false) + 20).max(70);
+                if qx + pw <= max_feed_x {
+                    let r = Rect::new(qx, y, pw, 24);
+                    let hov = self.detail.is_none() && r.contains(self.mouse_x, self.mouse_y);
+                    draw_pill(buf, bw, bh, &mut self.tp, r, &short, false, hov);
+                    self.hits.push(HitZone {
+                        rect: r,
+                        action: HitAction::LoadFeaturedFeed(idx),
+                    });
+                    qx += pw + 6;
+                }
+            }
+            let all_r = Rect::new(x + w - feeds_btn_w, y, feeds_btn_w, 24);
+            let all_hov = self.detail.is_none() && all_r.contains(self.mouse_x, self.mouse_y);
+            draw_pill(buf, bw, bh, &mut self.tp, all_r, "All Feeds →", false, all_hov);
+            self.hits.push(HitZone {
+                rect: all_r,
+                action: HitAction::SwitchTab(Tab::Swarm),
+            });
+            y += 32;
+        }
+
         self.tp.draw(
             buf,
             bw,
@@ -1469,23 +1797,50 @@ impl App {
         // Divider + Streams header.
         fill_rect(buf, bw, bh, rx, ry, rw, 1, BORDER_DEFAULT);
         ry += 10;
+        let header_y = ry;
         self.tp
             .draw(buf, bw, bh, rx, ry, rw, 14, "Available Streams", TEXT_PRIMARY, true);
+        let list_top = ry + 40;
+        let list_bottom = modal.y + modal.h - 14;
+        let row_h = 54i32;
+        let row_step = row_h + 8;
+        let view_h = (list_bottom - list_top).max(row_h);
+        let total_h = (streams.len() as i32) * row_step;
+        let max_scroll = (total_h - view_h).max(0);
+        let clamped_scroll = scroll_y.clamp(0, max_scroll);
+        if let Some(d) = self.detail.as_mut() {
+            d.scroll_y = clamped_scroll;
+        }
+        if max_scroll > 0 {
+            let scroll_hint = format!("Showing {} streams — scroll for more", streams.len());
+            let shw = self.tp.measure(&scroll_hint, 11, false);
+            self.tp.draw(
+                buf,
+                bw,
+                bh,
+                (rx + rw - shw).max(rx + 150),
+                header_y + 2,
+                shw + 4,
+                11,
+                &scroll_hint,
+                ACCENT_CYAN,
+                false,
+            );
+        }
         self.tp.draw(
             buf,
             bw,
             bh,
             rx,
-            ry + 20,
+            header_y + 20,
             rw,
             11,
             &stream_status,
             TEXT_MUTED,
             false,
         );
-        ry += 40;
+        ry = list_top;
 
-        let list_bottom = modal.y + modal.h - 14;
         if streams.is_empty() {
             let empty = Rect::new(rx, ry, rw, 64);
             draw_card(buf, bw, bh, empty, 8, BG_CARD, BORDER_DEFAULT);
@@ -1505,9 +1860,8 @@ impl App {
             return;
         }
 
-        let row_h = 54i32;
         for (i, st) in streams.iter().enumerate() {
-            let sy = ry + (i as i32) * (row_h + 8) - scroll_y;
+            let sy = ry + (i as i32) * row_step - clamped_scroll;
             if sy < ry - 4 || sy + row_h > list_bottom {
                 continue;
             }
@@ -1593,17 +1947,18 @@ impl App {
     fn render_swarm(&mut self, buf: &mut [u32], bw: usize, bh: usize, area: Rect) {
         let pad = 18i32;
         let x = area.x + pad;
-        let mut y = area.y + 16;
+        let mut y = area.y + 14;
         let w = (area.w - pad * 2).max(200);
+        let bottom = area.y + area.h - 8;
 
         self.tp
-            .draw(buf, bw, bh, x, y, w, 18, "Search / Swarm P2P", TEXT_PRIMARY, true);
-        y += 28;
+            .draw(buf, bw, bh, x, y, w, 18, "Swarm & Live Feeds", TEXT_PRIMARY, true);
+        y += 26;
 
         // Live search input box + Search button.
         let btn_w = 88i32;
-        let input_r = Rect::new(x, y, (w - btn_w - 8).max(120), 34);
-        let btn_r = Rect::new(input_r.x + input_r.w + 8, y, btn_w, 34);
+        let input_r = Rect::new(x, y, (w - btn_w - 8).max(120), 32);
+        let btn_r = Rect::new(input_r.x + input_r.w + 8, y, btn_w, 32);
         draw_card(
             buf,
             bw,
@@ -1621,7 +1976,7 @@ impl App {
             if self.search_focused {
                 "Type query and press Enter..."
             } else {
-                "Click to search Cinemeta & Swarm indexers..."
+                "Search Cinemeta + all configured Swarm indexers..."
             }
         } else {
             &self.search_query
@@ -1636,7 +1991,7 @@ impl App {
             bw,
             bh,
             input_r.x + 12,
-            input_r.y + 9,
+            input_r.y + 8,
             input_r.w - 24,
             13,
             display_q,
@@ -1654,69 +2009,237 @@ impl App {
             rect: btn_r,
             action: HitAction::RunSearch,
         });
+        y += 38;
 
-        y += 42;
+        // Clickable Featured Feeds pill row(s) — every featuredFeeds entry from provider_pack.json.
+        if !self.pack.featured_feeds.is_empty() {
+            let mut px = x;
+            let row_limit = x + w;
+            let lbl_w = draw_badge(
+                buf,
+                bw,
+                bh,
+                &mut self.tp,
+                px,
+                y + 2,
+                "FEEDS",
+                ACCENT_CYAN_DIM,
+                ACCENT_CYAN,
+            );
+            px += lbl_w + 8;
+            let feeds: Vec<(usize, String)> = self
+                .pack
+                .featured_feeds
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (i, f.label.clone()))
+                .collect();
+            for (idx, label) in feeds {
+                let short = truncate(&label, 22);
+                let pw = (self.tp.measure(&short, 12, true) + 20).max(70);
+                if px + pw > row_limit && px > x {
+                    px = x;
+                    y += 30;
+                }
+                let r = Rect::new(px, y, pw, 24);
+                let active = self.swarm_view == ActiveSwarmView::FeaturedFeed(idx);
+                let hovered = self.detail.is_none() && r.contains(self.mouse_x, self.mouse_y);
+                draw_pill(buf, bw, bh, &mut self.tp, r, &short, active, hovered);
+                self.hits.push(HitZone {
+                    rect: r,
+                    action: HitAction::LoadFeaturedFeed(idx),
+                });
+                px += pw + 6;
+            }
+            y += 30;
+        }
+
+        // Clickable Direct Sources pill row(s) — every directSources entry from provider_pack.json.
+        if !self.pack.direct_sources.is_empty() {
+            let mut px = x;
+            let row_limit = x + w;
+            let lbl_w = draw_badge(
+                buf,
+                bw,
+                bh,
+                &mut self.tp,
+                px,
+                y + 2,
+                "DIRECT",
+                ACCENT_EMERALD_DIM,
+                ACCENT_EMERALD,
+            );
+            px += lbl_w + 8;
+            let sources: Vec<(usize, String)> = self
+                .pack
+                .direct_sources
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.name.clone()))
+                .collect();
+            for (idx, name) in sources {
+                let short = truncate(&name, 22);
+                let pw = (self.tp.measure(&short, 12, true) + 20).max(70);
+                if px + pw > row_limit && px > x {
+                    px = x;
+                    y += 30;
+                }
+                let r = Rect::new(px, y, pw, 24);
+                let active = self.swarm_view == ActiveSwarmView::DirectSource(idx);
+                let hovered = self.detail.is_none() && r.contains(self.mouse_x, self.mouse_y);
+                draw_pill(buf, bw, bh, &mut self.tp, r, &short, active, hovered);
+                self.hits.push(HitZone {
+                    rect: r,
+                    action: HitAction::LoadDirectSource(idx),
+                });
+                px += pw + 6;
+            }
+            y += 30;
+        }
+
+        // Status line.
         self.tp
             .draw(buf, bw, bh, x, y, w, 12, &self.search_status, TEXT_MUTED, false);
-        y += 22;
+        y += 20;
 
-        // Catalog search results strip (if any).
-        if !self.search_results.is_empty() {
+        let results_top = y;
+        let view_h = (bottom - results_top).max(40);
+        let mut cursor_y = results_top;
+
+        // In Search mode, show Cinemeta catalog poster matches above Swarm results.
+        let show_catalog_strip =
+            self.swarm_view == ActiveSwarmView::Search && !self.search_results.is_empty();
+        if show_catalog_strip {
             let cols = (w / 136).clamp(3, 6);
             let gap = 10i32;
             let cw = (w - gap * (cols - 1)) / cols;
             let ch = (cw * 3) / 2 + 46;
-            for i in 0..(cols as usize).min(self.search_results.len()) {
-                let cr = Rect::new(x + (i as i32) * (cw + gap), y, cw, ch);
-                self.render_poster_card(buf, bw, bh, cr, i, true);
+            let draw_y = cursor_y - self.swarm_scroll_y;
+            if draw_y >= results_top - 4 && draw_y + ch <= bottom {
+                for i in 0..(cols as usize).min(self.search_results.len()) {
+                    let cr = Rect::new(x + (i as i32) * (cw + gap), draw_y, cw, ch);
+                    self.render_poster_card(buf, bw, bh, cr, i, true);
+                }
             }
-            y += ch + 18;
+            cursor_y += ch + 14;
         }
 
-        // Configured Swarm Indexers from provider_pack.json.
-        self.tp.draw(
-            buf,
-            bw,
-            bh,
-            x,
-            y,
-            w,
-            14,
-            "Configured Swarm Indexers",
-            ACCENT_CYAN,
-            true,
-        );
-        y += 24;
-
-        let bottom = area.y + area.h - 8;
-        if self.pack.swarm_indexers.is_empty() {
-            let empty = Rect::new(x, y, w, 52);
-            draw_card(buf, bw, bh, empty, 8, BG_CARD, BORDER_DEFAULT);
-            self.tp.draw(
-                buf,
-                bw,
-                bh,
-                empty.x + 14,
-                empty.y + 18,
-                empty.w - 28,
-                12,
-                "No Swarm indexers in provider_pack.json. Add `swarmIndexers` to enable P2P search links.",
-                TEXT_SECONDARY,
-                false,
-            );
-            y += 64;
-        } else {
-            let q = if self.search_query.trim().is_empty() {
-                "1080p"
-            } else {
-                self.search_query.trim()
-            };
-            for (i, ix) in self.pack.swarm_indexers.iter().enumerate() {
-                let ry = y - self.swarm_scroll_y;
-                if ry + 48 > bottom {
-                    break;
+        // Native Swarm / Feed / Direct Source results.
+        if self.swarm_results.is_empty() {
+            if !show_catalog_strip {
+                let card_h = if self.pack.swarm_indexers.is_empty() { 76 } else { 114 };
+                let card = Rect::new(x, results_top + 6, w, card_h);
+                draw_card(buf, bw, bh, card, 10, BG_CARD, BORDER_DEFAULT);
+                self.tp.draw(
+                    buf,
+                    bw,
+                    bh,
+                    card.x + 16,
+                    card.y + 14,
+                    card.w - 32,
+                    14,
+                    "Native Swarm Search, Featured Feeds & Direct Sources",
+                    TEXT_PRIMARY,
+                    true,
+                );
+                self.tp.draw(
+                    buf,
+                    bw,
+                    bh,
+                    card.x + 16,
+                    card.y + 38,
+                    card.w - 32,
+                    12,
+                    "Click any Featured Feed or Direct Source pill above to load live items natively, or search across all configured indexers.",
+                    TEXT_SECONDARY,
+                    false,
+                );
+                if !self.pack.swarm_indexers.is_empty() {
+                    let mut ix_x = card.x + 16;
+                    let ix_y = card.y + 68;
+                    let ix_names: Vec<(String, String)> = self
+                        .pack
+                        .swarm_indexers
+                        .iter()
+                        .map(|ix| (ix.name.clone(), ix.kind.clone()))
+                        .collect();
+                    for (name, kind) in ix_names {
+                        let lbl = if kind.is_empty() {
+                            name
+                        } else {
+                            format!("{} ({})", name, kind)
+                        };
+                        let bw_b = self.tp.measure(&lbl, 11, true) + 14;
+                        if ix_x + bw_b < card.x + card.w - 14 {
+                            ix_x += draw_badge(
+                                buf,
+                                bw,
+                                bh,
+                                &mut self.tp,
+                                ix_x,
+                                ix_y,
+                                &lbl,
+                                ACCENT_CYAN_DIM,
+                                ACCENT_CYAN,
+                            ) + 6;
+                        }
+                    }
                 }
-                let rr = Rect::new(x, ry, w, 46);
+            }
+            return;
+        }
+
+        let has_posters = self.swarm_results.iter().any(|r| !r.poster_url.is_empty());
+        if has_posters {
+            let cols: i32 = if w >= 780 {
+                6
+            } else if w >= 600 {
+                5
+            } else if w >= 450 {
+                4
+            } else {
+                3
+            };
+            let gap = 12i32;
+            let card_w = (w - gap * (cols - 1)) / cols;
+            let poster_h = (card_w * 3) / 2;
+            let card_h = poster_h + 56;
+            let row_h = card_h + gap;
+
+            let total_rows = ((self.swarm_results.len() as i32) + cols - 1) / cols;
+            let content_h = (cursor_y - results_top) + total_rows * row_h;
+            let max_scroll = (content_h - view_h).max(0);
+            if self.swarm_scroll_y > max_scroll {
+                self.swarm_scroll_y = max_scroll;
+            }
+
+            for i in 0..self.swarm_results.len() {
+                let col = (i as i32) % cols;
+                let row = (i as i32) / cols;
+                let cx = x + col * (card_w + gap);
+                let cy = cursor_y + row * row_h - self.swarm_scroll_y;
+                if cy < results_top - 4 || cy + card_h > bottom {
+                    continue;
+                }
+                let cr = Rect::new(cx, cy, card_w, card_h);
+                self.render_swarm_poster_card(buf, bw, bh, cr, i);
+            }
+        } else {
+            let row_h = 54i32;
+            let row_step = row_h + 8;
+            let content_h = (cursor_y - results_top) + (self.swarm_results.len() as i32) * row_step;
+            let max_scroll = (content_h - view_h).max(0);
+            if self.swarm_scroll_y > max_scroll {
+                self.swarm_scroll_y = max_scroll;
+            }
+
+            let items = self.swarm_results.clone();
+            for (i, res) in items.iter().enumerate() {
+                let ry = cursor_y + (i as i32) * row_step - self.swarm_scroll_y;
+                if ry < results_top - 4 || ry + row_h > bottom {
+                    continue;
+                }
+                let rr = Rect::new(x, ry, w, row_h);
                 let hovered = self.detail.is_none() && rr.contains(self.mouse_x, self.mouse_y);
                 draw_card(
                     buf,
@@ -1727,141 +2250,227 @@ impl App {
                     if hovered { BG_HOVER } else { BG_CARD },
                     if hovered { BORDER_ACTIVE } else { BORDER_DEFAULT },
                 );
-                let kind_lbl = if ix.kind.is_empty() { "SWARM" } else { &ix.kind };
-                let bw_badge = draw_badge(
-                    buf,
-                    bw,
-                    bh,
-                    &mut self.tp,
-                    rr.x + 10,
-                    rr.y + 12,
-                    kind_lbl,
-                    ACCENT_CYAN_DIM,
-                    ACCENT_CYAN,
-                );
-                self.tp.draw(
-                    buf,
-                    bw,
-                    bh,
-                    rr.x + 18 + bw_badge,
-                    rr.y + 7,
-                    rr.w - bw_badge - 30,
-                    13,
-                    &ix.name,
-                    TEXT_PRIMARY,
-                    true,
-                );
-                let preview_url = ix.build_query_url(q);
-                self.tp.draw(
-                    buf,
-                    bw,
-                    bh,
-                    rr.x + 18 + bw_badge,
-                    rr.y + 25,
-                    rr.w - bw_badge - 30,
-                    11,
-                    &preview_url,
-                    TEXT_MUTED,
-                    false,
-                );
-                self.hits.push(HitZone {
-                    rect: rr,
-                    action: HitAction::LaunchSwarmIndexer(i),
-                });
-                y += 54;
-            }
-        }
 
-        // Featured Feeds from provider_pack.json.
-        if y + 40 < bottom {
-            y += 8;
-            self.tp.draw(
-                buf,
-                bw,
-                bh,
-                x,
-                y,
-                w,
-                14,
-                "Featured Feeds",
-                ACCENT_EMERALD,
-                true,
-            );
-            y += 24;
-            if self.pack.featured_feeds.is_empty() {
-                self.tp.draw(
-                    buf,
-                    bw,
-                    bh,
-                    x,
-                    y,
-                    w,
-                    12,
-                    "No featured feeds configured in provider_pack.json.",
-                    TEXT_MUTED,
-                    false,
-                );
-            } else {
-                for (i, feed) in self.pack.featured_feeds.iter().enumerate() {
-                    if y + 42 > bottom {
-                        break;
-                    }
-                    let rr = Rect::new(x, y, w, 40);
-                    let hovered = self.detail.is_none() && rr.contains(self.mouse_x, self.mouse_y);
-                    draw_card(
-                        buf,
-                        bw,
-                        bh,
-                        rr,
-                        8,
-                        if hovered { BG_HOVER } else { BG_CARD },
-                        if hovered { BORDER_ACTIVE } else { BORDER_DEFAULT },
-                    );
-                    let bw_badge = draw_badge(
+                // Top row: badges (MAGNET/DIRECT, quality, seeders, size, source).
+                let mut bx = rr.x + 10;
+                let (kind_lbl, kind_bg, kind_fg) = if res.has_magnet() {
+                    ("MAGNET", ACCENT_CYAN_DIM, ACCENT_CYAN)
+                } else {
+                    ("DIRECT", ACCENT_EMERALD_DIM, ACCENT_EMERALD)
+                };
+                bx += draw_badge(buf, bw, bh, &mut self.tp, bx, rr.y + 7, kind_lbl, kind_bg, kind_fg)
+                    + 6;
+
+                if !res.quality.is_empty() {
+                    bx += draw_badge(
                         buf,
                         bw,
                         bh,
                         &mut self.tp,
-                        rr.x + 10,
-                        rr.y + 10,
-                        "FEED",
-                        ACCENT_EMERALD_DIM,
-                        ACCENT_EMERALD,
-                    );
-                    self.tp.draw(
-                        buf,
-                        bw,
-                        bh,
-                        rr.x + 18 + bw_badge,
-                        rr.y + 12,
-                        rr.w / 2,
-                        13,
-                        &feed.label,
+                        bx,
+                        rr.y + 7,
+                        &res.quality,
+                        BG_ELEVATED,
                         TEXT_PRIMARY,
-                        true,
-                    );
-                    let short_u = truncate(&feed.url, 42);
-                    let uw = self.tp.measure(&short_u, 11, false);
-                    self.tp.draw(
+                    ) + 6;
+                }
+                if let Some(seeds) = res.seeders {
+                    let s_lbl = format!("S:{}", seeds);
+                    bx += draw_badge(
                         buf,
                         bw,
                         bh,
-                        rr.x + rr.w - uw - 12,
-                        rr.y + 13,
-                        uw + 6,
-                        11,
-                        &short_u,
-                        TEXT_MUTED,
-                        false,
-                    );
-                    self.hits.push(HitZone {
-                        rect: rr,
-                        action: HitAction::LaunchFeed(i),
-                    });
-                    y += 48;
+                        &mut self.tp,
+                        bx,
+                        rr.y + 7,
+                        &s_lbl,
+                        ACCENT_AMBER_DIM,
+                        ACCENT_AMBER,
+                    ) + 6;
                 }
+                if !res.size_text.is_empty() {
+                    bx += draw_badge(
+                        buf,
+                        bw,
+                        bh,
+                        &mut self.tp,
+                        bx,
+                        rr.y + 7,
+                        &res.size_text,
+                        BG_ELEVATED,
+                        TEXT_SECONDARY,
+                    ) + 6;
+                }
+                if !res.source_name.is_empty() {
+                    let src_short = truncate(&res.source_name, 22);
+                    let sw = self.tp.measure(&src_short, 11, false);
+                    let sx = (rr.x + rr.w - sw - 12).max(bx + 4);
+                    if sx + 20 < rr.x + rr.w {
+                        self.tp.draw(
+                            buf,
+                            bw,
+                            bh,
+                            sx,
+                            rr.y + 10,
+                            rr.x + rr.w - sx - 8,
+                            11,
+                            &src_short,
+                            TEXT_MUTED,
+                            false,
+                        );
+                    }
+                }
+
+                // Bottom row: full title.
+                self.tp.draw(
+                    buf,
+                    bw,
+                    bh,
+                    rr.x + 10,
+                    rr.y + 32,
+                    rr.w - 20,
+                    12,
+                    &res.title,
+                    TEXT_PRIMARY,
+                    true,
+                );
+
+                self.hits.push(HitZone {
+                    rect: rr,
+                    action: HitAction::PlaySwarmResult(i),
+                });
             }
         }
+    }
+
+    fn render_swarm_poster_card(
+        &mut self,
+        buf: &mut [u32],
+        bw: usize,
+        bh: usize,
+        cr: Rect,
+        idx: usize,
+    ) {
+        let Some(res) = self.swarm_results.get(idx).cloned() else {
+            return;
+        };
+
+        let hovered = self.detail.is_none() && cr.contains(self.mouse_x, self.mouse_y);
+        let fill = if hovered { BG_HOVER } else { BG_CARD };
+        let border = if hovered { BORDER_ACTIVE } else { BORDER_DEFAULT };
+        draw_card(buf, bw, bh, cr, 9, fill, border);
+
+        let poster_r = Rect::new(cr.x + 2, cr.y + 2, cr.w - 4, (cr.h - 58).max(40));
+        if !res.poster_url.is_empty() {
+            self.visible_poster_urls.push(res.poster_url.clone());
+        }
+
+        if let Some(img) = self.posters.get(&res.poster_url) {
+            blit_image_cover(buf, bw, bh, poster_r, img);
+        } else {
+            let swatch = poster_swatch(&res.title);
+            draw_card(buf, bw, bh, poster_r, 7, swatch, BORDER_DEFAULT);
+            let init = res.initials();
+            let iw = self.tp.measure(&init, 24, true);
+            let ix = poster_r.x + ((poster_r.w - iw) / 2).max(4);
+            let iy = poster_r.y + (poster_r.h - 28) / 2;
+            self.tp
+                .draw(buf, bw, bh, ix, iy, poster_r.w - 8, 24, &init, TEXT_PRIMARY, true);
+        }
+
+        // Overlay quality badge on top-left of poster.
+        if !res.quality.is_empty() {
+            let (bg, fg) = if res.has_magnet() {
+                (BG_CANVAS, ACCENT_CYAN)
+            } else {
+                (BG_CANVAS, ACCENT_EMERALD)
+            };
+            draw_badge(
+                buf,
+                bw,
+                bh,
+                &mut self.tp,
+                poster_r.x + 6,
+                poster_r.y + 6,
+                &res.quality,
+                bg,
+                fg,
+            );
+        }
+
+        // Metadata footer: Title, seeders/direct + size/year.
+        let ty = poster_r.y + poster_r.h + 7;
+        let title_str = truncate(&res.title, ((cr.w - 14) / 7).max(8) as usize);
+        self.tp.draw(
+            buf,
+            bw,
+            bh,
+            cr.x + 8,
+            ty,
+            cr.w - 14,
+            12,
+            &title_str,
+            TEXT_PRIMARY,
+            true,
+        );
+
+        let meta_y = ty + 19;
+        if let Some(seeds) = res.seeders {
+            let s_lbl = format!("S:{}", seeds);
+            self.tp.draw(
+                buf,
+                bw,
+                bh,
+                cr.x + 8,
+                meta_y,
+                cr.w / 2,
+                11,
+                &s_lbl,
+                ACCENT_AMBER,
+                true,
+            );
+        } else if res.has_direct() {
+            self.tp.draw(
+                buf,
+                bw,
+                bh,
+                cr.x + 8,
+                meta_y,
+                cr.w / 2,
+                11,
+                "DIRECT",
+                ACCENT_EMERALD,
+                true,
+            );
+        }
+
+        let right_meta = if !res.size_text.is_empty() {
+            truncate(&res.size_text, 9)
+        } else if !res.year.is_empty() {
+            truncate(&res.year, 9)
+        } else {
+            String::new()
+        };
+        if !right_meta.is_empty() {
+            let rw = self.tp.measure(&right_meta, 11, false);
+            self.tp.draw(
+                buf,
+                bw,
+                bh,
+                cr.x + cr.w - rw - 8,
+                meta_y,
+                rw + 4,
+                11,
+                &right_meta,
+                TEXT_MUTED,
+                false,
+            );
+        }
+
+        self.hits.push(HitZone {
+            rect: cr,
+            action: HitAction::PlaySwarmResult(idx),
+        });
     }
 
     fn render_kodi(&mut self, buf: &mut [u32], bw: usize, bh: usize, area: Rect) {
