@@ -428,18 +428,10 @@ impl AcpBackend {
                                                 }
                                             }
                                         }
-                                        if step_type == "agent_response" && state == "DONE" {
-                                            let pid = prompt_id_reader.load(Ordering::SeqCst);
-                                            if pid > 0 {
-                                                let done = format!(
-                                                    "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"stopReason\":\"end_turn\"}}}}",
-                                                    pid
-                                                );
-                                                let _ = tx_reader.send(Frame::acp(done.as_bytes()));
-                                            }
-                                        } else if !step_type.is_empty()
+                                        if !step_type.is_empty()
                                             && step_type != "user_input"
                                             && step_type != "agent_response"
+                                            && step_type != "system_message"
                                             && state == "ACTIVE"
                                             && last_tool_step != Some(step_idx)
                                         {
@@ -477,6 +469,14 @@ impl AcpBackend {
                                                 );
                                                 let _ = tx_reader.send(Frame::acp(msg.as_bytes()));
                                             }
+                                        }
+                                        let pid = prompt_id_reader.load(Ordering::SeqCst);
+                                        if pid > 0 {
+                                            let done = format!(
+                                                "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"stopReason\":\"end_turn\"}}}}",
+                                                pid
+                                            );
+                                            let _ = tx_reader.send(Frame::acp(done.as_bytes()));
                                         }
                                     }
                                     _ => {}
