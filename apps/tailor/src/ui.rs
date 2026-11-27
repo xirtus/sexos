@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Antigravity-style Candy Lavender pixel UI for Tailor:
 //! - Instant <50ms pixel frame rendering (`window.show_pixels`)
-//! - Clickable top-bar provider pills (`Claude`, `DeepSeek`, `Codex`, `Gemini`)
-//! - Live Shibari key badge + active model badge
-//! - Scrollable chat & agent transcript panel with color-coded roles
+//! - Clickable top-bar provider pills (`Antigravity`, `Claude`, `DeepSeek`, `Codex`, `Gemini`)
+//! - Live Shibari key / OAuth / Proxy badge + active task boundary mode badge
+//! - Scrollable chat & agent transcript panel with color-coded roles and unified diffs
 //! - Clickable `Approve` / `Deny` buttons for pending file-edit tool approvals
 //! - Bottom prompt input well with selection highlight (`Ctrl+A/C/V`) + `Send` button
 
@@ -17,7 +17,7 @@ use sex_theme::candy_ui::{
     draw_candy_badge, draw_candy_button, draw_candy_panel, draw_candy_tab, draw_candy_toolbar,
     fill_rounded_rect, ButtonState, ButtonStyle, CandyPalette,
 };
-use tailor_core::Provider;
+use tailor_core::{AgentMode, Provider, TaskBoundary};
 
 #[derive(Clone, Copy)]
 pub enum HitAction {
@@ -165,7 +165,8 @@ impl TailorUi {
         auth_label: &str,
         auth_color: u32,
         streaming: bool,
-        pending_approval: bool,
+        task_boundary: Option<&TaskBoundary>,
+        pending_approval: Option<&str>,
         transcript: &str,
         scroll_lines: usize,
         input: &str,
@@ -186,7 +187,7 @@ impl TailorUi {
         buf.fill(pal.bg);
 
         let header_h = 48usize;
-        let approval_h = if pending_approval { 44usize } else { 0usize };
+        let approval_h = if pending_approval.is_some() { 44usize } else { 0usize };
         let input_h = 72usize;
         let body_y = header_h + 4;
         let body_h = h.saturating_sub(header_h + approval_h + input_h + 12);
@@ -201,11 +202,12 @@ impl TailorUi {
         let badge_x = (w as i32 - badge_w - 18).max(110);
 
         // Clickable Provider Pills
-        let pills: [(Provider, &str, i32); 4] = [
-            (Provider::Claude, "Claude", 62),
-            (Provider::ClaudeDeepSeek, "DeepSeek", 78),
-            (Provider::Codex, "Codex", 58),
-            (Provider::Gemini, "Gemini", 62),
+        let pills: [(Provider, &str, i32); 5] = [
+            (Provider::Antigravity, "Antigravity", 82),
+            (Provider::Claude, "Claude", 58),
+            (Provider::ClaudeDeepSeek, "DeepSeek", 74),
+            (Provider::Codex, "Codex", 54),
+            (Provider::Gemini, "Gemini", 58),
         ];
         let mut px = 104i32;
         for (p, label, pw) in pills {
@@ -218,9 +220,9 @@ impl TailorUi {
                 buf,
                 w,
                 h,
-                px + 9,
+                px + 8,
                 19,
-                pw - 12,
+                pw - 10,
                 12,
                 label,
                 if active { pal.text } else { pal.text_dim },
@@ -232,7 +234,7 @@ impl TailorUi {
                 h: 26,
                 action: HitAction::Provider(p),
             });
-            px += pw + 6;
+            px += pw + 5;
         }
 
         // Auth / Proxy Status Badge on right
@@ -261,7 +263,19 @@ impl TailorUi {
         for raw_line in transcript.lines() {
             let color = if raw_line.starts_with("> ") {
                 pal.accent
-            } else if raw_line.starts_with("[approval") || raw_line.starts_with("[tool") {
+            } else if raw_line.starts_with("@@")
+                || raw_line.starts_with("--- ")
+                || raw_line.starts_with("+++ ")
+            {
+                0x0038_BDF8
+            } else if raw_line.starts_with('+') && !raw_line.starts_with("+++") {
+                0x004A_DE80
+            } else if raw_line.starts_with('-') && !raw_line.starts_with("---") {
+                0x00F8_7171
+            } else if raw_line.starts_with("[approval")
+                || raw_line.starts_with("[APPROVAL")
+                || raw_line.starts_with("[tool")
+            {
                 0x00F5_B971
             } else if raw_line.starts_with("[tailor]") || raw_line.starts_with("[error") {
                 0x00C6_A0F6
@@ -302,12 +316,13 @@ impl TailorUi {
         }
 
         // 3. Pending File-Edit Approval Bar (when a mutating tool needs confirmation)
-        if pending_approval {
+        if let Some(summary) = pending_approval {
             let ay = (body_y + body_h + 6) as i32;
             draw_candy_panel(buf, w, h, 8, ay, (w - 16) as i32, (approval_h - 6) as i32, 10, &pal);
+            let prompt = format!("Approve: {}", summary);
             self.draw_text(
-                buf, w, h, 22, ay + 10, (w as i32 - 220).max(100), 13,
-                "Approve pending file edit / command?",
+                buf, w, h, 22, ay + 10, (w as i32 - 224).max(100), 13,
+                &prompt,
                 0x00F5_B971,
             );
             let ax = (w as i32 - 196).max(180);
@@ -336,7 +351,7 @@ impl TailorUi {
             fill_rounded_rect(buf, w, h, well_x + 4, well_y + 4, well_w - 8, well_h - 8, 5, pal.selection);
         }
         let prompt_text = if input.is_empty() {
-            String::from("Ask Tailor anything, or type /proxy <url> or /key <provider> <key> ...")
+            String::from("Ask Tailor anything, or type /provider antigravity, /proxy <url>, /key ...")
         } else {
             format!("{}|", input)
         };
@@ -355,9 +370,39 @@ impl TailorUi {
         self.draw_text(buf, w, h, cx + 12, well_y + 6, 50, 12, "Clear", pal.text_dim);
         self.hits.push(HitBox { x: cx, y: well_y, w: 62, h: well_h, action: HitAction::Clear });
 
-        // Status footer line
+        // Status footer line (with optional active task_boundary mode badge)
+        let mut fx = 20i32;
+        let fy = iy + 41;
+        let mut remaining_w = (w as i32 - 40).max(100);
+        if let Some(tb) = task_boundary {
+            if tb.mode != AgentMode::Idle {
+                let (mode_tag, mode_col) = match tb.mode {
+                    AgentMode::Planning => ("[PLANNING]", 0x0038_BDF8),
+                    AgentMode::Execution => ("[EXECUTION]", 0x00A8_55F7),
+                    AgentMode::Verification => ("[VERIFICATION]", 0x002E_A043),
+                    AgentMode::Idle => ("[IDLE]", pal.text_dim),
+                };
+                let tag_w = (mode_tag.len() as i32) * 7 + 8;
+                self.draw_text(buf, w, h, fx, fy, tag_w.min(remaining_w), 11, mode_tag, mode_col);
+                fx += tag_w;
+                remaining_w = (remaining_w - tag_w).max(40);
+                let tb_info = if !tb.task_status.is_empty() {
+                    tb.task_status.as_str()
+                } else {
+                    tb.task_name.as_str()
+                };
+                let footer = if tb_info.is_empty() {
+                    format!("{} · {}  |  Ctrl+A/C/V", model, status)
+                } else {
+                    format!("{} · {} · {}  |  Ctrl+A/C/V", tb_info, model, status)
+                };
+                self.draw_text(buf, w, h, fx, fy, remaining_w, 11, &footer, pal.text_dim);
+                window.show_pixels(w, h);
+                return;
+            }
+        }
         let footer = format!("{} · {}  |  Ctrl+A/C/V", model, status);
-        self.draw_text(buf, w, h, 20, iy + 41, (w as i32 - 40).max(100), 11, &footer, pal.text_dim);
+        self.draw_text(buf, w, h, fx, fy, remaining_w, 11, &footer, pal.text_dim);
 
         window.show_pixels(w, h);
     }

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Tailor: SexOS's native multi-provider AI coding agent (Gemini, Claude, Codex).
+//! Tailor: SexOS's native multi-provider AI coding agent (Antigravity, Gemini, Claude, Codex, DeepSeek).
 //!
 //! Launch with network and an optional workspace grant:
-//!   `run +net tailor [@/workspace] [gemini|claude|codex]`
+//!   `run +net tailor [@/workspace] [antigravity|gemini|claude|claude-deepseek|codex]`
 //!
-//! API keys are loaded into `shibari::Keeper` (RAM-only zeroizing secret store) from
-//! `/data/tailor/{gemini,claude,codex}.key` (or local `{gemini,claude,codex}.key`), or
-//! entered interactively with `/key <provider> <secret>`.
+//! Credentials are loaded into `shibari::Keeper` (RAM-only zeroizing secret store) from
+//! `/data/tailor/credentials.json` (unified desktop bundle), `google_oauth.json`,
+//! `claude_oauth.json`, `codex_oauth.json`, `keys.json`, or per-provider `*.key` files
+//! (with `@/media/Ventoy/` fallbacks), or entered interactively with `/key <provider> <secret>`.
 #![no_std]
 #![no_main]
 
@@ -20,9 +21,11 @@ use alloc::vec::Vec;
 use sex_app::{files, launch, net, Event, Nav, Window};
 use shibari::{Keeper, Knot, Owner};
 use tailor_core::{
-    build_claude_refresh_request, build_codex_refresh_request, is_claude_oauth_token,
-    parse_claude_oauth_json, parse_codex_oauth_json, Agent, AgentStep, ApprovalDecision,
-    OAuthToken, Provider, ProviderStreamParser, StreamEvent, ToolRunner, Workspace,
+    build_antigravity_request, build_claude_refresh_request, build_codex_refresh_request,
+    build_codex_responses_request, build_google_refresh_request, is_claude_oauth_token, json,
+    parse_claude_oauth_json, parse_codex_oauth_json, parse_google_oauth_json, Agent, AgentStep,
+    ApprovalDecision, JsonValue, OAuthToken, Provider, ProviderStreamParser, StreamEvent,
+    ToolRunner, Workspace,
 };
 
 const MAX_READ_BYTES: usize = 256 * 1024;
@@ -30,6 +33,11 @@ const READ_CHUNK_BYTES: usize = 32 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 24 * 1024;
 const COMMAND_TIMEOUT_TICKS: u64 = 15_000;
 const OAUTH_REFRESH_MAX_BYTES: usize = 64 * 1024;
+const LOAD_CODE_ASSIST_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+const ANTIGRAVITY_USER_AGENT: &str = "antigravity/hub/2.22.0 darwin/arm64";
+const DEFAULT_ANTIGRAVITY_PROJECT: &str = "aicode-consumers";
+const MAX_DIFF_PREVIEW_LINES: usize = 24;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -113,19 +121,66 @@ fn write_config_file(
     None
 }
 
+fn non_empty_str<'a>(val: Option<&'a JsonValue>) -> Option<&'a str> {
+    val.and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn parse_u64_json(val: Option<&JsonValue>) -> Option<u64> {
+    let v = val?;
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    v.as_str().and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+fn parse_oauth_object(obj: &JsonValue) -> Option<OAuthToken> {
+    let access_token = non_empty_str(obj.get("access_token").or_else(|| obj.get("accessToken")))?;
+    let refresh_token = non_empty_str(obj.get("refresh_token").or_else(|| obj.get("refreshToken")))
+        .map(String::from);
+    let account_id = non_empty_str(
+        obj.get("account_id")
+            .or_else(|| obj.get("accountId"))
+            .or_else(|| obj.get("project_id"))
+            .or_else(|| obj.get("projectId"))
+            .or_else(|| obj.get("cloudaicompanionProject")),
+    )
+    .map(String::from);
+    let expires_at = parse_u64_json(
+        obj.get("expires_at")
+            .or_else(|| obj.get("expiresAt"))
+            .or_else(|| obj.get("expiry_date"))
+            .or_else(|| obj.get("expiryDate")),
+    );
+    Some(OAuthToken {
+        access_token: String::from(access_token),
+        refresh_token,
+        account_id,
+        expires_at,
+    })
+}
+
 struct KeyVault {
     owner: Owner,
     keeper: Keeper,
     gemini: Option<Knot>,
+    antigravity: Option<Knot>,
     claude: Option<Knot>,
     claude_deepseek: Option<Knot>,
     codex: Option<Knot>,
+    antigravity_refresh: Option<Knot>,
+    antigravity_client_secret: Option<Knot>,
     claude_refresh: Option<Knot>,
     codex_refresh: Option<Knot>,
     proxy_key: Option<Knot>,
+    antigravity_oauth: bool,
     claude_oauth: bool,
     codex_oauth: bool,
+    antigravity_project_id: Option<String>,
+    antigravity_client_id: Option<String>,
     codex_account_id: Option<String>,
+    antigravity_expires_at: Option<u64>,
     claude_expires_at: Option<u64>,
     codex_expires_at: Option<u64>,
 }
@@ -136,15 +191,22 @@ impl KeyVault {
             owner,
             keeper: Keeper::new(salt, 16),
             gemini: None,
+            antigravity: None,
             claude: None,
             claude_deepseek: None,
             codex: None,
+            antigravity_refresh: None,
+            antigravity_client_secret: None,
             claude_refresh: None,
             codex_refresh: None,
             proxy_key: None,
+            antigravity_oauth: false,
             claude_oauth: false,
             codex_oauth: false,
+            antigravity_project_id: None,
+            antigravity_client_id: None,
             codex_account_id: None,
+            antigravity_expires_at: None,
             claude_expires_at: None,
             codex_expires_at: None,
         }
@@ -153,6 +215,7 @@ impl KeyVault {
     fn slot(&self, provider: Provider) -> Option<Knot> {
         match provider {
             Provider::Gemini => self.gemini,
+            Provider::Antigravity => self.antigravity,
             Provider::Claude => self.claude,
             Provider::ClaudeDeepSeek => self.claude_deepseek,
             Provider::Codex => self.codex,
@@ -162,6 +225,7 @@ impl KeyVault {
     fn set_slot(&mut self, provider: Provider, knot: Knot) {
         match provider {
             Provider::Gemini => self.gemini = Some(knot),
+            Provider::Antigravity => self.antigravity = Some(knot),
             Provider::Claude => self.claude = Some(knot),
             Provider::ClaudeDeepSeek => self.claude_deepseek = Some(knot),
             Provider::Codex => self.codex = Some(knot),
@@ -210,6 +274,8 @@ impl KeyVault {
             if let Ok(s) = core::str::from_utf8(secret) {
                 self.claude_oauth = is_claude_oauth_token(s);
             }
+        } else if provider == Provider::Antigravity {
+            self.antigravity_oauth = true;
         }
         Ok(())
     }
@@ -217,6 +283,22 @@ impl KeyVault {
     fn store_oauth(&mut self, provider: Provider, token: &OAuthToken) -> Result<(), &'static str> {
         self.store(provider, token.access_token.as_bytes())?;
         match provider {
+            Provider::Antigravity => {
+                self.antigravity_oauth = true;
+                self.antigravity_expires_at = token.expires_at;
+                if token.account_id.is_some() {
+                    self.antigravity_project_id = token.account_id.clone();
+                }
+                if let Some(ref rt) = token.refresh_token {
+                    Self::store_knot(
+                        &mut self.keeper,
+                        self.owner,
+                        &mut self.antigravity_refresh,
+                        "antigravity_refresh",
+                        rt.as_bytes(),
+                    )?;
+                }
+            }
             Provider::Claude => {
                 self.claude_oauth = true;
                 self.claude_expires_at = token.expires_at;
@@ -251,6 +333,25 @@ impl KeyVault {
         Ok(())
     }
 
+    fn store_antigravity_oauth_client(
+        &mut self,
+        client_id: Option<&str>,
+        client_secret: Option<&str>,
+    ) {
+        if let Some(cid) = client_id.map(str::trim).filter(|s| !s.is_empty()) {
+            self.antigravity_client_id = Some(String::from(cid));
+        }
+        if let Some(csec) = client_secret.map(str::trim).filter(|s| !s.is_empty()) {
+            let _ = Self::store_knot(
+                &mut self.keeper,
+                self.owner,
+                &mut self.antigravity_client_secret,
+                "antigravity_client_secret",
+                csec.as_bytes(),
+            );
+        }
+    }
+
     fn store_proxy_key(&mut self, secret: &[u8]) -> Result<(), &'static str> {
         Self::store_knot(
             &mut self.keeper,
@@ -267,10 +368,37 @@ impl KeyVault {
 
     fn is_oauth(&self, provider: Provider) -> bool {
         match provider {
+            Provider::Antigravity => self.antigravity_oauth,
             Provider::Claude => self.claude_oauth,
             Provider::Codex => self.codex_oauth,
             _ => false,
         }
+    }
+
+    fn antigravity_project_id(&self) -> Option<&str> {
+        self.antigravity_project_id
+            .as_deref()
+            .filter(|s| !s.is_empty())
+    }
+
+    fn set_antigravity_project_id(&mut self, project_id: String) {
+        if !project_id.trim().is_empty() {
+            self.antigravity_project_id = Some(String::from(project_id.trim()));
+        }
+    }
+
+    fn antigravity_client_id(&self) -> Option<&str> {
+        self.antigravity_client_id.as_deref()
+    }
+
+    fn with_antigravity_client_secret<R>(&self, f: impl FnOnce(&str) -> R) -> Option<R> {
+        let knot = self.antigravity_client_secret?;
+        self.keeper
+            .with(self.owner, knot, |bytes| {
+                let s = core::str::from_utf8(bytes).unwrap_or("");
+                f(s)
+            })
+            .ok()
     }
 
     fn codex_account_id(&self) -> Option<&str> {
@@ -279,6 +407,7 @@ impl KeyVault {
 
     fn has_refresh_token(&self, provider: Provider) -> bool {
         match provider {
+            Provider::Antigravity => self.antigravity_refresh.is_some(),
             Provider::Claude => self.claude_refresh.is_some(),
             Provider::Codex => self.codex_refresh.is_some(),
             _ => false,
@@ -297,6 +426,7 @@ impl KeyVault {
 
     fn with_refresh_token<R>(&self, provider: Provider, f: impl FnOnce(&str) -> R) -> Option<R> {
         let knot = match provider {
+            Provider::Antigravity => self.antigravity_refresh?,
             Provider::Claude => self.claude_refresh?,
             Provider::Codex => self.codex_refresh?,
             _ => return None,
@@ -319,27 +449,175 @@ impl KeyVault {
             .ok()
     }
 
+    /// Loads unified desktop `credentials.json` containing OAuth bundles (`antigravity`,
+    /// `claude`, `codex`), API keys (`gemini`, `deepseek`, `claude`, `codex`), and `proxy`.
+    fn load_unified_credentials(&mut self, raw: &str) -> (usize, Option<String>) {
+        let Ok(root) = json::parse(raw) else {
+            return (0, None);
+        };
+        let mut loaded = 0usize;
+        let mut proxy_base = None;
+
+        if let Some(ag) = root.get("antigravity") {
+            let oauth_obj = ag.get("oauth").unwrap_or(ag);
+            if let Some(tok) = parse_oauth_object(oauth_obj) {
+                if self.store_oauth(Provider::Antigravity, &tok).is_ok() {
+                    loaded += 1;
+                }
+            }
+            let cid = non_empty_str(
+                oauth_obj
+                    .get("client_id")
+                    .or_else(|| oauth_obj.get("clientId"))
+                    .or_else(|| ag.get("client_id"))
+                    .or_else(|| ag.get("clientId")),
+            );
+            let csec = non_empty_str(
+                oauth_obj
+                    .get("client_secret")
+                    .or_else(|| oauth_obj.get("clientSecret"))
+                    .or_else(|| ag.get("client_secret"))
+                    .or_else(|| ag.get("clientSecret")),
+            );
+            self.store_antigravity_oauth_client(cid, csec);
+        }
+
+        for (key_name, provider) in [
+            ("claude", Provider::Claude),
+            ("codex", Provider::Codex),
+            ("gemini", Provider::Gemini),
+            ("deepseek", Provider::ClaudeDeepSeek),
+            ("claude-deepseek", Provider::ClaudeDeepSeek),
+            ("claude_deepseek", Provider::ClaudeDeepSeek),
+        ] {
+            if self.has_key(provider) {
+                continue;
+            }
+            let Some(entry) = root.get(key_name) else {
+                continue;
+            };
+            if let Some(oauth_obj) = entry.get("oauth") {
+                if let Some(tok) = parse_oauth_object(oauth_obj) {
+                    if self.store_oauth(provider, &tok).is_ok() {
+                        loaded += 1;
+                        continue;
+                    }
+                }
+            }
+            let api_key = entry
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    non_empty_str(
+                        entry
+                            .get("api_key")
+                            .or_else(|| entry.get("key"))
+                            .or_else(|| entry.get("token")),
+                    )
+                });
+            if let Some(secret) = api_key {
+                if self.store(provider, secret.as_bytes()).is_ok() {
+                    loaded += 1;
+                }
+            }
+        }
+
+        if let Some(proxy) = root.get("proxy") {
+            if let Some(pk) = non_empty_str(proxy.get("api_key").or_else(|| proxy.get("key"))) {
+                let _ = self.store_proxy_key(pk.as_bytes());
+            }
+            let enabled = proxy
+                .get("enabled")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
+            if enabled {
+                if let Some(url) = non_empty_str(proxy.get("base_url").or_else(|| proxy.get("url")))
+                {
+                    proxy_base = Some(String::from(url.trim_end_matches('/')));
+                }
+            }
+        }
+
+        (loaded, proxy_base)
+    }
+
     fn load_from_files(&mut self, window: &mut Window) -> (usize, Option<String>) {
         let mut loaded = 0usize;
+        let mut proxy_base = None;
 
-        // 1. Load OAuth credentials first (Claude Pro/Max & Codex / ChatGPT Plus & Pro).
+        // 0. Unified desktop `credentials.json` (single-file drop onto Ventoy USB or /data/tailor/).
+        let mut cred_buf = vec![0u8; 16384];
+        if let Some(n) = read_config_file(
+            window,
+            "credentials.json",
+            Some("tailor-credentials.json"),
+            &mut cred_buf,
+        ) {
+            if let Ok(raw) = core::str::from_utf8(&cred_buf[..n]) {
+                let (c_loaded, c_proxy) = self.load_unified_credentials(raw);
+                loaded += c_loaded;
+                if c_proxy.is_some() {
+                    proxy_base = c_proxy;
+                }
+            }
+        }
+        zeroize_slice(&mut cred_buf);
+
+        // 1. Load individual OAuth credentials (Antigravity/Google, Claude Pro/Max, Codex/ChatGPT).
         let mut oauth_buf = vec![0u8; 8192];
-        if let Some(n) = read_config_file(window, "claude_oauth.json", None, &mut oauth_buf) {
-            if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
-                if let Some(tok) = parse_claude_oauth_json(raw) {
-                    if self.store_oauth(Provider::Claude, &tok).is_ok() {
-                        loaded += 1;
+        if !self.has_key(Provider::Antigravity) {
+            if let Some(n) = read_config_file(
+                window,
+                "google_oauth.json",
+                Some("tailor-google_oauth.json"),
+                &mut oauth_buf,
+            ) {
+                if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
+                    if let Some(tok) = parse_google_oauth_json(raw) {
+                        if self.store_oauth(Provider::Antigravity, &tok).is_ok() {
+                            loaded += 1;
+                        }
+                    }
+                    if let Ok(root) = json::parse(raw) {
+                        let obj = root.get("tokens").unwrap_or(&root);
+                        let cid = non_empty_str(
+                            obj.get("client_id")
+                                .or_else(|| obj.get("clientId"))
+                                .or_else(|| root.get("client_id")),
+                        );
+                        let csec = non_empty_str(
+                            obj.get("client_secret")
+                                .or_else(|| obj.get("clientSecret"))
+                                .or_else(|| root.get("client_secret")),
+                        );
+                        self.store_antigravity_oauth_client(cid, csec);
                     }
                 }
             }
         }
         zeroize_slice(&mut oauth_buf);
 
-        if let Some(n) = read_config_file(window, "codex_oauth.json", None, &mut oauth_buf) {
-            if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
-                if let Some(tok) = parse_codex_oauth_json(raw) {
-                    if self.store_oauth(Provider::Codex, &tok).is_ok() {
-                        loaded += 1;
+        if !self.has_key(Provider::Claude) {
+            if let Some(n) = read_config_file(window, "claude_oauth.json", None, &mut oauth_buf) {
+                if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
+                    if let Some(tok) = parse_claude_oauth_json(raw) {
+                        if self.store_oauth(Provider::Claude, &tok).is_ok() {
+                            loaded += 1;
+                        }
+                    }
+                }
+            }
+        }
+        zeroize_slice(&mut oauth_buf);
+
+        if !self.has_key(Provider::Codex) {
+            if let Some(n) = read_config_file(window, "codex_oauth.json", None, &mut oauth_buf) {
+                if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
+                    if let Some(tok) = parse_codex_oauth_json(raw) {
+                        if self.store_oauth(Provider::Codex, &tok).is_ok() {
+                            loaded += 1;
+                        }
                     }
                 }
             }
@@ -388,26 +666,29 @@ impl KeyVault {
         }
 
         // 4. Optional CLIProxyAPI-Rust proxy key & base URL.
-        if let Some(n) = read_config_file(window, "proxy.key", None, &mut buf) {
-            if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
-                let trimmed = raw.trim();
-                if !trimmed.is_empty() {
-                    let _ = self.store_proxy_key(trimmed.as_bytes());
+        if self.proxy_key.is_none() {
+            if let Some(n) = read_config_file(window, "proxy.key", None, &mut buf) {
+                if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        let _ = self.store_proxy_key(trimmed.as_bytes());
+                    }
                 }
             }
+            zeroize_slice(&mut buf);
         }
-        zeroize_slice(&mut buf);
 
-        let mut proxy_base = None;
-        if let Some(n) = read_config_file(window, "proxy.conf", None, &mut buf) {
-            if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
-                let trimmed = raw.trim();
-                if !trimmed.is_empty() {
-                    proxy_base = Some(String::from(trimmed));
+        if proxy_base.is_none() {
+            if let Some(n) = read_config_file(window, "proxy.conf", None, &mut buf) {
+                if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        proxy_base = Some(String::from(trimmed));
+                    }
                 }
             }
+            zeroize_slice(&mut buf);
         }
-        zeroize_slice(&mut buf);
 
         (loaded, proxy_base)
     }
@@ -605,6 +886,9 @@ impl AppState {
                 .trim_end_matches('/');
             return (format!("Proxy: {}", short), 0x0002_84C7);
         }
+        if provider == Provider::Antigravity && self.vault.is_oauth(Provider::Antigravity) {
+            return (String::from("Antigravity OAuth"), 0x002E_A043);
+        }
         if provider == Provider::Claude && self.vault.is_oauth(Provider::Claude) {
             return (String::from("Claude OAuth"), 0x002E_A043);
         }
@@ -618,13 +902,132 @@ impl AppState {
         }
     }
 
+    fn discover_antigravity_project(&mut self, window: &mut Window) -> Result<String, u16> {
+        let mut auth_header = match self
+            .vault
+            .with_key(Provider::Antigravity, |tok| format!("Bearer {}", tok.trim()))
+        {
+            Some(h) => h,
+            None => return Ok(String::from(DEFAULT_ANTIGRAVITY_PROJECT)),
+        };
+
+        let body = b"{\"metadata\":{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"PLATFORM_UNSPECIFIED\",\"pluginType\":\"GEMINI\"}}";
+        let headers = [
+            ("Authorization", auth_header.as_str()),
+            ("User-Agent", ANTIGRAVITY_USER_AGENT),
+            ("Content-Type", "application/json"),
+            ("Accept", "application/json"),
+        ];
+        let req = sex_fetch::Request {
+            method: "POST",
+            url: LOAD_CODE_ASSIST_URL,
+            headers: &headers,
+            body,
+            trusted_origin: false,
+            referrer: None,
+        };
+        let resp_res = net::request(window, &req, None, OAUTH_REFRESH_MAX_BYTES);
+        unsafe { zeroize_slice(auth_header.as_bytes_mut()) };
+
+        let Ok(resp) = resp_res else {
+            return Ok(String::from(DEFAULT_ANTIGRAVITY_PROJECT));
+        };
+        if resp.head.status == 401 {
+            return Err(401);
+        }
+        if (200..300).contains(&resp.head.status) {
+            if let Ok(body_str) = core::str::from_utf8(&resp.body) {
+                if let Ok(root) = json::parse(body_str) {
+                    let project = root.get("cloudaicompanionProject").and_then(|v| {
+                        v.as_str()
+                            .or_else(|| v.get("id").and_then(JsonValue::as_str))
+                            .or_else(|| v.get("projectId").and_then(JsonValue::as_str))
+                    });
+                    if let Some(p) = project.map(str::trim).filter(|s| !s.is_empty()) {
+                        let proj = String::from(p);
+                        self.vault.set_antigravity_project_id(proj.clone());
+                        return Ok(proj);
+                    }
+                }
+            }
+        }
+        let fallback = String::from(DEFAULT_ANTIGRAVITY_PROJECT);
+        self.vault.set_antigravity_project_id(fallback.clone());
+        Ok(fallback)
+    }
+
     fn start_model_turn(&mut self, window: &mut Window) {
         self.start_model_turn_inner(window, false);
     }
 
     fn start_model_turn_inner(&mut self, window: &mut Window, retried_after_refresh: bool) {
         let provider = self.agent.provider();
-        let mut req = if let Some(r) = self
+        let mut req = if provider == Provider::Antigravity
+            && self.proxy_base.is_none()
+            && self.vault.has_key(Provider::Antigravity)
+        {
+            let project_id = if let Some(pid) = self.vault.antigravity_project_id() {
+                String::from(pid)
+            } else {
+                match self.discover_antigravity_project(window) {
+                    Ok(pid) => pid,
+                    Err(401)
+                        if !retried_after_refresh
+                            && self.vault.has_refresh_token(Provider::Antigravity) =>
+                    {
+                        self.status = String::from("Refreshing Antigravity OAuth token...");
+                        self.push_log(&format!("\n[tailor] {}", self.status));
+                        match self.try_refresh_oauth(window, Provider::Antigravity) {
+                            Ok(()) => {
+                                self.push_log("[tailor] OAuth token refreshed; retrying...");
+                                self.start_model_turn_inner(window, true);
+                                return;
+                            }
+                            Err(err) => {
+                                self.push_log(&format!("[error] {}", err));
+                                self.status = format!("Error: {}", err);
+                                return;
+                            }
+                        }
+                    }
+                    Err(_) => String::from(DEFAULT_ANTIGRAVITY_PROJECT),
+                }
+            };
+            let Some(r) = self.vault.with_key(Provider::Antigravity, |key| {
+                build_antigravity_request(
+                    self.agent.model(),
+                    key,
+                    &project_id,
+                    self.agent.system_prompt(),
+                    self.agent.history(),
+                    self.agent.tools(),
+                )
+            }) else {
+                return;
+            };
+            r
+        } else if provider == Provider::Codex
+            && self.proxy_base.is_none()
+            && self.vault.is_oauth(Provider::Codex)
+        {
+            let effective_model = match self.agent.model() {
+                "gpt-4.1" | "o4-mini" => "gpt-5.1-codex",
+                other => other,
+            };
+            let Some(r) = self.vault.with_key(Provider::Codex, |key| {
+                build_codex_responses_request(
+                    effective_model,
+                    key,
+                    self.vault.codex_account_id(),
+                    self.agent.system_prompt(),
+                    self.agent.history(),
+                    self.agent.tools(),
+                )
+            }) else {
+                return;
+            };
+            r
+        } else if let Some(r) = self
             .vault
             .with_key(provider, |key| self.agent.build_request(key))
         {
@@ -634,14 +1037,14 @@ impl AppState {
             self.agent.build_request("")
         } else {
             self.status = format!(
-                "No {} key/OAuth. Put {} or claude_oauth.json/codex_oauth.json in /data/tailor, or run /proxy <url>",
+                "No {} key/OAuth. Drop credentials.json or {} in /data/tailor (or Ventoy), or /proxy <url>",
                 provider.display_name(),
                 provider.key_filename(),
             );
             return;
         };
 
-        if provider == Provider::Codex {
+        if provider == Provider::Codex && !self.vault.is_oauth(Provider::Codex) {
             req = req.with_chatgpt_account_id(self.vault.codex_account_id());
         }
 
@@ -684,6 +1087,18 @@ impl AppState {
 
     fn try_refresh_oauth(&mut self, window: &mut Window, provider: Provider) -> Result<(), String> {
         let refresh_req = match provider {
+            Provider::Antigravity => {
+                let cid = self.vault.antigravity_client_id().unwrap_or("");
+                let mut csec = self
+                    .vault
+                    .with_antigravity_client_secret(|s| String::from(s))
+                    .unwrap_or_default();
+                let req = self.vault.with_refresh_token(Provider::Antigravity, |rt| {
+                    build_google_refresh_request(rt, cid, &csec)
+                });
+                unsafe { zeroize_slice(csec.as_bytes_mut()) };
+                req
+            }
             Provider::Claude => self
                 .vault
                 .with_refresh_token(Provider::Claude, build_claude_refresh_request),
@@ -697,14 +1112,19 @@ impl AppState {
         let old_refresh = self
             .vault
             .with_refresh_token(provider, |s| String::from(s));
-        let old_account_id = if provider == Provider::Codex {
-            self.vault.codex_account_id().map(String::from)
-        } else {
-            None
+        let old_account_id = match provider {
+            Provider::Antigravity => self.vault.antigravity_project_id().map(String::from),
+            Provider::Codex => self.vault.codex_account_id().map(String::from),
+            _ => None,
         };
 
+        let content_type = if provider == Provider::Antigravity {
+            "application/x-www-form-urlencoded"
+        } else {
+            "application/json"
+        };
         let headers = [
-            ("Content-Type", "application/json"),
+            ("Content-Type", content_type),
             ("Accept", "application/json"),
         ];
         let req = sex_fetch::Request {
@@ -723,6 +1143,7 @@ impl AppState {
         let body_str = core::str::from_utf8(&resp.body)
             .map_err(|_| String::from("OAuth refresh response was not UTF-8"))?;
         let mut parsed = match provider {
+            Provider::Antigravity => parse_google_oauth_json(body_str),
             Provider::Claude => parse_claude_oauth_json(body_str),
             Provider::Codex => parse_codex_oauth_json(body_str),
             _ => None,
@@ -741,6 +1162,7 @@ impl AppState {
             .map_err(String::from)?;
 
         let filename = match provider {
+            Provider::Antigravity => "google_oauth.json",
             Provider::Claude => "claude_oauth.json",
             Provider::Codex => "codex_oauth.json",
             _ => return Ok(()),
@@ -771,10 +1193,23 @@ impl AppState {
                     self.push_log(&format!("[tool:{} {}] {}", res.name, tag, preview));
                 }
                 AgentStep::AwaitingApproval(pending) => {
-                    self.push_log(&format!(
-                        "\n[APPROVAL REQUIRED] {}\nType /approve (or y) to allow, /deny (or n) to reject.",
-                        pending.summary
-                    ));
+                    self.push_log(&format!("\n[APPROVAL REQUIRED] {}", pending.summary));
+                    if let Some(ref diff) = pending.diff {
+                        let mut shown = 0usize;
+                        let mut extra = 0usize;
+                        for line in diff.lines() {
+                            if shown < MAX_DIFF_PREVIEW_LINES {
+                                self.push_log(line);
+                                shown += 1;
+                            } else {
+                                extra += 1;
+                            }
+                        }
+                        if extra > 0 {
+                            self.push_log(&format!("... (+{} more diff lines)", extra));
+                        }
+                    }
+                    self.push_log("Type /approve (or y) to allow, /deny (or n) to reject.");
                     self.status = format!("Awaiting approval: {}", pending.summary);
                     return;
                 }
@@ -799,7 +1234,10 @@ impl AppState {
         let poll_res = active.duplex.poll(window, &mut active.rx_buf);
         let mut done = false;
         let can_auto_refresh = !active.retried_after_refresh
-            && matches!(active.provider, Provider::Claude | Provider::Codex)
+            && matches!(
+                active.provider,
+                Provider::Antigravity | Provider::Claude | Provider::Codex
+            )
             && self.vault.has_refresh_token(active.provider);
 
         if !active.rx_buf.is_empty() {
@@ -964,7 +1402,9 @@ impl AppState {
                     self.push_log(&format!("[tailor] {}", self.status));
                 }
                 None => {
-                    self.status = String::from("Usage: /provider gemini|claude|claude-deepseek|codex");
+                    self.status = String::from(
+                        "Usage: /provider antigravity|gemini|claude|claude-deepseek|codex",
+                    );
                 }
             },
             "model" => {
@@ -1031,7 +1471,9 @@ impl AppState {
                         Err(e) => self.status = String::from(e),
                     },
                     _ => {
-                        self.status = String::from("Usage: /key gemini|claude|claude-deepseek|codex <secret>");
+                        self.status = String::from(
+                            "Usage: /key antigravity|gemini|claude|claude-deepseek|codex <secret>",
+                        );
                     }
                 }
             }
@@ -1046,14 +1488,14 @@ impl AppState {
             "help" => {
                 self.push_log(
                     "Commands:\n\
-                     /provider gemini|claude|claude-deepseek|codex  Switch AI provider\n\
-                     /model <name>                   Override model name\n\
+                     /provider antigravity|gemini|claude|claude-deepseek|codex  Switch AI provider\n\
+                     /model <name>                   Override model (e.g. gemini-4-neon-high, gpt-6.2-sol)\n\
                      /proxy <url> | /proxy off       Route via CLIProxyAPI-Rust (e.g. http://127.0.0.1:8317)\n\
-                     /key <provider> <secret>        Store & persist API key or sk-ant-oat01-* OAuth token\n\
+                     /key <provider> <secret>        Store & persist API key or OAuth token\n\
                      /approve (or y)                 Approve pending mutating tool\n\
                      /deny [reason] (or n)           Deny pending mutating tool\n\
                      /clear                          Clear conversation history\n\
-                     OAuth files in /data/tailor/: claude_oauth.json, codex_oauth.json, proxy.conf, proxy.key\n\
+                     Auto-load (/data/tailor/ or @/media/Ventoy/): credentials.json, google_oauth.json, claude_oauth.json, codex_oauth.json\n\
                      Up/Down scroll · Ctrl+C cancel stream · F11 close",
                 );
             }
@@ -1073,7 +1515,8 @@ impl AppState {
         let (auth_label, auth_color) = self.auth_badge(p);
         let model = self.agent.model();
         let streaming = self.stream.is_some();
-        let pending_approval = self.agent.pending_approval().is_some();
+        let task_boundary = self.agent.task_boundary();
+        let pending_approval = self.agent.pending_approval().map(|pa| pa.summary.as_str());
         self.ui.render(
             window,
             p,
@@ -1081,6 +1524,7 @@ impl AppState {
             &auth_label,
             auth_color,
             streaming,
+            task_boundary,
             pending_approval,
             &self.transcript,
             self.scroll_lines,
@@ -1131,10 +1575,10 @@ pub extern "C" fn _start() -> ! {
         ui: ui::TailorUi::new(),
     };
     app.push_log("Tailor — Native Multi-Provider AI Coding Agent for SexOS.");
-    app.push_log("Click a provider pill above (Claude / DeepSeek / Codex / Gemini), or use:");
+    app.push_log("Click a provider pill above (Antigravity / Claude / DeepSeek / Codex / Gemini), or use:");
+    app.push_log("  Unified drop: copy credentials.json (or google_oauth.json) to /data/tailor/ or Ventoy");
     app.push_log("  /proxy http://127.0.0.1:8317  (CLIProxyAPI-Rust)  |  /proxy off");
-    app.push_log("  OAuth: drop claude_oauth.json or codex_oauth.json in /data/tailor/");
-    app.push_log("  API key: /key <provider> <secret>  |  /model <id>  |  /help");
+    app.push_log("  /key <provider> <secret>  |  /model <id>  |  /help");
     app.render(&mut window);
 
     let (loaded, proxy_base) = app.vault.load_from_files(&mut window);

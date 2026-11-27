@@ -15,6 +15,7 @@ use crate::sse::{HttpSseDecoder, SseError, SseMessage, StreamEvent};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     Gemini,
+    Antigravity,
     Claude,
     ClaudeDeepSeek,
     Codex,
@@ -24,6 +25,7 @@ impl Provider {
     pub fn name(self) -> &'static str {
         match self {
             Self::Gemini => "gemini",
+            Self::Antigravity => "antigravity",
             Self::Claude => "claude",
             Self::ClaudeDeepSeek => "claude-deepseek",
             Self::Codex => "codex",
@@ -33,6 +35,7 @@ impl Provider {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Gemini => "Gemini",
+            Self::Antigravity => "Antigravity",
             Self::Claude => "Claude",
             Self::ClaudeDeepSeek => "Claude-DeepSeek",
             Self::Codex => "Codex",
@@ -42,6 +45,7 @@ impl Provider {
     pub fn host(self) -> &'static str {
         match self {
             Self::Gemini => "generativelanguage.googleapis.com",
+            Self::Antigravity => "daily-cloudcode-pa.googleapis.com",
             Self::Claude => "api.anthropic.com",
             Self::ClaudeDeepSeek => "api.deepseek.com",
             Self::Codex => "api.openai.com",
@@ -55,15 +59,45 @@ impl Provider {
     pub fn default_model(self) -> &'static str {
         match self {
             Self::Gemini => "gemini-2.5-flash",
+            Self::Antigravity => "gemini-2.5-pro",
             Self::Claude => "claude-sonnet-4-20250514",
             Self::ClaudeDeepSeek => "deepseek-chat",
-            Self::Codex => "gpt-4.1",
+            Self::Codex => "gpt-5.1-codex",
+        }
+    }
+
+    pub fn available_models(self) -> &'static [&'static str] {
+        match self {
+            Self::Gemini => &["gemini-2.5-pro", "gemini-2.5-flash"],
+            Self::Antigravity => &[
+                "gemini-2.5-pro",
+                "gemini-2.5-flash",
+                "claude-sonnet-4-20250514",
+            ],
+            Self::Claude => &[
+                "claude-sonnet-4-20250514",
+                "claude-opus-4-20250514",
+                "claude-3-7-sonnet-20250219",
+            ],
+            Self::Codex => &[
+                "gpt-5.1-codex",
+                "gpt-5.3-codex",
+                "gpt-5.2-codex",
+                "gpt-5.1-codex-mini",
+                "gpt-5-codex",
+                "gpt-5.2",
+                "gpt-5",
+                "gpt-4.1",
+                "o4-mini",
+            ],
+            Self::ClaudeDeepSeek => &["deepseek-chat", "deepseek-reasoner"],
         }
     }
 
     pub fn key_filename(self) -> &'static str {
         match self {
             Self::Gemini => "gemini.key",
+            Self::Antigravity => "google_oauth.json",
             Self::Claude => "claude.key",
             Self::ClaudeDeepSeek => "claude-deepseek.key",
             Self::Codex => "codex.key",
@@ -72,7 +106,13 @@ impl Provider {
 
     pub fn from_name(s: &str) -> Option<Self> {
         let lower = s.trim();
-        if lower.eq_ignore_ascii_case("gemini") || lower.eq_ignore_ascii_case("google") {
+        if lower.eq_ignore_ascii_case("antigravity")
+            || lower.eq_ignore_ascii_case("cloudcode")
+            || lower.eq_ignore_ascii_case("google-oauth")
+            || lower.eq_ignore_ascii_case("google_oauth")
+        {
+            Some(Self::Antigravity)
+        } else if lower.eq_ignore_ascii_case("gemini") || lower.eq_ignore_ascii_case("google") {
             Some(Self::Gemini)
         } else if lower.eq_ignore_ascii_case("claude-deepseek")
             || lower.eq_ignore_ascii_case("claude_deepseek")
@@ -239,6 +279,49 @@ pub fn parse_codex_oauth_json(text: &str) -> Option<OAuthToken> {
     })
 }
 
+/// Parses a Google / Antigravity Cloud Code OAuth JSON document.
+///
+/// Extracts `access_token`, `refresh_token`, `expires_at`/`expiry_date`, and stores
+/// `project_id`/`cloudaicompanionProject` in `account_id`.
+pub fn parse_google_oauth_json(raw: &str) -> Option<OAuthToken> {
+    let root = json::parse(raw).ok()?;
+    let obj = root.get("tokens").unwrap_or(&root);
+    let access_token = non_empty_trimmed(
+        obj.get("access_token")
+            .or_else(|| obj.get("accessToken"))
+            .and_then(JsonValue::as_str),
+    )?;
+    let refresh_token = non_empty_trimmed(
+        obj.get("refresh_token")
+            .or_else(|| obj.get("refreshToken"))
+            .and_then(JsonValue::as_str),
+    );
+    let account_id = non_empty_trimmed(
+        obj.get("project_id")
+            .or_else(|| obj.get("projectId"))
+            .or_else(|| obj.get("cloudaicompanionProject"))
+            .or_else(|| obj.get("account_id"))
+            .or_else(|| root.get("project_id"))
+            .or_else(|| root.get("projectId"))
+            .or_else(|| root.get("cloudaicompanionProject"))
+            .and_then(JsonValue::as_str),
+    );
+    let expires_at = parse_u64_field(
+        obj.get("expires_at")
+            .or_else(|| obj.get("expiresAt"))
+            .or_else(|| obj.get("expiry_date"))
+            .or_else(|| obj.get("expiryDate"))
+            .or_else(|| root.get("expires_at"))
+            .or_else(|| root.get("expiry_date")),
+    );
+    Some(OAuthToken {
+        access_token,
+        refresh_token,
+        account_id,
+        expires_at,
+    })
+}
+
 /// OAuth token refresh HTTP POST request ready to send via `sex_app::net::request` or raw TLS.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OAuthRefreshRequest {
@@ -295,10 +378,22 @@ fn build_oauth_refresh_request(
     }
 }
 
-/// Builds a `POST https://console.anthropic.com/v1/oauth/token` refresh request.
+fn form_urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            let _ = write!(&mut out, "%{:02X}", b);
+        }
+    }
+    out
+}
+
+/// Builds a `POST https://platform.claude.com/v1/oauth/token` refresh request.
 pub fn build_claude_refresh_request(refresh_token: &str) -> OAuthRefreshRequest {
     build_oauth_refresh_request(
-        "console.anthropic.com",
+        "platform.claude.com",
         "/v1/oauth/token",
         refresh_token,
         CLAUDE_OAUTH_CLIENT_ID,
@@ -313,6 +408,47 @@ pub fn build_codex_refresh_request(refresh_token: &str) -> OAuthRefreshRequest {
         refresh_token,
         CODEX_OAUTH_CLIENT_ID,
     )
+}
+
+/// Builds a form-encoded `POST https://oauth2.googleapis.com/token` refresh request.
+pub fn build_google_refresh_request(
+    refresh_token: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> OAuthRefreshRequest {
+    let host = "oauth2.googleapis.com";
+    let path = "/token";
+    let body = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
+        form_urlencode(refresh_token.trim()),
+        form_urlencode(client_id.trim()),
+        form_urlencode(client_secret.trim()),
+    );
+    let mut http = String::with_capacity(body.len() + 256);
+    let _ = write!(
+        &mut http,
+        "POST {} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: SexOS-Tailor/0.1\r\n\
+         Content-Type: application/x-www-form-urlencoded\r\n\
+         Accept: application/json\r\n\
+         Connection: close\r\n\
+         Content-Length: {}\r\n\
+         \r\n\
+         {}",
+        path,
+        host,
+        body.len(),
+        body
+    );
+    OAuthRefreshRequest {
+        url: format!("https://{}{}", host, path),
+        host: String::from(host),
+        port: 443,
+        path: String::from(path),
+        body,
+        http_bytes: http.into_bytes(),
+    }
 }
 
 /// Complete HTTP/1.1 request ready to send over a `sex_app::net::Duplex` connection.
@@ -516,6 +652,9 @@ pub fn build_http_request(
     tools: &[ToolSpec],
 ) -> ProviderRequest {
     let key = api_key.trim();
+    if provider == Provider::Antigravity {
+        return build_antigravity_request(model, key, "", system_prompt, messages, tools);
+    }
     let (path, body_json, extra_headers) = match provider {
         Provider::Gemini => {
             let path = format!("/v1beta/models/{}:streamGenerateContent?alt=sse", model);
@@ -527,18 +666,26 @@ pub fn build_http_request(
             };
             (path, body, headers)
         }
+        Provider::Antigravity => unreachable!(),
         Provider::Claude | Provider::ClaudeDeepSeek => {
+            let is_oauth = provider == Provider::Claude && is_claude_oauth_token(key);
             let path = if provider == Provider::ClaudeDeepSeek {
                 String::from("/anthropic/v1/messages")
+            } else if is_oauth {
+                String::from("/v1/messages?beta=true")
             } else {
                 String::from("/v1/messages")
             };
             let body = build_claude_body(model, system_prompt, messages, tools);
             let headers = if key.is_empty() {
                 String::from("anthropic-version: 2023-06-01\r\n")
-            } else if provider == Provider::Claude && is_claude_oauth_token(key) {
+            } else if is_oauth {
                 format!(
-                    "Authorization: Bearer {}\r\nanthropic-version: 2023-06-01\r\nanthropic-beta: oauth-2025-04-20\r\n",
+                    "Authorization: Bearer {}\r\n\
+                     anthropic-version: 2023-06-01\r\n\
+                     anthropic-beta: claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14\r\n\
+                     x-app: cli\r\n\
+                     anthropic-dangerous-direct-browser-access: true\r\n",
                     key
                 )
             } else {
@@ -582,6 +729,191 @@ pub fn build_http_request(
     ProviderRequest {
         host: String::from(provider.host()),
         port: provider.port(),
+        tls: true,
+        path,
+        http_bytes: http.into_bytes(),
+    }
+}
+
+/// Builds a `POST https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`
+/// request for Google AI / Antigravity Cloud Code OAuth.
+pub fn build_antigravity_request(
+    model: &str,
+    access_token: &str,
+    project_id: &str,
+    system_prompt: &str,
+    messages: &[Message],
+    tools: &[ToolSpec],
+) -> ProviderRequest {
+    let host = Provider::Antigravity.host();
+    let path = String::from("/v1internal:streamGenerateContent?alt=sse");
+    let inner = build_gemini_body(system_prompt, messages, tools);
+    let envelope = JsonValue::object(vec![
+        (String::from("model"), JsonValue::str(model)),
+        (String::from("project"), JsonValue::str(project_id)),
+        (String::from("userAgent"), JsonValue::str("antigravity")),
+        (String::from("requestType"), JsonValue::str("agent")),
+        (String::from("request"), inner),
+    ]);
+    let body_str = json::encode(&envelope);
+    let token = access_token.trim();
+    let extra_headers = if token.is_empty() {
+        String::new()
+    } else {
+        format!("Authorization: Bearer {}\r\n", token)
+    };
+    let mut http = String::with_capacity(body_str.len() + 256);
+    let _ = write!(
+        &mut http,
+        "POST {} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: antigravity/hub/2.22.0 darwin/arm64\r\n\
+         Content-Type: application/json\r\n\
+         Accept: text/event-stream\r\n\
+         Connection: close\r\n\
+         {}\
+         Content-Length: {}\r\n\
+         \r\n\
+         {}",
+        path,
+        host,
+        extra_headers,
+        body_str.len(),
+        body_str
+    );
+    ProviderRequest {
+        host: String::from(host),
+        port: 443,
+        tls: true,
+        path,
+        http_bytes: http.into_bytes(),
+    }
+}
+
+/// Builds a `POST https://chatgpt.com/backend-api/codex/responses` request for
+/// ChatGPT Plus/Pro OAuth using the OpenAI Responses API wire format.
+pub fn build_codex_responses_request(
+    model: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+    system_prompt: &str,
+    messages: &[Message],
+    tools: &[ToolSpec],
+) -> ProviderRequest {
+    let host = "chatgpt.com";
+    let path = String::from("/backend-api/codex/responses");
+
+    let mut input_items = Vec::new();
+    for msg in messages {
+        match msg.role {
+            Role::User => {
+                input_items.push(JsonValue::object(vec![
+                    (String::from("role"), JsonValue::str("user")),
+                    (
+                        String::from("content"),
+                        JsonValue::array(vec![JsonValue::object(vec![
+                            (String::from("type"), JsonValue::str("input_text")),
+                            (String::from("text"), JsonValue::str(msg.text.as_str())),
+                        ])]),
+                    ),
+                ]));
+            }
+            Role::Assistant => {
+                if !msg.text.is_empty() {
+                    input_items.push(JsonValue::object(vec![
+                        (String::from("role"), JsonValue::str("assistant")),
+                        (
+                            String::from("content"),
+                            JsonValue::array(vec![JsonValue::object(vec![
+                                (String::from("type"), JsonValue::str("output_text")),
+                                (String::from("text"), JsonValue::str(msg.text.as_str())),
+                            ])]),
+                        ),
+                    ]));
+                }
+                for tc in &msg.tool_calls {
+                    input_items.push(JsonValue::object(vec![
+                        (String::from("type"), JsonValue::str("function_call")),
+                        (String::from("call_id"), JsonValue::str(tc.id.as_str())),
+                        (String::from("name"), JsonValue::str(tc.name.as_str())),
+                        (
+                            String::from("arguments"),
+                            JsonValue::str(json::encode(&tc.arguments)),
+                        ),
+                    ]));
+                }
+            }
+            Role::Tool => {
+                if let Some(ref res) = msg.tool_result {
+                    input_items.push(JsonValue::object(vec![
+                        (String::from("type"), JsonValue::str("function_call_output")),
+                        (String::from("call_id"), JsonValue::str(res.call_id.as_str())),
+                        (String::from("output"), JsonValue::str(res.output.as_str())),
+                    ]));
+                }
+            }
+        }
+    }
+
+    let mut root = vec![
+        (String::from("model"), JsonValue::str(model)),
+        (String::from("store"), JsonValue::Bool(false)),
+        (String::from("stream"), JsonValue::Bool(true)),
+        (String::from("instructions"), JsonValue::str(system_prompt)),
+        (String::from("input"), JsonValue::array(input_items)),
+    ];
+
+    if !tools.is_empty() {
+        let tool_defs = tools
+            .iter()
+            .map(|t| {
+                JsonValue::object(vec![
+                    (String::from("type"), JsonValue::str("function")),
+                    (String::from("name"), JsonValue::str(t.name.as_str())),
+                    (
+                        String::from("description"),
+                        JsonValue::str(t.description.as_str()),
+                    ),
+                    (String::from("parameters"), t.parameters_schema.clone()),
+                ])
+            })
+            .collect();
+        root.push((String::from("tools"), JsonValue::array(tool_defs)));
+    }
+
+    let body_str = json::encode(&JsonValue::object(root));
+    let mut extra_headers = String::from("originator: codex-tui\r\n");
+    let token = access_token.trim();
+    if !token.is_empty() {
+        let _ = write!(&mut extra_headers, "Authorization: Bearer {}\r\n", token);
+    }
+    if let Some(aid) = account_id.map(str::trim).filter(|s| !s.is_empty()) {
+        let _ = write!(&mut extra_headers, "chatgpt-account-id: {}\r\n", aid);
+    }
+
+    let mut http = String::with_capacity(body_str.len() + 256);
+    let _ = write!(
+        &mut http,
+        "POST {} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: codex-tui/0.169.0 (Mac OS; arm64)\r\n\
+         Content-Type: application/json\r\n\
+         Accept: text/event-stream\r\n\
+         Connection: close\r\n\
+         {}\
+         Content-Length: {}\r\n\
+         \r\n\
+         {}",
+        path,
+        host,
+        extra_headers,
+        body_str.len(),
+        body_str
+    );
+
+    ProviderRequest {
+        host: String::from(host),
+        port: 443,
         tls: true,
         path,
         http_bytes: http.into_bytes(),
@@ -716,14 +1048,17 @@ fn build_claude_body(
         root.push((String::from("system"), JsonValue::str(system_prompt)));
     }
 
-    let mut out_msgs = Vec::new();
-    for msg in messages {
+    let mut out_msgs: Vec<JsonValue> = Vec::new();
+    let mut i = 0;
+    while i < messages.len() {
+        let msg = &messages[i];
         match msg.role {
             Role::User => {
                 out_msgs.push(JsonValue::object(vec![
                     (String::from("role"), JsonValue::str("user")),
                     (String::from("content"), JsonValue::str(msg.text.as_str())),
                 ]));
+                i += 1;
             }
             Role::Assistant => {
                 let mut blocks = Vec::new();
@@ -747,14 +1082,17 @@ fn build_claude_body(
                         (String::from("content"), JsonValue::array(blocks)),
                     ]));
                 }
-            }
-            Role::Tool => {
-                if let Some(ref res) = msg.tool_result {
-                    out_msgs.push(JsonValue::object(vec![
-                        (String::from("role"), JsonValue::str("user")),
-                        (
-                            String::from("content"),
-                            JsonValue::array(vec![JsonValue::object(vec![
+                i += 1;
+
+                // Anthropic & DeepSeek require ALL tool_result blocks for an assistant
+                // turn's tool_use calls to appear in ONE immediately-following user message.
+                if !msg.tool_calls.is_empty() {
+                    let mut result_blocks = Vec::new();
+                    let mut answered_ids: Vec<String> = Vec::new();
+                    while i < messages.len() && messages[i].role == Role::Tool {
+                        if let Some(ref res) = messages[i].tool_result {
+                            answered_ids.push(res.call_id.clone());
+                            result_blocks.push(JsonValue::object(vec![
                                 (String::from("type"), JsonValue::str("tool_result")),
                                 (
                                     String::from("tool_use_id"),
@@ -765,8 +1103,55 @@ fn build_claude_body(
                                     JsonValue::str(res.output.as_str()),
                                 ),
                                 (String::from("is_error"), JsonValue::Bool(res.is_error)),
-                            ])]),
-                        ),
+                            ]));
+                        }
+                        i += 1;
+                    }
+                    for tc in &msg.tool_calls {
+                        if !answered_ids.iter().any(|id| id == &tc.id) {
+                            result_blocks.push(JsonValue::object(vec![
+                                (String::from("type"), JsonValue::str("tool_result")),
+                                (String::from("tool_use_id"), JsonValue::str(tc.id.as_str())),
+                                (
+                                    String::from("content"),
+                                    JsonValue::str("Tool execution skipped or interrupted."),
+                                ),
+                                (String::from("is_error"), JsonValue::Bool(true)),
+                            ]));
+                        }
+                    }
+                    if !result_blocks.is_empty() {
+                        out_msgs.push(JsonValue::object(vec![
+                            (String::from("role"), JsonValue::str("user")),
+                            (String::from("content"), JsonValue::array(result_blocks)),
+                        ]));
+                    }
+                }
+            }
+            Role::Tool => {
+                // Standalone tool messages (if any) are grouped into a single user message.
+                let mut result_blocks = Vec::new();
+                while i < messages.len() && messages[i].role == Role::Tool {
+                    if let Some(ref res) = messages[i].tool_result {
+                        result_blocks.push(JsonValue::object(vec![
+                            (String::from("type"), JsonValue::str("tool_result")),
+                            (
+                                String::from("tool_use_id"),
+                                JsonValue::str(res.call_id.as_str()),
+                            ),
+                            (
+                                String::from("content"),
+                                JsonValue::str(res.output.as_str()),
+                            ),
+                            (String::from("is_error"), JsonValue::Bool(res.is_error)),
+                        ]));
+                    }
+                    i += 1;
+                }
+                if !result_blocks.is_empty() {
+                    out_msgs.push(JsonValue::object(vec![
+                        (String::from("role"), JsonValue::str("user")),
+                        (String::from("content"), JsonValue::array(result_blocks)),
                     ]));
                 }
             }
@@ -996,11 +1381,11 @@ impl ProviderStreamParser {
             Err(_) => return,
         };
         match self.provider {
-            Provider::Gemini => self.parse_gemini_chunk(&val, out),
+            Provider::Gemini | Provider::Antigravity => self.parse_gemini_chunk(&val, out),
             Provider::Claude | Provider::ClaudeDeepSeek => {
                 self.parse_claude_chunk(msg.event.as_deref(), &val, out)
             }
-            Provider::Codex => self.parse_codex_chunk(&val, out),
+            Provider::Codex => self.parse_codex_chunk(msg.event.as_deref(), &val, out),
         }
     }
 
@@ -1009,7 +1394,16 @@ impl ProviderStreamParser {
             out.push(StreamEvent::Error(String::from(err_msg)));
             return;
         }
-        let Some(cand) = val.get("candidates").and_then(|c| c.index(0)) else {
+        // Automatically unwrap Antigravity Cloud Code `{"response": { ... }}` envelope when present.
+        let inner = val.get("response").unwrap_or(val);
+        if let Some(err_msg) = inner
+            .get_path(&["error", "message"])
+            .and_then(JsonValue::as_str)
+        {
+            out.push(StreamEvent::Error(String::from(err_msg)));
+            return;
+        }
+        let Some(cand) = inner.get("candidates").and_then(|c| c.index(0)) else {
             return;
         };
         if let Some(parts) = cand
@@ -1162,11 +1556,142 @@ impl ProviderStreamParser {
         }
     }
 
-    fn parse_codex_chunk(&mut self, val: &JsonValue, out: &mut Vec<StreamEvent>) {
+    fn parse_codex_chunk(
+        &mut self,
+        event_name: Option<&str>,
+        val: &JsonValue,
+        out: &mut Vec<StreamEvent>,
+    ) {
         if let Some(err_msg) = val.get_path(&["error", "message"]).and_then(JsonValue::as_str) {
             out.push(StreamEvent::Error(String::from(err_msg)));
             return;
         }
+
+        // OpenAI Responses API SSE events (ChatGPT Plus/Pro Codex backend).
+        if let Some(kind) = val.get("type").and_then(JsonValue::as_str).or(event_name) {
+            match kind {
+                "response.output_text.delta" => {
+                    if let Some(delta) = val.get("delta").and_then(JsonValue::as_str) {
+                        if !delta.is_empty() {
+                            out.push(StreamEvent::TextDelta(String::from(delta)));
+                        }
+                    }
+                    return;
+                }
+                "response.reasoning_summary_text.delta" => {
+                    if let Some(delta) = val.get("delta").and_then(JsonValue::as_str) {
+                        if !delta.is_empty() {
+                            out.push(StreamEvent::ThinkingDelta(String::from(delta)));
+                        }
+                    }
+                    return;
+                }
+                "response.output_item.added" => {
+                    let idx = val
+                        .get("output_index")
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or(0) as usize;
+                    if let Some(item) = val.get("item") {
+                        if item.get("type").and_then(JsonValue::as_str) == Some("function_call") {
+                            let id = item
+                                .get("call_id")
+                                .or_else(|| item.get("id"))
+                                .and_then(JsonValue::as_str)
+                                .unwrap_or("codex-call");
+                            let name = item
+                                .get("name")
+                                .and_then(JsonValue::as_str)
+                                .unwrap_or("");
+                            let args = item
+                                .get("arguments")
+                                .and_then(JsonValue::as_str)
+                                .unwrap_or("");
+                            self.partial_tools.insert(
+                                idx,
+                                PartialToolCall {
+                                    id: String::from(id),
+                                    name: String::from(name),
+                                    args_json: String::from(args),
+                                },
+                            );
+                        }
+                    }
+                    return;
+                }
+                "response.function_call_arguments.delta" => {
+                    let idx = val
+                        .get("output_index")
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or(0) as usize;
+                    if let Some(delta) = val.get("delta").and_then(JsonValue::as_str) {
+                        let entry = self.partial_tools.entry(idx).or_default();
+                        entry.args_json.push_str(delta);
+                    }
+                    return;
+                }
+                "response.output_item.done" => {
+                    let idx = val
+                        .get("output_index")
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or(0) as usize;
+                    if let Some(item) = val.get("item") {
+                        if item.get("type").and_then(JsonValue::as_str) == Some("function_call") {
+                            let mut tool = self.partial_tools.remove(&idx).unwrap_or_default();
+                            if tool.id.is_empty() {
+                                if let Some(id) = item
+                                    .get("call_id")
+                                    .or_else(|| item.get("id"))
+                                    .and_then(JsonValue::as_str)
+                                {
+                                    tool.id = String::from(id);
+                                }
+                            }
+                            if tool.name.is_empty() {
+                                if let Some(name) = item.get("name").and_then(JsonValue::as_str) {
+                                    tool.name = String::from(name);
+                                }
+                            }
+                            if tool.args_json.trim().is_empty() {
+                                if let Some(args) = item.get("arguments").and_then(JsonValue::as_str)
+                                {
+                                    tool.args_json = String::from(args);
+                                }
+                            }
+                            emit_partial_tool(tool, out);
+                        }
+                    }
+                    return;
+                }
+                "response.completed" => {
+                    self.flush_partial_tools(out);
+                    if let Some(status) = val
+                        .get_path(&["response", "status"])
+                        .and_then(JsonValue::as_str)
+                    {
+                        self.stop_reason = Some(String::from(status));
+                    }
+                    if !self.emitted_done {
+                        self.emitted_done = true;
+                        out.push(StreamEvent::Done {
+                            stop_reason: self.stop_reason.take(),
+                        });
+                    }
+                    return;
+                }
+                "error" => {
+                    let msg = val
+                        .get("message")
+                        .and_then(JsonValue::as_str)
+                        .or_else(|| val.get_path(&["error", "message"]).and_then(JsonValue::as_str))
+                        .unwrap_or("Codex API error");
+                    out.push(StreamEvent::Error(String::from(msg)));
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Standard OpenAI Chat Completions SSE format.
         let Some(choice) = val.get("choices").and_then(|c| c.index(0)) else {
             return;
         };
@@ -1426,8 +1951,14 @@ mod tests {
             &[],
         );
         let oauth_txt = core::str::from_utf8(&oauth_req.http_bytes).unwrap();
+        assert_eq!(oauth_req.path, "/v1/messages?beta=true");
+        assert!(oauth_txt.starts_with("POST /v1/messages?beta=true HTTP/1.1\r\n"));
         assert!(oauth_txt.contains("Authorization: Bearer sk-ant-oat01-example-token\r\n"));
-        assert!(oauth_txt.contains("anthropic-beta: oauth-2025-04-20\r\n"));
+        assert!(oauth_txt.contains(
+            "anthropic-beta: claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14\r\n"
+        ));
+        assert!(oauth_txt.contains("x-app: cli\r\n"));
+        assert!(oauth_txt.contains("anthropic-dangerous-direct-browser-access: true\r\n"));
         assert!(oauth_txt.contains("anthropic-version: 2023-06-01\r\n"));
         assert!(!oauth_txt.contains("x-api-key:"));
 
@@ -1440,9 +1971,10 @@ mod tests {
             &[],
         );
         let api_txt = core::str::from_utf8(&api_req.http_bytes).unwrap();
+        assert_eq!(api_req.path, "/v1/messages");
         assert!(api_txt.contains("x-api-key: sk-ant-api03-example-key\r\n"));
         assert!(!api_txt.contains("Authorization: Bearer"));
-        assert!(!api_txt.contains("anthropic-beta: oauth-2025-04-20"));
+        assert!(!api_txt.contains("anthropic-beta:"));
     }
 
     #[test]
@@ -1578,15 +2110,15 @@ mod tests {
     #[test]
     fn builds_claude_and_codex_oauth_refresh_requests() {
         let claude_ref = build_claude_refresh_request("sk-ant-ort01-test");
-        assert_eq!(claude_ref.url, "https://console.anthropic.com/v1/oauth/token");
-        assert_eq!(claude_ref.host, "console.anthropic.com");
+        assert_eq!(claude_ref.url, "https://platform.claude.com/v1/oauth/token");
+        assert_eq!(claude_ref.host, "platform.claude.com");
         assert_eq!(claude_ref.port, 443);
         assert_eq!(claude_ref.path, "/v1/oauth/token");
         assert!(claude_ref.body.contains("\"grant_type\":\"refresh_token\""));
         assert!(claude_ref.body.contains("\"refresh_token\":\"sk-ant-ort01-test\""));
         let raw_c = core::str::from_utf8(&claude_ref.http_bytes).unwrap();
         assert!(raw_c.starts_with("POST /v1/oauth/token HTTP/1.1\r\n"));
-        assert!(raw_c.contains("Host: console.anthropic.com\r\n"));
+        assert!(raw_c.contains("Host: platform.claude.com\r\n"));
 
         let codex_ref = build_codex_refresh_request("rt-openai-test");
         assert_eq!(codex_ref.url, "https://auth.openai.com/oauth/token");
@@ -1598,5 +2130,125 @@ mod tests {
         let raw_o = core::str::from_utf8(&codex_ref.http_bytes).unwrap();
         assert!(raw_o.starts_with("POST /oauth/token HTTP/1.1\r\n"));
         assert!(raw_o.contains("Host: auth.openai.com\r\n"));
+    }
+
+    #[test]
+    fn parses_google_oauth_and_builds_refresh_request() {
+        let raw = r#"{"access_token":"ya29.abc","refresh_token":"1//ref+1","expiry_date":1790005555,"cloudaicompanionProject":"proj-123"}"#;
+        let tok = parse_google_oauth_json(raw).unwrap();
+        assert_eq!(tok.access_token, "ya29.abc");
+        assert_eq!(tok.refresh_token.as_deref(), Some("1//ref+1"));
+        assert_eq!(tok.expires_at, Some(1790005555));
+        assert_eq!(tok.account_id.as_deref(), Some("proj-123"));
+
+        let req = build_google_refresh_request("1//ref+1", "cid-1", "csec/2");
+        assert_eq!(req.url, "https://oauth2.googleapis.com/token");
+        assert_eq!(req.host, "oauth2.googleapis.com");
+        assert_eq!(req.path, "/token");
+        assert!(req.body.contains("grant_type=refresh_token"));
+        assert!(req.body.contains("refresh_token=1%2F%2Fref%2B1"));
+        assert!(req.body.contains("client_secret=csec%2F2"));
+        let wire = core::str::from_utf8(&req.http_bytes).unwrap();
+        assert!(wire.contains("Content-Type: application/x-www-form-urlencoded\r\n"));
+    }
+
+    #[test]
+    fn builds_and_parses_antigravity_cloudcode_stream() {
+        assert_eq!(Provider::from_name("antigravity"), Some(Provider::Antigravity));
+        assert_eq!(Provider::Antigravity.host(), "daily-cloudcode-pa.googleapis.com");
+        assert_eq!(Provider::Antigravity.default_model(), "gemini-2.5-pro");
+        assert_eq!(Provider::Antigravity.key_filename(), "google_oauth.json");
+        assert!(Provider::Antigravity.available_models().contains(&"gemini-2.5-pro"));
+        assert!(Provider::Codex.available_models().contains(&"gpt-5.1-codex"));
+
+        let msgs = vec![Message::user("Inspect workspace")];
+        let req = build_antigravity_request(
+            "gemini-2.5-pro",
+            "ya29.token",
+            "proj-42",
+            "You are Antigravity.",
+            &msgs,
+            &builtin_tools(),
+        );
+        assert_eq!(req.host, "daily-cloudcode-pa.googleapis.com");
+        assert_eq!(req.path, "/v1internal:streamGenerateContent?alt=sse");
+        let wire = core::str::from_utf8(&req.http_bytes).unwrap();
+        assert!(wire.contains("Authorization: Bearer ya29.token\r\n"));
+        assert!(wire.contains("\"project\":\"proj-42\""));
+        assert!(wire.contains("\"userAgent\":\"antigravity\""));
+        assert!(wire.contains("\"requestType\":\"agent\""));
+        assert!(wire.contains("\"request\":{"));
+
+        // Envelope-wrapped SSE response: {"response": {"candidates": ...}}
+        let sse = concat!(
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"Planning...\"}]}}]}}\n\n",
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Done!\"}]},\"finishReason\":\"STOP\"}]}}\n\n"
+        );
+        let wire = chunked_response(sse);
+        let mut parser = ProviderStreamParser::new(Provider::Antigravity);
+        let mut events = parser.feed(&wire);
+        events.extend(parser.finish());
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], StreamEvent::ThinkingDelta(String::from("Planning...")));
+        assert_eq!(events[1], StreamEvent::TextDelta(String::from("Done!")));
+        assert_eq!(
+            events[2],
+            StreamEvent::Done {
+                stop_reason: Some(String::from("STOP"))
+            }
+        );
+    }
+
+    #[test]
+    fn builds_and_parses_codex_responses_api_stream() {
+        let msgs = vec![Message::user("List files")];
+        let req = build_codex_responses_request(
+            "gpt-5.1-codex",
+            "eyJ-tok",
+            Some("acct_99"),
+            "System instructions.",
+            &msgs,
+            &builtin_tools(),
+        );
+        assert_eq!(req.host, "chatgpt.com");
+        assert_eq!(req.path, "/backend-api/codex/responses");
+        let wire = core::str::from_utf8(&req.http_bytes).unwrap();
+        assert!(wire.contains("Authorization: Bearer eyJ-tok\r\n"));
+        assert!(wire.contains("chatgpt-account-id: acct_99\r\n"));
+        assert!(wire.contains("originator: codex-tui\r\n"));
+        assert!(wire.contains("\"store\":false"));
+        assert!(wire.contains("\"instructions\":\"System instructions.\""));
+        assert!(wire.contains("\"input\":["));
+
+        let sse = concat!(
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"Thinking...\"}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Checking dir\"}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"fc_1\",\"name\":\"list_dir\",\"arguments\":\"\"}}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{\\\"path\\\":\\\"\"}\n\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\".\\\"}\"}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"fc_1\",\"name\":\"list_dir\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+        );
+        let wire = chunked_response(sse);
+        let mut parser = ProviderStreamParser::new(Provider::Codex);
+        let mut events = parser.feed(&wire);
+        events.extend(parser.finish());
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0], StreamEvent::ThinkingDelta(String::from("Thinking...")));
+        assert_eq!(events[1], StreamEvent::TextDelta(String::from("Checking dir")));
+        match &events[2] {
+            StreamEvent::ToolCall { id, name, arguments } => {
+                assert_eq!(id, "fc_1");
+                assert_eq!(name, "list_dir");
+                assert_eq!(arguments.get("path").and_then(JsonValue::as_str), Some("."));
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+        assert_eq!(
+            events[3],
+            StreamEvent::Done {
+                stop_reason: Some(String::from("completed"))
+            }
+        );
     }
 }
