@@ -24,8 +24,8 @@ use tailor_core::{
     build_antigravity_request, build_claude_refresh_request, build_codex_refresh_request,
     build_codex_responses_request, build_google_refresh_request, is_claude_oauth_token, json,
     parse_claude_oauth_json, parse_codex_oauth_json, parse_google_oauth_json, Agent, AgentStep,
-    ApprovalDecision, JsonValue, OAuthToken, Provider, ProviderStreamParser, StreamEvent,
-    ToolRunner, Workspace,
+    ApprovalDecision, ApprovalPolicy, JsonValue, OAuthToken, Provider, ProviderStreamParser,
+    StreamEvent, ToolRunner, Workspace,
 };
 
 const MAX_READ_BYTES: usize = 256 * 1024;
@@ -33,10 +33,16 @@ const READ_CHUNK_BYTES: usize = 32 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 24 * 1024;
 const COMMAND_TIMEOUT_TICKS: u64 = 15_000;
 const OAUTH_REFRESH_MAX_BYTES: usize = 64 * 1024;
+const MODEL_DISCOVERY_MAX_BYTES: usize = 256 * 1024;
 const LOAD_CODE_ASSIST_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+const FETCH_AVAILABLE_MODELS_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+const CODEX_MODELS_URL: &str =
+    "https://chatgpt.com/backend-api/codex/models?client_version=0.169.0";
 const ANTIGRAVITY_USER_AGENT: &str = "antigravity/hub/2.22.0 darwin/arm64";
 const DEFAULT_ANTIGRAVITY_PROJECT: &str = "aicode-consumers";
+const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:8317";
 const MAX_DIFF_PREVIEW_LINES: usize = 24;
 
 #[panic_handler]
@@ -827,6 +833,70 @@ struct ActiveStream {
     retried_after_refresh: bool,
 }
 
+fn provider_index(provider: Provider) -> usize {
+    match provider {
+        Provider::Antigravity => 0,
+        Provider::Codex => 1,
+        Provider::Claude => 2,
+        Provider::ClaudeDeepSeek => 3,
+        Provider::Gemini => 4,
+    }
+}
+
+fn curated_models(provider: Provider) -> Vec<ui::ModelInfo> {
+    let mk = |id: &str, name: &str, tag: Option<&str>| ui::ModelInfo {
+        id: String::from(id),
+        display_name: String::from(name),
+        tag: tag.map(String::from),
+    };
+    match provider {
+        Provider::Antigravity => vec![
+            mk("gemini-4-neon-high", "Gemini 4 Neon High", Some("New")),
+            mk("gemini-4-neon-medium", "Gemini 4 Neon Medium", Some("New")),
+            mk("gemini-4-carbon-medium", "Gemini 4 Carbon Medium", None),
+            mk("gemini-4-hydrogen-high", "Gemini 4 Hydrogen High", None),
+            mk("gemini-3.8-flash-medium", "Gemini 3.8 Flash", None),
+            mk("claude-opus-5-5-medium", "Claude Opus 5.5", Some("New")),
+            mk("claude-sonnet-5-5-medium", "Claude Sonnet 5.5", None),
+        ],
+        Provider::Codex => vec![
+            mk("gpt-6.2-sol", "GPT-6.2-Sol", Some("New")),
+            mk("gpt-6.2-astra", "GPT-6.2-Astra", Some("New")),
+            mk("gpt-6.1-terra", "GPT-6.1 Terra", None),
+            mk("gpt-6-sol", "GPT-6-Sol", None),
+            mk("gpt-5.1-codex", "GPT-5.1 Codex", None),
+        ],
+        Provider::Claude => vec![
+            mk("claude-sonnet-4-20250514", "Claude Sonnet 4", None),
+            mk("claude-opus-4-20250514", "Claude Opus 4", None),
+        ],
+        Provider::ClaudeDeepSeek => vec![
+            mk("deepseek-chat", "DeepSeek Chat", None),
+            mk("deepseek-reasoner", "DeepSeek Reasoner", None),
+        ],
+        Provider::Gemini => vec![
+            mk("gemini-2.5-pro", "Gemini 2.5 Pro", None),
+            mk("gemini-2.5-flash", "Gemini 2.5 Flash", None),
+        ],
+    }
+}
+
+fn default_model_for_provider(provider: Provider, is_oauth: bool) -> &'static str {
+    match provider {
+        Provider::Antigravity => "gemini-4-neon-high",
+        Provider::Codex => {
+            if is_oauth {
+                "gpt-6.2-sol"
+            } else {
+                "gpt-6.2-sol"
+            }
+        }
+        Provider::Claude => "claude-sonnet-4-20250514",
+        Provider::ClaudeDeepSeek => "deepseek-chat",
+        Provider::Gemini => "gemini-2.5-pro",
+    }
+}
+
 struct AppState {
     workspace_root: String,
     agent: Agent,
@@ -835,11 +905,28 @@ struct AppState {
     runner: SexToolRunner,
     transcript: String,
     input: String,
+    input_focused: bool,
     input_selected: bool,
     status: String,
     scroll_lines: usize,
+    center_scroll: usize,
     stream: Option<ActiveStream>,
     ui: ui::TailorUi,
+    // 3-pane IDE & overlay state
+    left_tab: ui::LeftTab,
+    center_tab: ui::CenterTab,
+    workspace_files: Vec<String>,
+    open_file_name: Option<String>,
+    open_file_content: String,
+    active_artifact_name: Option<String>,
+    active_diff_title: String,
+    active_diff_content: String,
+    model_picker_open: bool,
+    settings_open: bool,
+    models_by_provider: [Vec<ui::ModelInfo>; 5],
+    models_fetched: [bool; 5],
+    last_pointer_x: i32,
+    last_pointer_y: i32,
 }
 
 impl AppState {
@@ -877,29 +964,339 @@ impl AppState {
         }
     }
 
-    fn auth_badge(&self, provider: Provider) -> (String, u32) {
-        if let Some(ref base) = self.proxy_base {
-            let short = base
-                .trim()
-                .trim_start_matches("http://")
-                .trim_start_matches("https://")
-                .trim_end_matches('/');
-            return (format!("Proxy: {}", short), 0x0002_84C7);
+    fn provider_statuses(&self) -> Vec<ui::ProviderStatusInfo> {
+        let specs: [(Provider, &'static str, &'static str); 5] = [
+            (Provider::Antigravity, "Antigravity", "Google OAuth"),
+            (Provider::Codex, "Codex", "ChatGPT OAuth"),
+            (Provider::Claude, "Claude", "Anthropic"),
+            (Provider::ClaudeDeepSeek, "DeepSeek", "API Key"),
+            (Provider::Gemini, "Gemini", "API Key"),
+        ];
+        specs
+            .into_iter()
+            .map(|(provider, label, subtitle)| {
+                let connected = self.vault.has_key(provider) || self.proxy_base.is_some();
+                let auth_kind = if self.proxy_base.is_some() {
+                    "Proxy"
+                } else if self.vault.is_oauth(provider) {
+                    "OAuth"
+                } else if self.vault.has_key(provider) {
+                    "API Key"
+                } else {
+                    "Not connected"
+                };
+                ui::ProviderStatusInfo {
+                    provider,
+                    label,
+                    subtitle,
+                    connected,
+                    auth_kind,
+                }
+            })
+            .collect()
+    }
+
+    fn active_model_display(&self) -> String {
+        let cur = self.agent.model();
+        let idx = provider_index(self.agent.provider());
+        if let Some(m) = self.models_by_provider[idx].iter().find(|m| m.id == cur) {
+            return m.display_name.clone();
         }
-        if provider == Provider::Antigravity && self.vault.is_oauth(Provider::Antigravity) {
-            return (String::from("Antigravity OAuth"), 0x002E_A043);
+        String::from(cur)
+    }
+
+    fn switch_provider(&mut self, window: &mut Window, provider: Provider) {
+        self.agent.set_provider(provider);
+        let def_model = default_model_for_provider(provider, self.vault.is_oauth(provider));
+        self.agent.set_model(def_model);
+        self.status = format!(
+            "Switched to {} ({}) [auth={}]",
+            provider.display_name(),
+            self.agent.model(),
+            self.auth_mode_label(provider)
+        );
+        self.push_log(&format!("[tailor] {}", self.status));
+        self.maybe_fetch_models(window, provider, false);
+    }
+
+    fn maybe_fetch_models(&mut self, window: &mut Window, provider: Provider, force: bool) {
+        let idx = provider_index(provider);
+        if !force && self.models_fetched[idx] {
+            return;
         }
-        if provider == Provider::Claude && self.vault.is_oauth(Provider::Claude) {
-            return (String::from("Claude OAuth"), 0x002E_A043);
+        if self.proxy_base.is_some() || !self.vault.has_key(provider) {
+            return;
         }
-        if provider == Provider::Codex && self.vault.is_oauth(Provider::Codex) {
-            return (String::from("Codex OAuth"), 0x002E_A043);
+        match provider {
+            Provider::Antigravity => {
+                self.models_fetched[idx] = true;
+                if let Some(list) = self.fetch_antigravity_models(window, false) {
+                    if !list.is_empty() {
+                        self.models_by_provider[idx] = list;
+                        self.status = format!(
+                            "Loaded {} Antigravity models.",
+                            self.models_by_provider[idx].len()
+                        );
+                    }
+                }
+            }
+            Provider::Codex if self.vault.is_oauth(Provider::Codex) => {
+                self.models_fetched[idx] = true;
+                if let Some(list) = self.fetch_codex_models(window, false) {
+                    if !list.is_empty() {
+                        self.models_by_provider[idx] = list;
+                        self.status = format!(
+                            "Loaded {} Codex models.",
+                            self.models_by_provider[idx].len()
+                        );
+                    }
+                }
+            }
+            _ => {
+                self.models_fetched[idx] = true;
+            }
         }
-        if self.vault.has_key(provider) {
-            (String::from("Shibari: OK"), 0x002E_A043)
+    }
+
+    fn fetch_antigravity_models(
+        &mut self,
+        window: &mut Window,
+        retried: bool,
+    ) -> Option<Vec<ui::ModelInfo>> {
+        let project_id = if let Some(pid) = self.vault.antigravity_project_id() {
+            String::from(pid)
         } else {
-            (String::from("No API Key"), 0x00D9_7706)
+            self.discover_antigravity_project(window)
+                .unwrap_or_else(|_| String::from(DEFAULT_ANTIGRAVITY_PROJECT))
+        };
+        let mut auth_header = self
+            .vault
+            .with_key(Provider::Antigravity, |tok| format!("Bearer {}", tok.trim()))?;
+        let body = format!("{{\"project\":\"{}\"}}", project_id);
+        let headers = [
+            ("Authorization", auth_header.as_str()),
+            ("User-Agent", ANTIGRAVITY_USER_AGENT),
+            ("Content-Type", "application/json"),
+            ("Accept", "application/json"),
+        ];
+        let req = sex_fetch::Request {
+            method: "POST",
+            url: FETCH_AVAILABLE_MODELS_URL,
+            headers: &headers,
+            body: body.as_bytes(),
+            trusted_origin: false,
+            referrer: None,
+        };
+        let resp_res = net::request(window, &req, None, MODEL_DISCOVERY_MAX_BYTES);
+        unsafe { zeroize_slice(auth_header.as_bytes_mut()) };
+
+        let resp = resp_res.ok()?;
+        if resp.head.status == 401
+            && !retried
+            && self.vault.has_refresh_token(Provider::Antigravity)
+        {
+            if self.try_refresh_oauth(window, Provider::Antigravity).is_ok() {
+                return self.fetch_antigravity_models(window, true);
+            }
+            return None;
         }
+        if !(200..300).contains(&resp.head.status) {
+            return None;
+        }
+        let body_str = core::str::from_utf8(&resp.body).ok()?;
+        let root = json::parse(body_str).ok()?;
+        let models_map = root.get("models");
+
+        let mut out = Vec::new();
+        let push_id = |out: &mut Vec<ui::ModelInfo>, id: &str| {
+            let trimmed = id.trim();
+            if trimmed.is_empty() || out.iter().any(|m| m.id == trimmed) {
+                return;
+            }
+            let meta = models_map.and_then(|m| m.get(trimmed));
+            let display_name = meta
+                .and_then(|m| non_empty_str(m.get("displayName").or_else(|| m.get("display_name"))))
+                .unwrap_or(trimmed);
+            let tag = meta
+                .and_then(|m| non_empty_str(m.get("tagTitle").or_else(|| m.get("tag"))))
+                .map(String::from);
+            out.push(ui::ModelInfo {
+                id: String::from(trimmed),
+                display_name: String::from(display_name),
+                tag,
+            });
+        };
+
+        if let Some(ids) = root
+            .get("agentModelSorts")
+            .and_then(|s| s.index(0))
+            .and_then(|s| s.get("groups"))
+            .and_then(|g| g.index(0))
+            .and_then(|g| g.get("modelIds"))
+            .and_then(JsonValue::as_array)
+        {
+            for item in ids {
+                if let Some(id) = item.as_str() {
+                    push_id(&mut out, id);
+                }
+            }
+        }
+        if out.is_empty() {
+            if let Some(entries) = models_map.and_then(JsonValue::as_object) {
+                for (id, _) in entries {
+                    push_id(&mut out, id);
+                }
+            }
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    fn fetch_codex_models(
+        &mut self,
+        window: &mut Window,
+        retried: bool,
+    ) -> Option<Vec<ui::ModelInfo>> {
+        let mut auth_header = self
+            .vault
+            .with_key(Provider::Codex, |tok| format!("Bearer {}", tok.trim()))?;
+        let acct = self.vault.codex_account_id().map(String::from);
+        let mut headers: Vec<(&str, &str)> = vec![
+            ("Authorization", auth_header.as_str()),
+            ("originator", "codex-tui"),
+            ("Accept", "application/json"),
+        ];
+        if let Some(ref aid) = acct {
+            headers.push(("chatgpt-account-id", aid.as_str()));
+        }
+        let req = sex_fetch::Request {
+            method: "GET",
+            url: CODEX_MODELS_URL,
+            headers: &headers,
+            body: &[],
+            trusted_origin: false,
+            referrer: None,
+        };
+        let resp_res = net::request(window, &req, None, MODEL_DISCOVERY_MAX_BYTES);
+        unsafe { zeroize_slice(auth_header.as_bytes_mut()) };
+
+        let resp = resp_res.ok()?;
+        if resp.head.status == 401 && !retried && self.vault.has_refresh_token(Provider::Codex) {
+            if self.try_refresh_oauth(window, Provider::Codex).is_ok() {
+                return self.fetch_codex_models(window, true);
+            }
+            return None;
+        }
+        if !(200..300).contains(&resp.head.status) {
+            return None;
+        }
+        let body_str = core::str::from_utf8(&resp.body).ok()?;
+        let root = json::parse(body_str).ok()?;
+        let items = root
+            .get("models")
+            .or_else(|| root.get("data"))
+            .and_then(JsonValue::as_array)?;
+        let mut out = Vec::new();
+        for item in items {
+            let Some(id) = non_empty_str(item.get("slug").or_else(|| item.get("id"))) else {
+                continue;
+            };
+            let display_name = non_empty_str(
+                item.get("display_name")
+                    .or_else(|| item.get("title"))
+                    .or_else(|| item.get("name")),
+            )
+            .unwrap_or(id);
+            let tag = non_empty_str(item.get("tag").or_else(|| item.get("badge")))
+                .map(String::from);
+            if !out.iter().any(|m: &ui::ModelInfo| m.id == id) {
+                out.push(ui::ModelInfo {
+                    id: String::from(id),
+                    display_name: String::from(display_name),
+                    tag,
+                });
+            }
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    fn refresh_workspace_files(&mut self, window: &mut Window) {
+        let path = if self.workspace_root.is_empty() {
+            String::from(".")
+        } else {
+            self.workspace_root.clone()
+        };
+        if let Ok(entries) = files::list(window, path.as_bytes()) {
+            let mut list: Vec<String> = entries
+                .into_iter()
+                .map(|e| {
+                    let name = String::from_utf8_lossy(&e.name).into_owned();
+                    if e.dir {
+                        format!("{}/", name)
+                    } else {
+                        name
+                    }
+                })
+                .collect();
+            list.sort();
+            self.workspace_files = list;
+        }
+    }
+
+    fn open_workspace_file(&mut self, window: &mut Window, name: &str) {
+        if name.ends_with('/') {
+            self.status = format!("Directory: {}", name);
+            return;
+        }
+        let content_res = {
+            let mut ws = SexWorkspace {
+                window,
+                root: &self.workspace_root,
+            };
+            ws.read_file(name)
+        };
+        match content_res {
+            Ok(content) => {
+                self.open_file_name = Some(String::from(name));
+                self.open_file_content = content;
+                self.center_tab = ui::CenterTab::File;
+                self.center_scroll = 0;
+                self.status = format!("Opened {}", name);
+            }
+            Err(e) => {
+                self.status = format!("Read error: {}", e);
+            }
+        }
+    }
+
+    fn artifact_names(&self) -> Vec<String> {
+        let mut names = vec![
+            String::from("task.md"),
+            String::from("implementation_plan.md"),
+            String::from("walkthrough.md"),
+        ];
+        for (k, _) in self.agent.artifacts() {
+            if !names.iter().any(|n| n == k) {
+                names.push(k.clone());
+            }
+        }
+        names
+    }
+
+    fn artifact_content(&self, name: &str) -> String {
+        for (k, v) in self.agent.artifacts() {
+            if k == name || k.ends_with(name) {
+                return v.clone();
+            }
+        }
+        String::new()
     }
 
     fn discover_antigravity_project(&mut self, window: &mut Window) -> Result<String, u16> {
@@ -1195,6 +1592,10 @@ impl AppState {
                 AgentStep::AwaitingApproval(pending) => {
                     self.push_log(&format!("\n[APPROVAL REQUIRED] {}", pending.summary));
                     if let Some(ref diff) = pending.diff {
+                        self.active_diff_title = pending.summary.clone();
+                        self.active_diff_content = diff.clone();
+                        self.center_tab = ui::CenterTab::Diff;
+                        self.center_scroll = 0;
                         let mut shown = 0usize;
                         let mut extra = 0usize;
                         for line in diff.lines() {
@@ -1392,14 +1793,7 @@ impl AppState {
         match verb {
             "provider" => match Provider::from_name(rest) {
                 Some(p) => {
-                    self.agent.set_provider(p);
-                    self.status = format!(
-                        "Switched to {} ({}) [auth={}]",
-                        p.display_name(),
-                        self.agent.model(),
-                        self.auth_mode_label(p)
-                    );
-                    self.push_log(&format!("[tailor] {}", self.status));
+                    self.switch_provider(window, p);
                 }
                 None => {
                     self.status = String::from(
@@ -1512,36 +1906,59 @@ impl AppState {
 
     fn render(&mut self, window: &mut Window) {
         let p = self.agent.provider();
-        let (auth_label, auth_color) = self.auth_badge(p);
-        let model = self.agent.model();
-        let streaming = self.stream.is_some();
-        let task_boundary = self.agent.task_boundary();
-        let pending_approval = self.agent.pending_approval().map(|pa| pa.summary.as_str());
-        self.ui.render(
-            window,
-            p,
-            model,
-            &auth_label,
-            auth_color,
-            streaming,
-            task_boundary,
-            pending_approval,
-            &self.transcript,
-            self.scroll_lines,
-            &self.input,
-            self.input_selected,
-            &self.status,
-        );
+        let providers = self.provider_statuses();
+        let model_display = self.active_model_display();
+        let artifact_names = self.artifact_names();
+        let active_artifact_content = self
+            .active_artifact_name
+            .as_deref()
+            .map(|n| self.artifact_content(n))
+            .unwrap_or_default();
+        let pidx = provider_index(p);
+        let state = ui::RenderState {
+            provider: p,
+            model_id: self.agent.model(),
+            model_display: &model_display,
+            approval_policy: self.agent.approval_policy(),
+            providers: &providers,
+            models: &self.models_by_provider[pidx],
+            proxy_base: self.proxy_base.as_deref(),
+            streaming: self.stream.is_some(),
+            task_boundary: self.agent.task_boundary(),
+            pending_approval: self.agent.pending_approval().map(|pa| pa.summary.as_str()),
+            transcript: &self.transcript,
+            scroll_lines: self.scroll_lines,
+            input: &self.input,
+            input_focused: self.input_focused,
+            input_selected: self.input_selected,
+            status: &self.status,
+            workspace_root: &self.workspace_root,
+            left_tab: self.left_tab,
+            center_tab: self.center_tab,
+            workspace_files: &self.workspace_files,
+            open_file_name: self.open_file_name.as_deref(),
+            open_file_content: &self.open_file_content,
+            artifact_names: &artifact_names,
+            active_artifact_name: self.active_artifact_name.as_deref(),
+            active_artifact_content: &active_artifact_content,
+            active_diff_title: &self.active_diff_title,
+            active_diff_content: &self.active_diff_content,
+            steps: self.agent.steps(),
+            center_scroll: self.center_scroll,
+            model_picker_open: self.model_picker_open,
+            settings_open: self.settings_open,
+        };
+        self.ui.render(window, &state);
     }
 }
 
-fn parse_launch_args(raw: &[u8]) -> (String, Provider) {
+fn parse_launch_args(raw: &[u8]) -> (String, Option<Provider>) {
     let text = core::str::from_utf8(raw).unwrap_or("");
     let mut workspace = String::new();
-    let mut provider = Provider::ClaudeDeepSeek;
+    let mut provider = None;
     for word in text.split_whitespace() {
         if let Some(p) = Provider::from_name(word) {
-            provider = p;
+            provider = Some(p);
         } else if workspace.is_empty() {
             workspace = String::from(word);
         }
@@ -1555,34 +1972,81 @@ pub extern "C" fn _start() -> ! {
     window.title(b"Tailor");
 
     let mut args_buf = [0u8; sex_pdx::fs::ARGS_MAX];
-    let (workspace_root, initial_provider) = parse_launch_args(files::args(&mut window, &mut args_buf));
+    let (workspace_root, arg_provider) = parse_launch_args(files::args(&mut window, &mut args_buf));
+    let boot_provider = arg_provider.unwrap_or(Provider::Antigravity);
 
     let owner = Owner(window.target);
     let vault = KeyVault::new(owner, sex_pdx::get_ticks() ^ 0x5A17_7A11_0001);
 
+    let mut agent = Agent::new(boot_provider);
+    agent.set_model(default_model_for_provider(boot_provider, true));
+
     let mut app = AppState {
         workspace_root,
-        agent: Agent::new(initial_provider),
+        agent,
         vault,
         proxy_base: None,
         runner: SexToolRunner::new(),
         transcript: String::new(),
         input: String::new(),
+        input_focused: true,
         input_selected: false,
         status: String::from("Loading keys & OAuth into Shibari vault..."),
         scroll_lines: 0,
+        center_scroll: 0,
         stream: None,
         ui: ui::TailorUi::new(),
+        left_tab: ui::LeftTab::Files,
+        center_tab: ui::CenterTab::Artifact,
+        workspace_files: Vec::new(),
+        open_file_name: None,
+        open_file_content: String::new(),
+        active_artifact_name: None,
+        active_diff_title: String::new(),
+        active_diff_content: String::new(),
+        model_picker_open: false,
+        settings_open: false,
+        models_by_provider: [
+            curated_models(Provider::Antigravity),
+            curated_models(Provider::Codex),
+            curated_models(Provider::Claude),
+            curated_models(Provider::ClaudeDeepSeek),
+            curated_models(Provider::Gemini),
+        ],
+        models_fetched: [false; 5],
+        last_pointer_x: 0,
+        last_pointer_y: 0,
     };
     app.push_log("Tailor — Native Multi-Provider AI Coding Agent for SexOS.");
-    app.push_log("Click a provider pill above (Antigravity / Claude / DeepSeek / Codex / Gemini), or use:");
-    app.push_log("  Unified drop: copy credentials.json (or google_oauth.json) to /data/tailor/ or Ventoy");
-    app.push_log("  /proxy http://127.0.0.1:8317  (CLIProxyAPI-Rust)  |  /proxy off");
-    app.push_log("  /key <provider> <secret>  |  /model <id>  |  /help");
+    app.push_log("Select a provider & model above, or open Settings to manage OAuth/keys.");
     app.render(&mut window);
 
     let (loaded, proxy_base) = app.vault.load_from_files(&mut window);
     app.proxy_base = proxy_base;
+
+    // Auto-select first connected provider when no explicit provider CLI arg was passed
+    if arg_provider.is_none() {
+        for cand in [
+            Provider::Antigravity,
+            Provider::Codex,
+            Provider::Claude,
+            Provider::ClaudeDeepSeek,
+            Provider::Gemini,
+        ] {
+            if app.vault.has_key(cand) {
+                app.agent.set_provider(cand);
+                let def_m = default_model_for_provider(cand, app.vault.is_oauth(cand));
+                app.agent.set_model(def_m);
+                break;
+            }
+        }
+    } else {
+        let p = app.agent.provider();
+        app.agent
+            .set_model(default_model_for_provider(p, app.vault.is_oauth(p)));
+    }
+
+    app.refresh_workspace_files(&mut window);
     app.status = if let Some(ref url) = app.proxy_base {
         format!(
             "Ready (Proxy: {}, {} key(s) in Shibari). Type a prompt or /help.",
@@ -1597,10 +2061,11 @@ pub extern "C" fn _start() -> ! {
     app.render(&mut window);
 
     sex_pdx::serial_record!(
-        "[tailor.ready] target={} task={} provider={} keys={} proxy={}",
+        "[tailor.ready] target={} task={} provider={} model={} keys={} proxy={}",
         window.target,
         window.task,
         app.agent.provider().name(),
+        app.agent.model(),
         loaded,
         app.proxy_base.as_deref().unwrap_or("none")
     );
@@ -1620,66 +2085,261 @@ pub extern "C" fn _start() -> ! {
                 Event::Resize { .. } => {
                     dirty = true;
                 }
-                Event::Pointer(p) => match p.kind {
-                    sex_pdx::app_pointer::Kind::Down { button: 0 } => {
-                        let px = p.x as i32;
-                        let py = p.y as i32;
-                        if let Some(hit) = app.ui.hits.iter().find(|h| h.contains(px, py)).copied() {
-                            match hit.action {
-                                ui::HitAction::Provider(prov) => {
-                                    app.agent.set_provider(prov);
-                                    app.status = format!(
-                                        "Switched to {} ({}) [auth={}]",
-                                        prov.display_name(),
-                                        app.agent.model(),
-                                        app.auth_mode_label(prov)
-                                    );
-                                    app.push_log(&format!("[tailor] {}", app.status));
-                                    dirty = true;
+                Event::Pointer(p) => {
+                    let px = p.x as i32;
+                    let py = p.y as i32;
+                    app.last_pointer_x = px;
+                    app.last_pointer_y = py;
+                    match p.kind {
+                        sex_pdx::app_pointer::Kind::Down { button: 0 } => {
+                            if let Some(hit) =
+                                app.ui.hits.iter().rev().find(|h| h.contains(px, py)).copied()
+                            {
+                                match hit.action {
+                                    ui::HitAction::Noop => {}
+                                    ui::HitAction::CloseOverlays => {
+                                        app.model_picker_open = false;
+                                        app.settings_open = false;
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::Provider(prov) => {
+                                        app.model_picker_open = false;
+                                        app.switch_provider(&mut window, prov);
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::ToggleModelPicker => {
+                                        app.settings_open = false;
+                                        app.model_picker_open = !app.model_picker_open;
+                                        if app.model_picker_open {
+                                            let cur_p = app.agent.provider();
+                                            app.maybe_fetch_models(&mut window, cur_p, false);
+                                        }
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::SelectModel(idx) => {
+                                        let pidx = provider_index(app.agent.provider());
+                                        if let Some(m) = app.models_by_provider[pidx].get(idx) {
+                                            let id = m.id.clone();
+                                            let name = m.display_name.clone();
+                                            app.agent.set_model(&id);
+                                            app.status = format!("Model set to {} ({})", name, id);
+                                            app.push_log(&format!("[tailor] {}", app.status));
+                                        }
+                                        app.model_picker_open = false;
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::RefreshModels => {
+                                        let cur_p = app.agent.provider();
+                                        app.status = format!(
+                                            "Refreshing {} models...",
+                                            cur_p.display_name()
+                                        );
+                                        app.render(&mut window);
+                                        app.maybe_fetch_models(&mut window, cur_p, true);
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::CyclePolicy => {
+                                        let next = match app.agent.approval_policy() {
+                                            ApprovalPolicy::AlwaysAsk => ApprovalPolicy::AutoSafe,
+                                            ApprovalPolicy::AutoSafe => ApprovalPolicy::Turbo,
+                                            ApprovalPolicy::Turbo => ApprovalPolicy::AlwaysAsk,
+                                        };
+                                        app.agent.set_approval_policy(next);
+                                        let lbl = match next {
+                                            ApprovalPolicy::AlwaysAsk => "Ask (all mutating tools)",
+                                            ApprovalPolicy::AutoSafe => "Auto (safe tools & artifacts)",
+                                            ApprovalPolicy::Turbo => "Turbo (auto-approve all)",
+                                        };
+                                        app.status = format!("Approval policy: {}", lbl);
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::ToggleSettings => {
+                                        app.model_picker_open = false;
+                                        app.settings_open = !app.settings_open;
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::ReloadCreds => {
+                                        let (reloaded, new_proxy) =
+                                            app.vault.load_from_files(&mut window);
+                                        if new_proxy.is_some() {
+                                            app.proxy_base = new_proxy;
+                                        }
+                                        app.models_fetched = [false; 5];
+                                        let cur_p = app.agent.provider();
+                                        app.maybe_fetch_models(&mut window, cur_p, true);
+                                        app.status = format!(
+                                            "Reloaded /data/tailor ({} credential(s) loaded).",
+                                            reloaded
+                                        );
+                                        app.push_log(&format!("[tailor] {}", app.status));
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::ToggleProxy => {
+                                        if app.proxy_base.is_some() {
+                                            app.proxy_base = None;
+                                            let _ = write_config_file(
+                                                &mut window,
+                                                "proxy.conf",
+                                                None,
+                                                b"",
+                                            );
+                                            app.status = String::from("Proxy mode disabled.");
+                                        } else {
+                                            app.proxy_base = Some(String::from(DEFAULT_PROXY_URL));
+                                            let _ = write_config_file(
+                                                &mut window,
+                                                "proxy.conf",
+                                                None,
+                                                DEFAULT_PROXY_URL.as_bytes(),
+                                            );
+                                            app.status = format!(
+                                                "Proxy mode enabled ({}).",
+                                                DEFAULT_PROXY_URL
+                                            );
+                                        }
+                                        app.push_log(&format!("[tailor] {}", app.status));
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::LeftTab(tab) => {
+                                        app.left_tab = tab;
+                                        if tab == ui::LeftTab::Files && app.workspace_files.is_empty()
+                                        {
+                                            app.refresh_workspace_files(&mut window);
+                                        }
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::RefreshFiles => {
+                                        app.refresh_workspace_files(&mut window);
+                                        app.status = format!(
+                                            "Synced workspace ({} entries).",
+                                            app.workspace_files.len()
+                                        );
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::OpenFile(idx) => {
+                                        if let Some(name) = app.workspace_files.get(idx).cloned() {
+                                            app.open_workspace_file(&mut window, &name);
+                                            dirty = true;
+                                        }
+                                    }
+                                    ui::HitAction::OpenArtifact(idx) => {
+                                        let names = app.artifact_names();
+                                        if let Some(name) = names.get(idx).cloned() {
+                                            app.active_artifact_name = Some(name.clone());
+                                            app.center_tab = ui::CenterTab::Artifact;
+                                            app.center_scroll = 0;
+                                            app.status = format!("Viewing artifact {}", name);
+                                            dirty = true;
+                                        }
+                                    }
+                                    ui::HitAction::SelectStep(idx) => {
+                                        if let Some(step) = app.agent.steps().get(idx).cloned() {
+                                            if let Some(diff) = step.diff {
+                                                app.active_diff_title = step.title.clone();
+                                                app.active_diff_content = diff;
+                                                app.center_tab = ui::CenterTab::Diff;
+                                                app.center_scroll = 0;
+                                            }
+                                            app.status = format!("Step: {}", step.title);
+                                            dirty = true;
+                                        }
+                                    }
+                                    ui::HitAction::CenterTab(tab) => {
+                                        app.center_tab = tab;
+                                        app.center_scroll = 0;
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::QuickPrompt(idx) => {
+                                        if app.stream.is_none() {
+                                            if let Some(prompt) = ui::QUICK_PROMPTS.get(idx) {
+                                                app.input = String::from(*prompt);
+                                                app.input_focused = true;
+                                                app.input_selected = false;
+                                                app.handle_submit(&mut window);
+                                                dirty = true;
+                                            }
+                                        }
+                                    }
+                                    ui::HitAction::FocusInput => {
+                                        app.model_picker_open = false;
+                                        app.settings_open = false;
+                                        app.input_focused = true;
+                                        app.input_selected = false;
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::Approve if app.stream.is_none() => {
+                                        app.input = String::from("/approve");
+                                        app.handle_submit(&mut window);
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::Deny if app.stream.is_none() => {
+                                        app.input = String::from("/deny");
+                                        app.handle_submit(&mut window);
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::SendOrStop => {
+                                        if let Some(mut active) = app.stream.take() {
+                                            active.duplex.close(&mut window);
+                                            app.push_log("\n[stopped]");
+                                            app.status = String::from("Stream stopped.");
+                                        } else {
+                                            app.input_focused = true;
+                                            app.input_selected = false;
+                                            app.handle_submit(&mut window);
+                                        }
+                                        dirty = true;
+                                    }
+                                    ui::HitAction::Clear => {
+                                        app.input.clear();
+                                        app.input_selected = false;
+                                        app.status = String::from("Input cleared.");
+                                        dirty = true;
+                                    }
+                                    _ => {}
                                 }
-                                ui::HitAction::Approve if app.stream.is_none() => {
-                                    app.input = String::from("/approve");
-                                    app.handle_submit(&mut window);
-                                    dirty = true;
-                                }
-                                ui::HitAction::Deny if app.stream.is_none() => {
-                                    app.input = String::from("/deny");
-                                    app.handle_submit(&mut window);
-                                    dirty = true;
-                                }
-                                ui::HitAction::Send if app.stream.is_none() => {
-                                    app.handle_submit(&mut window);
-                                    app.input_selected = false;
-                                    dirty = true;
-                                }
-                                ui::HitAction::Clear => {
-                                    app.input.clear();
-                                    app.input_selected = false;
-                                    app.status = String::from("Input cleared.");
-                                    dirty = true;
-                                }
-                                _ => {}
                             }
                         }
-                    }
-                    sex_pdx::app_pointer::Kind::Wheel { steps } => {
-                        if steps > 0 {
-                            app.scroll_lines = app.scroll_lines.saturating_add(3);
-                        } else if steps < 0 {
-                            app.scroll_lines = app.scroll_lines.saturating_sub(3);
+                        sex_pdx::app_pointer::Kind::Wheel { steps } => {
+                            let (cx, cy, cw, ch) = app.ui.center_rect;
+                            let in_center = cw > 0
+                                && px >= cx
+                                && px < cx + cw
+                                && py >= cy
+                                && py < cy + ch;
+                            if in_center {
+                                if steps > 0 {
+                                    app.center_scroll = app.center_scroll.saturating_sub(3);
+                                } else if steps < 0 {
+                                    app.center_scroll = app.center_scroll.saturating_add(3);
+                                }
+                            } else if steps > 0 {
+                                app.scroll_lines = app.scroll_lines.saturating_add(3);
+                            } else if steps < 0 {
+                                app.scroll_lines = app.scroll_lines.saturating_sub(3);
+                            }
+                            dirty = true;
                         }
+                        _ => {}
+                    }
+                }
+                Event::Key(key) if key.code == 0x01 => {
+                    // Escape: close any open popovers/modals
+                    if app.model_picker_open || app.settings_open {
+                        app.model_picker_open = false;
+                        app.settings_open = false;
                         dirty = true;
                     }
-                    _ => {}
-                },
+                }
                 Event::Key(key) if key.control && key.code == 0x1E => {
                     // Ctrl+A: select all prompt text
+                    app.input_focused = true;
                     app.input_selected = !app.input.is_empty();
                     dirty = true;
                 }
                 Event::Key(key) if key.control && key.code == 0x2F => {
                     // Ctrl+V: paste clipboard into prompt
                     if app.stream.is_none() {
+                        app.input_focused = true;
                         if let Ok(clip) = sex_app::clipboard::paste(&mut window) {
                             if app.input_selected {
                                 app.input.clear();
@@ -1695,7 +2355,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                Event::Key(key) if key.control && key.code == 0x2e => {
+                Event::Key(key) if key.control && key.code == 0x2E => {
                     // Ctrl+C: cancel active stream, or copy prompt/transcript to clipboard.
                     if let Some(mut active) = app.stream.take() {
                         active.duplex.close(&mut window);
@@ -1710,17 +2370,27 @@ pub extern "C" fn _start() -> ! {
                     }
                     dirty = true;
                 }
-                Event::Key(key) if key.code == 0x1C => {
+                Event::Key(key)
+                    if key.code == 0x1C || matches!(sex_app::text(key), Some('\n' | '\r')) =>
+                {
                     // Enter
-                    if app.stream.is_none() {
+                    if app.model_picker_open || app.settings_open {
+                        app.model_picker_open = false;
+                        app.settings_open = false;
+                        dirty = true;
+                    } else if app.stream.is_none() {
+                        app.input_focused = true;
                         app.input_selected = false;
                         app.handle_submit(&mut window);
                         dirty = true;
                     }
                 }
-                Event::Key(key) if key.code == 0x0E => {
+                Event::Key(key)
+                    if key.code == 0x0E || matches!(sex_app::text(key), Some('\x08' | '\x7f')) =>
+                {
                     // Backspace
                     if app.stream.is_none() {
+                        app.input_focused = true;
                         if app.input_selected {
                             app.input.clear();
                             app.input_selected = false;
@@ -1740,9 +2410,10 @@ pub extern "C" fn _start() -> ! {
                         dirty = true;
                     }
                     _ => {
-                        if app.stream.is_none() {
+                        if app.stream.is_none() && !app.model_picker_open && !app.settings_open {
                             if let Some(ch) = sex_app::text(key) {
                                 if !ch.is_control() && app.input.len() < 1024 {
+                                    app.input_focused = true;
                                     if app.input_selected {
                                         app.input.clear();
                                         app.input_selected = false;
