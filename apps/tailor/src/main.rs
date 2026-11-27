@@ -20,19 +20,97 @@ use alloc::vec::Vec;
 use sex_app::{files, launch, net, Event, Nav, Window};
 use shibari::{Keeper, Knot, Owner};
 use tailor_core::{
-    Agent, AgentStep, ApprovalDecision, Provider, ProviderStreamParser, StreamEvent, ToolRunner,
-    Workspace,
+    build_claude_refresh_request, build_codex_refresh_request, is_claude_oauth_token,
+    parse_claude_oauth_json, parse_codex_oauth_json, Agent, AgentStep, ApprovalDecision,
+    OAuthToken, Provider, ProviderStreamParser, StreamEvent, ToolRunner, Workspace,
 };
 
 const MAX_READ_BYTES: usize = 256 * 1024;
 const READ_CHUNK_BYTES: usize = 32 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 24 * 1024;
 const COMMAND_TIMEOUT_TICKS: u64 = 15_000;
+const OAUTH_REFRESH_MAX_BYTES: usize = 64 * 1024;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[tailor.fatal] {}", info);
     sex_pdx::task_finish(1);
+}
+
+fn zeroize_slice(buf: &mut [u8]) {
+    for b in buf {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+}
+
+/// Reads a Tailor config/secret file, prioritizing SexOS confined relative paths first
+/// (`<filename>` -> `/data/tailor/<filename>`), then `@/data/tailor/<filename>`,
+/// `/data/tailor/<filename>`, and `@/media/Ventoy/` fallbacks.
+fn read_config_file(
+    window: &mut Window,
+    filename: &str,
+    ventoy_alias: Option<&str>,
+    buf: &mut [u8],
+) -> Option<usize> {
+    let at_data = format!("@/data/tailor/{}", filename);
+    let abs_data = format!("/data/tailor/{}", filename);
+    let at_ventoy = format!("@/media/Ventoy/{}", filename);
+    let abs_ventoy = format!("/media/Ventoy/{}", filename);
+
+    let mut candidates: Vec<&[u8]> = vec![
+        filename.as_bytes(),
+        at_data.as_bytes(),
+        abs_data.as_bytes(),
+        at_ventoy.as_bytes(),
+        abs_ventoy.as_bytes(),
+    ];
+    let at_alias;
+    let abs_alias;
+    if let Some(alias) = ventoy_alias {
+        at_alias = format!("@/media/Ventoy/{}", alias);
+        abs_alias = format!("/media/Ventoy/{}", alias);
+        candidates.push(at_alias.as_bytes());
+        candidates.push(abs_alias.as_bytes());
+    }
+
+    for path in candidates {
+        if let Ok(n) = files::read(window, path, buf) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Writes a Tailor config/secret file, prioritizing SexOS confined relative paths first
+/// (`<filename>` -> `/data/tailor/<filename>`), then `@/data/tailor/<filename>`,
+/// `/data/tailor/<filename>`, and optional Ventoy fallbacks.
+fn write_config_file(
+    window: &mut Window,
+    filename: &str,
+    ventoy_alias: Option<&str>,
+    data: &[u8],
+) -> Option<String> {
+    let local_path = String::from(filename);
+    let at_data = format!("@/data/tailor/{}", filename);
+    let abs_data = format!("/data/tailor/{}", filename);
+
+    let mut candidates = vec![local_path, at_data, abs_data];
+    if let Some(alias) = ventoy_alias {
+        candidates.push(format!("@/media/Ventoy/{}", alias));
+        candidates.push(format!("/media/Ventoy/{}", alias));
+    }
+
+    for (idx, path) in candidates.into_iter().enumerate() {
+        if idx == 2 {
+            let _ = files::mkdir(window, b"/data");
+            let _ = files::mkdir(window, b"/data/tailor");
+        }
+        if files::write(window, path.as_bytes(), data).is_ok() {
+            let _ = files::sync(window);
+            return Some(path);
+        }
+    }
+    None
 }
 
 struct KeyVault {
@@ -42,17 +120,33 @@ struct KeyVault {
     claude: Option<Knot>,
     claude_deepseek: Option<Knot>,
     codex: Option<Knot>,
+    claude_refresh: Option<Knot>,
+    codex_refresh: Option<Knot>,
+    proxy_key: Option<Knot>,
+    claude_oauth: bool,
+    codex_oauth: bool,
+    codex_account_id: Option<String>,
+    claude_expires_at: Option<u64>,
+    codex_expires_at: Option<u64>,
 }
 
 impl KeyVault {
     fn new(owner: Owner, salt: u64) -> Self {
         Self {
             owner,
-            keeper: Keeper::new(salt, 8),
+            keeper: Keeper::new(salt, 16),
             gemini: None,
             claude: None,
             claude_deepseek: None,
             codex: None,
+            claude_refresh: None,
+            codex_refresh: None,
+            proxy_key: None,
+            claude_oauth: false,
+            codex_oauth: false,
+            codex_account_id: None,
+            claude_expires_at: None,
+            codex_expires_at: None,
         }
     }
 
@@ -74,6 +168,29 @@ impl KeyVault {
         }
     }
 
+    fn store_knot(
+        keeper: &mut Keeper,
+        owner: Owner,
+        slot: &mut Option<Knot>,
+        label: &str,
+        secret: &[u8],
+    ) -> Result<(), &'static str> {
+        if secret.is_empty() {
+            return Err("Empty secret");
+        }
+        if let Some(knot) = *slot {
+            keeper
+                .retie(owner, knot, secret)
+                .map_err(|_| "Failed to update secret in Shibari")?;
+        } else {
+            let knot = keeper
+                .tie(owner, label, secret)
+                .map_err(|_| "Shibari key vault full")?;
+            *slot = Some(knot);
+        }
+        Ok(())
+    }
+
     fn store(&mut self, provider: Provider, secret: &[u8]) -> Result<(), &'static str> {
         if secret.is_empty() {
             return Err("Empty API key");
@@ -89,11 +206,83 @@ impl KeyVault {
                 .map_err(|_| "Shibari key vault full")?;
             self.set_slot(provider, knot);
         }
+        if provider == Provider::Claude {
+            if let Ok(s) = core::str::from_utf8(secret) {
+                self.claude_oauth = is_claude_oauth_token(s);
+            }
+        }
         Ok(())
+    }
+
+    fn store_oauth(&mut self, provider: Provider, token: &OAuthToken) -> Result<(), &'static str> {
+        self.store(provider, token.access_token.as_bytes())?;
+        match provider {
+            Provider::Claude => {
+                self.claude_oauth = true;
+                self.claude_expires_at = token.expires_at;
+                if let Some(ref rt) = token.refresh_token {
+                    Self::store_knot(
+                        &mut self.keeper,
+                        self.owner,
+                        &mut self.claude_refresh,
+                        "claude_refresh",
+                        rt.as_bytes(),
+                    )?;
+                }
+            }
+            Provider::Codex => {
+                self.codex_oauth = true;
+                self.codex_expires_at = token.expires_at;
+                if token.account_id.is_some() {
+                    self.codex_account_id = token.account_id.clone();
+                }
+                if let Some(ref rt) = token.refresh_token {
+                    Self::store_knot(
+                        &mut self.keeper,
+                        self.owner,
+                        &mut self.codex_refresh,
+                        "codex_refresh",
+                        rt.as_bytes(),
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn store_proxy_key(&mut self, secret: &[u8]) -> Result<(), &'static str> {
+        Self::store_knot(
+            &mut self.keeper,
+            self.owner,
+            &mut self.proxy_key,
+            "proxy.key",
+            secret,
+        )
     }
 
     fn has_key(&self, provider: Provider) -> bool {
         self.slot(provider).is_some()
+    }
+
+    fn is_oauth(&self, provider: Provider) -> bool {
+        match provider {
+            Provider::Claude => self.claude_oauth,
+            Provider::Codex => self.codex_oauth,
+            _ => false,
+        }
+    }
+
+    fn codex_account_id(&self) -> Option<&str> {
+        self.codex_account_id.as_deref()
+    }
+
+    fn has_refresh_token(&self, provider: Provider) -> bool {
+        match provider {
+            Provider::Claude => self.claude_refresh.is_some(),
+            Provider::Codex => self.codex_refresh.is_some(),
+            _ => false,
+        }
     }
 
     fn with_key<R>(&self, provider: Provider, f: impl FnOnce(&str) -> R) -> Option<R> {
@@ -106,32 +295,71 @@ impl KeyVault {
             .ok()
     }
 
-    fn load_from_files(&mut self, window: &mut Window) -> usize {
+    fn with_refresh_token<R>(&self, provider: Provider, f: impl FnOnce(&str) -> R) -> Option<R> {
+        let knot = match provider {
+            Provider::Claude => self.claude_refresh?,
+            Provider::Codex => self.codex_refresh?,
+            _ => return None,
+        };
+        self.keeper
+            .with(self.owner, knot, |bytes| {
+                let s = core::str::from_utf8(bytes).unwrap_or("");
+                f(s)
+            })
+            .ok()
+    }
+
+    fn with_proxy_key<R>(&self, f: impl FnOnce(&str) -> R) -> Option<R> {
+        let knot = self.proxy_key?;
+        self.keeper
+            .with(self.owner, knot, |bytes| {
+                let s = core::str::from_utf8(bytes).unwrap_or("");
+                f(s)
+            })
+            .ok()
+    }
+
+    fn load_from_files(&mut self, window: &mut Window) -> (usize, Option<String>) {
         let mut loaded = 0usize;
-        // 1. Load JSON key bundles first (supports gemini, claude, claude-deepseek, codex).
-        let mut jbuf = vec![0u8; 4096];
-        for path in [
-            b"/data/tailor/keys.json".as_slice(),
-            b"/media/Ventoy/tailor-keys.json".as_slice(),
-            b"/media/Ventoy/keys.json".as_slice(),
-            b"keys.json".as_slice(),
-        ] {
-            if let Ok(n) = files::read(window, path, &mut jbuf) {
-                if let Ok(raw) = core::str::from_utf8(&jbuf[..n]) {
-                    for (provider, secret) in tailor_core::parse_keys_json(raw) {
-                        if !self.has_key(provider)
-                            && self.store(provider, secret.as_bytes()).is_ok()
-                        {
-                            loaded += 1;
-                        }
+
+        // 1. Load OAuth credentials first (Claude Pro/Max & Codex / ChatGPT Plus & Pro).
+        let mut oauth_buf = vec![0u8; 8192];
+        if let Some(n) = read_config_file(window, "claude_oauth.json", None, &mut oauth_buf) {
+            if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
+                if let Some(tok) = parse_claude_oauth_json(raw) {
+                    if self.store_oauth(Provider::Claude, &tok).is_ok() {
+                        loaded += 1;
                     }
                 }
             }
-            for b in &mut jbuf {
-                unsafe { core::ptr::write_volatile(b, 0) };
+        }
+        zeroize_slice(&mut oauth_buf);
+
+        if let Some(n) = read_config_file(window, "codex_oauth.json", None, &mut oauth_buf) {
+            if let Ok(raw) = core::str::from_utf8(&oauth_buf[..n]) {
+                if let Some(tok) = parse_codex_oauth_json(raw) {
+                    if self.store_oauth(Provider::Codex, &tok).is_ok() {
+                        loaded += 1;
+                    }
+                }
             }
         }
-        // 2. Fallback to per-provider *.key files.
+        zeroize_slice(&mut oauth_buf);
+
+        // 2. Load JSON key bundle (supports gemini, claude, claude-deepseek, codex).
+        let mut jbuf = vec![0u8; 4096];
+        if let Some(n) = read_config_file(window, "keys.json", Some("tailor-keys.json"), &mut jbuf) {
+            if let Ok(raw) = core::str::from_utf8(&jbuf[..n]) {
+                for (provider, secret) in tailor_core::parse_keys_json(raw) {
+                    if !self.has_key(provider) && self.store(provider, secret.as_bytes()).is_ok() {
+                        loaded += 1;
+                    }
+                }
+            }
+        }
+        zeroize_slice(&mut jbuf);
+
+        // 3. Fallback to per-provider *.key files.
         let mut buf = vec![0u8; 512];
         for provider in [
             Provider::Gemini,
@@ -142,26 +370,46 @@ impl KeyVault {
             if self.has_key(provider) {
                 continue;
             }
-            let abs = format!("/data/tailor/{}", provider.key_filename());
-            let ventoy = format!("/media/Ventoy/tailor-{}", provider.key_filename());
-            let candidates = [abs.as_bytes(), ventoy.as_bytes(), provider.key_filename().as_bytes()];
-            for path in candidates {
-                if let Ok(n) = files::read(window, path, &mut buf) {
-                    if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
-                        let trimmed = raw.trim();
-                        if !trimmed.is_empty() && self.store(provider, trimmed.as_bytes()).is_ok() {
-                            loaded += 1;
-                            break;
-                        }
+            let ventoy_alias = format!("tailor-{}", provider.key_filename());
+            if let Some(n) = read_config_file(
+                window,
+                provider.key_filename(),
+                Some(&ventoy_alias),
+                &mut buf,
+            ) {
+                if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() && self.store(provider, trimmed.as_bytes()).is_ok() {
+                        loaded += 1;
                     }
                 }
             }
-            // Wipe temporary buffer after each read.
-            for b in &mut buf {
-                unsafe { core::ptr::write_volatile(b, 0) };
+            zeroize_slice(&mut buf);
+        }
+
+        // 4. Optional CLIProxyAPI-Rust proxy key & base URL.
+        if let Some(n) = read_config_file(window, "proxy.key", None, &mut buf) {
+            if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() {
+                    let _ = self.store_proxy_key(trimmed.as_bytes());
+                }
             }
         }
-        loaded
+        zeroize_slice(&mut buf);
+
+        let mut proxy_base = None;
+        if let Some(n) = read_config_file(window, "proxy.conf", None, &mut buf) {
+            if let Ok(raw) = core::str::from_utf8(&buf[..n]) {
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() {
+                    proxy_base = Some(String::from(trimmed));
+                }
+            }
+        }
+        zeroize_slice(&mut buf);
+
+        (loaded, proxy_base)
     }
 }
 
@@ -291,15 +539,18 @@ impl ToolRunner for SexToolRunner {
 }
 
 struct ActiveStream {
+    provider: Provider,
     duplex: net::Duplex,
     parser: ProviderStreamParser,
     rx_buf: Vec<u8>,
+    retried_after_refresh: bool,
 }
 
 struct AppState {
     workspace_root: String,
     agent: Agent,
     vault: KeyVault,
+    proxy_base: Option<String>,
     runner: SexToolRunner,
     transcript: String,
     input: String,
@@ -333,31 +584,88 @@ impl AppState {
         }
     }
 
+    fn auth_mode_label(&self, provider: Provider) -> &'static str {
+        if self.proxy_base.is_some() {
+            "proxy"
+        } else if self.vault.is_oauth(provider) {
+            "oauth"
+        } else if self.vault.has_key(provider) {
+            "loaded"
+        } else {
+            "missing"
+        }
+    }
+
+    fn auth_badge(&self, provider: Provider) -> (String, u32) {
+        if let Some(ref base) = self.proxy_base {
+            let short = base
+                .trim()
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .trim_end_matches('/');
+            return (format!("Proxy: {}", short), 0x0002_84C7);
+        }
+        if provider == Provider::Claude && self.vault.is_oauth(Provider::Claude) {
+            return (String::from("Claude OAuth"), 0x002E_A043);
+        }
+        if provider == Provider::Codex && self.vault.is_oauth(Provider::Codex) {
+            return (String::from("Codex OAuth"), 0x002E_A043);
+        }
+        if self.vault.has_key(provider) {
+            (String::from("Shibari: OK"), 0x002E_A043)
+        } else {
+            (String::from("No API Key"), 0x00D9_7706)
+        }
+    }
+
     fn start_model_turn(&mut self, window: &mut Window) {
+        self.start_model_turn_inner(window, false);
+    }
+
+    fn start_model_turn_inner(&mut self, window: &mut Window, retried_after_refresh: bool) {
         let provider = self.agent.provider();
-        let req = match self
+        let mut req = if let Some(r) = self
             .vault
             .with_key(provider, |key| self.agent.build_request(key))
         {
-            Some(r) => r,
-            None => {
-                self.status = format!(
-                    "No {} API key. Put it in /data/tailor/{} or run /key {} <secret>",
-                    provider.display_name(),
-                    provider.key_filename(),
-                    provider.name()
-                );
-                return;
-            }
+            r
+        } else if self.proxy_base.is_some() {
+            // Proxy mode allows all providers without individual API keys.
+            self.agent.build_request("")
+        } else {
+            self.status = format!(
+                "No {} key/OAuth. Put {} or claude_oauth.json/codex_oauth.json in /data/tailor, or run /proxy <url>",
+                provider.display_name(),
+                provider.key_filename(),
+            );
+            return;
         };
 
-        match net::Duplex::start(window, &req.host, req.port, true, req.http_bytes) {
+        if provider == Provider::Codex {
+            req = req.with_chatgpt_account_id(self.vault.codex_account_id());
+        }
+
+        if let Some(ref proxy_url) = self.proxy_base {
+            req = match self
+                .vault
+                .with_proxy_key(|pk| req.clone().with_proxy_base(proxy_url, Some(pk)))
+            {
+                Some(rewritten) => rewritten,
+                None => req.with_proxy_base(proxy_url, Some("cliproxy")),
+            };
+        }
+
+        match net::Duplex::start(window, &req.host, req.port, req.tls, req.http_bytes) {
             Ok(duplex) => {
-                self.push_delta(&format!("\n[{}] ", provider.display_name()));
+                if !retried_after_refresh {
+                    self.push_delta(&format!("\n[{}] ", provider.display_name()));
+                }
                 self.stream = Some(ActiveStream {
+                    provider,
                     duplex,
                     parser: ProviderStreamParser::new(provider),
                     rx_buf: Vec::with_capacity(4096),
+                    retried_after_refresh,
                 });
                 self.status = format!(
                     "Streaming from {} ({})... Ctrl+C to cancel.",
@@ -372,6 +680,75 @@ impl AppState {
                 self.status = format!("Connection failed: {:?}", e);
             }
         }
+    }
+
+    fn try_refresh_oauth(&mut self, window: &mut Window, provider: Provider) -> Result<(), String> {
+        let refresh_req = match provider {
+            Provider::Claude => self
+                .vault
+                .with_refresh_token(Provider::Claude, build_claude_refresh_request),
+            Provider::Codex => self
+                .vault
+                .with_refresh_token(Provider::Codex, build_codex_refresh_request),
+            _ => None,
+        }
+        .ok_or_else(|| String::from("No refresh_token available"))?;
+
+        let old_refresh = self
+            .vault
+            .with_refresh_token(provider, |s| String::from(s));
+        let old_account_id = if provider == Provider::Codex {
+            self.vault.codex_account_id().map(String::from)
+        } else {
+            None
+        };
+
+        let headers = [
+            ("Content-Type", "application/json"),
+            ("Accept", "application/json"),
+        ];
+        let req = sex_fetch::Request {
+            method: "POST",
+            url: &refresh_req.url,
+            headers: &headers,
+            body: refresh_req.body.as_bytes(),
+            trusted_origin: false,
+            referrer: None,
+        };
+        let resp = net::request(window, &req, None, OAUTH_REFRESH_MAX_BYTES)
+            .map_err(|e| format!("OAuth refresh request failed: {:?}", e))?;
+        if !(200..300).contains(&resp.head.status) {
+            return Err(format!("OAuth refresh returned HTTP {}", resp.head.status));
+        }
+        let body_str = core::str::from_utf8(&resp.body)
+            .map_err(|_| String::from("OAuth refresh response was not UTF-8"))?;
+        let mut parsed = match provider {
+            Provider::Claude => parse_claude_oauth_json(body_str),
+            Provider::Codex => parse_codex_oauth_json(body_str),
+            _ => None,
+        }
+        .ok_or_else(|| String::from("OAuth refresh response missing access_token"))?;
+
+        if parsed.refresh_token.is_none() {
+            parsed.refresh_token = old_refresh;
+        }
+        if parsed.account_id.is_none() {
+            parsed.account_id = old_account_id;
+        }
+
+        self.vault
+            .store_oauth(provider, &parsed)
+            .map_err(String::from)?;
+
+        let filename = match provider {
+            Provider::Claude => "claude_oauth.json",
+            Provider::Codex => "codex_oauth.json",
+            _ => return Ok(()),
+        };
+        let mut json_bytes = parsed.to_json().into_bytes();
+        let _ = write_config_file(window, filename, None, &json_bytes);
+        zeroize_slice(&mut json_bytes);
+        Ok(())
     }
 
     fn drive_tools(&mut self, window: &mut Window) {
@@ -421,12 +798,18 @@ impl AppState {
         active.rx_buf.clear();
         let poll_res = active.duplex.poll(window, &mut active.rx_buf);
         let mut done = false;
+        let can_auto_refresh = !active.retried_after_refresh
+            && matches!(active.provider, Provider::Claude | Provider::Codex)
+            && self.vault.has_refresh_token(active.provider);
 
         if !active.rx_buf.is_empty() {
             changed = true;
             let events = active.parser.feed(&active.rx_buf);
+            let will_refresh = can_auto_refresh && active.parser.http_status() == Some(401);
             for ev in events {
-                if self.apply_stream_event(&ev) {
+                if will_refresh && matches!(ev, StreamEvent::Error(_)) {
+                    done = true;
+                } else if self.apply_stream_event(&ev) {
                     done = true;
                 }
             }
@@ -438,6 +821,29 @@ impl AppState {
             }
             Ok(_) | Err(_) => {
                 let tail = active.parser.finish();
+                let will_refresh = can_auto_refresh && active.parser.http_status() == Some(401);
+                if will_refresh {
+                    active.duplex.close(window);
+                    self.status = format!(
+                        "Refreshing {} OAuth token...",
+                        active.provider.display_name()
+                    );
+                    self.push_log(&format!("\n[tailor] {}", self.status));
+                    changed = true;
+                    match self.try_refresh_oauth(window, active.provider) {
+                        Ok(()) => {
+                            self.push_log("[tailor] OAuth token refreshed; retrying...");
+                            self.start_model_turn_inner(window, true);
+                        }
+                        Err(err) => {
+                            self.push_log(&format!("[error] {}", err));
+                            self.status = format!("Error: {}", err);
+                            let _ = self.agent.finish_model_turn();
+                        }
+                    }
+                    return changed;
+                }
+
                 for ev in tail {
                     self.apply_stream_event(&ev);
                 }
@@ -550,10 +956,10 @@ impl AppState {
                 Some(p) => {
                     self.agent.set_provider(p);
                     self.status = format!(
-                        "Switched to {} ({}) [key={}]",
+                        "Switched to {} ({}) [auth={}]",
                         p.display_name(),
                         self.agent.model(),
-                        if self.vault.has_key(p) { "loaded" } else { "missing" }
+                        self.auth_mode_label(p)
                     );
                     self.push_log(&format!("[tailor] {}", self.status));
                 }
@@ -567,6 +973,36 @@ impl AppState {
                 } else {
                     self.agent.set_model(rest);
                     self.status = format!("Model set to {}", self.agent.model());
+                    self.push_log(&format!("[tailor] {}", self.status));
+                }
+            }
+            "proxy" => {
+                if rest.is_empty() {
+                    self.status = match &self.proxy_base {
+                        Some(url) => format!("Proxy active: {} (use /proxy off to disable)", url),
+                        None => String::from("Proxy is off. Usage: /proxy http://127.0.0.1:8317 | /proxy off"),
+                    };
+                } else if rest.eq_ignore_ascii_case("off")
+                    || rest.eq_ignore_ascii_case("none")
+                    || rest.eq_ignore_ascii_case("clear")
+                {
+                    self.proxy_base = None;
+                    let _ = write_config_file(window, "proxy.conf", None, b"");
+                    self.status = String::from("Proxy disabled (cleared proxy.conf).");
+                    self.push_log(&format!("[tailor] {}", self.status));
+                } else {
+                    let normalized = if rest.starts_with("http://") || rest.starts_with("https://") {
+                        String::from(rest.trim_end_matches('/'))
+                    } else {
+                        format!("http://{}", rest.trim_end_matches('/'))
+                    };
+                    let saved = write_config_file(window, "proxy.conf", None, normalized.as_bytes());
+                    self.proxy_base = Some(normalized.clone());
+                    self.status = if let Some(where_saved) = saved {
+                        format!("Proxy set to {} (saved to {}).", normalized, where_saved)
+                    } else {
+                        format!("Proxy set to {} (RAM only).", normalized)
+                    };
                     self.push_log(&format!("[tailor] {}", self.status));
                 }
             }
@@ -612,10 +1048,12 @@ impl AppState {
                     "Commands:\n\
                      /provider gemini|claude|claude-deepseek|codex  Switch AI provider\n\
                      /model <name>                   Override model name\n\
-                     /key <provider> <secret>        Store & persist API key\n\
+                     /proxy <url> | /proxy off       Route via CLIProxyAPI-Rust (e.g. http://127.0.0.1:8317)\n\
+                     /key <provider> <secret>        Store & persist API key or sk-ant-oat01-* OAuth token\n\
                      /approve (or y)                 Approve pending mutating tool\n\
                      /deny [reason] (or n)           Deny pending mutating tool\n\
                      /clear                          Clear conversation history\n\
+                     OAuth files in /data/tailor/: claude_oauth.json, codex_oauth.json, proxy.conf, proxy.key\n\
                      Up/Down scroll · Ctrl+C cancel stream · F11 close",
                 );
             }
@@ -626,22 +1064,13 @@ impl AppState {
     }
 
     fn persist_key(&self, window: &mut Window, provider: Provider, secret: &[u8]) -> Option<String> {
-        let data_path = format!("/data/tailor/{}", provider.key_filename());
-        let ventoy_path = format!("/media/Ventoy/tailor-{}", provider.key_filename());
-        let local_path = String::from(provider.key_filename());
-        let _ = files::mkdir(window, b"/data");
-        let _ = files::mkdir(window, b"/data/tailor");
-        for path in [data_path, ventoy_path, local_path] {
-            if files::write(window, path.as_bytes(), secret).is_ok() {
-                return Some(path);
-            }
-        }
-        None
+        let ventoy_alias = format!("tailor-{}", provider.key_filename());
+        write_config_file(window, provider.key_filename(), Some(&ventoy_alias), secret)
     }
 
     fn render(&mut self, window: &mut Window) {
         let p = self.agent.provider();
-        let has_key = self.vault.has_key(p);
+        let (auth_label, auth_color) = self.auth_badge(p);
         let model = self.agent.model();
         let streaming = self.stream.is_some();
         let pending_approval = self.agent.pending_approval().is_some();
@@ -649,7 +1078,8 @@ impl AppState {
             window,
             p,
             model,
-            has_key,
+            &auth_label,
+            auth_color,
             streaming,
             pending_approval,
             &self.transcript,
@@ -690,33 +1120,45 @@ pub extern "C" fn _start() -> ! {
         workspace_root,
         agent: Agent::new(initial_provider),
         vault,
+        proxy_base: None,
         runner: SexToolRunner::new(),
         transcript: String::new(),
         input: String::new(),
         input_selected: false,
-        status: String::from("Loading keys into Shibari vault..."),
+        status: String::from("Loading keys & OAuth into Shibari vault..."),
         scroll_lines: 0,
         stream: None,
         ui: ui::TailorUi::new(),
     };
     app.push_log("Tailor — Native Multi-Provider AI Coding Agent for SexOS.");
-    app.push_log("Click a provider pill above (Claude / DeepSeek / Codex / Gemini), or type:");
-    app.push_log("  /key claude-deepseek <api-key>   |   /key claude <api-key>   |   /model <id>");
+    app.push_log("Click a provider pill above (Claude / DeepSeek / Codex / Gemini), or use:");
+    app.push_log("  /proxy http://127.0.0.1:8317  (CLIProxyAPI-Rust)  |  /proxy off");
+    app.push_log("  OAuth: drop claude_oauth.json or codex_oauth.json in /data/tailor/");
+    app.push_log("  API key: /key <provider> <secret>  |  /model <id>  |  /help");
     app.render(&mut window);
 
-    let loaded = app.vault.load_from_files(&mut window);
-    app.status = format!(
-        "Ready ({} key(s) in Shibari). Type a prompt or /help.",
-        loaded
-    );
+    let (loaded, proxy_base) = app.vault.load_from_files(&mut window);
+    app.proxy_base = proxy_base;
+    app.status = if let Some(ref url) = app.proxy_base {
+        format!(
+            "Ready (Proxy: {}, {} key(s) in Shibari). Type a prompt or /help.",
+            url, loaded
+        )
+    } else {
+        format!(
+            "Ready ({} key(s) in Shibari). Type a prompt or /help.",
+            loaded
+        )
+    };
     app.render(&mut window);
 
     sex_pdx::serial_record!(
-        "[tailor.ready] target={} task={} provider={} keys={}",
+        "[tailor.ready] target={} task={} provider={} keys={} proxy={}",
         window.target,
         window.task,
         app.agent.provider().name(),
-        loaded
+        loaded,
+        app.proxy_base.as_deref().unwrap_or("none")
     );
 
     loop {
@@ -743,10 +1185,10 @@ pub extern "C" fn _start() -> ! {
                                 ui::HitAction::Provider(prov) => {
                                     app.agent.set_provider(prov);
                                     app.status = format!(
-                                        "Switched to {} ({}) [key={}]",
+                                        "Switched to {} ({}) [auth={}]",
                                         prov.display_name(),
                                         app.agent.model(),
-                                        if app.vault.has_key(prov) { "ok" } else { "missing" }
+                                        app.auth_mode_label(prov)
                                     );
                                     app.push_log(&format!("[tailor] {}", app.status));
                                     dirty = true;
