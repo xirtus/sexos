@@ -2775,11 +2775,11 @@ fn render_wifi(
 
     // 1. Current Connection Status Card.
     let status_h = 78;
-    draw_candy_panel(buf, w, h, x, y, cw, status_h, 10, pal);
+    draw_noir_card(buf, w, h, x, y, cw, status_h, 10, pal);
     let accent_bar = if gui.wifi.connected { 0x0034_D399 } else { pal.accent };
     fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, status_h - 12, 2, accent_bar);
 
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 240, b"Current Wi-Fi Connection", pal.text);
+    draw_sans(buf, w, h, g, x + 14, y + 8, cw - 240, b"Current Wi-Fi Connection", pal.text);
 
     // Status pill badge.
     let badge_lbl: &[u8] = if gui.wifi.connected { b"CONNECTED" } else { b"DISCONNECTED" };
@@ -2787,7 +2787,7 @@ fn render_wifi(
     let badge_ink = if gui.wifi.connected { 0x0010_0C1C } else { pal.text_dim };
     let badge_w = if gui.wifi.connected { 88 } else { 108 };
     draw_candy_badge(buf, w, h, x + 14, y + 30, badge_w, 20, badge_col, pal);
-    draw_text(buf, w, h, g, x + 20, y + 32, badge_w - 8, badge_lbl, badge_ink);
+    draw_sans(buf, w, h, g, x + 20, y + 32, badge_w - 8, badge_lbl, badge_ink);
 
     // Connected SSID / Status text next to badge.
     let ssid_text: &[u8] = if gui.wifi.active_ssid_len > 0 {
@@ -2795,7 +2795,7 @@ fn render_wifi(
     } else {
         gui.wifi.status_bytes()
     };
-    draw_text(buf, w, h, g, x + 22 + badge_w, y + 32, (cw - badge_w - 220).max(80), ssid_text, pal.text);
+    draw_sans(buf, w, h, g, x + 22 + badge_w, y + 32, (cw - badge_w - 220).max(80), ssid_text, pal.text);
 
     // Second info line: IP & Signal quality.
     let mut meta = [0u8; 96];
@@ -2816,7 +2816,7 @@ fn render_wifi(
         put_meta(&mut meta, &mut mn, WifiState::signal_quality_label(gui.wifi.signal_rssi));
         put_meta(&mut meta, &mut mn, b")");
     }
-    draw_text(buf, w, h, g, x + 14, y + 54, cw - 220, &meta[..mn], pal.text_dim);
+    draw_sans(buf, w, h, g, x + 14, y + 54, cw - 220, &meta[..mn], pal.text_dim);
 
     // Action buttons on right of Status card: Scan Wi-Fi + Refresh.
     let scan_w = 96;
@@ -2825,12 +2825,12 @@ fn render_wifi(
     let scan_x = ref_x - scan_w - 8;
     let scan_act = UiAction::WifiScan;
     draw_candy_button(buf, w, h, scan_x, y + 10, scan_w, 26, 8, ButtonStyle::Primary, gui.btn_state(scan_act), pal);
-    draw_text(buf, w, h, g, scan_x + 12, y + 15, scan_w - 16, b"Scan Wi-Fi", pal.text_on_accent);
+    draw_sans(buf, w, h, g, scan_x + 12, y + 15, scan_w - 16, b"Scan Wi-Fi", pal.text_on_accent);
     gui.push_hit(scan_x, y + 10, scan_w, 26, scan_act);
 
     let ref_act = UiAction::WifiRefresh;
     draw_candy_button(buf, w, h, ref_x, y + 10, ref_w, 26, 8, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
-    draw_text(buf, w, h, g, ref_x + 11, y + 15, ref_w - 14, b"Refresh", pal.text);
+    draw_sans(buf, w, h, g, ref_x + 11, y + 15, ref_w - 14, b"Refresh", pal.text);
     gui.push_hit(ref_x, y + 10, ref_w, 26, ref_act);
 
     y += status_h + 10;
@@ -2839,8 +2839,8 @@ fn render_wifi(
     let known_count = gui.wifi.known_count;
     let known_rows = known_count.min(4);
     let known_h = (38 + known_rows.max(1) as i32 * 30 + 6).min((max_y - y - 160).max(74));
-    draw_candy_panel(buf, w, h, x, y, cw, known_h, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 130, b"Known / Saved Networks (/data/wifi.conf)", pal.text);
+    draw_noir_card(buf, w, h, x, y, cw, known_h, 10, pal);
+    draw_sans(buf, w, h, g, x + 14, y + 8, cw - 130, b"Known / Saved Networks (/data/wifi.conf)", pal.text);
 
     let mut cnt_buf = [0u8; 16];
     let mut cn = format_u64_ascii(known_count as u64, &mut cnt_buf);
@@ -2848,11 +2848,11 @@ fn render_wifi(
     cnt_buf[cn..cn + suf.len()].copy_from_slice(suf);
     cn += suf.len();
     draw_candy_badge(buf, w, h, x + cw - 82, y + 6, 70, 20, pal.control, pal);
-    draw_text(buf, w, h, g, x + cw - 74, y + 8, 58, &cnt_buf[..cn], pal.accent);
+    draw_sans(buf, w, h, g, x + cw - 74, y + 8, 58, &cnt_buf[..cn], pal.accent);
 
     let mut ky = y + 32;
     if known_count == 0 {
-        draw_text(
+        draw_sans(
             buf,
             w,
             h,
@@ -2870,14 +2870,14 @@ fn render_wifi(
             }
             let entry = gui.wifi.known[i];
             draw_candy_selection_row(buf, w, h, x + 10, ky, cw - 20, 26, 7, pal);
-            draw_text(buf, w, h, g, x + 18, ky + 5, (cw - 290).max(80), entry.ssid_bytes(), pal.text);
+            draw_sans(buf, w, h, g, x + 18, ky + 5, (cw - 290).max(80), entry.ssid_bytes(), pal.text);
 
             // Auto-connect Candy badge.
             let ac_w = 104;
             let ac_x = x + cw - 252;
             if ac_x > x + 120 {
                 draw_candy_badge(buf, w, h, ac_x, ky + 3, ac_w, 20, pal.accent, pal);
-                draw_text(buf, w, h, g, ac_x + 6, ky + 5, ac_w - 8, b"Auto-connect", pal.text_on_accent);
+                draw_sans(buf, w, h, g, ac_x + 6, ky + 5, ac_w - 8, b"Auto-connect", pal.text_on_accent);
             }
 
             // Connect button.
@@ -2885,7 +2885,7 @@ fn render_wifi(
             let conn_x = x + cw - 142;
             let conn_act = UiAction::WifiConnectKnown(i);
             draw_candy_button(buf, w, h, conn_x, ky + 2, conn_w, 22, 6, ButtonStyle::Normal, gui.btn_state(conn_act), pal);
-            draw_text(buf, w, h, g, conn_x + 6, ky + 5, conn_w - 8, b"Connect", pal.text);
+            draw_sans(buf, w, h, g, conn_x + 6, ky + 5, conn_w - 8, b"Connect", pal.text);
             gui.push_hit(conn_x, ky + 2, conn_w, 22, conn_act);
 
             // Forget button.
@@ -2893,7 +2893,7 @@ fn render_wifi(
             let fgt_x = x + cw - 68;
             let fgt_act = UiAction::WifiForgetKnown(i);
             draw_candy_button(buf, w, h, fgt_x, ky + 2, fgt_w, 22, 6, ButtonStyle::Subtle, gui.btn_state(fgt_act), pal);
-            draw_text(buf, w, h, g, fgt_x + 5, ky + 5, fgt_w - 8, b"Forget", pal.text_dim);
+            draw_sans(buf, w, h, g, fgt_x + 5, ky + 5, fgt_w - 8, b"Forget", pal.text_dim);
             gui.push_hit(fgt_x, ky + 2, fgt_w, 22, fgt_act);
 
             ky += 30;
@@ -2903,14 +2903,14 @@ fn render_wifi(
 
     // 3. Scan & Quick Join Card (available networks + SSID/Password form).
     let join_h = (max_y - y).max(126);
-    draw_candy_panel(buf, w, h, x, y, cw, join_h, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Available Networks & Quick Join", pal.text);
+    draw_noir_card(buf, w, h, x, y, cw, join_h, 10, pal);
+    draw_sans(buf, w, h, g, x + 14, y + 8, cw - 28, b"Available Networks & Quick Join", pal.text);
 
     // Available scanned networks list (above quick-join form).
     let form_y = (y + join_h - 46).max(y + 56);
     let mut sy = y + 30;
     if gui.wifi.scan_count == 0 {
-        draw_text(
+        draw_sans(
             buf,
             w,
             h,
@@ -2932,15 +2932,15 @@ fn render_wifi(
             let style = if st == ButtonState::Hover { ButtonStyle::Active } else { ButtonStyle::Subtle };
             draw_candy_button(buf, w, h, x + 10, sy, cw - 20, 22, 6, style, st, pal);
             let name = if s.ssid_len > 0 { s.ssid_bytes() } else { b"(hidden)" };
-            draw_text(buf, w, h, g, x + 18, sy + 3, (cw - 210).max(80), name, pal.text);
+            draw_sans(buf, w, h, g, x + 18, sy + 3, (cw - 210).max(80), name, pal.text);
 
             let mut rb = [0u8; 24];
             let rl = format_rssi(s.rssi, &mut rb);
-            draw_text(buf, w, h, g, x + cw - 178, sy + 3, 72, &rb[..rl], pal.text_dim);
+            draw_sans(buf, w, h, g, x + cw - 178, sy + 3, 72, &rb[..rl], pal.text_dim);
 
             let sec_lbl: &[u8] = if s.security == 0 { b"Open" } else { b"WPA2/3" };
             draw_candy_badge(buf, w, h, x + cw - 86, sy + 2, 64, 18, pal.control, pal);
-            draw_text(buf, w, h, g, x + cw - 78, sy + 3, 52, sec_lbl, pal.accent);
+            draw_sans(buf, w, h, g, x + cw - 78, sy + 3, 52, sec_lbl, pal.accent);
 
             gui.push_hit(x + 10, sy, cw - 20, 22, act);
             sy += 24;
@@ -2963,9 +2963,9 @@ fn render_wifi(
     let ssid_style = if ssid_focused { ButtonStyle::Active } else { ButtonStyle::Normal };
     draw_candy_button(buf, w, h, ssid_x, form_y + 4, ssid_w, 28, 7, ssid_style, gui.btn_state(ssid_act), pal);
     if gui.wifi.form_ssid_len > 0 {
-        draw_text(buf, w, h, g, ssid_x + 8, form_y + 10, ssid_w - 14, gui.wifi.form_ssid_bytes(), pal.text);
+        draw_sans(buf, w, h, g, ssid_x + 8, form_y + 10, ssid_w - 14, gui.wifi.form_ssid_bytes(), pal.text);
     } else {
-        draw_text(buf, w, h, g, ssid_x + 8, form_y + 10, ssid_w - 14, b"SSID...", pal.text_dim);
+        draw_sans(buf, w, h, g, ssid_x + 8, form_y + 10, ssid_w - 14, b"SSID...", pal.text_dim);
     }
     gui.push_hit(ssid_x, form_y + 4, ssid_w, 28, ssid_act);
 
@@ -2976,9 +2976,9 @@ fn render_wifi(
     draw_candy_button(buf, w, h, pass_x, form_y + 4, pass_w, 28, 7, pass_style, gui.btn_state(pass_act), pal);
     if gui.wifi.form_pass_len > 0 {
         let mask = [b'*'; 63];
-        draw_text(buf, w, h, g, pass_x + 8, form_y + 10, pass_w - 14, &mask[..gui.wifi.form_pass_len], pal.text);
+        draw_sans(buf, w, h, g, pass_x + 8, form_y + 10, pass_w - 14, &mask[..gui.wifi.form_pass_len], pal.text);
     } else {
-        draw_text(buf, w, h, g, pass_x + 8, form_y + 10, pass_w - 14, b"Passphrase...", pal.text_dim);
+        draw_sans(buf, w, h, g, pass_x + 8, form_y + 10, pass_w - 14, b"Passphrase...", pal.text_dim);
     }
     gui.push_hit(pass_x, form_y + 4, pass_w, 28, pass_act);
 
@@ -2988,7 +2988,7 @@ fn render_wifi(
     let join_style = if can_join { ButtonStyle::Primary } else { ButtonStyle::Disabled };
     let join_state = if can_join { gui.btn_state(join_act) } else { ButtonState::Rest };
     draw_candy_button(buf, w, h, join_x, form_y + 4, join_w, 28, 8, join_style, join_state, pal);
-    draw_text(buf, w, h, g, join_x + 8, form_y + 10, join_w - 12, b"Save & Join", button_text_color(join_style, pal));
+    draw_sans(buf, w, h, g, join_x + 8, form_y + 10, join_w - 12, b"Save & Join", button_text_color(join_style, pal));
     gui.push_hit(join_x, form_y + 4, join_w, 28, join_act);
 }
 

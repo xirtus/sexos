@@ -776,7 +776,6 @@ static CONTROL_QUEUE: spin::Mutex<([u64; 8], usize)> = spin::Mutex::new(([0; 8],
 static DESKTOP_PD: AtomicU32 = AtomicU32::new(0);
 /// Lid bits of the last sensor report, to tell the desktop when they change.
 static LAST_LID: AtomicU8 = AtomicU8::new(0);
-/// Wrapping WMI microphone-mute counter of the last sensor report, to wake idle Shell.
 static LAST_MIC_MUTE: AtomicU8 = AtomicU8::new(0);
 fn wake_desktop() {
     let pd = DESKTOP_PD.load(Ordering::Acquire);
@@ -840,13 +839,8 @@ fn fw_control() -> [u64; 5] {
 /// zone shuts the machine down cleanly (Files flushes first).
 fn sensors_reported(words: [u64; 3]) {
     let s = w::Sensors::decode([w::OK, words[0], words[1], words[2], 0]).unwrap_or_default();
-    let lid = ((words[1] >> 2) & 3) as u8;
-    let mic_mute = (words[1] >> 26) as u8;
-    if LAST_LID.swap(lid, Ordering::AcqRel) != lid
-        || LAST_MIC_MUTE.swap(mic_mute, Ordering::AcqRel) != mic_mute
-    {
-        wake_desktop();
-    }
+    let (lid, mm) = (((words[1] >> 2) & 3) as u8, (words[1] >> 26) as u8);
+    if LAST_LID.swap(lid, Ordering::AcqRel) != lid || LAST_MIC_MUTE.swap(mm, Ordering::AcqRel) != mm { wake_desktop(); }
     let why = if s.thermal_critical { "thermal_critical" } else if s.battery_critical { "battery_critical" } else { return };
     if STATE.load(Ordering::Acquire) != 0 { return; }
     serial_println!("[acpi.power.critical] reason={} percent={} temperature_dk={} trip_dk={}", why,

@@ -163,7 +163,10 @@ fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 mod bt_panel{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 mod silkbar_menus{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize,_:&crate::scene::SceneSnapshot){}}
-mod bg_apps{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:&silkbar_model::SilkBar,_:u32,_:usize){}}
+mod bg_apps{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:&silkbar_model::SilkBar,_:u32,_:usize){}pub fn bar_fg_at(_:usize,_:usize,_:&silkbar_model::SilkBar,_:&crate::scene::SceneSnapshot,_:u32)->Option<u32>{None}}
+mod meta_hub{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+mod noir_spaces{pub fn flush_pending_capture(_:Option<&[u32]>,_:usize,_:usize,_:usize){}}
+mod wifi_popover{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 mod spotlight{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 // Frosted panels (S6b): no popup shows in this fixture, so no body is repainted under one.
 fn glass_body(_:*mut u32,_:usize,_:usize,_:&scene::SceneSnapshot,_:Plan){}
