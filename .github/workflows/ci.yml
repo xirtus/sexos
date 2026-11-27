@@ -470,6 +470,8 @@ jobs:
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
     - name: Spindle tether streams to a host and runs its commands; hw record (x17 first boot)
       run: python3 scripts/tether_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/tether"
+    - name: Spindle fetch resumes a download cut by a FIN or a reset, and reports one that stays cut
+      run: python3 scripts/fetch_resume_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/fetch-resume"
     - name: Swingers downloads a torrent from aria2 on the host
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2

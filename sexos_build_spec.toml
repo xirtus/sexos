@@ -1118,7 +1118,7 @@ manifest = "apps/tether/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/tether"
 dest_artifact = "iso_root/programs/tether"
 
-# Splicy: native SexOS transcript-driven video editor on sex-app + sex-media.
+# Splicy: transcript-driven NLE video editor on sex-app + sex-splice + FFmpeg.
 [[stage]]
 id = "build_splicy"
 action = "cargo_manifest"
