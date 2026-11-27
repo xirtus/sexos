@@ -33,6 +33,7 @@ pub struct BridgeConfig {
 
 struct PendingRpc {
     tx: mpsc::Sender<String>,
+    chunks: Arc<Mutex<Vec<u8>>>,
 }
 
 pub struct BridgeState {
@@ -142,6 +143,19 @@ impl BridgeState {
             );
         }
 
+        // For Screenshot, trigger Spindle's native `capture /tether-shot.png` if the
+        // Spindle tether inbox exists on this host so we always grab a fresh frame.
+        if method == RpcMethod::Screenshot {
+            let inbox = std::path::Path::new("sexwork/tether/logs/inbox.txt");
+            if inbox.exists() {
+                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(inbox) {
+                    let _ = writeln!(f, "capture /tether-shot.png");
+                    let _ = f.flush();
+                    thread::sleep(Duration::from_millis(1600));
+                }
+            }
+        }
+
         // Exclusive lease for mutating operations so fanned-out agents never stomp on SexOS.
         let _lease_guard = if method.is_mutating() {
             let guard = self.mutating_lease.lock().unwrap();
@@ -154,10 +168,14 @@ impl BridgeState {
 
         let stream_id = self.next_stream_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
-        self.pending_rpcs
-            .lock()
-            .unwrap()
-            .insert(stream_id, PendingRpc { tx });
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        self.pending_rpcs.lock().unwrap().insert(
+            stream_id,
+            PendingRpc {
+                tx,
+                chunks: Arc::clone(&chunks),
+            },
+        );
 
         let payload = format!(
             "{{\"id\":{},\"method\":\"{}\",\"caller\":\"{}\",\"params\":{}}}",
@@ -174,7 +192,34 @@ impl BridgeState {
             payload.into_bytes(),
         )) {
             Ok(()) => match rx.recv_timeout(timeout) {
-                Ok(reply) => reply,
+                Ok(reply) => {
+                    if method == RpcMethod::Screenshot {
+                        let bytes = chunks.lock().unwrap();
+                        if !bytes.is_empty() {
+                            let ts = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            let out_path = format!("/tmp/sexos-screenshot-{}.png", ts);
+                            match std::fs::write(&out_path, &*bytes) {
+                                Ok(()) => rpc_ok_json(
+                                    id,
+                                    &format!(
+                                        "{{\"path\":\"{}\",\"bytes\":{},\"fnv64\":\"{:016x}\"}}",
+                                        json_escape(&out_path),
+                                        bytes.len(),
+                                        tether_proto::auth::fnv64(&bytes)
+                                    ),
+                                ),
+                                Err(e) => rpc_err_json(id, "write_failed", &e.to_string()),
+                            }
+                        } else {
+                            reply
+                        }
+                    } else {
+                        reply
+                    }
+                }
                 Err(_) => {
                     let _ = self.send_frame(Frame::new(stream_id, FrameKind::Cancel, 0, Vec::new()));
                     rpc_err_json(id, "timeout", "Timed out waiting for SexOS RPC response")
@@ -720,6 +765,13 @@ pub fn handle_sexos_session(
                         FrameKind::AcpJson => {
                             if let Ok(s) = core::str::from_utf8(&frame.payload) {
                                 acp.send_acp_json(s);
+                            }
+                        }
+                        FrameKind::RpcStreamChunk => {
+                            if let Some(pending) =
+                                state.pending_rpcs.lock().unwrap().get(&frame.stream_id)
+                            {
+                                pending.chunks.lock().unwrap().extend_from_slice(&frame.payload);
                             }
                         }
                         FrameKind::RpcResponse => {

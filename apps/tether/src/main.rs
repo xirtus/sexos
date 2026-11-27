@@ -641,6 +641,46 @@ impl TetherApp {
                     ),
                 }
             }
+            RpcMethod::Screenshot => {
+                let path = json_get_str(req_json, "path").unwrap_or_else(|| String::from("/tether-shot.png"));
+                let sp = sexfs_path(&path);
+                let mut chunk = vec![0u8; 32 * 1024];
+                let mut offset = 0u64;
+                let mut fnv = tether_proto::auth::FNV64_OFFSET;
+                let mut err_out: Option<String> = None;
+                loop {
+                    match files::read_at(window, &sp, offset, &mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            for &b in &chunk[..n] {
+                                fnv ^= b as u64;
+                                fnv = fnv.wrapping_mul(tether_proto::auth::FNV64_PRIME);
+                            }
+                            self.send_frame(
+                                window,
+                                Frame::new(
+                                    stream_id,
+                                    FrameKind::RpcStreamChunk,
+                                    tether_proto::frame::FLAG_BINARY,
+                                    chunk[..n].to_vec(),
+                                ),
+                            );
+                            offset += n as u64;
+                        }
+                        Err(e) => {
+                            err_out = Some(format!("read_at({}, off={}) failed: {:?}", path, offset, e));
+                            break;
+                        }
+                    }
+                }
+                match err_out {
+                    Some(msg) => rpc_err_json(id, "fs_error", &msg),
+                    None => rpc_ok_json(
+                        id,
+                        &format!("{{\"bytes\":{},\"fnv64\":\"{:016x}\"}}", offset, fnv),
+                    ),
+                }
+            }
             RpcMethod::Exec => {
                 let cmd = json_get_str(req_json, "command").unwrap_or_default();
                 if cmd.is_empty() {
