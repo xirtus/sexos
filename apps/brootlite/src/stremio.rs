@@ -26,7 +26,7 @@ const MAX_REDIRECTS: usize = 4;
 const MAX_HTTP_ATTEMPTS: usize = 2;
 /// Cinemeta series catalogs are ~580–610 KiB; 1 MiB fits them with headroom.
 const MAX_CATALOG_BYTES: usize = 1024 * 1024;
-const MAX_STREAM_BYTES: usize = 256 * 1024;
+const MAX_STREAM_BYTES: usize = 512 * 1024;
 const MAX_CATALOG_ITEMS: usize = 48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +50,7 @@ impl MediaType {
         }
     }
 
+    #[allow(dead_code)]
     pub const fn badge(self) -> &'static str {
         match self {
             MediaType::Movie => "MOVIE",
@@ -126,6 +127,7 @@ pub struct StreamItem {
     pub title: String,
     pub url: String,
     pub info_hash: String,
+    #[allow(dead_code)]
     pub file_idx: Option<u32>,
     pub magnet_uri: String,
     pub resolution: String,
@@ -372,7 +374,7 @@ fn parse_streams_into(
         return;
     };
     for obj in json_objects(arr) {
-        if out.len() >= 48 {
+        if out.len() >= 120 {
             break;
         }
         let name = json_str_field(obj, "name").unwrap_or_default();
@@ -420,7 +422,7 @@ fn parse_streams_into(
     }
 }
 
-fn build_magnet(info_hash: &str, display_name: &str, trackers: &[String]) -> String {
+pub fn build_magnet(info_hash: &str, display_name: &str, trackers: &[String]) -> String {
     let mut mag = format!(
         "magnet:?xt=urn:btih:{}&dn={}",
         info_hash.trim(),
@@ -433,7 +435,7 @@ fn build_magnet(info_hash: &str, display_name: &str, trackers: &[String]) -> Str
     mag
 }
 
-fn detect_resolution(s: &str) -> String {
+pub fn detect_resolution(s: &str) -> String {
     let up = s.to_ascii_uppercase();
     if up.contains("2160P") || up.contains("4K") || up.contains("UHD") {
         String::from("4K")

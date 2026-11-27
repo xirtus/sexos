@@ -15,6 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use sex_app::{files, Window};
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct StremioAddon {
     pub id: String,
@@ -36,26 +37,37 @@ impl StremioAddon {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SwarmIndexer {
     pub id: String,
     pub name: String,
     pub kind: String,
     pub search_url: String,
+    pub default_category: String,
+    pub tab_group: String,
 }
 
 impl SwarmIndexer {
-    /// Substitutes `{query}` / `%s` in the indexer's search URL template.
+    /// Substitutes `{query}`, `{category}` (using `default_category`), and `%s`
+    /// in the indexer's search URL template.
     pub fn build_query_url(&self, query: &str) -> String {
+        if self.search_url.is_empty() {
+            return String::new();
+        }
         let enc = percent_encode_query(query);
-        if self.search_url.contains("{query}") {
-            self.search_url.replace("{query}", &enc)
-        } else if self.search_url.contains("%s") {
-            self.search_url.replace("%s", &enc)
-        } else if self.search_url.is_empty() {
-            String::new()
+        let cat = percent_encode_query(&self.default_category);
+        let base = if self.search_url.contains("{category}") {
+            self.search_url.replace("{category}", &cat)
         } else {
-            let mut out = self.search_url.clone();
+            self.search_url.clone()
+        };
+        if base.contains("{query}") {
+            base.replace("{query}", &enc)
+        } else if base.contains("%s") {
+            base.replace("%s", &enc)
+        } else {
+            let mut out = base;
             if !out.contains('?') {
                 out.push_str("?q=");
             }
@@ -65,9 +77,12 @@ impl SwarmIndexer {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct FeaturedFeed {
+    pub key: String,
     pub label: String,
+    pub kind: String,
     pub url: String,
 }
 
@@ -78,6 +93,7 @@ pub struct DirectSource {
     pub name: String,
     pub kind: String,
     pub api_url: String,
+    pub detail_api_url: String,
 }
 
 #[allow(dead_code)]
@@ -206,6 +222,12 @@ pub fn json_u32_field(obj: &str, key: &str) -> Option<u32> {
     s.trim().parse::<u32>().ok()
 }
 
+/// Extracts an unsigned 64-bit integer JSON field (e.g. `"size": 1503238553`).
+pub fn json_u64_field(obj: &str, key: &str) -> Option<u64> {
+    let s = json_str_field(obj, key)?;
+    s.trim().parse::<u64>().ok()
+}
+
 /// Parses a JSON string literal starting at the opening `"`.
 pub fn parse_json_string(s: &str) -> Option<String> {
     if !s.starts_with('"') {
@@ -314,6 +336,56 @@ pub fn json_array_slice<'a>(text: &'a str, key: &str) -> Option<&'a str> {
                     b'"' => in_str = true,
                     b'[' => depth += 1,
                     b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(&after[1..i]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return None;
+        }
+        search = &search[idx + pat.len()..];
+    }
+    None
+}
+
+/// Returns the inner slice of `{ ... }` for `"obj_key": { ... }`.
+pub fn json_object_slice<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let mut pat = String::with_capacity(key.len() + 2);
+    pat.push('"');
+    pat.push_str(key);
+    pat.push('"');
+    let mut search = text;
+    while let Some(idx) = search.find(&pat) {
+        let rest = &search[idx + pat.len()..];
+        let trimmed = rest.trim_start();
+        if let Some(after_colon) = trimmed.strip_prefix(':') {
+            let after = after_colon.trim_start();
+            if !after.starts_with('{') {
+                return None;
+            }
+            let bytes = after.as_bytes();
+            let mut depth = 0i32;
+            let mut in_str = false;
+            let mut esc = false;
+            for i in 0..bytes.len() {
+                let b = bytes[i];
+                if in_str {
+                    if esc {
+                        esc = false;
+                    } else if b == b'\\' {
+                        esc = true;
+                    } else if b == b'"' {
+                        in_str = false;
+                    }
+                    continue;
+                }
+                match b {
+                    b'"' => in_str = true,
+                    b'{' => depth += 1,
+                    b'}' => {
                         depth -= 1;
                         if depth == 0 {
                             return Some(&after[1..i]);
@@ -442,22 +514,42 @@ pub fn parse_pack(text: &str) -> ProviderPack {
             let search_url = json_str_field(obj, "searchUrlTemplate")
                 .or_else(|| json_str_field(obj, "pathTemplate"))
                 .unwrap_or_default();
+            let default_category = json_str_field(obj, "defaultCategory")
+                .or_else(|| json_str_field(obj, "default_category"))
+                .or_else(|| json_str_field(obj, "category"))
+                .unwrap_or_default();
+            let tab_group = json_str_field(obj, "tabGroup")
+                .or_else(|| json_str_field(obj, "tab_group"))
+                .unwrap_or_default();
             if !name.is_empty() {
                 pack.swarm_indexers.push(SwarmIndexer {
                     id,
                     name,
                     kind,
                     search_url,
+                    default_category,
+                    tab_group,
                 });
             }
         }
     }
     if let Some(arr) = json_array_slice(text, "featuredFeeds") {
         for obj in json_objects(arr) {
-            let label = json_str_field(obj, "label").unwrap_or_default();
+            let key = json_str_field(obj, "key")
+                .or_else(|| json_str_field(obj, "id"))
+                .unwrap_or_default();
+            let label = json_str_field(obj, "label")
+                .or_else(|| json_str_field(obj, "name"))
+                .unwrap_or_else(|| key.clone());
+            let kind = json_str_field(obj, "kind").unwrap_or_default();
             let url = json_str_field(obj, "url").unwrap_or_default();
             if !label.is_empty() && !url.is_empty() {
-                pack.featured_feeds.push(FeaturedFeed { label, url });
+                pack.featured_feeds.push(FeaturedFeed {
+                    key,
+                    label,
+                    kind,
+                    url,
+                });
             }
         }
     }
@@ -466,13 +558,19 @@ pub fn parse_pack(text: &str) -> ProviderPack {
             let id = json_str_field(obj, "id").unwrap_or_default();
             let name = json_str_field(obj, "name").unwrap_or_else(|| id.clone());
             let kind = json_str_field(obj, "kind").unwrap_or_default();
-            let api_url = json_str_field(obj, "apiUrl").unwrap_or_default();
+            let api_url = json_str_field(obj, "apiUrl")
+                .or_else(|| json_str_field(obj, "url"))
+                .unwrap_or_default();
+            let detail_api_url = json_str_field(obj, "detailApiUrl")
+                .or_else(|| json_str_field(obj, "detail_api_url"))
+                .unwrap_or_default();
             if !name.is_empty() && !api_url.is_empty() {
                 pack.direct_sources.push(DirectSource {
                     id,
                     name,
                     kind,
                     api_url,
+                    detail_api_url,
                 });
             }
         }
