@@ -266,13 +266,171 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     sex_pdx::task_finish(1);
 }
 
+fn draw_noir_text(
+    font: &sex_font::Font<'static>,
+    buf: &mut [u32],
+    bw: usize,
+    bh: usize,
+    x: i32,
+    y: i32,
+    max_w: i32,
+    px_h: i32,
+    text: &str,
+    color: u32,
+) {
+    use sex_font::raster::{scratch_len, FX};
+    let px_size = px_h.max(10) as usize;
+    let size = (px_size * 64) as u32;
+    let asc = font.ascender(size);
+    let line_h =
+        ((font.ascender(size) - font.descender(size)) / FX + 2).max(px_size as i32) as usize;
+    let limit = (x + max_w).min(bw as i32);
+    let cr = ((color >> 16) & 0xFF) as u32;
+    let cg = ((color >> 8) & 0xFF) as u32;
+    let cb = (color & 0xFF) as u32;
+    let pad = 2usize;
+    let mut pen = x * FX;
+    let mut prev = None;
+    let mut acc = alloc::vec::Vec::new();
+    let mut glyph = alloc::vec::Vec::new();
+    for ch in text.chars() {
+        if pen / FX >= limit - 6 {
+            break;
+        }
+        let Some(id) = font.glyph(ch as u32) else {
+            pen += (px_h / 2) * FX;
+            prev = None;
+            continue;
+        };
+        if let Some(p) = prev {
+            pen += font.kerning(p, id, size);
+        }
+        let adv = font.advance(id, size);
+        let gx0 = (pen / FX) - pad as i32;
+        let gw = ((adv / FX).max(0) as usize + 2 * pad + 2).min(64);
+        if gw > 0 && line_h > 0 && line_h <= 64 {
+            let slen = scratch_len(gw, line_h);
+            if acc.len() < slen {
+                acc.resize(slen, 0);
+            }
+            if glyph.len() < gw * line_h {
+                glyph.resize(gw * line_h, 0);
+            }
+            for b in &mut glyph[..gw * line_h] {
+                *b = 0;
+            }
+            let sub = pen - (pen / FX) * FX + pad as i32 * FX;
+            font.draw(id, size, sub, asc + FX, gw, line_h, &mut acc[..slen], &mut glyph[..gw * line_h]);
+            for row in 0..line_h {
+                let py = y + row as i32;
+                if py < 0 || py >= bh as i32 {
+                    continue;
+                }
+                let row_off = py as usize * bw;
+                for col in 0..gw {
+                    let px = gx0 + col as i32;
+                    if px < 0 || px >= limit {
+                        continue;
+                    }
+                    let a = glyph[row * gw + col] as u32;
+                    if a == 0 {
+                        continue;
+                    }
+                    let dst = buf[row_off + px as usize];
+                    let dr = (dst >> 16) & 0xFF;
+                    let dg = (dst >> 8) & 0xFF;
+                    let db = dst & 0xFF;
+                    let inv = 255 - a;
+                    buf[row_off + px as usize] = (((cr * a + dr * inv) / 255) << 16)
+                        | (((cg * a + dg * inv) / 255) << 8)
+                        | ((cb * a + db * inv) / 255);
+                }
+            }
+        }
+        pen += adv;
+        prev = Some(id);
+    }
+}
+
 fn say(window: &mut Window, why: &[u8]) {
-    let mut text = [0u8; 300];
-    let head = b"Qupid. Space pauses, J/L or Left/Right seek, S subtitles, A sound track, [ ] speed, F11 closes.\n\n";
-    let n = (head.len() + why.len()).min(text.len());
-    text[..head.len()].copy_from_slice(head);
-    text[head.len()..n].copy_from_slice(&why[..n - head.len()]);
-    window.show(&text[..n]);
+    use sex_theme::candy_ui::{
+        draw_candy_button, fill_rounded_rect, ButtonState, ButtonStyle, CandyPalette,
+    };
+    let (w, h) = window.size();
+    if w < 160 || h < 120 {
+        window.show(why);
+        return;
+    }
+    let msg = core::str::from_utf8(why).unwrap_or("Qupid");
+    let buf = window.frame(w, h);
+    let pal = CandyPalette::dark();
+    // Deep macOS Noir / Obsidian canvas
+    for px in buf.iter_mut() {
+        *px = 0x0008_0A10;
+    }
+    // Top translucent Noir header bar
+    fill_rounded_rect(buf, w, h, 0, 0, w as i32, 42, 0, 0x000E_111A);
+    fill_rounded_rect(buf, w, h, 14, 9, 76, 24, 7, 0x001E_2336);
+
+    // Centered Noir media stage card
+    let card_w = (w as i32 - 64).clamp(240, 560);
+    let card_h = 168i32;
+    let card_x = (w as i32 - card_w) / 2;
+    let card_y = ((h as i32 - 84 - card_h) / 2).max(52);
+    fill_rounded_rect(buf, w, h, card_x, card_y, card_w, card_h, 14, 0x0012_1520);
+    // Lavender emblem pill
+    let emb_x = card_x + (card_w - 48) / 2;
+    fill_rounded_rect(buf, w, h, emb_x, card_y + 20, 48, 48, 24, 0x0024_1E38);
+    // Progress / buffering track
+    let bar_w = card_w - 64;
+    let bar_x = card_x + 32;
+    let bar_y = card_y + 114;
+    fill_rounded_rect(buf, w, h, bar_x, bar_y, bar_w, 6, 3, 0x001D_2233);
+    let phase = ((sex_pdx::get_ticks() / 30) as i32) % (bar_w.max(80));
+    let seg_w = (bar_w / 3).max(40);
+    let seg_x = bar_x + phase.min((bar_w - seg_w).max(0));
+    fill_rounded_rect(buf, w, h, seg_x, bar_y, seg_w, 6, 3, 0x00C6_A0F6);
+
+    // Bottom floating macOS Noir VLC-style transport dock
+    let dock_w = (w as i32 - 48).clamp(260, 680);
+    let dock_h = 62i32;
+    let dock_x = (w as i32 - dock_w) / 2;
+    let dock_y = (h as i32 - dock_h - 16).max(card_y + card_h + 12);
+    fill_rounded_rect(buf, w, h, dock_x, dock_y, dock_w, dock_h, 14, 0x0011_141E);
+    // Scrub track
+    fill_rounded_rect(buf, w, h, dock_x + 18, dock_y + 12, dock_w - 36, 4, 2, 0x0023_283D);
+    // Transport buttons: Rewind, Play/Pause (Primary Lavender), Forward
+    let mid_x = dock_x + dock_w / 2;
+    draw_candy_button(buf, w, h, mid_x - 76, dock_y + 24, 42, 28, 8, ButtonStyle::Subtle, ButtonState::Rest, &pal);
+    draw_candy_button(buf, w, h, mid_x - 26, dock_y + 22, 52, 32, 10, ButtonStyle::Primary, ButtonState::Rest, &pal);
+    draw_candy_button(buf, w, h, mid_x + 34, dock_y + 24, 42, 28, 8, ButtonStyle::Subtle, ButtonState::Rest, &pal);
+    // Volume bar on right of dock
+    fill_rounded_rect(buf, w, h, dock_x + dock_w - 92, dock_y + 36, 70, 4, 2, 0x0023_283D);
+    fill_rounded_rect(buf, w, h, dock_x + dock_w - 92, dock_y + 36, 48, 4, 2, 0x0094_A3B8);
+
+    if let Some(font) = sex_font::Font::new(sex_font::GEIST_SANS) {
+        draw_noir_text(&font, buf, w, h, 24, 13, 64, 13, "QUPID", 0x00C6_A0F6);
+        draw_noir_text(&font, buf, w, h, 100, 14, w as i32 - 120, 12, "Noir Media Player", 0x0094_A3B8);
+        draw_noir_text(&font, buf, w, h, emb_x + 18, card_y + 33, 24, 18, ">", 0x00C6_A0F6);
+        draw_noir_text(&font, buf, w, h, card_x + 28, card_y + 82, card_w - 56, 15, msg, 0x00F1_F5F9);
+        draw_noir_text(
+            &font,
+            buf,
+            w,
+            h,
+            card_x + 28,
+            card_y + 134,
+            card_w - 56,
+            11,
+            "Space Play/Pause  ·  J/L Seek  ·  A Audio  ·  S Subs  ·  [ ] Speed  ·  F11 Close",
+            0x0064_748B,
+        );
+        draw_noir_text(&font, buf, w, h, mid_x - 63, dock_y + 30, 30, 12, "<<", 0x0094_A3B8);
+        draw_noir_text(&font, buf, w, h, mid_x - 8, dock_y + 30, 24, 13, "||", 0x00F1_F5F9);
+        draw_noir_text(&font, buf, w, h, mid_x + 47, dock_y + 30, 30, 12, ">>", 0x0094_A3B8);
+        draw_noir_text(&font, buf, w, h, dock_x + 18, dock_y + 30, 72, 11, "00:00", 0x0064_748B);
+    }
+    window.show_frame(w, h);
 }
 
 fn fail(window: &mut Window, why: &[u8]) {
