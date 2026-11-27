@@ -28,6 +28,6 @@ while ! python3 scripts/key_bytes.py "$bin"; do
   seed=$((seed + 1)); [[ $seed -le 24 ]] || { echo "no clean layout found" >&2; exit 1; }
   build $seed
 done
-size=$(stat -c %s "$bin")
+size=$(stat -c %s "$bin" 2>/dev/null || stat -f %z "$bin")
 [[ $size -le 33554432 ]] || { echo "splicy-studio is $size bytes, over the 32 MiB program image" >&2; exit 1; }
 ls -la "$bin"

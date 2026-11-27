@@ -175,3 +175,134 @@ pub fn composite_cpu(
         pixels,
     }
 }
+
+/// Compute exact letterboxed/pillarboxed `(x, y, w, h)` honoring non-square pixel
+/// sample aspect ratio (`display_w = src_w * sar_num / sar_den`), using pure integer math.
+pub fn fit_anamorphic_rect(
+    src_w: usize,
+    src_h: usize,
+    sar_num: u32,
+    sar_den: u32,
+    dst_w: usize,
+    dst_h: usize,
+) -> (usize, usize, usize, usize) {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return (0, 0, 0, 0);
+    }
+    let (sn, sd) = if sar_num == 0 || sar_den == 0 {
+        (1u128, 1u128)
+    } else {
+        (sar_num as u128, sar_den as u128)
+    };
+    let sw = src_w as u128;
+    let sh = src_h as u128;
+    let dw = dst_w as u128;
+    let dh = dst_h as u128;
+
+    let lhs = sw * sn * dh;
+    let rhs = dw * sh * sd;
+
+    if lhs > rhs {
+        // Display aspect is wider than destination: letterbox (fit width).
+        let fit_w = dst_w;
+        let fit_h = ((dw * sh * sd) / (sw * sn)).clamp(1, dh) as usize;
+        let y = (dst_h - fit_h) / 2;
+        (0, y, fit_w, fit_h)
+    } else {
+        // Display aspect is taller or equal: pillarbox (fit height).
+        let fit_h = dst_h;
+        let fit_w = ((dh * sw * sn) / (sh * sd)).clamp(1, dw) as usize;
+        let x = (dst_w - fit_w) / 2;
+        (x, 0, fit_w, fit_h)
+    }
+}
+
+/// Smooth 16.16 fixed-point bilinear subpixel pan-and-zoom sampler for Ken Burns motion.
+///
+/// `center_x_q16` and `center_y_q16` are normalized `Q16` coordinates (`32768` = center `0.5`).
+/// `zoom_per_mille` is `1000` for `1.0x`, `2000` for `2.0x`, etc.
+pub fn sample_ken_burns_q16(
+    src: &[u32],
+    src_w: usize,
+    src_h: usize,
+    out_w: usize,
+    out_h: usize,
+    center_x_q16: i32,
+    center_y_q16: i32,
+    zoom_per_mille: u32,
+) -> Vec<u32> {
+    if out_w == 0 || out_h == 0 {
+        return Vec::new();
+    }
+    if src_w == 0 || src_h == 0 || src.len() < src_w * src_h {
+        return alloc::vec![0u32; out_w * out_h];
+    }
+
+    let zoom = zoom_per_mille.max(1) as i64;
+    let span_w_q16 = ((src_w as i64) << 16) * 1000 / zoom;
+    let span_h_q16 = ((src_h as i64) << 16) * 1000 / zoom;
+    let center_px_x_q16 = center_x_q16 as i64 * src_w as i64;
+    let center_px_y_q16 = center_y_q16 as i64 * src_h as i64;
+    let max_x_q16 = ((src_w - 1) as i64) << 16;
+    let max_y_q16 = ((src_h - 1) as i64) << 16;
+
+    let mut out = Vec::with_capacity(out_w * out_h);
+    let ow = out_w as i64;
+    let oh = out_h as i64;
+
+    for oy in 0..out_h {
+        let v_q16 = ((2 * oy as i64 + 1 - oh) << 15) / oh;
+        let sy_q16 = (center_px_y_q16 + ((v_q16 * span_h_q16) >> 16) - 32768).clamp(0, max_y_q16);
+        let y0 = (sy_q16 >> 16) as usize;
+        let y1 = (y0 + 1).min(src_h - 1);
+        let fy = (sy_q16 & 0xffff) as u64;
+        let inv_fy = 65536 - fy;
+        let row0 = y0 * src_w;
+        let row1 = y1 * src_w;
+
+        for ox in 0..out_w {
+            let u_q16 = ((2 * ox as i64 + 1 - ow) << 15) / ow;
+            let sx_q16 = (center_px_x_q16 + ((u_q16 * span_w_q16) >> 16) - 32768).clamp(0, max_x_q16);
+            let x0 = (sx_q16 >> 16) as usize;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let fx = (sx_q16 & 0xffff) as u64;
+            let inv_fx = 65536 - fx;
+
+            let p00 = src[row0 + x0];
+            let p10 = src[row0 + x1];
+            let p01 = src[row1 + x0];
+            let p11 = src[row1 + x1];
+
+            let w00 = inv_fx * inv_fy;
+            let w10 = fx * inv_fy;
+            let w01 = inv_fx * fy;
+            let w11 = fx * fy;
+
+            let r = (((((p00 >> 16) & 0xff) as u64 * w00
+                + ((p10 >> 16) & 0xff) as u64 * w10
+                + ((p01 >> 16) & 0xff) as u64 * w01
+                + ((p11 >> 16) & 0xff) as u64 * w11
+                + (1u64 << 31))
+                >> 32)
+                .min(255)) as u32;
+            let g = (((((p00 >> 8) & 0xff) as u64 * w00
+                + ((p10 >> 8) & 0xff) as u64 * w10
+                + ((p01 >> 8) & 0xff) as u64 * w01
+                + ((p11 >> 8) & 0xff) as u64 * w11
+                + (1u64 << 31))
+                >> 32)
+                .min(255)) as u32;
+            let b = ((((p00 & 0xff) as u64 * w00
+                + (p10 & 0xff) as u64 * w10
+                + (p01 & 0xff) as u64 * w01
+                + (p11 & 0xff) as u64 * w11
+                + (1u64 << 31))
+                >> 32)
+                .min(255)) as u32;
+
+            out.push((r << 16) | (g << 8) | b);
+        }
+    }
+
+    out
+}
