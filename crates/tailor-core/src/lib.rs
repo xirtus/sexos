@@ -21,5 +21,9 @@ pub use agent::{
     ToolResult, ToolRunner, ToolSpec, Workspace,
 };
 pub use json::{JsonError, JsonValue};
-pub use provider::{parse_keys_json, Provider, ProviderRequest, ProviderStreamParser};
+pub use provider::{
+    build_claude_refresh_request, build_codex_refresh_request, is_claude_oauth_token,
+    parse_claude_oauth_json, parse_codex_oauth_json, parse_keys_json, OAuthRefreshRequest,
+    OAuthToken, Provider, ProviderRequest, ProviderStreamParser,
+};
 pub use sse::{HttpSseDecoder, SseError, SseMessage, StreamEvent};

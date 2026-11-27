@@ -162,7 +162,8 @@ impl TailorUi {
         window: &mut Window,
         provider: Provider,
         model: &str,
-        has_key: bool,
+        auth_label: &str,
+        auth_color: u32,
         streaming: bool,
         pending_approval: bool,
         transcript: &str,
@@ -195,6 +196,10 @@ impl TailorUi {
         draw_candy_badge(buf, w, h, 16, 15, 78, 24, 0x00D6_336C, &pal);
         self.draw_text(buf, w, h, 26, 19, 68, 13, "TAILOR", 0x00FF_FFFF);
 
+        // Auth / Proxy Status Badge width computed first so pills don't overlap it
+        let badge_w = ((auth_label.len() as i32) * 7 + 22).clamp(102, 210);
+        let badge_x = (w as i32 - badge_w - 18).max(110);
+
         // Clickable Provider Pills
         let pills: [(Provider, &str, i32); 4] = [
             (Provider::Claude, "Claude", 62),
@@ -204,7 +209,7 @@ impl TailorUi {
         ];
         let mut px = 104i32;
         for (p, label, pw) in pills {
-            if px + pw > (w as i32 - 150) {
+            if px + pw > badge_x - 8 {
                 break;
             }
             let active = p == provider;
@@ -230,13 +235,21 @@ impl TailorUi {
             px += pw + 6;
         }
 
-        // Key Status Badge on right
-        let badge_w = 102i32;
-        let badge_x = (w as i32 - badge_w - 18).max(px + 8);
-        let badge_col = if has_key { 0x002E_A043 } else { 0x00D9_7706 };
-        let badge_lbl = if has_key { "Shibari: OK" } else { "No API Key" };
-        draw_candy_badge(buf, w, h, badge_x, 15, badge_w, 24, badge_col, &pal);
-        self.draw_text(buf, w, h, badge_x + 12, 19, badge_w - 16, 12, badge_lbl, 0x00FF_FFFF);
+        // Auth / Proxy Status Badge on right
+        let final_badge_x = badge_x.max(px + 8);
+        let final_badge_w = (w as i32 - final_badge_x - 16).min(badge_w).max(60);
+        draw_candy_badge(buf, w, h, final_badge_x, 15, final_badge_w, 24, auth_color, &pal);
+        self.draw_text(
+            buf,
+            w,
+            h,
+            final_badge_x + 10,
+            19,
+            final_badge_w - 14,
+            12,
+            auth_label,
+            0x00FF_FFFF,
+        );
 
         // 2. Main Chat & Agent Transcript Panel
         draw_candy_panel(buf, w, h, 8, body_y as i32, (w - 16) as i32, body_h as i32, 12, &pal);
@@ -323,7 +336,7 @@ impl TailorUi {
             fill_rounded_rect(buf, w, h, well_x + 4, well_y + 4, well_w - 8, well_h - 8, 5, pal.selection);
         }
         let prompt_text = if input.is_empty() {
-            String::from("Ask Tailor anything, or type /key claude-deepseek <key> ...")
+            String::from("Ask Tailor anything, or type /proxy <url> or /key <provider> <key> ...")
         } else {
             format!("{}|", input)
         };

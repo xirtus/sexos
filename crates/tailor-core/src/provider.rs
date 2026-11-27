@@ -117,13 +117,392 @@ pub fn parse_keys_json(raw: &str) -> Vec<(Provider, String)> {
     out
 }
 
-/// Complete HTTP/1.1 request ready to send over a TLS `sex_app::net::Duplex` connection.
+/// Returns `true` if `token` is a Claude Pro/Max OAuth access token (`sk-ant-oat01-*`).
+pub fn is_claude_oauth_token(token: &str) -> bool {
+    token.trim().starts_with("sk-ant-oat01-")
+}
+
+/// Parsed OAuth credential bundle (Claude Pro/Max or Codex / ChatGPT Plus & Pro).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OAuthToken {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub account_id: Option<String>,
+    pub expires_at: Option<u64>,
+}
+
+impl OAuthToken {
+    /// Serializes the token to flat JSON suitable for persisting to `claude_oauth.json` or `codex_oauth.json`.
+    pub fn to_json(&self) -> String {
+        let mut entries = vec![(
+            String::from("access_token"),
+            JsonValue::str(self.access_token.as_str()),
+        )];
+        if let Some(ref rt) = self.refresh_token {
+            entries.push((String::from("refresh_token"), JsonValue::str(rt.as_str())));
+        }
+        if let Some(ref aid) = self.account_id {
+            entries.push((String::from("account_id"), JsonValue::str(aid.as_str())));
+        }
+        if let Some(exp) = self.expires_at {
+            entries.push((String::from("expires_at"), JsonValue::uint(exp)));
+        }
+        json::encode(&JsonValue::object(entries))
+    }
+}
+
+fn non_empty_trimmed(s: Option<&str>) -> Option<String> {
+    let t = s?.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(String::from(t))
+    }
+}
+
+fn parse_u64_field(val: Option<&JsonValue>) -> Option<u64> {
+    let v = val?;
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    if let Some(s) = v.as_str() {
+        return s.trim().parse::<u64>().ok();
+    }
+    None
+}
+
+/// Parses a Claude OAuth JSON document.
+///
+/// Accepts both flat `{ "access_token", "refresh_token", "expires_at" }` and
+/// Claude Code's `{ "claudeAiOauth": { "accessToken", "refreshToken", "expiresAt" } }` format.
+pub fn parse_claude_oauth_json(text: &str) -> Option<OAuthToken> {
+    let root = json::parse(text).ok()?;
+    let obj = root.get("claudeAiOauth").unwrap_or(&root);
+    let access_token = non_empty_trimmed(
+        obj.get("access_token")
+            .or_else(|| obj.get("accessToken"))
+            .and_then(JsonValue::as_str),
+    )?;
+    let refresh_token = non_empty_trimmed(
+        obj.get("refresh_token")
+            .or_else(|| obj.get("refreshToken"))
+            .and_then(JsonValue::as_str),
+    );
+    let account_id = non_empty_trimmed(
+        obj.get("account_id")
+            .or_else(|| obj.get("accountId"))
+            .and_then(JsonValue::as_str),
+    );
+    let expires_at = parse_u64_field(obj.get("expires_at").or_else(|| obj.get("expiresAt")));
+    Some(OAuthToken {
+        access_token,
+        refresh_token,
+        account_id,
+        expires_at,
+    })
+}
+
+/// Parses a Codex / ChatGPT OAuth JSON document.
+///
+/// Accepts both flat `{ "access_token", "refresh_token", "account_id" }` and
+/// Codex CLI's `{ "tokens": { "access_token", "refresh_token", "account_id" } }` format.
+pub fn parse_codex_oauth_json(text: &str) -> Option<OAuthToken> {
+    let root = json::parse(text).ok()?;
+    let obj = root.get("tokens").unwrap_or(&root);
+    let access_token = non_empty_trimmed(
+        obj.get("access_token")
+            .or_else(|| obj.get("accessToken"))
+            .and_then(JsonValue::as_str),
+    )?;
+    let refresh_token = non_empty_trimmed(
+        obj.get("refresh_token")
+            .or_else(|| obj.get("refreshToken"))
+            .and_then(JsonValue::as_str),
+    );
+    let account_id = non_empty_trimmed(
+        obj.get("account_id")
+            .or_else(|| obj.get("accountId"))
+            .or_else(|| root.get("account_id"))
+            .or_else(|| root.get("accountId"))
+            .and_then(JsonValue::as_str),
+    );
+    let expires_at = parse_u64_field(
+        obj.get("expires_at")
+            .or_else(|| obj.get("expiresAt"))
+            .or_else(|| root.get("expires_at")),
+    );
+    Some(OAuthToken {
+        access_token,
+        refresh_token,
+        account_id,
+        expires_at,
+    })
+}
+
+/// OAuth token refresh HTTP POST request ready to send via `sex_app::net::request` or raw TLS.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OAuthRefreshRequest {
+    pub url: String,
+    pub host: String,
+    pub port: u16,
+    pub path: String,
+    pub body: String,
+    pub http_bytes: Vec<u8>,
+}
+
+const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+fn build_oauth_refresh_request(
+    host: &str,
+    path: &str,
+    refresh_token: &str,
+    client_id: &str,
+) -> OAuthRefreshRequest {
+    let payload = JsonValue::object(vec![
+        (String::from("grant_type"), JsonValue::str("refresh_token")),
+        (
+            String::from("refresh_token"),
+            JsonValue::str(refresh_token.trim()),
+        ),
+        (String::from("client_id"), JsonValue::str(client_id)),
+    ]);
+    let body = json::encode(&payload);
+    let mut http = String::with_capacity(body.len() + 256);
+    let _ = write!(
+        &mut http,
+        "POST {} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         User-Agent: SexOS-Tailor/0.1\r\n\
+         Content-Type: application/json\r\n\
+         Accept: application/json\r\n\
+         Connection: close\r\n\
+         Content-Length: {}\r\n\
+         \r\n\
+         {}",
+        path,
+        host,
+        body.len(),
+        body
+    );
+    OAuthRefreshRequest {
+        url: format!("https://{}{}", host, path),
+        host: String::from(host),
+        port: 443,
+        path: String::from(path),
+        body,
+        http_bytes: http.into_bytes(),
+    }
+}
+
+/// Builds a `POST https://console.anthropic.com/v1/oauth/token` refresh request.
+pub fn build_claude_refresh_request(refresh_token: &str) -> OAuthRefreshRequest {
+    build_oauth_refresh_request(
+        "console.anthropic.com",
+        "/v1/oauth/token",
+        refresh_token,
+        CLAUDE_OAUTH_CLIENT_ID,
+    )
+}
+
+/// Builds a `POST https://auth.openai.com/oauth/token` refresh request.
+pub fn build_codex_refresh_request(refresh_token: &str) -> OAuthRefreshRequest {
+    build_oauth_refresh_request(
+        "auth.openai.com",
+        "/oauth/token",
+        refresh_token,
+        CODEX_OAUTH_CLIENT_ID,
+    )
+}
+
+/// Complete HTTP/1.1 request ready to send over a `sex_app::net::Duplex` connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderRequest {
     pub host: String,
     pub port: u16,
+    pub tls: bool,
     pub path: String,
     pub http_bytes: Vec<u8>,
+}
+
+impl ProviderRequest {
+    /// Inserts or appends an HTTP header before the request body.
+    pub fn with_header(mut self, name: &str, value: &str) -> Self {
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() || value.is_empty() {
+            return self;
+        }
+        if let Some(sep) = find_double_crlf(&self.http_bytes) {
+            let mut out = Vec::with_capacity(self.http_bytes.len() + name.len() + value.len() + 6);
+            out.extend_from_slice(&self.http_bytes[..sep]);
+            out.extend_from_slice(b"\r\n");
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(value.as_bytes());
+            out.extend_from_slice(&self.http_bytes[sep..]);
+            self.http_bytes = out;
+        }
+        self
+    }
+
+    /// Attaches the `ChatGPT-Account-Id` header when using Codex / ChatGPT Plus & Pro OAuth.
+    pub fn with_chatgpt_account_id(self, account_id: Option<&str>) -> Self {
+        match account_id.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(id) => self.with_header("ChatGPT-Account-Id", id),
+            None => self,
+        }
+    }
+
+    /// Rewrites this request's origin (`host`, `port`, `tls`, `Host` header, and optional base path
+    /// prefix) to point at a custom proxy such as CLIProxyAPI-Rust (`http://127.0.0.1:8317`),
+    /// preserving the provider API path (`/v1/messages`, `/v1/chat/completions`, `/v1beta/models/...`).
+    ///
+    /// If `proxy_key` is provided and no provider auth header is currently set, adds
+    /// `x-api-key: <proxy_key>` (for Claude requests) or `Authorization: Bearer <proxy_key>`.
+    pub fn with_proxy_base(mut self, base_url: &str, proxy_key: Option<&str>) -> Self {
+        let Some((tls, host, port, base_prefix)) = parse_base_url(base_url) else {
+            return self;
+        };
+        let default_port = if tls { 443 } else { 80 };
+        let host_header = if port == default_port {
+            host.clone()
+        } else {
+            format!("{}:{}", host, port)
+        };
+        let new_path = if base_prefix.is_empty() {
+            self.path.clone()
+        } else {
+            format!("{}{}", base_prefix, self.path)
+        };
+
+        if let Some(sep) = find_double_crlf(&self.http_bytes) {
+            if let Ok(head_str) = core::str::from_utf8(&self.http_bytes[..sep]) {
+                let mut lines = head_str.split("\r\n");
+                let first_line = lines.next().unwrap_or("");
+                let method = first_line.split(' ').next().unwrap_or("POST");
+                let mut rebuilt = String::with_capacity(self.http_bytes.len() + 128);
+                let _ = write!(&mut rebuilt, "{} {} HTTP/1.1\r\n", method, new_path);
+
+                let mut has_auth = false;
+                let mut is_claude = self.path.contains("/v1/messages");
+                let mut saw_host = false;
+
+                for line in lines {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Some((k, v)) = line.split_once(':') {
+                        let k_trim = k.trim();
+                        let v_trim = v.trim();
+                        if k_trim.eq_ignore_ascii_case("host") {
+                            let _ = write!(&mut rebuilt, "Host: {}\r\n", host_header);
+                            saw_host = true;
+                            continue;
+                        }
+                        if k_trim.eq_ignore_ascii_case("anthropic-version") {
+                            is_claude = true;
+                        }
+                        if k_trim.eq_ignore_ascii_case("authorization")
+                            || k_trim.eq_ignore_ascii_case("x-api-key")
+                            || k_trim.eq_ignore_ascii_case("x-goog-api-key")
+                        {
+                            let nonempty_val = if k_trim.eq_ignore_ascii_case("authorization") {
+                                v_trim
+                                    .strip_prefix("Bearer")
+                                    .map(|rest| !rest.trim().is_empty())
+                                    .unwrap_or(!v_trim.is_empty())
+                            } else {
+                                !v_trim.is_empty()
+                            };
+                            if nonempty_val {
+                                has_auth = true;
+                            } else {
+                                // Drop empty placeholder auth header.
+                                continue;
+                            }
+                        }
+                    }
+                    rebuilt.push_str(line);
+                    rebuilt.push_str("\r\n");
+                }
+
+                if !saw_host {
+                    let _ = write!(&mut rebuilt, "Host: {}\r\n", host_header);
+                }
+                if !has_auth {
+                    if let Some(pk) = proxy_key.map(str::trim).filter(|s| !s.is_empty()) {
+                        if is_claude {
+                            let _ = write!(&mut rebuilt, "x-api-key: {}\r\n", pk);
+                        } else {
+                            let _ = write!(&mut rebuilt, "Authorization: Bearer {}\r\n", pk);
+                        }
+                    }
+                }
+                rebuilt.push_str("\r\n");
+
+                let mut bytes = rebuilt.into_bytes();
+                bytes.extend_from_slice(&self.http_bytes[sep + 4..]);
+                self.http_bytes = bytes;
+            }
+        }
+
+        self.host = host;
+        self.port = port;
+        self.tls = tls;
+        self.path = new_path;
+        self
+    }
+}
+
+fn find_double_crlf(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+fn parse_base_url(raw: &str) -> Option<(bool, String, u16, String)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (tls, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = trimmed.strip_prefix("http://") {
+        (false, r)
+    } else if trimmed.contains("://") {
+        return None;
+    } else {
+        (false, trimmed)
+    };
+    let (authority, prefix_raw) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, ""),
+    };
+    if authority.is_empty() {
+        return None;
+    }
+    let (host, port) = if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        let host_part = &authority[..=end];
+        let after = &authority[end + 1..];
+        let port = if let Some(p_str) = after.strip_prefix(':') {
+            p_str.parse::<u16>().ok()?
+        } else if after.is_empty() {
+            if tls { 443 } else { 80 }
+        } else {
+            return None;
+        };
+        (host_part, port)
+    } else if let Some((h, p_str)) = authority.rsplit_once(':') {
+        let port = p_str.parse::<u16>().ok()?;
+        (h, port)
+    } else {
+        (authority, if tls { 443 } else { 80 })
+    };
+    if host.is_empty() || port == 0 {
+        return None;
+    }
+    let prefix = prefix_raw.trim_end_matches('/');
+    Some((tls, String::from(host), port, String::from(prefix)))
 }
 
 /// Builds a complete HTTP/1.1 POST request for the given provider, model, API key,
@@ -136,11 +515,16 @@ pub fn build_http_request(
     messages: &[Message],
     tools: &[ToolSpec],
 ) -> ProviderRequest {
+    let key = api_key.trim();
     let (path, body_json, extra_headers) = match provider {
         Provider::Gemini => {
             let path = format!("/v1beta/models/{}:streamGenerateContent?alt=sse", model);
             let body = build_gemini_body(system_prompt, messages, tools);
-            let headers = format!("x-goog-api-key: {}\r\n", api_key);
+            let headers = if key.is_empty() {
+                String::new()
+            } else {
+                format!("x-goog-api-key: {}\r\n", key)
+            };
             (path, body, headers)
         }
         Provider::Claude | Provider::ClaudeDeepSeek => {
@@ -150,16 +534,26 @@ pub fn build_http_request(
                 String::from("/v1/messages")
             };
             let body = build_claude_body(model, system_prompt, messages, tools);
-            let headers = format!(
-                "x-api-key: {}\r\nanthropic-version: 2023-06-01\r\n",
-                api_key
-            );
+            let headers = if key.is_empty() {
+                String::from("anthropic-version: 2023-06-01\r\n")
+            } else if provider == Provider::Claude && is_claude_oauth_token(key) {
+                format!(
+                    "Authorization: Bearer {}\r\nanthropic-version: 2023-06-01\r\nanthropic-beta: oauth-2025-04-20\r\n",
+                    key
+                )
+            } else {
+                format!("x-api-key: {}\r\nanthropic-version: 2023-06-01\r\n", key)
+            };
             (path, body, headers)
         }
         Provider::Codex => {
             let path = String::from("/v1/chat/completions");
             let body = build_codex_body(model, system_prompt, messages, tools);
-            let headers = format!("Authorization: Bearer {}\r\n", api_key);
+            let headers = if key.is_empty() {
+                String::new()
+            } else {
+                format!("Authorization: Bearer {}\r\n", key)
+            };
             (path, body, headers)
         }
     };
@@ -188,6 +582,7 @@ pub fn build_http_request(
     ProviderRequest {
         host: String::from(provider.host()),
         port: provider.port(),
+        tls: true,
         path,
         http_bytes: http.into_bytes(),
     }
@@ -533,6 +928,10 @@ impl ProviderStreamParser {
 
     pub fn is_complete(&self) -> bool {
         self.emitted_done || self.decoder.is_complete()
+    }
+
+    pub fn http_status(&self) -> Option<u16> {
+        self.decoder.status()
     }
 
     /// Feeds raw HTTP response bytes and returns decoded provider-agnostic [`StreamEvent`]s.
@@ -1013,5 +1412,191 @@ mod tests {
                 stop_reason: Some(String::from("tool_calls"))
             }
         );
+    }
+
+    #[test]
+    fn claude_oauth_token_uses_bearer_and_beta_header() {
+        let msgs = vec![Message::user("Hello")];
+        let oauth_req = build_http_request(
+            Provider::Claude,
+            "claude-sonnet-4-20250514",
+            "sk-ant-oat01-example-token",
+            "System",
+            &msgs,
+            &[],
+        );
+        let oauth_txt = core::str::from_utf8(&oauth_req.http_bytes).unwrap();
+        assert!(oauth_txt.contains("Authorization: Bearer sk-ant-oat01-example-token\r\n"));
+        assert!(oauth_txt.contains("anthropic-beta: oauth-2025-04-20\r\n"));
+        assert!(oauth_txt.contains("anthropic-version: 2023-06-01\r\n"));
+        assert!(!oauth_txt.contains("x-api-key:"));
+
+        let api_req = build_http_request(
+            Provider::Claude,
+            "claude-sonnet-4-20250514",
+            "sk-ant-api03-example-key",
+            "System",
+            &msgs,
+            &[],
+        );
+        let api_txt = core::str::from_utf8(&api_req.http_bytes).unwrap();
+        assert!(api_txt.contains("x-api-key: sk-ant-api03-example-key\r\n"));
+        assert!(!api_txt.contains("Authorization: Bearer"));
+        assert!(!api_txt.contains("anthropic-beta: oauth-2025-04-20"));
+    }
+
+    #[test]
+    fn codex_chatgpt_account_id_header_is_attached() {
+        let msgs = vec![Message::user("Hi")];
+        let req = build_http_request(Provider::Codex, "gpt-4.1", "tok-123", "", &msgs, &[])
+            .with_chatgpt_account_id(Some("acct_abc999"));
+        let txt = core::str::from_utf8(&req.http_bytes).unwrap();
+        assert!(txt.contains("Authorization: Bearer tok-123\r\n"));
+        assert!(txt.contains("ChatGPT-Account-Id: acct_abc999\r\n"));
+    }
+
+    #[test]
+    fn with_proxy_base_rewrites_all_providers_and_preserves_paths() {
+        let msgs = vec![Message::user("Ping")];
+
+        let claude = build_http_request(
+            Provider::Claude,
+            "claude-sonnet-4-20250514",
+            "",
+            "",
+            &msgs,
+            &[],
+        )
+        .with_proxy_base("http://127.0.0.1:8317", Some("proxy-secret"));
+        assert_eq!(claude.host, "127.0.0.1");
+        assert_eq!(claude.port, 8317);
+        assert!(!claude.tls);
+        assert_eq!(claude.path, "/v1/messages");
+        let claude_txt = core::str::from_utf8(&claude.http_bytes).unwrap();
+        assert!(claude_txt.starts_with("POST /v1/messages HTTP/1.1\r\n"));
+        assert!(claude_txt.contains("Host: 127.0.0.1:8317\r\n"));
+        assert!(claude_txt.contains("x-api-key: proxy-secret\r\n"));
+
+        let codex = build_http_request(Provider::Codex, "gpt-4.1", "", "", &msgs, &[])
+            .with_proxy_base("http://127.0.0.1:8317", Some("proxy-secret"));
+        assert_eq!(codex.host, "127.0.0.1");
+        assert_eq!(codex.port, 8317);
+        assert!(!codex.tls);
+        assert_eq!(codex.path, "/v1/chat/completions");
+        let codex_txt = core::str::from_utf8(&codex.http_bytes).unwrap();
+        assert!(codex_txt.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+        assert!(codex_txt.contains("Host: 127.0.0.1:8317\r\n"));
+        assert!(codex_txt.contains("Authorization: Bearer proxy-secret\r\n"));
+
+        let gemini = build_http_request(
+            Provider::Gemini,
+            "gemini-2.5-flash",
+            "",
+            "",
+            &msgs,
+            &[],
+        )
+        .with_proxy_base("http://127.0.0.1:8317", Some("proxy-secret"));
+        assert_eq!(gemini.host, "127.0.0.1");
+        assert_eq!(gemini.port, 8317);
+        assert!(!gemini.tls);
+        assert_eq!(
+            gemini.path,
+            "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+        );
+        let gemini_txt = core::str::from_utf8(&gemini.http_bytes).unwrap();
+        assert!(gemini_txt.starts_with(
+            "POST /v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse HTTP/1.1\r\n"
+        ));
+        assert!(gemini_txt.contains("Host: 127.0.0.1:8317\r\n"));
+        assert!(gemini_txt.contains("Authorization: Bearer proxy-secret\r\n"));
+
+        let deepseek = build_http_request(
+            Provider::ClaudeDeepSeek,
+            "deepseek-chat",
+            "",
+            "",
+            &msgs,
+            &[],
+        )
+        .with_proxy_base("https://proxy.example.test", Some("proxy-secret"));
+        assert_eq!(deepseek.host, "proxy.example.test");
+        assert_eq!(deepseek.port, 443);
+        assert!(deepseek.tls);
+        assert_eq!(deepseek.path, "/anthropic/v1/messages");
+        let ds_txt = core::str::from_utf8(&deepseek.http_bytes).unwrap();
+        assert!(ds_txt.contains("Host: proxy.example.test\r\n"));
+        assert!(ds_txt.contains("x-api-key: proxy-secret\r\n"));
+
+        // Existing provider key must NOT be overwritten by proxy_key.
+        let keep_key = build_http_request(
+            Provider::Claude,
+            "claude-sonnet-4-20250514",
+            "sk-ant-api03-existing",
+            "",
+            &msgs,
+            &[],
+        )
+        .with_proxy_base("http://127.0.0.1:8317", Some("proxy-secret"));
+        let keep_txt = core::str::from_utf8(&keep_key.http_bytes).unwrap();
+        assert!(keep_txt.contains("x-api-key: sk-ant-api03-existing\r\n"));
+        assert!(!keep_txt.contains("proxy-secret"));
+    }
+
+    #[test]
+    fn parses_claude_and_codex_oauth_json_formats() {
+        let claude_flat = r#"{"access_token":"sk-ant-oat01-flat","refresh_token":"sk-ant-ort01-ref","expires_at":1790000000}"#;
+        let t1 = parse_claude_oauth_json(claude_flat).unwrap();
+        assert_eq!(t1.access_token, "sk-ant-oat01-flat");
+        assert_eq!(t1.refresh_token.as_deref(), Some("sk-ant-ort01-ref"));
+        assert_eq!(t1.expires_at, Some(1790000000));
+
+        let claude_nested = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-nested","refreshToken":"sk-ant-ort01-nref","expiresAt":1790001234}}"#;
+        let t2 = parse_claude_oauth_json(claude_nested).unwrap();
+        assert_eq!(t2.access_token, "sk-ant-oat01-nested");
+        assert_eq!(t2.refresh_token.as_deref(), Some("sk-ant-ort01-nref"));
+        assert_eq!(t2.expires_at, Some(1790001234));
+
+        // Round-trip serialization
+        let serialized = t2.to_json();
+        let t2_rt = parse_claude_oauth_json(&serialized).unwrap();
+        assert_eq!(t2_rt, t2);
+
+        let codex_flat = r#"{"access_token":"eyJ-flat","refresh_token":"rt-flat","account_id":"acct_1"}"#;
+        let c1 = parse_codex_oauth_json(codex_flat).unwrap();
+        assert_eq!(c1.access_token, "eyJ-flat");
+        assert_eq!(c1.refresh_token.as_deref(), Some("rt-flat"));
+        assert_eq!(c1.account_id.as_deref(), Some("acct_1"));
+
+        let codex_nested = r#"{"tokens":{"access_token":"eyJ-nested","refresh_token":"rt-nested","account_id":"acct_2"}}"#;
+        let c2 = parse_codex_oauth_json(codex_nested).unwrap();
+        assert_eq!(c2.access_token, "eyJ-nested");
+        assert_eq!(c2.refresh_token.as_deref(), Some("rt-nested"));
+        assert_eq!(c2.account_id.as_deref(), Some("acct_2"));
+    }
+
+    #[test]
+    fn builds_claude_and_codex_oauth_refresh_requests() {
+        let claude_ref = build_claude_refresh_request("sk-ant-ort01-test");
+        assert_eq!(claude_ref.url, "https://console.anthropic.com/v1/oauth/token");
+        assert_eq!(claude_ref.host, "console.anthropic.com");
+        assert_eq!(claude_ref.port, 443);
+        assert_eq!(claude_ref.path, "/v1/oauth/token");
+        assert!(claude_ref.body.contains("\"grant_type\":\"refresh_token\""));
+        assert!(claude_ref.body.contains("\"refresh_token\":\"sk-ant-ort01-test\""));
+        let raw_c = core::str::from_utf8(&claude_ref.http_bytes).unwrap();
+        assert!(raw_c.starts_with("POST /v1/oauth/token HTTP/1.1\r\n"));
+        assert!(raw_c.contains("Host: console.anthropic.com\r\n"));
+
+        let codex_ref = build_codex_refresh_request("rt-openai-test");
+        assert_eq!(codex_ref.url, "https://auth.openai.com/oauth/token");
+        assert_eq!(codex_ref.host, "auth.openai.com");
+        assert_eq!(codex_ref.port, 443);
+        assert_eq!(codex_ref.path, "/oauth/token");
+        assert!(codex_ref.body.contains("\"grant_type\":\"refresh_token\""));
+        assert!(codex_ref.body.contains("\"refresh_token\":\"rt-openai-test\""));
+        let raw_o = core::str::from_utf8(&codex_ref.http_bytes).unwrap();
+        assert!(raw_o.starts_with("POST /oauth/token HTTP/1.1\r\n"));
+        assert!(raw_o.contains("Host: auth.openai.com\r\n"));
     }
 }
