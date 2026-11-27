@@ -87,7 +87,7 @@ pub fn parse_header(packet: &[u8]) -> Option<(UvcHeader, &[u8])> {
     Some((hdr, &packet[hlen..]))
 }
 
-/// Build a 26-byte UVC 1.0/1.1 `VS_PROBE_CONTROL` / `VS_COMMIT_CONTROL` payload.
+/// Build a 26-byte UVC 1.0 `VS_PROBE_CONTROL` / `VS_COMMIT_CONTROL` payload.
 pub fn build_probe_commit(format_index: u8, frame_index: u8, fps: u16) -> [u8; 26] {
     let mut b = [0u8; 26];
     let interval = if fps == 0 { 333_333u32 } else { 10_000_000u32 / (fps as u32) };
@@ -95,6 +95,14 @@ pub fn build_probe_commit(format_index: u8, frame_index: u8, fps: u16) -> [u8; 2
     b[2] = format_index.max(1);
     b[3] = frame_index.max(1);
     b[4..8].copy_from_slice(&interval.to_le_bytes());
+    b
+}
+
+/// Build a zero-extended 48-byte `VS_PROBE_CONTROL` / `VS_COMMIT_CONTROL` buffer.
+/// Slice to `26` (UVC 1.0), `34` (UVC 1.1), or `48` (UVC 1.5) bytes according to `bcdUVC`.
+pub fn build_probe_commit_48(format_index: u8, frame_index: u8, fps: u16) -> [u8; 48] {
+    let mut b = [0u8; 48];
+    b[..26].copy_from_slice(&build_probe_commit(format_index, frame_index, fps));
     b
 }
 

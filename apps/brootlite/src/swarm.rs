@@ -93,6 +93,7 @@ pub fn is_media_stream_url(url: &str) -> bool {
 /// Builds a compact `get <target>` argument string for `swingers` that stays strictly
 /// under `sex_pdx::fs::ARGS_MAX` (256 bytes). Prefers the bare 40-char hex `info_hash`
 /// (44 bytes total), falling back to a tracker-stripped magnet URI capped at 200 bytes.
+#[allow(dead_code)]
 pub fn swingers_get_arg(info_hash: &str, magnet_uri: &str) -> String {
     let hash = info_hash.trim();
     if !hash.is_empty() {
@@ -110,6 +111,29 @@ pub fn swingers_get_arg(info_hash: &str, magnet_uri: &str) -> String {
         short
     };
     format!("get {}", capped)
+}
+
+/// Builds a compact `stream <target> --port <port>` argument string for `swingers`
+/// strictly under `sex_pdx::fs::ARGS_MAX` (256 bytes). Prefers the bare 40-char hex
+/// `info_hash` (59 bytes total), falling back to a tracker-stripped magnet URI capped
+/// at 180 bytes.
+pub fn swingers_stream_arg(info_hash: &str, magnet_uri: &str, port: u16) -> String {
+    let hash = info_hash.trim();
+    if !hash.is_empty() {
+        return format!("stream {} --port {}", hash, port);
+    }
+    let mag = magnet_uri.trim();
+    let short = mag.split("&tr=").next().unwrap_or(mag);
+    let capped = if short.len() > 180 {
+        let mut end = 180;
+        while !short.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        &short[..end]
+    } else {
+        short
+    };
+    format!("stream {} --port {}", capped, port)
 }
 
 /// Formats a byte count into a concise human-readable string (e.g. `1.4 GB`).

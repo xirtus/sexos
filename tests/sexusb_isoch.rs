@@ -54,6 +54,7 @@ fn webcam() -> Vec<u8> {
     let mut c = vec![9, 2, 0, 0, 4, 1, 0, 0x80, 250];
     c.extend_from_slice(&[8, 0x0B, 0, 2, 0x0E, 3, 0, 0]); // IAD
     c.extend_from_slice(&[9, 4, 0, 0, 1, 0x0E, 1, 0, 0]); // VideoControl
+    c.extend_from_slice(&[13, 0x24, 1, 0x10, 0x01, 13, 0, 0, 0, 0, 0, 1, 1]); // VC_HEADER (bcdUVC = 1.10)
     c.extend_from_slice(&[7, 5, 0x83, 3, 16, 0, 6]);      // its interrupt endpoint (ignored)
     c.extend_from_slice(&[9, 4, 1, 0, 0, 0x0E, 2, 0, 0]); // VideoStreaming alt 0
     c.extend_from_slice(&[11, 0x24, 6, 1, 2, 0, 1, 0, 0, 0, 0]); // MJPEG, 2 frames
@@ -81,6 +82,7 @@ fn webcam() -> Vec<u8> {
 fn finds_the_webcam() {
     let cam = uvc_scan::scan(&webcam()).expect("camera");
     assert_eq!((cam.control_iface, cam.stream_iface, cam.more_streams), (0, 1, 1));
+    assert_eq!((cam.bcd_uvc, cam.probe_len()), (0x0110, 34));
     assert_eq!(cam.alts().iter().map(|a| (a.alt, a.ep, a.w_max_packet)).collect::<Vec<_>>(), [(1, 0x81, 0x80), (2, 0x81, 0x400), (3, 0x81, 0x1400)]);
     assert_eq!(cam.max_payload(HIGH), 3072);
     assert!(!cam.bulk());

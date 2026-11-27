@@ -71,6 +71,122 @@ impl Source for FileSource {
     }
 }
 
+/// An HTTP/HTTPS media stream read with byte-range requests (used for `swingers stream`
+/// at `http://127.0.0.1:8990/stream` and direct HTTP video links from BrootLite).
+struct HttpSource {
+    window: *mut Window,
+    url: alloc::string::String,
+    len: Option<u64>,
+    cache: Vec<u8>,
+    cache_at: u64,
+}
+
+impl HttpSource {
+    fn open(window: &mut Window, url: &str) -> Result<Self, &'static str> {
+        let local = url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
+        let attempts = if local { 60 } else { 3 };
+        let mut current = alloc::string::String::from(url);
+        for attempt in 0..attempts {
+            if let Some(Event::Close) = window.poll() {
+                sex_pdx::task_finish(0);
+            }
+            let head_req = sex_fetch::Request {
+                method: "HEAD",
+                url: &current,
+                headers: &[],
+                body: &[],
+                trusted_origin: false,
+                referrer: None,
+            };
+            match sex_app::net::request(window, &head_req, None, 4096) {
+                Ok(resp) if resp.head.is_redirect() => {
+                    if let Some(loc) = resp.head.get("location") {
+                        current = alloc::string::String::from(loc);
+                        continue;
+                    }
+                }
+                Ok(resp) if (200..300).contains(&resp.head.status) => {
+                    let len = resp.head.get("content-length").and_then(|v| v.trim().parse::<u64>().ok());
+                    return Ok(Self {
+                        window,
+                        url: current,
+                        len,
+                        cache: Vec::new(),
+                        cache_at: 0,
+                    });
+                }
+                _ => {}
+            }
+            if attempt + 1 < attempts {
+                let _ = sex_pdx::sys_wait_self_ticks(50);
+            }
+        }
+        Err("Could not connect to the HTTP video stream.")
+    }
+}
+
+impl Source for HttpSource {
+    fn len(&self) -> Option<u64> { self.len }
+    fn read_at(&mut self, at: u64, out: &mut [u8]) -> Option<usize> {
+        if let Some(total) = self.len {
+            if at >= total {
+                return Some(0);
+            }
+        }
+        let in_cache = !self.cache.is_empty() && at >= self.cache_at && at < self.cache_at + self.cache.len() as u64;
+        if !in_cache {
+            let want = match self.len {
+                Some(total) => (CACHE as u64).min(total - at),
+                None => CACHE as u64,
+            };
+            if want == 0 {
+                return Some(0);
+            }
+            let end = at + want - 1;
+            let range_val = alloc::format!("bytes={at}-{end}");
+            let headers = [("Range", range_val.as_str())];
+            let req = sex_fetch::Request {
+                method: "GET",
+                url: &self.url,
+                headers: &headers,
+                body: &[],
+                trusted_origin: false,
+                referrer: None,
+            };
+            let window = unsafe { &mut *self.window };
+            let resp = sex_app::net::request(window, &req, None, CACHE + 64 * 1024).ok()?;
+            if resp.head.status != 206 && resp.head.status != 200 {
+                return None;
+            }
+            if self.len.is_none() {
+                if let Some(cr) = resp.head.get("content-range") {
+                    if let Some((_, tot)) = cr.rsplit_once('/') {
+                        if let Ok(n) = tot.trim().parse::<u64>() {
+                            self.len = Some(n);
+                        }
+                    }
+                } else if resp.head.status == 200 {
+                    if let Some(cl) = resp.head.get("content-length").and_then(|v| v.trim().parse::<u64>().ok()) {
+                        self.len = Some(cl);
+                    }
+                }
+            }
+            if resp.body.is_empty() {
+                return Some(0);
+            }
+            self.cache = resp.body;
+            self.cache_at = at;
+        }
+        let off = (at - self.cache_at) as usize;
+        if off >= self.cache.len() {
+            return Some(0);
+        }
+        let n = out.len().min(self.cache.len() - off);
+        out[..n].copy_from_slice(&self.cache[off..off + n]);
+        Some(n)
+    }
+}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[play.fatal] {}", info);
@@ -405,8 +521,8 @@ struct Played { pictures: u32, sound_frames: u64, outcome: Outcome, at_ms: i64, 
 
 /// Plays the stream from `start_ms`; returns what was shown and heard and how it
 /// ended, or FFmpeg's error. `progress` is called now and then with the time, to save it.
-fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progress: &mut dyn FnMut(&mut Window, u64, u64)) -> Result<Played, sex_media::Error> {
-    let dec = Decoder::open(Box::new(src))?;
+fn play(window: &mut Window, src: Box<dyn Source>, ui: &mut Ui, start_ms: u64, progress: &mut dyn FnMut(&mut Window, u64, u64)) -> Result<Played, sex_media::Error> {
+    let dec = Decoder::open(src)?;
     let info = dec.info.clone();
     let (w, h) = sex_media::fit(info.width as usize, info.height as usize, MAX_W, MAX_H);
     let (num, den) = match info.fps { (0, _) | (_, 0) => (25, 1), f => f };
@@ -582,24 +698,46 @@ fn playlist(window: &mut Window, words: &[&[u8]]) {
         let (path, given) = (path.as_slice(), given.as_deref());
         ui.item = (i, items.len());
         sex_pdx::serial_record!("[play.item] n={} of={} file={}", i, items.len(), core::str::from_utf8(path).unwrap_or("?"));
-        let len = match files::size(window, path) {
-            Ok(len) => len,
-            Err(e) => {
-                fail(window, files::message(e));
-                i += 1;
-                continue;
+        let is_http = path.starts_with(b"http://") || path.starts_with(b"https://");
+        let (src, start): (Box<dyn Source>, u64) = if is_http {
+            say(window, b"Buffering stream...");
+            let url = core::str::from_utf8(path).unwrap_or("");
+            match HttpSource::open(window, url) {
+                Ok(hs) => {
+                    ui.subs = None;
+                    (Box::new(hs), 0)
+                }
+                Err(why) => {
+                    fail(window, why.as_bytes());
+                    i += 1;
+                    continue;
+                }
+            }
+        } else {
+            let len = match files::size(window, path) {
+                Ok(len) => len,
+                Err(e) => {
+                    fail(window, files::message(e));
+                    i += 1;
+                    continue;
+                }
+            };
+            say(window, b"Opening...");
+            ui.subs = captions::load(window, path, given).and_then(|(file, track)| {
+                sex_pdx::serial_record!("[play.subtitles.loaded] file={} cues={}", core::str::from_utf8(&file).unwrap_or("?"), track.cues.len());
+                Some(Subs { track, painter: captions::Painter::new()?, on: true, text: alloc::string::String::new() })
+            });
+            let start = resume.get(path);
+            let wp: *mut Window = window;
+            (Box::new(FileSource { window: wp, path: path.to_vec(), len, cache: Vec::new(), cache_at: 0 }), start)
+        };
+        let wp: *mut Window = window;
+        let rp: *mut Resume = &mut resume;
+        let mut save = |w: &mut Window, at: u64, total: u64| {
+            if !is_http {
+                unsafe { (*rp).set(w, path, at, total) }
             }
         };
-        say(window, b"Opening...");
-        ui.subs = captions::load(window, path, given).and_then(|(file, track)| {
-            sex_pdx::serial_record!("[play.subtitles.loaded] file={} cues={}", core::str::from_utf8(&file).unwrap_or("?"), track.cues.len());
-            Some(Subs { track, painter: captions::Painter::new()?, on: true, text: alloc::string::String::new() })
-        });
-        let start = resume.get(path);
-        let wp: *mut Window = window;
-        let src = FileSource { window: wp, path: path.to_vec(), len, cache: Vec::new(), cache_at: 0 };
-        let rp: *mut Resume = &mut resume;
-        let mut save = |w: &mut Window, at: u64, total: u64| unsafe { (*rp).set(w, path, at, total) };
         match play(unsafe { &mut *wp }, src, &mut ui, start, &mut save) {
             Ok(p) => {
                 // Where it was left; an item played to its end starts afresh next time.

@@ -41,6 +41,7 @@ pub struct Client {
     pub(crate) session: Session,
     pub(crate) jobs: HashMap<TorrentKey, Job>,
     pub(crate) rpc: Option<crate::remote::Rpc>,
+    pub(crate) stream_http: Option<crate::stream_http::HttpStreamServer>,
     pub(crate) next_id: u64,
     dht: Option<Dht>,
     dht_sock: Option<UdpSocket>,
@@ -72,13 +73,19 @@ impl Client {
         let (done_tx, done_rx) = channel();
         let mut k = [0u8; 4];
         crate::random(&mut k);
-        Client { session: Session::new(SessionConfig::default()), jobs: HashMap::new(), rpc: None, next_id: 1, dht: None, dht_sock: None, dht_boot: None, lookups: HashMap::new(), last_dht_tick: 0, conns: HashMap::new(), listener, port, dir, peer_id, anonymous,
+        Client { session: Session::new(SessionConfig::default()), jobs: HashMap::new(), rpc: None, stream_http: None, next_id: 1, dht: None, dht_sock: None, dht_boot: None, lookups: HashMap::new(), last_dht_tick: 0, conns: HashMap::new(), listener, port, dir, peer_id, anonymous,
             next_peer: 1, started: Instant::now(), done_tx, done_rx, queue: VecDeque::new(), key: u32::from_le_bytes(k) }
     }
 
     /// Serves Transmission's RPC and the web UI on `port` (daemon mode).
     pub fn listen_rpc(&mut self, port: u16, user: &str, password: &str) -> Result<(), String> {
         self.rpc = Some(crate::remote::Rpc::new(port, user, password, &self.dir.display().to_string(), self.port)?);
+        Ok(())
+    }
+
+    /// Serves the torrent's largest video file over HTTP `GET /stream` on `127.0.0.1:port`.
+    pub fn listen_stream(&mut self, port: u16, target: TorrentKey) -> Result<(), String> {
+        self.stream_http = Some(crate::stream_http::HttpStreamServer::new(port, target)?);
         Ok(())
     }
 
@@ -218,6 +225,7 @@ impl Client {
             busy |= self.pump(now);
             while let Ok(d) = self.done_rx.try_recv() { self.done(d); busy = true; }
             busy |= crate::remote::pump(self);
+            busy |= crate::stream_http::pump(self);
             busy |= self.dht_pump(now);
             if now >= last_tick + 50 { last_tick = now; let a = self.session.on_tick(now); self.queue.extend(a); self.announce(now); }
             if now >= last_report + 2000 { last_report = now; self.report(now); }
@@ -250,7 +258,7 @@ impl Client {
                 let a = self.session.with(&k, now, |t, now| t.flush_cache(now));
                 self.queue.extend(a);
                 self.drain();
-                let daemon = self.rpc.is_some();
+                let daemon = self.rpc.is_some() || self.stream_http.is_some();
                 let job = self.jobs.get_mut(&k).expect("job");
                 if let Some(d) = job.disk.as_mut() {
                     d.close();
@@ -300,7 +308,13 @@ impl Client {
                 Action::Hash { piece, data } => { let _ = (piece, data); }
                 Action::MetadataReceived(info) => self.metadata(torrent, &info, now),
                 Action::DhtNode(addr) => { if let Some(d) = self.dht.as_mut() { d.add_node(addr, now); } }
-                Action::Finished | Action::PieceDone(_) | Action::PieceFailed(_) => {}
+                Action::PieceDone(_) => {
+                    if self.stream_http.as_ref().is_some_and(|s| s.target == torrent) {
+                        let a = self.session.with(&torrent, now, |t, now| t.flush_cache(now));
+                        self.queue.extend(a);
+                    }
+                }
+                Action::Finished | Action::PieceFailed(_) => {}
                 Action::StateChanged(s) => say(&format!("[swingers.state] {} {:?}", sex_torrent::to_hex(&torrent), s)),
             }
         }
