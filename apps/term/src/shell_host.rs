@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Spindle's shell (`spindle-shell`) on SexOS: its files are the terminal's folder through
-//! Files, its programs are Wasm guests in the folder or programs of their own.
+//! Files, its programs are Wasm guests in the folder or programs of their own, and its
+//! live `sys_info` / `processes` read real kernel telemetry via `SYS_STATS`.
 //!
 //! The shell's paths are absolute (`/notes/a.txt`); the terminal's folder paths have no
 //! leading slash (`notes/a.txt`).
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use sex_app::files::{self, direct};
-use spindle_shell::{DirEntry, EntryKind, ExternalRequest, Host, JobId, JobInfo, JobState, Value};
 use sex_pdx::console_relay as c;
+use sex_pdx::{mesh_stats, system_stats};
+use spindle_shell::{DirEntry, EntryKind, ExternalRequest, Host, JobId, JobInfo, JobState, ProcessInfo, Value};
 
 pub struct TermHost<'a> {
     pub cwd: &'a mut Vec<u8>,
@@ -100,8 +102,65 @@ impl Host for TermHost<'_> {
     fn sys_info(&self) -> Value {
         let mut r = spindle_shell::Record::new();
         r.insert("system", Value::String(String::from("SexOS")));
+        r.insert("host", Value::String(String::from("sexos-noir")));
         r.insert("uptime", Value::Duration(sex_pdx::get_ticks() as i64 * 1_000_000));
+        if let Some(ov) = system_stats::overview() {
+            r.insert("cpus", Value::Int(ov.cores.max(1) as i64));
+            r.insert("tsc", Value::Int(ov.tsc as i64));
+            r.insert("idle_cycles", Value::Int(ov.idle_cycles as i64));
+            r.insert("free_pages", Value::Int(ov.free_pages as i64));
+            for c_idx in 0..ov.cores.min(8) as u32 {
+                if let Some(core) = mesh_stats::core(c_idx) {
+                    r.insert(&format!("core_idle_{}", c_idx), Value::Int(core.idle_cycles as i64));
+                }
+            }
+        } else {
+            r.insert("cpus", Value::Int(1));
+        }
+        if let Some(k) = system_stats::kernel() {
+            r.insert("kernel_heap_used", Value::Int(k.heap_used as i64));
+            r.insert("kernel_heap_mapped", Value::Int(k.heap_mapped as i64));
+            r.insert("kernel_heap_blocks", Value::Int(k.heap_blocks as i64));
+            r.insert("free_frames", Value::Int(k.free_frames as i64));
+        }
+        if let Some(mem) = mesh_stats::memory() {
+            r.insert("lent_pages", Value::Int(mem.lent_pages as i64));
+            r.insert("peak_pages", Value::Int(mem.peak_pages as i64));
+            r.insert("limit_pages", Value::Int(mem.limit_pages as i64));
+            r.insert("memory", Value::Filesize((mem.limit_pages * 4096) as i64));
+        }
+        if let Some((packed, store)) = system_stats::packed(0) {
+            r.insert("packed_pages", Value::Int(packed as i64));
+            r.insert("denim_store", Value::Int(store as i64));
+        }
         Value::Record(r)
+    }
+    fn processes(&self) -> Vec<ProcessInfo> {
+        let mut out = Vec::new();
+        let mut after = 0u32;
+        for _ in 0..96 {
+            let Some(pd) = system_stats::next(after) else { break };
+            after = pd;
+            let raw = system_stats::name(pd);
+            let len = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+            let name = String::from_utf8_lossy(&raw[..len]).trim().to_string();
+            if let Some(d) = system_stats::domain(pd) {
+                let display = if name.is_empty() { format!("domain-{}", pd) } else { name };
+                let mem = (d.pages != system_stats::UNKNOWN).then_some(d.pages * 4096);
+                let state = if d.task != 0 { String::from("active") } else { String::from("service") };
+                out.push(ProcessInfo { pid: pd as u64, name: display, state, memory: mem });
+            }
+        }
+        for y in direct::relay::yarns().unwrap_or_default() {
+            let lbl = String::from_utf8_lossy(y.label()).into_owned();
+            let state = match y.state {
+                c::ENDED => String::from("ended"),
+                c::STARTING => String::from("starting"),
+                _ => String::from("yarn"),
+            };
+            out.push(ProcessInfo { pid: 10_000 + y.name as u64, name: lbl, state, memory: None });
+        }
+        out
     }
     fn is_external(&self, name: &str) -> bool {
         if name == "greet" { return true; }
@@ -164,7 +223,13 @@ impl Host for TermHost<'_> {
         Ok(())
     }
     fn external_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = ["greet", "python", "lua", "rg", "fd", "stdhello", "chello"].iter().map(|s| String::from(*s)).collect();
+        let mut names: Vec<String> = [
+            "greet", "python", "lua", "rg", "fd", "ssh", "stdhello", "chello",
+            "edit", "files", "view", "fortune", "bench", "spindle",
+        ]
+        .iter()
+        .map(|s| String::from(*s))
+        .collect();
         if let Ok(entries) = direct::list(self.cwd) {
             names.extend(entries.into_iter().filter_map(|e| String::from_utf8_lossy(&e.name).strip_suffix(".wasm").map(String::from)));
         }

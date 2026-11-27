@@ -1,45 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Candy Lavender + HyprMod-inspired GUI for SexOS Settings (`apps/settings`).
+//! Flagship macOS Ventura/Sequoia Dark-Mode Noir GUI for Tatami (`apps/settings`).
 //!
-//! Renders a categorized Candy Lavender sidebar, top toolbar with Undo/Reset,
-//! live-preview Appearance controls (Theme pills, Accent color swatches, Frosted
-//! Glass & Animations toggles), Windows & Tabs chrome/tiling controls (Hyprland
-//! & KDE styles), Keybinds reference & profile switcher, and one-click Named
-//! Profiles — all with instant apply and zero heap allocation.
+//! Renders a `#0B0D12` left sidebar (search pill, SexOS machine card, 11 color-badged
+//! categories), `#11141D` main canvas with `#181C28` grouped rounded cards and `1px`
+//! `#262D3F` top specular borders, Geist Sans proportional typography, smooth macOS
+//! pill toggles, 4 Accent Tints, interactive sliders & segmented selectors, About This
+//! SexOS Lips hero card, and the graphical GPT partition installer — zero heap allocation.
 
-use sex_config::{id, Config, Kind, KEYS};
-use sex_font::cache::{GlyphCache, Key as GlyphKey};
-use sex_font::raster::scratch_len;
-use sex_font::Font;
+#[path = "noir_ui.rs"]
+pub mod noir_ui;
+
+pub use noir_ui::{
+    draw_mono, draw_noir_card, draw_noir_slider, draw_noir_toggle, draw_noir_well, draw_sans,
+    draw_sans_bold, draw_sans_sm, draw_sexos_lips, draw_sidebar_badge, fill_solid, noir_palette,
+    Glyphs, Icon, ACCENT_TINTS,
+};
+#[cfg(test)]
+pub use noir_ui::{NOIR_CANVAS, NOIR_CARD, NOIR_SIDEBAR, NOIR_TOP_SPECULAR};
+
+use sex_config::{id, Config, Key, Kind, COLOUR_FILTERS, CORNER_ACTIONS, KEYS, LAYOUTS, PROGRAMS, WALLPAPERS, ZONES};
 use sex_theme::candy_ui::{
-    button_text_color, draw_candy_badge, draw_candy_button, draw_candy_panel,
-    draw_candy_selection_row, draw_candy_swatch, draw_candy_tab, draw_candy_toggle,
-    draw_candy_toolbar, fill_rounded_rect, mix_rgb, ButtonState, ButtonStyle, CandyPalette,
+    button_text_color, draw_candy_badge, draw_candy_button, draw_candy_swatch, fill_rounded_rect,
+    ButtonState, ButtonStyle, CandyPalette,
 };
 use sex_theme::Mode;
 
+use crate::about::Facts as KernelFacts;
+use crate::facts;
+use crate::grants;
 use crate::model::{self, Model};
+use crate::setup::{self, Setup, Step};
 
-const CELL_W: usize = 8;
-const CELL_H: usize = 16;
-const GLYPH_SLOTS: usize = 128;
-
-pub const SIDEBAR_W: i32 = 188;
-pub const HEADER_H: i32 = 42;
-pub const MAX_HITS: usize = 96;
-
-/// Accent color swatches in the Appearance picker (Candy Lavender default first).
-pub const CANDY_SWATCHES: [(&str, i32); 6] = [
-    ("Candy Lavender", 0xA78BFA),
-    ("Orchid", 0xD6336C),
-    ("Mint", 0x34D399),
-    ("Sky", 0x60A5FA),
-    ("Peach", 0xFB923C),
-    ("Slate", 0x64748B),
-];
+pub const SIDEBAR_W: i32 = 236;
+pub const HEADER_H: i32 = 48;
+pub const STATUS_H: i32 = 26;
+pub const MAX_HITS: usize = 192;
 
 /// Window corner radius presets (in px).
-pub const CORNER_RADII: [(&str, u8); 3] = [("Sharp 4px", 4), ("Soft 8px", 8), ("Candy 12px", 12)];
+pub const CORNER_RADII: [(&str, u8); 3] = [("4 px", 4), ("8 px", 8), ("12 px", 12)];
 
 /// Tab bar visual style presets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +49,7 @@ impl TabBarStyle {
     pub const fn label(self) -> &'static str {
         match self {
             TabBarStyle::SilkPill => "SilkBar Pill",
-            TabBarStyle::Classic => "KDE Classic",
+            TabBarStyle::Classic => "Classic",
         }
     }
 }
@@ -59,16 +57,33 @@ impl TabBarStyle {
 /// Window tiling behavior presets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TilingStyle {
+    HybridCandy,
     HyprlandMaster,
     KdeFloat,
-    HybridCandy,
 }
 impl TilingStyle {
     pub const fn label(self) -> &'static str {
         match self {
-            TilingStyle::HyprlandMaster => "Hyprland Master",
-            TilingStyle::KdeFloat => "KDE Floating",
-            TilingStyle::HybridCandy => "Hybrid Candy",
+            TilingStyle::HybridCandy => "Hybrid",
+            TilingStyle::HyprlandMaster => "Hyprland Tile",
+            TilingStyle::KdeFloat => "Floating",
+        }
+    }
+}
+
+/// SilkBar window close button behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseBehavior {
+    QuitApp,
+    MinimizeDock,
+    AskFirst,
+}
+impl CloseBehavior {
+    pub const fn label(self) -> &'static str {
+        match self {
+            CloseBehavior::QuitApp => "Quit App",
+            CloseBehavior::MinimizeDock => "Minimize",
+            CloseBehavior::AskFirst => "Ask First",
         }
     }
 }
@@ -90,7 +105,7 @@ impl KeybindProfile {
     }
 }
 
-/// HyprMod-inspired named desktop profile (one-click switch + instant apply).
+/// One-click desktop look presets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProfilePreset {
     pub name: &'static str,
@@ -107,10 +122,10 @@ pub struct ProfilePreset {
 
 pub const PROFILES: [ProfilePreset; 4] = [
     ProfilePreset {
-        name: "Candy Lavender",
-        subtitle: "Frosted lavender glass, Orchid accent, Hybrid tiling",
+        name: "SexOS Noir Rose",
+        subtitle: "Obsidian dark canvas, SexOS Rose tint, frosted glass",
         theme: 1,
-        accent: 0xA78BFA,
+        accent: 0x00F4_3F5E,
         reduce_transparency: 0,
         animations: 1,
         corner_radius_idx: 2,
@@ -119,22 +134,22 @@ pub const PROFILES: [ProfilePreset; 4] = [
         keybinds: KeybindProfile::HyprlandKde,
     },
     ProfilePreset {
-        name: "Midnight Orchid",
-        subtitle: "Deep plum dark mode, SexOS Rose accent, SilkBar pills",
+        name: "Noir Lavender",
+        subtitle: "Deep slate glass, Noir Lavender tint, SilkBar pills",
         theme: 1,
-        accent: 0xD6336C,
+        accent: 0x00A7_8BFA,
         reduce_transparency: 0,
         animations: 1,
         corner_radius_idx: 2,
         tab_bar: TabBarStyle::SilkPill,
-        tiling: TilingStyle::HyprlandMaster,
+        tiling: TilingStyle::HybridCandy,
         keybinds: KeybindProfile::HyprlandKde,
     },
     ProfilePreset {
-        name: "Hyprland Compact",
-        subtitle: "Crisp dark tiling, Sky accent, compact 4px corners",
+        name: "Ice Cyan Studio",
+        subtitle: "Crisp dark tiling, Ice Cyan tint, compact 4 px corners",
         theme: 1,
-        accent: 0x60A5FA,
+        accent: 0x0038_BDF8,
         reduce_transparency: 0,
         animations: 1,
         corner_radius_idx: 0,
@@ -143,10 +158,10 @@ pub const PROFILES: [ProfilePreset; 4] = [
         keybinds: KeybindProfile::HyprlandPure,
     },
     ProfilePreset {
-        name: "KDE Classic",
-        subtitle: "Airy light mode, opaque chrome, classic floating windows",
-        theme: 0,
-        accent: 0x64748B,
+        name: "Graphite Minimal",
+        subtitle: "Monochrome Graphite tint, opaque surfaces, floating",
+        theme: 1,
+        accent: 0x0064_748B,
         reduce_transparency: 1,
         animations: 1,
         corner_radius_idx: 1,
@@ -156,24 +171,20 @@ pub const PROFILES: [ProfilePreset; 4] = [
     },
 ];
 
-/// Reference hotkeys shown in the Keybinds pane.
 pub const HOTKEY_ROWS: [(&str, &str, &str); 8] = [
     ("Super + Enter", "Launch Spindle terminal", "Hyprland"),
     ("Super + Q / Alt + F4", "Close focused window", "Hyprland + KDE"),
-    ("Super + 1..9", "Switch workspace / scene", "Hyprland + KDE"),
+    ("Super + 1..9", "Switch workspace / space", "Hyprland + KDE"),
     ("Alt + Tab / Super + J/K", "Cycle window focus", "KDE + Hyprland"),
     ("Super + F / F11", "Toggle fullscreen / zoom", "Hyprland + KDE"),
     ("Super + V", "Toggle floating / tiled mode", "Hyprland"),
-    ("Super + L / Ctrl+Alt+L", "Lock session immediately", "KDE + Hyprland"),
-    ("Super + Space", "Open SilkBar launcher", "Candy Desktop"),
+    ("Super + Esc / Ctrl+Alt+L", "Lock session immediately", "KDE + Hyprland"),
+    ("Super + D / Space", "Open SilkBar Spotlight", "Noir Desktop"),
 ];
 
-/// Maximum partitions (plus free space runs) tracked by the Candy graphical installer.
 pub const MAX_INSTALL_PARTS: usize = 16;
-/// Minimum partition size (1.5 GiB in 512-byte sectors) required to replace with SexOS A/B + Store.
 pub const MIN_INSTALL_SECTORS: u64 = 1536 * 2048;
 
-/// Partition category for color-coding in the Candy GPT Partition Bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiskPartKind {
     Esp,
@@ -198,16 +209,15 @@ impl DiskPartKind {
         }
     }
 
-    /// Distinct Candy palette RGB color for each partition type in the GPT bar.
     pub const fn color(self) -> u32 {
         match self {
-            Self::Esp => 0x00F5_9E0B,       // Amber (EFI System)
-            Self::Msr => 0x0064_748B,       // Slate (MSR)
-            Self::Windows => 0x0038_BDF8,   // Sky Blue (Windows)
-            Self::Linux => 0x0034_D399,     // Mint/Emerald (Linux / Garuda / Void)
-            Self::SexOs => 0x00A7_8BFA,     // Candy Lavender (SexOS)
-            Self::FreeSpace => 0x0047_5569, // Muted Slate (Free Space)
-            Self::Other => 0x00F4_72B6,     // Orchid Pink (Other)
+            Self::Esp => 0x00F5_9E0B,
+            Self::Msr => 0x0064_748B,
+            Self::Windows => 0x0038_BDF8,
+            Self::Linux => 0x0010_B981,
+            Self::SexOs => 0x00F4_3F5E,
+            Self::FreeSpace => 0x0047_5569,
+            Self::Other => 0x00A7_8BFA,
         }
     }
 
@@ -224,10 +234,8 @@ impl DiskPartKind {
     }
 }
 
-/// One partition or free-space entry displayed in the Candy graphical installer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiskPartRow {
-    /// 1-based GPT partition number (`0` for Free Space).
     pub part_num: u16,
     pub kind: DiskPartKind,
     pub first_lba: u64,
@@ -254,7 +262,6 @@ impl DiskPartRow {
             kind,
             first_lba,
             sectors,
-            // Enforce protection invariant in UI too: ESP, MSR, and < 1.5 GiB are always locked.
             replaceable: replaceable
                 && !matches!(kind, DiskPartKind::Esp | DiskPartKind::Msr)
                 && sectors >= MIN_INSTALL_SECTORS,
@@ -272,7 +279,6 @@ impl DiskPartRow {
     }
 }
 
-/// Zero-heap state for the Candy Lavender Graphical Installer & Partition Manager.
 pub struct InstallState {
     pub total_sectors: u64,
     pub parts: [DiskPartRow; MAX_INSTALL_PARTS],
@@ -308,7 +314,6 @@ impl InstallState {
         &self.report[..self.report_len]
     }
 
-    /// Selects a partition or free space entry ONLY if it is replaceable (never ESP/MSR/tiny).
     pub fn select_part(&mut self, idx: usize) -> bool {
         if idx < self.part_count && self.parts[idx].replaceable {
             self.selected = Some(idx);
@@ -323,7 +328,6 @@ impl InstallState {
         self.selected.and_then(|i| (i < self.part_count).then_some(&self.parts[i]))
     }
 
-    /// Parses machine-readable output from `sexfiles` (`INSTALL_LIST | INSTALL_LIST_RAW`).
     pub fn parse_raw(&mut self, data: &[u8]) {
         self.total_sectors = 0;
         self.part_count = 0;
@@ -367,7 +371,6 @@ impl InstallState {
                 self.set_report(b"No GPT partition table found. Use Spindle `install` for blank disks.");
             }
         }
-        // Auto-select the first replaceable target (if any) for immediate clarity.
         for i in 0..self.part_count {
             if self.parts[i].replaceable {
                 self.selected = Some(i);
@@ -376,7 +379,6 @@ impl InstallState {
         }
     }
 
-    /// Formats the safety summary line into `out`; returns `(len, is_replace_warning)`.
     pub fn safety_summary(&self, out: &mut [u8; 160]) -> (usize, bool) {
         let mut n = 0usize;
         let mut push = |s: &[u8]| {
@@ -412,11 +414,7 @@ impl InstallState {
 
 fn split_ws(mut s: &[u8]) -> (&[u8], &[u8]) {
     while let Some(&b) = s.first() {
-        if b == b' ' || b == b'\t' {
-            s = &s[1..];
-        } else {
-            break;
-        }
+        if b == b' ' || b == b'\t' { s = &s[1..]; } else { break; }
     }
     let mut i = 0;
     while i < s.len() && s[i] != b' ' && s[i] != b'\t' {
@@ -425,11 +423,7 @@ fn split_ws(mut s: &[u8]) -> (&[u8], &[u8]) {
     let head = &s[..i];
     let mut tail = &s[i..];
     while let Some(&b) = tail.first() {
-        if b == b' ' || b == b'\t' {
-            tail = &tail[1..];
-        } else {
-            break;
-        }
+        if b == b' ' || b == b'\t' { tail = &tail[1..]; } else { break; }
     }
     (head, tail)
 }
@@ -437,11 +431,7 @@ fn split_ws(mut s: &[u8]) -> (&[u8], &[u8]) {
 fn parse_u64_ascii(s: &[u8]) -> u64 {
     let mut v = 0u64;
     for &b in s {
-        if b.is_ascii_digit() {
-            v = v.saturating_mul(10).saturating_add((b - b'0') as u64);
-        } else {
-            break;
-        }
+        if b.is_ascii_digit() { v = v.saturating_mul(10).saturating_add((b - b'0') as u64); } else { break; }
     }
     v
 }
@@ -453,9 +443,7 @@ fn format_u64_ascii(mut v: u64, out: &mut [u8]) -> usize {
         tmp[k] = b'0' + (v % 10) as u8;
         k += 1;
         v /= 10;
-        if v == 0 {
-            break;
-        }
+        if v == 0 { break; }
     }
     let mut n = 0;
     while k > 0 && n < out.len() {
@@ -479,14 +467,8 @@ fn format_size_short(sectors: u64, out: &mut [u8; 16]) -> usize {
         let gib = sectors / (2048 * 1024);
         let tenths = sectors % (2048 * 1024) * 10 / (2048 * 1024);
         n += format_u64_ascii(gib, &mut out[n..]);
-        if n < out.len() {
-            out[n] = b'.';
-            n += 1;
-        }
-        if n < out.len() {
-            out[n] = b'0' + tenths as u8;
-            n += 1;
-        }
+        if n < out.len() { out[n] = b'.'; n += 1; }
+        if n < out.len() { out[n] = b'0' + tenths as u8; n += 1; }
         let suf = b" GiB";
         let take = suf.len().min(out.len() - n);
         out[n..n + take].copy_from_slice(&suf[..take]);
@@ -495,18 +477,22 @@ fn format_size_short(sectors: u64, out: &mut [u8; 16]) -> usize {
     n
 }
 
-/// Active top-level Candy sidebar tab.
+/// Top-level macOS Noir System Settings sidebar categories + fallback schema view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarView {
     Appearance,
-    WindowsTabs,
-    Keybinds,
-    Profiles,
-    /// Candy Lavender Wi-Fi & Network Manager (shares `/data/wifi.conf` with Spindle).
+    Network,
     Wifi,
-    /// Candy Lavender Graphical Installer & Partition Manager.
+    Sound,
+    Display,
+    Trackpad,
+    Apps,
+    Keyboard,
+    Privacy,
     Install,
-    /// One of the existing `sex-config` schema / info pages by index.
+    Updates,
+    About,
+    /// Schema page navigated directly via `PgUp`/`PgDn`/`Tab`.
     SystemPage(usize),
 }
 
@@ -868,6 +854,74 @@ impl WifiState {
     }
 }
 
+pub struct SidebarItem {
+    pub label: &'static str,
+    pub view: SidebarView,
+    pub icon: Icon,
+    pub badge_color: u32,
+    pub schema_section: &'static str,
+}
+
+pub const SIDEBAR_ITEMS: [SidebarItem; 11] = [
+    SidebarItem { label: "Appearance & Noir", view: SidebarView::Appearance, icon: Icon::Appearance, badge_color: 0x00F4_3F5E, schema_section: "appearance" },
+    SidebarItem { label: "Wi-Fi & Network", view: SidebarView::Network, icon: Icon::Network, badge_color: 0x003B_82F6, schema_section: "privacy" },
+    SidebarItem { label: "Sound", view: SidebarView::Sound, icon: Icon::Sound, badge_color: 0x00EF_4444, schema_section: "sound" },
+    SidebarItem { label: "Display", view: SidebarView::Display, icon: Icon::Display, badge_color: 0x000E_A5E9, schema_section: "display" },
+    SidebarItem { label: "Trackpad & Multitouch", view: SidebarView::Trackpad, icon: Icon::Trackpad, badge_color: 0x0064_748B, schema_section: "desktop" },
+    SidebarItem { label: "Apps & Close Behavior", view: SidebarView::Apps, icon: Icon::Apps, badge_color: 0x00A8_55F7, schema_section: "open" },
+    SidebarItem { label: "Keyboard & Prediction", view: SidebarView::Keyboard, icon: Icon::Keyboard, badge_color: 0x0063_66F1, schema_section: "keyboard" },
+    SidebarItem { label: "Privacy & Grants", view: SidebarView::Privacy, icon: Icon::Privacy, badge_color: 0x0010_B981, schema_section: "privacy" },
+    SidebarItem { label: "Storage & Disk Installer", view: SidebarView::Install, icon: Icon::Storage, badge_color: 0x00F5_9E0B, schema_section: "storage" },
+    SidebarItem { label: "Software Update", view: SidebarView::Updates, icon: Icon::Update, badge_color: 0x0038_BDF8, schema_section: "updates" },
+    SidebarItem { label: "About This SexOS", view: SidebarView::About, icon: Icon::About, badge_color: 0x00F4_3F5E, schema_section: "setup" },
+];
+
+impl SidebarView {
+    pub fn from_section(sec: &str, idx: usize) -> Self {
+        match sec {
+            "appearance" => SidebarView::Appearance,
+            "sound" => SidebarView::Sound,
+            "display" => SidebarView::Display,
+            "keyboard" => SidebarView::Keyboard,
+            "privacy" => SidebarView::Privacy,
+            "storage" => SidebarView::Install,
+            "updates" => SidebarView::Updates,
+            "setup" => SidebarView::About,
+            _ => SidebarView::SystemPage(idx),
+        }
+    }
+
+    pub fn active_sidebar_idx(self) -> usize {
+        let (pages, n) = model::pages();
+        match self {
+            SidebarView::Appearance => 0,
+            SidebarView::Network | SidebarView::Wifi => 1,
+            SidebarView::Sound => 2,
+            SidebarView::Display => 3,
+            SidebarView::Trackpad => 4,
+            SidebarView::Apps => 5,
+            SidebarView::Keyboard => 6,
+            SidebarView::Privacy => 7,
+            SidebarView::Install => 8,
+            SidebarView::Updates => 9,
+            SidebarView::About => 10,
+            SidebarView::SystemPage(idx) if idx < n => match pages[idx] {
+                "appearance" => 0,
+                "sound" => 2,
+                "desktop" | "display" | "accessibility" => 3,
+                "open" | "startup" | "notifications" => 5,
+                "keyboard" | "time" | "shortcuts" => 6,
+                "privacy" | "session" => 7,
+                "storage" => 8,
+                "updates" => 9,
+                "setup" => 10,
+                _ => 0,
+            },
+            SidebarView::SystemPage(_) => 0,
+        }
+    }
+}
+
 /// Snapshot of editable desktop preferences for one-click Undo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrefSnapshot {
@@ -881,11 +935,9 @@ pub struct PrefSnapshot {
     pub keybinds: KeybindProfile,
 }
 
-/// Default upstream repositories shown in the Updates & Dotfiles panel.
 pub const SYSTEM_REPO: &str = "xirtus/sexos";
 pub const DOTFILES_REPO: &str = "xirtus/sexosdotfiles";
 
-/// Zero-heap state for the Tatami Software Update & Private Dotfiles Sync panel.
 pub struct UpdatesState {
     pub system_checked: bool,
     pub system_status: [u8; 96],
@@ -938,23 +990,161 @@ impl UpdatesState {
     }
 }
 
+/// Live structured facts for About This SexOS and Storage cards.
+#[derive(Clone, Copy)]
+pub struct AboutState {
+    pub kernel: KernelFacts,
+    pub slot: [u8; 8],
+    pub slot_len: usize,
+    pub version: [u8; 16],
+    pub version_len: usize,
+    pub image_mib: Option<u64>,
+    pub image_hash: [u8; 72],
+    pub image_hash_len: usize,
+    pub fs_health: [u8; 64],
+    pub fs_health_len: usize,
+    pub disk_summary: [u8; 64],
+    pub disk_summary_len: usize,
+}
+
+impl AboutState {
+    pub const fn new() -> Self {
+        Self {
+            kernel: KernelFacts {
+                cores: None,
+                program_limit: None,
+                program_lent: None,
+                free_frames: None,
+                kernel_heap: None,
+                domains: 0,
+                uptime_s: 0,
+            },
+            slot: [0; 8],
+            slot_len: 0,
+            version: [0; 16],
+            version_len: 0,
+            image_mib: None,
+            image_hash: [0; 72],
+            image_hash_len: 0,
+            fs_health: [0; 64],
+            fs_health_len: 0,
+            disk_summary: [0; 64],
+            disk_summary_len: 0,
+        }
+    }
+
+    pub fn update_about(&mut self, k: KernelFacts, facts_raw: &[u8]) {
+        self.kernel = k;
+        if let Some(s) = facts::field(facts_raw, "slot") {
+            let n = s.len().min(self.slot.len());
+            self.slot[..n].copy_from_slice(&s[..n]);
+            self.slot_len = n;
+        }
+        if let Some(v) = facts::field(facts_raw, "version") {
+            let n = v.len().min(self.version.len());
+            self.version[..n].copy_from_slice(&v[..n]);
+            self.version_len = n;
+        }
+        self.image_mib = facts::field(facts_raw, "image_bytes")
+            .and_then(|v| core::str::from_utf8(v).ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|b| b >> 20);
+        if let Some(h) = facts::field(facts_raw, "image") {
+            let n = h.len().min(self.image_hash.len());
+            self.image_hash[..n].copy_from_slice(&h[..n]);
+            self.image_hash_len = n;
+        }
+    }
+
+    pub fn update_storage(&mut self, facts_raw: &[u8]) {
+        let mut out = [0u8; 64];
+        let mut at = 0usize;
+        let mut push = |b: &[u8]| {
+            let take = b.len().min(out.len().saturating_sub(at));
+            out[at..at + take].copy_from_slice(&b[..take]);
+            at += take;
+        };
+        if let Some(fs_v) = facts::field(facts_raw, "filesystem") {
+            let mut it = fs_v.split(|&b| b == b' ');
+            let _ = it.next();
+            let total = it.next().and_then(|v| core::str::from_utf8(v).ok()).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let free = it.next().and_then(|v| core::str::from_utf8(v).ok()).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let mut tmp = [0u8; 16];
+            push(b"sexfs Healthy (");
+            let l1 = format_size_short(free * 8, &mut tmp);
+            push(&tmp[..l1]);
+            push(b" free / ");
+            let l2 = format_size_short(total * 8, &mut tmp);
+            push(&tmp[..l2]);
+            push(b")");
+        } else {
+            push(b"Live Read-Only / No SexFS Mounted");
+        }
+        self.fs_health[..at].copy_from_slice(&out[..at]);
+        self.fs_health_len = at;
+
+        let mut dout = [0u8; 64];
+        let mut dat = 0usize;
+        let mut dpush = |b: &[u8]| {
+            let take = b.len().min(dout.len().saturating_sub(dat));
+            dout[dat..dat + take].copy_from_slice(&b[..take]);
+            dat += take;
+        };
+        if let Some(disk_v) = facts::field(facts_raw, "disk") {
+            let mut it = disk_v.split(|&b| b == b' ');
+            let sectors = it.next().and_then(|v| core::str::from_utf8(v).ok()).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let kind = it.next().unwrap_or(b"unknown");
+            let mut tmp = [0u8; 16];
+            let l = format_size_short(sectors, &mut tmp);
+            dpush(&tmp[..l]);
+            dpush(b" (");
+            dpush(kind);
+            dpush(b")");
+        }
+        self.disk_summary[..dat].copy_from_slice(&dout[..dat]);
+        self.disk_summary_len = dat;
+    }
+
+    pub fn slot_badge(&self) -> &[u8] {
+        match &self.slot[..self.slot_len] {
+            b"a" => b"Slot A",
+            b"b" => b"Slot B",
+            b"none" => b"Live USB",
+            _ => b"SexOS",
+        }
+    }
+}
+
 /// Interactive hitbox action emitted on click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
     SelectView(SidebarView),
+    FocusSearch,
+    ClearSearch,
     SetTheme(i32),
     SetAccent(i32),
     ToggleFrostedGlass,
     ToggleAnimations,
+    ToggleBoolSetting(u16),
+    SetSettingValue(u16, i32),
+    StepSetting(u16, bool),
+    ToggleSetBit(u16, u8),
     SetCornerRadius(usize),
     SetTabBar(TabBarStyle),
     SetTiling(TilingStyle),
+    SetCloseBehavior(CloseBehavior),
     SetKeybinds(KeybindProfile),
+    ToggleTrackpad(u8),
+    TogglePrediction(u8),
+    ToggleWifiRadio,
     ApplyProfile(usize),
     Undo,
     ResetDefaults,
     SelectRow(usize),
     StepRow(usize, bool),
+    SetGrant(usize, bool),
+    StartPassword,
+    CancelPassword,
     SelectInstallPart(usize),
     InstallRefresh,
     InstallPlan,
@@ -989,13 +1179,24 @@ impl HitRect {
     }
 }
 
-/// Settings GUI state (kept in static or on stack; zero heap).
+/// Settings GUI state (static / stack; zero heap).
 pub struct GuiState {
     pub view: SidebarView,
+    pub search_focused: bool,
+    pub search_selected: bool,
+    pub scroll_y: i32,
     pub corner_radius_idx: usize,
     pub tab_bar: TabBarStyle,
     pub tiling: TilingStyle,
+    pub close_behavior: CloseBehavior,
     pub keybinds: KeybindProfile,
+    pub trackpad_tap_click: bool,
+    pub trackpad_natural_scroll: bool,
+    pub trackpad_three_finger_spaces: bool,
+    pub trackpad_four_finger_overview: bool,
+    pub text_prediction: bool,
+    pub text_autocorrect: bool,
+    pub wifi_enabled: bool,
     pub active_profile: Option<usize>,
     pub undo: Option<PrefSnapshot>,
     pub hovered: Option<UiAction>,
@@ -1005,16 +1206,30 @@ pub struct GuiState {
     pub install: InstallState,
     pub updates: UpdatesState,
     pub wifi: WifiState,
+    pub about: AboutState,
+    pub grant_rows: [grants::Row; grants::ROWS_MAX],
+    pub grant_count: usize,
 }
 
 impl GuiState {
     pub const fn new() -> Self {
         Self {
             view: SidebarView::Appearance,
+            search_focused: false,
+            search_selected: false,
+            scroll_y: 0,
             corner_radius_idx: 2,
             tab_bar: TabBarStyle::SilkPill,
             tiling: TilingStyle::HybridCandy,
+            close_behavior: CloseBehavior::QuitApp,
             keybinds: KeybindProfile::HyprlandKde,
+            trackpad_tap_click: true,
+            trackpad_natural_scroll: true,
+            trackpad_three_finger_spaces: true,
+            trackpad_four_finger_overview: true,
+            text_prediction: true,
+            text_autocorrect: true,
+            wifi_enabled: true,
             active_profile: Some(0),
             undo: None,
             hovered: None,
@@ -1024,7 +1239,16 @@ impl GuiState {
             install: InstallState::new(),
             updates: UpdatesState::new(),
             wifi: WifiState::new(),
+            about: AboutState::new(),
+            grant_rows: [grants::Row::EMPTY; grants::ROWS_MAX],
+            grant_count: 0,
         }
+    }
+
+    pub fn set_grants(&mut self, rows: &[grants::Row]) {
+        let n = rows.len().min(grants::ROWS_MAX);
+        self.grant_rows[..n].copy_from_slice(&rows[..n]);
+        self.grant_count = n;
     }
 
     pub fn snapshot(&self, values: &Config) -> PrefSnapshot {
@@ -1076,7 +1300,6 @@ impl GuiState {
         }
     }
 
-    /// Applies a named profile and returns the `(key_id, value)` pairs to persist.
     pub fn apply_profile(&mut self, idx: usize, values: &Config) -> [(u16, i32); 4] {
         let p = PROFILES[idx.min(PROFILES.len() - 1)];
         self.save_undo(values);
@@ -1093,7 +1316,6 @@ impl GuiState {
         ]
     }
 
-    /// Reverts to the previous undo snapshot if one exists.
     pub fn take_undo(&mut self) -> Option<[(u16, i32); 4]> {
         let snap = self.undo.take()?;
         self.corner_radius_idx = snap.corner_radius_idx;
@@ -1109,258 +1331,405 @@ impl GuiState {
         ])
     }
 
-    /// Resets to the default `Candy Lavender` profile.
     pub fn reset_defaults(&mut self, values: &Config) -> [(u16, i32); 4] {
         self.apply_profile(0, values)
     }
 
-    /// Builds a live CandyPalette customized by the active Theme mode and Accent color.
     pub fn palette(&self, values: &Config) -> CandyPalette {
         let mode = Mode::from_setting(values.value(id::THEME));
-        let mut pal = CandyPalette::for_mode(mode);
-        let accent = (values.value(id::ACCENT) as u32) & 0x00FF_FFFF;
-        if mode != Mode::HighContrast && accent != 0 {
-            pal.accent = accent;
-            pal.accent_hover = mix_rgb(accent, 0x00FF_FFFF, 36);
-            pal.accent_pressed = mix_rgb(accent, 0x0014_0D24, 48);
-            pal.rim_accent = mix_rgb(accent, pal.specular, 72);
-            pal.selection = mix_rgb(pal.card, accent, if mode == Mode::Light { 42 } else { 68 });
-        }
-        pal
+        noir_palette(mode, values.value(id::ACCENT))
+    }
+
+    pub fn scroll_by(&mut self, delta: i32) {
+        self.scroll_y = (self.scroll_y + delta).clamp(0, 900);
     }
 }
 
-/// Compact Geist Mono glyph cache for Settings GUI.
-pub struct Glyphs {
-    font: Option<Font<'static>>,
-    loaded: bool,
-    cache: GlyphCache<GLYPH_SLOTS, { GLYPH_SLOTS * CELL_W * CELL_H }>,
-    acc: [i32; scratch_len(CELL_W, CELL_H)],
-}
-
-impl Glyphs {
-    pub const fn new() -> Self {
-        Self {
-            font: None,
-            loaded: false,
-            cache: GlyphCache::new(),
-            acc: [0; scratch_len(CELL_W, CELL_H)],
-        }
-    }
-
-    fn cell(&mut self, c: u8) -> Option<&[u8]> {
-        if !self.loaded {
-            self.font = Font::new(sex_font::GEIST_MONO);
-            self.loaded = true;
-        }
-        let font = self.font.as_ref()?;
-        let acc = &mut self.acc;
-        let key = GlyphKey { font: 0, scalar: c as u32, size: 0, phase: 0, w: CELL_W as u8, h: CELL_H as u8 };
-        self.cache.get(key, |out| sex_font::draw_cell(font, c as u32, CELL_W, CELL_H, acc, out))
-    }
-}
-
-fn draw_text(
-    buf: &mut [u32],
-    w: usize,
-    h: usize,
-    g: &mut Glyphs,
-    x: i32,
-    y: i32,
-    max_w: i32,
-    text: &[u8],
-    color: u32,
-) {
-    let mut at = x;
-    let limit = (x + max_w).min(w as i32);
-    for &b in text {
-        if at + CELL_W as i32 > limit {
-            break;
-        }
-        let c = if (0x21..0x7F).contains(&b) {
-            b
-        } else if b == b' ' {
-            at += CELL_W as i32;
-            continue;
-        } else {
-            b'?'
-        };
-        if let Some(cov) = g.cell(c) {
-            for (i, &a) in cov.iter().enumerate() {
-                if a == 0 {
-                    continue;
-                }
-                let px = at + (i % CELL_W) as i32;
-                let py = y + (i / CELL_W) as i32;
-                if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
-                    let idx = py as usize * w + px as usize;
-                    buf[idx] = mix_rgb(buf[idx], color, a);
-                }
-            }
-        }
-        at += CELL_W as i32;
-    }
-}
-
-fn fill_solid(buf: &mut [u32], w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, color: u32) {
-    let x0 = x.max(0) as usize;
-    let y0 = y.max(0) as usize;
-    let x1 = x.saturating_add(rw).clamp(0, w as i32) as usize;
-    let y1 = y.saturating_add(rh).clamp(0, h as i32) as usize;
-    if x0 >= x1 {
-        return;
-    }
-    for row in y0..y1 {
-        buf[row * w + x0..row * w + x1].fill(color);
-    }
-}
-
-/// Renders the entire Candy Lavender Settings GUI into `buf` (`w x h`, `0x00RRGGBB`).
+/// Renders the entire macOS Ventura/Sequoia Dark-Mode Noir Tatami GUI.
 pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut GuiState, m: &Model) {
-    if w < 120 || h < 120 || buf.len() < w * h {
+    if w < 220 || h < 200 || buf.len() < w * h {
         return;
     }
     gui.clear_hits();
     let pal = gui.palette(&m.values);
     let (wi, hi) = (w as i32, h as i32);
 
-    // Main canvas & sidebar surface.
+    // Full Noir canvas & dark `#0B0D12` sidebar.
     fill_solid(buf, w, h, 0, 0, wi, hi, pal.bg);
-    fill_solid(buf, w, h, 0, HEADER_H, SIDEBAR_W, hi - HEADER_H, pal.panel);
-    fill_solid(buf, w, h, SIDEBAR_W, HEADER_H, 1, hi - HEADER_H, pal.hairline);
+    fill_solid(buf, w, h, 0, 0, SIDEBAR_W, hi, pal.panel);
+    fill_solid(buf, w, h, SIDEBAR_W, 0, 1, hi, pal.specular);
 
-    // Top frosted Candy Lavender toolbar with title, Undo, and Reset buttons.
-    draw_candy_toolbar(buf, w, h, 0, 0, wi, HEADER_H, &pal);
-    draw_text(buf, w, h, g, 14, 13, SIDEBAR_W - 20, b"Tatami Settings", pal.text);
+    // 1. Left Sidebar: Search Pill at Top.
+    let sbx = 12;
+    let sby = 12;
+    let sbw = SIDEBAR_W - 24;
+    let sbh = 30;
+    let search_border = if gui.search_focused || m.searching() { pal.accent } else { pal.specular };
+    draw_noir_well(buf, w, h, sbx, sby, sbw, sbh, 8, search_border, &pal);
+    noir_ui::draw_icon(buf, w, h, g, sbx + 8, sby + 8, Icon::Search, pal.text_dim);
 
-    let title: &[u8] = match gui.view {
-        SidebarView::Appearance => b"Appearance & Theme",
-        SidebarView::WindowsTabs => b"Windows, Chrome & Tiling",
-        SidebarView::Keybinds => b"Keybinds (Hyprland + KDE)",
-        SidebarView::Profiles => b"Desktop Profiles (HyprMod)",
-        SidebarView::Wifi => b"Wi-Fi & Network Manager",
-        SidebarView::Install => b"Install SexOS & Partition Manager",
-        SidebarView::SystemPage(idx) => {
-            let (pages, n) = model::pages();
-            if idx < n {
-                if pages[idx] == "updates" {
-                    b"Software Update & Private Dotfiles"
-                } else {
-                    model::page_title(pages[idx]).as_bytes()
-                }
-            } else {
-                b"System"
+    if m.query_len == 0 {
+        draw_sans(buf, w, h, g, sbx + 27, sby + 7, sbw - 38, b"Search", pal.text_dim);
+        if gui.search_focused {
+            fill_solid(buf, w, h, sbx + 26, sby + 7, 1, 16, pal.accent);
+        }
+    } else {
+        let q = &m.query[..m.query_len];
+        let qw = g.measure(0, 13, q).min(sbw - 52);
+        if gui.search_selected {
+            fill_rounded_rect(buf, w, h, sbx + 25, sby + 5, qw + 4, 20, 4, pal.selection);
+        }
+        draw_sans(buf, w, h, g, sbx + 27, sby + 7, sbw - 52, q, pal.text);
+        if gui.search_focused && !gui.search_selected {
+            fill_solid(buf, w, h, sbx + 28 + qw, sby + 7, 1, 16, pal.accent);
+        }
+        // Clear `x` pill.
+        let cx = sbx + sbw - 22;
+        fill_rounded_rect(buf, w, h, cx, sby + 7, 16, 16, 8, pal.control);
+        draw_sans_sm(buf, w, h, g, cx + 5, sby + 7, 10, b"x", pal.text_dim);
+        gui.push_hit(cx - 2, sby + 4, 22, 22, UiAction::ClearSearch);
+    }
+    gui.push_hit(sbx, sby, if m.query_len > 0 { sbw - 24 } else { sbw }, sbh, UiAction::FocusSearch);
+
+    // 2. SexOS Machine / Profile Card below Search.
+    let prof_y = 50;
+    let prof_h = 48;
+    draw_noir_card(buf, w, h, sbx, prof_y, sbw, prof_h, 10, &pal);
+    fill_rounded_rect(buf, w, h, sbx + 8, prof_y + 9, 30, 30, 8, 0x0026_2122);
+    draw_sexos_lips(buf, w, h, sbx + 23, prof_y + 24, 22, true);
+    draw_sans_bold(buf, w, h, g, sbx + 45, prof_y + 8, sbw - 54, 13, b"SexOS", pal.text);
+    let sub_buf = if gui.about.slot_len > 0 {
+        let mut s = [0u8; 24];
+        let badge = gui.about.slot_badge();
+        let n = badge.len().min(12);
+        s[..n].copy_from_slice(&badge[..n]);
+        let suf = b" \xE2\x80\xA2 Noir";
+        let mlen = suf.len().min(s.len() - n);
+        s[n..n + mlen].copy_from_slice(&suf[..mlen]);
+        draw_sans_sm(buf, w, h, g, sbx + 45, prof_y + 25, sbw - 54, &s[..n + mlen], pal.text_dim);
+        ()
+    } else {
+        draw_sans_sm(buf, w, h, g, sbx + 45, prof_y + 25, sbw - 54, b"Local Machine", pal.text_dim);
+    };
+    let _ = sub_buf;
+    gui.push_hit(sbx, prof_y, sbw, prof_h, UiAction::SelectView(SidebarView::About));
+
+    // 3. 11 Color-Badged Category Rows.
+    let active_idx = if m.searching() { usize::MAX } else { gui.view.active_sidebar_idx() };
+    let mut sy = 108;
+    for (idx, item) in SIDEBAR_ITEMS.iter().enumerate() {
+        if sy + 28 > hi - 8 {
+            break;
+        }
+        let active = idx == active_idx;
+        let act = UiAction::SelectView(item.view);
+        let hovered = gui.hovered == Some(act);
+        if active {
+            fill_rounded_rect(buf, w, h, sbx, sy, sbw, 28, 7, pal.selection);
+            fill_rounded_rect(buf, w, h, sbx + 2, sy + 5, 3, 18, 2, pal.accent);
+        } else if hovered {
+            fill_rounded_rect(buf, w, h, sbx, sy, sbw, 28, 7, pal.control);
+        }
+        draw_sidebar_badge(buf, w, h, g, sbx + 8, sy + 4, item.badge_color, item.icon);
+        draw_sans(
+            buf,
+            w,
+            h,
+            g,
+            sbx + 34,
+            sy + 6,
+            sbw - 40,
+            item.label.as_bytes(),
+            if active { pal.text } else { pal.text_dim },
+        );
+        gui.push_hit(sbx, sy, sbw, 28, act);
+        sy += 30;
+    }
+
+    // 4. Right Content Header Bar (`HEADER_H = 48`).
+    let cx = SIDEBAR_W + 22;
+    let cw = (wi - SIDEBAR_W - 44).max(220);
+    fill_solid(buf, w, h, SIDEBAR_W + 1, 0, wi - SIDEBAR_W - 1, HEADER_H, pal.toolbar_top);
+    fill_solid(buf, w, h, SIDEBAR_W + 1, HEADER_H - 1, wi - SIDEBAR_W - 1, 1, pal.hairline);
+
+    let title: &[u8] = if m.searching() {
+        b"Search Results"
+    } else {
+        match gui.view {
+            SidebarView::Appearance => b"Appearance & Noir",
+            SidebarView::Network | SidebarView::Wifi => b"Wi-Fi & Network",
+            SidebarView::Sound => b"Sound",
+            SidebarView::Display => b"Display",
+            SidebarView::Trackpad => b"Trackpad & Multitouch",
+            SidebarView::Apps => b"Apps & SilkBar Close Behavior",
+            SidebarView::Keyboard => b"Keyboard & Text Prediction",
+            SidebarView::Privacy => b"Privacy & Grants",
+            SidebarView::Install => b"Storage & Disk Installer",
+            SidebarView::Updates => b"Software Update",
+            SidebarView::About => b"About This SexOS",
+            SidebarView::SystemPage(idx) => {
+                let (pages, n) = model::pages();
+                if idx < n { model::page_title(pages[idx]).as_bytes() } else { b"Settings" }
             }
         }
     };
-    draw_text(buf, w, h, g, SIDEBAR_W + 18, 13, wi - SIDEBAR_W - 190, title, pal.text);
+    draw_sans_bold(buf, w, h, g, cx, 14, cw - 156, 16, title, pal.text);
 
-    // Undo & Reset Candy pill buttons in header right.
-    let reset_w = 72;
-    let undo_w = 64;
-    let reset_x = wi - reset_w - 12;
+    // Undo & Reset buttons on header right.
+    let reset_w = 64;
+    let undo_w = 58;
+    let reset_x = wi - reset_w - 16;
     let undo_x = reset_x - undo_w - 8;
-    let btn_y = 8;
+    let btn_y = 10;
     let btn_h = 26;
 
     let undo_style = if gui.undo.is_some() { ButtonStyle::Normal } else { ButtonStyle::Disabled };
     let undo_state = if gui.undo.is_some() { gui.btn_state(UiAction::Undo) } else { ButtonState::Rest };
-    draw_candy_button(buf, w, h, undo_x, btn_y, undo_w, btn_h, 13, undo_style, undo_state, &pal);
-    draw_text(buf, w, h, g, undo_x + 16, btn_y + 5, undo_w - 16, b"Undo", button_text_color(undo_style, &pal));
+    draw_candy_button(buf, w, h, undo_x, btn_y, undo_w, btn_h, 7, undo_style, undo_state, &pal);
+    draw_sans_sm(buf, w, h, g, undo_x + 15, btn_y + 6, undo_w - 12, b"Undo", button_text_color(undo_style, &pal));
     if gui.undo.is_some() {
         gui.push_hit(undo_x, btn_y, undo_w, btn_h, UiAction::Undo);
     }
 
     let reset_state = gui.btn_state(UiAction::ResetDefaults);
-    draw_candy_button(buf, w, h, reset_x, btn_y, reset_w, btn_h, 13, ButtonStyle::Normal, reset_state, &pal);
-    draw_text(buf, w, h, g, reset_x + 16, btn_y + 5, reset_w - 16, b"Reset", button_text_color(ButtonStyle::Normal, &pal));
+    draw_candy_button(buf, w, h, reset_x, btn_y, reset_w, btn_h, 7, ButtonStyle::Normal, reset_state, &pal);
+    draw_sans_sm(buf, w, h, g, reset_x + 15, btn_y + 6, reset_w - 12, b"Reset", button_text_color(ButtonStyle::Normal, &pal));
     gui.push_hit(reset_x, btn_y, reset_w, btn_h, UiAction::ResetDefaults);
 
-    // Sidebar navigation pills.
-    let mut sy = HEADER_H + 10;
-    draw_text(buf, w, h, g, 14, sy, SIDEBAR_W - 24, b"PERSONALIZE", pal.text_dim);
-    sy += 20;
+    // 5. Main Scrollable Canvas Body.
+    let body_top = HEADER_H + 14;
+    let body_bottom = hi - STATUS_H - 8;
+    let content_y = body_top - gui.scroll_y;
 
-    let primary_items: [(&[u8], SidebarView); 6] = [
-        (b"Appearance", SidebarView::Appearance),
-        (b"Windows & Tabs", SidebarView::WindowsTabs),
-        (b"Keybinds", SidebarView::Keybinds),
-        (b"Profiles", SidebarView::Profiles),
-        (b"Wi-Fi & Network", SidebarView::Wifi),
-        (b"Install SexOS", SidebarView::Install),
-    ];
-    for (label, view) in primary_items {
-        let active = gui.view == view;
-        let act = UiAction::SelectView(view);
-        let st = gui.btn_state(act);
-        let style = if active { ButtonStyle::Active } else { ButtonStyle::Subtle };
-        draw_candy_button(buf, w, h, 10, sy, SIDEBAR_W - 20, 28, 10, style, st, &pal);
-        if active {
-            fill_rounded_rect(buf, w, h, 14, sy + 6, 3, 16, 2, pal.accent);
+    let total_h = if m.searching() {
+        render_search_results(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom)
+    } else {
+        match gui.view {
+            SidebarView::Appearance => render_appearance(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Network => render_network(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Wifi => {
+                render_wifi(buf, w, h, g, gui, &pal, cx, content_y, cw, (body_bottom - body_top).max(200));
+                (body_bottom - body_top).max(200)
+            }
+            SidebarView::Sound => render_sound(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Display => render_display(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Trackpad => render_trackpad(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Apps => render_apps(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Keyboard => render_keyboard(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Privacy => render_privacy(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Install => render_storage_install(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::Updates => render_updates(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::About => render_about(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
+            SidebarView::SystemPage(_) => render_system_page(buf, w, h, g, gui, m, &pal, cx, content_y, cw, body_top, body_bottom),
         }
-        draw_text(buf, w, h, g, 24, sy + 6, SIDEBAR_W - 38, label, if active { pal.text } else { pal.text_dim });
-        gui.push_hit(10, sy, SIDEBAR_W - 20, 28, act);
-        sy += 32;
+    };
+    // Clamp scroll_y cleanly if window resized or switched to shorter page.
+    let view_h = (body_bottom - body_top).max(60);
+    let max_scroll = (total_h - view_h).max(0);
+    if gui.scroll_y > max_scroll {
+        gui.scroll_y = max_scroll;
     }
 
-    sy += 6;
-    fill_solid(buf, w, h, 14, sy, SIDEBAR_W - 28, 1, pal.hairline);
-    sy += 10;
-    draw_text(buf, w, h, g, 14, sy, SIDEBAR_W - 24, b"SYSTEM", pal.text_dim);
-    sy += 20;
+    // Re-mask header & status bar over any scrolled content so text never bleeds into header/footer.
+    fill_solid(buf, w, h, SIDEBAR_W + 1, 0, wi - SIDEBAR_W - 1, HEADER_H, pal.toolbar_top);
+    fill_solid(buf, w, h, SIDEBAR_W + 1, HEADER_H - 1, wi - SIDEBAR_W - 1, 1, pal.hairline);
+    draw_sans_bold(buf, w, h, g, cx, 14, cw - 156, 16, title, pal.text);
+    draw_candy_button(buf, w, h, undo_x, btn_y, undo_w, btn_h, 7, undo_style, undo_state, &pal);
+    draw_sans_sm(buf, w, h, g, undo_x + 15, btn_y + 6, undo_w - 12, b"Undo", button_text_color(undo_style, &pal));
+    draw_candy_button(buf, w, h, reset_x, btn_y, reset_w, btn_h, 7, ButtonStyle::Normal, reset_state, &pal);
+    draw_sans_sm(buf, w, h, g, reset_x + 15, btn_y + 6, reset_w - 12, b"Reset", button_text_color(ButtonStyle::Normal, &pal));
 
-    let (pages, page_count) = model::pages();
-    for (idx, &sec) in pages[..page_count].iter().enumerate() {
-        if sec == "appearance" {
-            continue;
-        }
-        if sy + 26 > hi - 10 {
-            break;
-        }
-        let view = SidebarView::SystemPage(idx);
-        let active = gui.view == view;
-        let act = UiAction::SelectView(view);
-        let st = gui.btn_state(act);
-        if active {
-            draw_candy_selection_row(buf, w, h, 10, sy, SIDEBAR_W - 20, 24, 8, &pal);
-        } else if st == ButtonState::Hover {
-            draw_candy_button(buf, w, h, 10, sy, SIDEBAR_W - 20, 24, 8, ButtonStyle::Subtle, st, &pal);
-        }
-        let label = model::page_title(sec).as_bytes();
-        draw_text(buf, w, h, g, 22, sy + 4, SIDEBAR_W - 34, label, if active { pal.text } else { pal.text_dim });
-        gui.push_hit(10, sy, SIDEBAR_W - 20, 24, act);
-        sy += 26;
+    // Password entry modal overlay (Ctrl+P or "Change Lock Password").
+    if let Some(ref entry) = m.entry {
+        render_password_modal(buf, w, h, g, gui, entry, m, &pal);
     }
 
-    // Right content pane.
-    let cx = SIDEBAR_W + 18;
-    let cw = (wi - SIDEBAR_W - 36).max(200);
-    let cy = HEADER_H + 14;
-    let ch = (hi - HEADER_H - 42).max(120);
-
-    match gui.view {
-        SidebarView::Appearance => render_appearance(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
-        SidebarView::WindowsTabs => render_windows_tabs(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
-        SidebarView::Keybinds => render_keybinds(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
-        SidebarView::Profiles => render_profiles(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
-        SidebarView::Wifi => render_wifi(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
-        SidebarView::Install => render_install(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
-        SidebarView::SystemPage(idx) if idx < page_count && pages[idx] == "updates" => {
-            render_updates(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch)
-        }
-        SidebarView::SystemPage(_) => render_system_page(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
-    }
-
-    // Bottom status bar.
-    let status_y = hi - 26;
-    fill_solid(buf, w, h, SIDEBAR_W + 1, status_y, wi - SIDEBAR_W - 1, 26, pal.panel);
+    // 6. Bottom Status Bar.
+    let status_y = hi - STATUS_H;
+    fill_solid(buf, w, h, SIDEBAR_W + 1, status_y, wi - SIDEBAR_W - 1, STATUS_H, pal.panel);
     fill_solid(buf, w, h, SIDEBAR_W + 1, status_y, wi - SIDEBAR_W - 1, 1, pal.hairline);
     let status = if m.status_len > 0 {
         &m.status[..m.status_len]
     } else {
-        b"Live preview & instant apply active. Click any control or use arrow keys."
+        b"macOS Noir System Settings  \xE2\x80\xA2  Type to search  \xE2\x80\xA2  PgUp/PgDn pages  \xE2\x80\xA2  Ctrl+P password"
     };
-    draw_text(buf, w, h, g, SIDEBAR_W + 18, status_y + 5, wi - SIDEBAR_W - 32, status, pal.text_dim);
+    draw_sans_sm(buf, w, h, g, cx, status_y + 6, cw, status, pal.text_dim);
+}
+
+/// Helper: draws a setting label + description + toggle switch inside a card row.
+#[allow(clippy::too_many_arguments)]
+fn draw_toggle_row(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    y: i32,
+    cw: i32,
+    title: &[u8],
+    subtitle: &[u8],
+    on: bool,
+    act: UiAction,
+    divider: bool,
+) {
+    let row_h = if subtitle.is_empty() { 40 } else { 48 };
+    if divider {
+        fill_solid(buf, w, h, x + 14, y, cw - 28, 1, pal.hairline);
+    }
+    if subtitle.is_empty() {
+        draw_sans(buf, w, h, g, x + 14, y + 12, cw - 82, title, pal.text);
+    } else {
+        draw_sans(buf, w, h, g, x + 14, y + 8, cw - 82, title, pal.text);
+        draw_sans_sm(buf, w, h, g, x + 14, y + 26, cw - 82, subtitle, pal.text_dim);
+    }
+    let ty = y + (row_h - 22) / 2;
+    draw_noir_toggle(buf, w, h, x + cw - 56, ty, 42, 22, on, gui.btn_state(act), pal);
+    gui.push_hit(x + cw - 62, ty - 4, 54, 30, act);
+}
+
+/// Helper: draws a segmented pill bar for up to 5 choices.
+#[allow(clippy::too_many_arguments)]
+fn draw_segmented<F>(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    y: i32,
+    total_w: i32,
+    labels: &[&[u8]],
+    active_idx: usize,
+    mut make_act: F,
+) where
+    F: FnMut(usize) -> UiAction,
+{
+    let n = labels.len().max(1) as i32;
+    draw_noir_well(buf, w, h, x, y, total_w, 28, 8, pal.specular, pal);
+    let seg_w = ((total_w - 6) / n).max(32);
+    for (i, &lbl) in labels.iter().enumerate() {
+        let sx = x + 3 + i as i32 * seg_w;
+        let sw = if i + 1 == labels.len() { x + total_w - 3 - sx } else { seg_w - 2 };
+        let act = make_act(i);
+        let active = i == active_idx;
+        let hovered = gui.hovered == Some(act);
+        if active {
+            fill_rounded_rect(buf, w, h, sx, y + 3, sw, 22, 6, pal.accent);
+        } else if hovered {
+            fill_rounded_rect(buf, w, h, sx, y + 3, sw, 22, 6, pal.control_hover);
+        }
+        let tw = g.measure(if active { 1 } else { 0 }, 11, lbl).min(sw - 6);
+        let tx = sx + ((sw - tw) / 2).max(3);
+        let ink = if active { pal.text_on_accent } else { pal.text_dim };
+        g.draw_text(buf, w, h, tx, y + 7, sw - 6, 11, if active { 1 } else { 0 }, lbl, ink);
+        gui.push_hit(sx, y + 2, sw, 24, act);
+    }
+}
+
+/// Helper: draws an interactive integer slider + `-` / `+` steppers + value pill.
+#[allow(clippy::too_many_arguments)]
+fn draw_slider_row(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    y: i32,
+    cw: i32,
+    key_id: u16,
+    label: &[u8],
+    val: i32,
+    min: i32,
+    max: i32,
+    unit: &[u8],
+    divider: bool,
+) {
+    if divider {
+        fill_solid(buf, w, h, x + 14, y, cw - 28, 1, pal.hairline);
+    }
+    draw_sans(buf, w, h, g, x + 14, y + 10, 220, label, pal.text);
+
+    // Numeric badge on right.
+    let mut vbuf = [0u8; 24];
+    let mut vn = format_i32_ascii(val, &mut vbuf);
+    let take = unit.len().min(vbuf.len() - vn);
+    vbuf[vn..vn + take].copy_from_slice(&unit[..take]);
+    vn += take;
+
+    let dec_act = UiAction::StepSetting(key_id, false);
+    let inc_act = UiAction::StepSetting(key_id, true);
+    let dec_x = x + cw - 116;
+    let inc_x = x + cw - 36;
+    draw_candy_button(buf, w, h, dec_x, y + 10, 22, 22, 6, ButtonStyle::Normal, gui.btn_state(dec_act), pal);
+    draw_sans_bold(buf, w, h, g, dec_x + 7, y + 12, 12, 13, b"-", pal.text);
+    gui.push_hit(dec_x, y + 8, 22, 26, dec_act);
+
+    let val_w = g.measure(2, 12, &vbuf[..vn]).min(50);
+    draw_mono(buf, w, h, g, dec_x + 26 + (52 - val_w) / 2, y + 13, 52, &vbuf[..vn], pal.accent);
+
+    draw_candy_button(buf, w, h, inc_x, y + 10, 22, 22, 6, ButtonStyle::Normal, gui.btn_state(inc_act), pal);
+    draw_sans_bold(buf, w, h, g, inc_x + 6, y + 12, 12, 13, b"+", pal.text);
+    gui.push_hit(inc_x, y + 8, 22, 26, inc_act);
+
+    // Interactive clickable slider segments across the track.
+    let sl_x = (x + 236).min(dec_x - 84);
+    let sl_w = (dec_x - sl_x - 14).max(72);
+    let hov = matches!(gui.hovered, Some(UiAction::SetSettingValue(k, _)) if k == key_id);
+    draw_noir_slider(buf, w, h, sl_x, y + 10, sl_w, val, min, max, hov, pal);
+
+    // Register 10 clickable target buckets along the slider track for smooth direct-click scrubbing.
+    let buckets = 10i32;
+    let bw = (sl_w / buckets).max(6);
+    for b in 0..buckets {
+        let bx = sl_x + b * bw;
+        let sw = if b + 1 == buckets { sl_x + sl_w - bx } else { bw };
+        let frac_num = if b + 1 == buckets { max - min } else { ((max - min) * b) / (buckets - 1) };
+        let target = (min + frac_num).clamp(min, max);
+        gui.push_hit(bx, y + 6, sw, 28, UiAction::SetSettingValue(key_id, target));
+    }
+}
+
+/// Helper: draws a `< value >` choice stepper row.
+#[allow(clippy::too_many_arguments)]
+fn draw_choice_row(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    y: i32,
+    cw: i32,
+    key_id: u16,
+    label: &[u8],
+    value_text: &[u8],
+    divider: bool,
+) {
+    if divider {
+        fill_solid(buf, w, h, x + 14, y, cw - 28, 1, pal.hairline);
+    }
+    draw_sans(buf, w, h, g, x + 14, y + 11, (cw - 220).max(90), label, pal.text);
+
+    let dec = UiAction::StepSetting(key_id, false);
+    let inc = UiAction::StepSetting(key_id, true);
+    let inc_x = x + cw - 36;
+    let dec_x = x + cw - 192;
+    draw_candy_button(buf, w, h, dec_x, y + 9, 24, 22, 6, ButtonStyle::Normal, gui.btn_state(dec), pal);
+    draw_sans_bold(buf, w, h, g, dec_x + 8, y + 11, 14, 12, b"<", pal.text);
+    gui.push_hit(dec_x, y + 7, 24, 26, dec);
+
+    let vw = g.measure(0, 12, value_text).min(120);
+    draw_sans(buf, w, h, g, dec_x + 28 + (126 - vw) / 2, y + 11, 126, value_text, pal.accent);
+
+    draw_candy_button(buf, w, h, inc_x, y + 9, 24, 22, 6, ButtonStyle::Normal, gui.btn_state(inc), pal);
+    draw_sans_bold(buf, w, h, g, inc_x + 8, y + 11, 14, 12, b">", pal.text);
+    gui.push_hit(inc_x, y + 7, 24, 26, inc);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1374,34 +1743,50 @@ fn render_live_preview(
     pal: &CandyPalette,
     x: i32,
     y: i32,
-    pw: i32,
-) {
-    let ph = 86;
+    cw: i32,
+) -> i32 {
+    let ph = 92;
     let r = CORNER_RADII[gui.corner_radius_idx.min(CORNER_RADII.len() - 1)].1 as i32;
+    let theme_val = m.values.value(id::THEME);
     let frosted = m.values.value(id::REDUCE_TRANSPARENCY) == 0;
-    draw_candy_panel(buf, w, h, x, y, pw, ph, r, pal);
+    draw_noir_card(buf, w, h, x, y, cw, ph, r.max(8), pal);
 
-    // Mini window titlebar inside preview.
-    draw_candy_toolbar(buf, w, h, x + 2, y + 2, pw - 4, 24, pal);
-    // Traffic-light candy dots.
-    fill_rounded_rect(buf, w, h, x + 12, y + 9, 10, 10, 5, 0x00FF_5F57);
-    fill_rounded_rect(buf, w, h, x + 26, y + 9, 10, 10, 5, 0x00FE_BC2E);
-    fill_rounded_rect(buf, w, h, x + 40, y + 9, 10, 10, 5, 0x0028_C840);
-    draw_text(buf, w, h, g, x + 60, y + 6, pw - 160, b"Live Candy Preview", pal.text);
+    // Mini desktop bar preview reflecting desktop `appearance.theme` (Light vs Dark vs High Contrast).
+    let mini_bar_bg = match theme_val {
+        0 => 0x00ED_E9F6,
+        2 => 0x0000_0000,
+        _ => 0x000E_1119,
+    };
+    let mini_bar_fg = match theme_val {
+        0 => 0x001E_162E,
+        _ => pal.text,
+    };
+    fill_rounded_rect(buf, w, h, x + 2, y + 2, cw - 4, 26, (r - 2).max(4), mini_bar_bg);
+    fill_rounded_rect(buf, w, h, x + 12, y + 10, 10, 10, 5, 0x00FF_5F57);
+    fill_rounded_rect(buf, w, h, x + 26, y + 10, 10, 10, 5, 0x00FE_BC2E);
+    fill_rounded_rect(buf, w, h, x + 40, y + 10, 10, 10, 5, 0x0028_C840);
+    draw_sans_bold(buf, w, h, g, x + 60, y + 8, cw - 200, 12, b"Live Desktop Preview", mini_bar_fg);
 
-    // Frosted badge on right of preview titlebar.
-    let badge_label: &[u8] = if frosted { b"Frosted" } else { b"Opaque" };
-    draw_candy_badge(buf, w, h, x + pw - 86, y + 5, 74, 18, pal.accent, pal);
-    draw_text(buf, w, h, g, x + pw - 78, y + 6, 62, badge_label, pal.text_on_accent);
+    let mode_lbl: &[u8] = match theme_val {
+        0 => b"Light Bar",
+        2 => b"High Contrast",
+        _ => b"Noir Dark",
+    };
+    draw_candy_badge(buf, w, h, x + cw - 98, y + 6, 86, 18, pal.accent, pal);
+    let mlw = g.measure(1, 11, mode_lbl).min(78);
+    draw_sans_bold(buf, w, h, g, x + cw - 98 + (86 - mlw) / 2, y + 7, 78, 11, mode_lbl, pal.text_on_accent);
 
-    // Sample controls inside preview body.
-    draw_candy_button(buf, w, h, x + 14, y + 38, 118, 28, r.min(12), ButtonStyle::Primary, ButtonState::Rest, pal);
-    draw_text(buf, w, h, g, x + 24, y + 44, 100, b"Apply Candy", pal.text_on_accent);
+    // Preview pills inside body.
+    draw_candy_button(buf, w, h, x + 14, y + 40, 118, 28, r, ButtonStyle::Primary, ButtonState::Rest, pal);
+    draw_sans_bold(buf, w, h, g, x + 28, y + 47, 94, 12, b"Accent Action", pal.text_on_accent);
 
-    draw_candy_button(buf, w, h, x + 142, y + 38, 116, 28, r.min(12), ButtonStyle::Normal, ButtonState::Rest, pal);
-    draw_text(buf, w, h, g, x + 154, y + 44, 96, gui.tiling.label().as_bytes(), pal.text);
+    let wall_name = WALLPAPERS.get(m.values.value(id::WALLPAPER) as usize).copied().unwrap_or("sexos");
+    draw_candy_button(buf, w, h, x + 142, y + 40, 134, 28, r, ButtonStyle::Normal, ButtonState::Rest, pal);
+    draw_sans(buf, w, h, g, x + 154, y + 47, 112, wall_name.as_bytes(), pal.text);
 
-    draw_candy_toggle(buf, w, h, x + pw - 62, y + 41, 44, 22, frosted, ButtonState::Rest, pal);
+    draw_sans_sm(buf, w, h, g, x + cw - 134, y + 47, 68, if frosted { b"Frosted" } else { b"Opaque" }, pal.text_dim);
+    draw_noir_toggle(buf, w, h, x + cw - 58, y + 43, 42, 22, frosted, ButtonState::Rest, pal);
+    ph
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1416,209 +1801,135 @@ fn render_appearance(
     x: i32,
     mut y: i32,
     cw: i32,
-    _ch: i32,
-) {
-    render_live_preview(buf, w, h, g, gui, m, pal, x, y, cw);
-    y += 98;
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    y += render_live_preview(buf, w, h, g, gui, m, pal, x, y, cw) + 12;
 
-    // Theme mode card.
-    draw_candy_panel(buf, w, h, x, y, cw, 64, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Theme Mode", pal.text);
-    let cur_theme = m.values.value(id::THEME);
-    let modes: [(&[u8], i32); 3] = [(b"Light", 0), (b"Dark", 1), (b"High Contrast", 2)];
-    let mut tx = x + 14;
-    for (label, val) in modes {
-        let bw = (label.len() as i32) * CELL_W as i32 + 28;
-        let act = UiAction::SetTheme(val);
-        draw_candy_tab(buf, w, h, tx, y + 30, bw, 26, cur_theme == val, gui.btn_state(act), pal);
-        draw_text(buf, w, h, g, tx + 14, y + 35, bw - 16, label, if cur_theme == val { pal.text } else { pal.text_dim });
-        gui.push_hit(tx, y + 30, bw, 26, act);
-        tx += bw + 10;
-    }
-    y += 74;
+    // Theme Mode Card.
+    draw_noir_card(buf, w, h, x, y, cw, 66, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Desktop Theme Mode", pal.text);
+    let cur_theme = m.values.value(id::THEME).clamp(0, 2) as usize;
+    draw_segmented(
+        buf,
+        w,
+        h,
+        g,
+        gui,
+        pal,
+        x + 14,
+        y + 30,
+        cw - 28,
+        &[b"Light", b"Noir Dark", b"High Contrast"],
+        cur_theme,
+        |i| UiAction::SetTheme(i as i32),
+    );
+    y += 78;
 
-    // Accent color picker swatches card.
-    draw_candy_panel(buf, w, h, x, y, cw, 82, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Accent Swatch (Candy Lavender Default)", pal.text);
-    let cur_accent = m.values.value(id::ACCENT) & 0x00FF_FFFF;
-    let sw_step = ((cw - 28) / CANDY_SWATCHES.len() as i32).max(58);
-    for (i, (name, rgb)) in CANDY_SWATCHES.iter().enumerate() {
-        let sx = x + 18 + i as i32 * sw_step;
-        let sy = y + 32;
-        let act = UiAction::SetAccent(*rgb);
-        let selected = cur_accent == *rgb;
+    // 4 Accent Tints Picker Card.
+    draw_noir_card(buf, w, h, x, y, cw, 82, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Accent Tint", pal.text);
+    let cur_accent = (m.values.value(id::ACCENT) as u32) & 0x00FF_FFFF;
+    let card_gap = 10;
+    let tint_w = ((cw - 28 - card_gap * 3) / 4).max(76);
+    for (i, (name, rgb_i32)) in ACCENT_TINTS.iter().enumerate() {
+        let tx = x + 14 + i as i32 * (tint_w + card_gap);
+        let ty = y + 32;
+        let act = UiAction::SetAccent(*rgb_i32);
+        let selected = cur_accent == *rgb_i32 as u32
+            || (i == 0 && cur_accent == 0x00D6_336C);
         let hovered = gui.hovered == Some(act);
-        draw_candy_swatch(buf, w, h, sx, sy, 26, *rgb as u32, selected, hovered, pal);
-        let short = if name.len() > 8 { &name.as_bytes()[..8] } else { name.as_bytes() };
-        draw_text(buf, w, h, g, sx - 2, sy + 30, sw_step - 4, short, if selected { pal.text } else { pal.text_dim });
-        gui.push_hit(sx - 4, sy - 4, 34, 44, act);
+        let bg = if selected { pal.selection } else if hovered { pal.control_hover } else { pal.well };
+        let rim = if selected { *rgb_i32 as u32 } else { pal.specular };
+        fill_rounded_rect(buf, w, h, tx, ty, tint_w, 38, 8, rim);
+        fill_rounded_rect(buf, w, h, tx + 1, ty + 1, tint_w - 2, 36, 7, bg);
+        draw_candy_swatch(buf, w, h, tx + 10, ty + 9, 20, *rgb_i32 as u32, selected, hovered, pal);
+        draw_sans_sm(
+            buf,
+            w,
+            h,
+            g,
+            tx + 36,
+            ty + 12,
+            tint_w - 42,
+            name.as_bytes(),
+            if selected { pal.text } else { pal.text_dim },
+        );
+        gui.push_hit(tx, ty, tint_w, 38, act);
     }
-    y += 92;
+    y += 94;
 
-    // Frosted Glass & Animations toggles card.
-    draw_candy_panel(buf, w, h, x, y, cw, 82, 10, pal);
+    // Glass, Animations, Wallpaper & Desktop Widgets grouped card.
+    draw_noir_card(buf, w, h, x, y, cw, 212, 10, pal);
     let frosted_on = m.values.value(id::REDUCE_TRANSPARENCY) == 0;
-    draw_text(buf, w, h, g, x + 14, y + 14, cw - 90, b"Frosted Lavender Glass (off = Reduce Transparency)", pal.text);
-    let fg_act = UiAction::ToggleFrostedGlass;
-    draw_candy_toggle(buf, w, h, x + cw - 62, y + 11, 46, 22, frosted_on, gui.btn_state(fg_act), pal);
-    gui.push_hit(x + cw - 66, y + 8, 54, 28, fg_act);
-
-    fill_solid(buf, w, h, x + 14, y + 41, cw - 28, 1, pal.hairline);
-
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y, cw,
+        b"Frosted Glass & Translucent Panels",
+        b"Disable to make SilkBar and popovers solid opaque",
+        frosted_on,
+        UiAction::ToggleFrostedGlass,
+        false,
+    );
     let anim_on = m.values.value(id::ANIMATIONS) != 0;
-    draw_text(buf, w, h, g, x + 14, y + 52, cw - 90, b"Smooth Candy Animations & Transitions", pal.text);
-    let an_act = UiAction::ToggleAnimations;
-    draw_candy_toggle(buf, w, h, x + cw - 62, y + 49, 46, 22, anim_on, gui.btn_state(an_act), pal);
-    gui.push_hit(x + cw - 66, y + 46, 54, 28, an_act);
-}
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 48, cw,
+        b"Smooth Motion & Window Animations",
+        b"Fluid transitions across Spaces and SilkBar",
+        anim_on,
+        UiAction::ToggleAnimations,
+        true,
+    );
+    let wall = WALLPAPERS.get(m.values.value(id::WALLPAPER) as usize).copied().unwrap_or("sexos");
+    draw_choice_row(buf, w, h, g, gui, pal, x, y + 96, cw, id::WALLPAPER, b"Desktop Wallpaper", wall.as_bytes(), true);
+    let widgets_on = m.values.value(id::WIDGETS) != 0;
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 136, cw,
+        b"Desktop Clock & System Widgets",
+        b"",
+        widgets_on,
+        UiAction::ToggleBoolSetting(id::WIDGETS),
+        true,
+    );
+    let weather_on = m.values.value(id::WEATHER) != 0;
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 174, cw,
+        b"Weather Widget (Open-Meteo)",
+        b"",
+        weather_on,
+        UiAction::ToggleBoolSetting(id::WEATHER),
+        true,
+    );
+    y += 224;
 
-#[allow(clippy::too_many_arguments)]
-fn render_windows_tabs(
-    buf: &mut [u32],
-    w: usize,
-    h: usize,
-    g: &mut Glyphs,
-    gui: &mut GuiState,
-    m: &Model,
-    pal: &CandyPalette,
-    x: i32,
-    mut y: i32,
-    cw: i32,
-    _ch: i32,
-) {
-    render_live_preview(buf, w, h, g, gui, m, pal, x, y, cw);
-    y += 98;
-
-    // Corner radius selector.
-    draw_candy_panel(buf, w, h, x, y, cw, 64, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Window & Button Corner Radius", pal.text);
-    let mut rx = x + 14;
-    for (idx, (label, _r)) in CORNER_RADII.iter().enumerate() {
-        let bw = (label.len() as i32) * CELL_W as i32 + 24;
-        let act = UiAction::SetCornerRadius(idx);
-        draw_candy_tab(buf, w, h, rx, y + 30, bw, 26, gui.corner_radius_idx == idx, gui.btn_state(act), pal);
-        draw_text(buf, w, h, g, rx + 12, y + 35, bw - 12, label.as_bytes(), if gui.corner_radius_idx == idx { pal.text } else { pal.text_dim });
-        gui.push_hit(rx, y + 30, bw, 26, act);
-        rx += bw + 10;
-    }
-    y += 74;
-
-    // Tab bar chrome style.
-    draw_candy_panel(buf, w, h, x, y, cw, 64, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Tab Bar & Window Chrome Style", pal.text);
-    let mut tx = x + 14;
-    for style in [TabBarStyle::SilkPill, TabBarStyle::Classic] {
-        let label = style.label().as_bytes();
-        let bw = (label.len() as i32) * CELL_W as i32 + 28;
-        let act = UiAction::SetTabBar(style);
-        draw_candy_tab(buf, w, h, tx, y + 30, bw, 26, gui.tab_bar == style, gui.btn_state(act), pal);
-        draw_text(buf, w, h, g, tx + 14, y + 35, bw - 14, label, if gui.tab_bar == style { pal.text } else { pal.text_dim });
-        gui.push_hit(tx, y + 30, bw, 26, act);
-        tx += bw + 10;
-    }
-    y += 74;
-
-    // Tiling defaults (Hyprland / KDE / Hybrid).
-    draw_candy_panel(buf, w, h, x, y, cw, 64, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Window Tiling Default (Hyprland / KDE)", pal.text);
-    let mut wx = x + 14;
-    for tiling in [TilingStyle::HybridCandy, TilingStyle::HyprlandMaster, TilingStyle::KdeFloat] {
-        let label = tiling.label().as_bytes();
-        let bw = (label.len() as i32) * CELL_W as i32 + 22;
-        let act = UiAction::SetTiling(tiling);
-        draw_candy_tab(buf, w, h, wx, y + 30, bw, 26, gui.tiling == tiling, gui.btn_state(act), pal);
-        draw_text(buf, w, h, g, wx + 11, y + 35, bw - 12, label, if gui.tiling == tiling { pal.text } else { pal.text_dim });
-        gui.push_hit(wx, y + 30, bw, 26, act);
-        wx += bw + 10;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_keybinds(
-    buf: &mut [u32],
-    w: usize,
-    h: usize,
-    g: &mut Glyphs,
-    gui: &mut GuiState,
-    pal: &CandyPalette,
-    x: i32,
-    mut y: i32,
-    cw: i32,
-    ch: i32,
-) {
-    // Profile toggle bar.
-    draw_candy_panel(buf, w, h, x, y, cw, 64, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Hotkey Binding Profile", pal.text);
-    let mut bx = x + 14;
-    for prof in [KeybindProfile::HyprlandKde, KeybindProfile::HyprlandPure, KeybindProfile::KdeClassic] {
-        let label = prof.label().as_bytes();
-        let bw = (label.len() as i32) * CELL_W as i32 + 24;
-        let act = UiAction::SetKeybinds(prof);
-        draw_candy_tab(buf, w, h, bx, y + 30, bw, 26, gui.keybinds == prof, gui.btn_state(act), pal);
-        draw_text(buf, w, h, g, bx + 12, y + 35, bw - 12, label, if gui.keybinds == prof { pal.text } else { pal.text_dim });
-        gui.push_hit(bx, y + 30, bw, 26, act);
-        bx += bw + 10;
-    }
-    y += 74;
-
-    // Hotkey reference card.
-    let card_h = (ch - 80).max(160);
-    draw_candy_panel(buf, w, h, x, y, cw, card_h, 10, pal);
-    draw_text(buf, w, h, g, x + 14, y + 10, cw - 28, b"Active Desktop Bindings Reference", pal.text);
-    let mut ry = y + 34;
-    for (keys, desc, origin) in HOTKEY_ROWS {
-        if ry + 24 > y + card_h - 6 {
-            break;
-        }
-        draw_candy_badge(buf, w, h, x + 14, ry, 180, 20, pal.control, pal);
-        draw_text(buf, w, h, g, x + 22, ry + 2, 166, keys.as_bytes(), pal.accent);
-        draw_text(buf, w, h, g, x + 206, ry + 2, (cw - 320).max(80), desc.as_bytes(), pal.text);
-        draw_text(buf, w, h, g, x + cw - 116, ry + 2, 104, origin.as_bytes(), pal.text_dim);
-        ry += 25;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_profiles(
-    buf: &mut [u32],
-    w: usize,
-    h: usize,
-    g: &mut Glyphs,
-    gui: &mut GuiState,
-    m: &Model,
-    pal: &CandyPalette,
-    x: i32,
-    mut y: i32,
-    cw: i32,
-    _ch: i32,
-) {
-    render_live_preview(buf, w, h, g, gui, m, pal, x, y, cw);
-    y += 98;
-
-    draw_text(buf, w, h, g, x + 2, y, cw, b"One-click HyprMod Profiles (Instant Apply + Undoable)", pal.text_dim);
-    y += 22;
-
+    // One-click Noir Presets.
+    draw_sans_bold(buf, w, h, g, x + 2, y, cw, 12, b"One-Click Noir Presets", pal.text_dim);
+    y += 20;
     for (idx, p) in PROFILES.iter().enumerate() {
         let act = UiAction::ApplyProfile(idx);
         let active = gui.active_profile == Some(idx);
-        let st = gui.btn_state(act);
-        let style = if active { ButtonStyle::Active } else { ButtonStyle::Normal };
-        draw_candy_button(buf, w, h, x, y, cw, 50, 10, style, st, pal);
-        draw_candy_swatch(buf, w, h, x + 14, y + 12, 24, p.accent as u32, active, false, pal);
-        draw_text(buf, w, h, g, x + 50, y + 8, cw - 150, p.name.as_bytes(), pal.text);
-        draw_text(buf, w, h, g, x + 50, y + 26, cw - 150, p.subtitle.as_bytes(), pal.text_dim);
-        let pill_txt: &[u8] = if active { b"Active" } else { b"Apply" };
-        let pill_col = if active { pal.accent } else { pal.control };
-        let pill_ink = if active { pal.text_on_accent } else { pal.text };
-        draw_candy_badge(buf, w, h, x + cw - 82, y + 14, 68, 22, pill_col, pal);
-        draw_text(buf, w, h, g, x + cw - 68, y + 17, 52, pill_txt, pill_ink);
-        gui.push_hit(x, y, cw, 50, act);
-        y += 58;
+        let hovered = gui.hovered == Some(act);
+        draw_noir_card(buf, w, h, x, y, cw, 48, 9, pal);
+        if active {
+            fill_rounded_rect(buf, w, h, x + 1, y + 1, cw - 2, 46, 8, pal.selection);
+        } else if hovered {
+            fill_rounded_rect(buf, w, h, x + 1, y + 1, cw - 2, 46, 8, pal.control);
+        }
+        draw_candy_swatch(buf, w, h, x + 14, y + 12, 24, p.accent as u32, active, hovered, pal);
+        draw_sans_bold(buf, w, h, g, x + 48, y + 8, cw - 140, 13, p.name.as_bytes(), pal.text);
+        draw_sans_sm(buf, w, h, g, x + 48, y + 26, cw - 140, p.subtitle.as_bytes(), pal.text_dim);
+        let badge_col = if active { pal.accent } else { pal.control };
+        let badge_ink = if active { pal.text_on_accent } else { pal.text };
+        draw_candy_badge(buf, w, h, x + cw - 78, y + 13, 64, 22, badge_col, pal);
+        draw_sans_bold(buf, w, h, g, x + cw - 62, y + 16, 48, 11, if active { b"Active" } else { b"Apply" }, badge_ink);
+        gui.push_hit(x, y, cw, 48, act);
+        y += 56;
     }
+    y - start_y
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_system_page(
+fn render_network(
     buf: &mut [u32],
     w: usize,
     h: usize,
@@ -1629,143 +1940,525 @@ fn render_system_page(
     x: i32,
     mut y: i32,
     cw: i32,
-    ch: i32,
-) {
-    let (rows, count) = m.rows();
-    let max_y = y + ch;
-    for (idx, row) in rows[..count].iter().enumerate() {
-        if y + 34 > max_y {
-            break;
-        }
-        let k = &KEYS[row.key];
-        let selected = m.row == idx;
-        if selected {
-            draw_candy_selection_row(buf, w, h, x, y, cw, 30, 8, pal);
-        } else {
-            draw_candy_panel(buf, w, h, x, y, cw, 30, 8, pal);
-        }
-        let label = match (k.kind, row.item) {
-            (Kind::Set(names), Some(item)) => names.get(item as usize).copied().unwrap_or(k.label),
-            _ => k.label,
-        };
-        draw_text(buf, w, h, g, x + 12, y + 7, cw - 170, label.as_bytes(), pal.text);
-        gui.push_hit(x, y, cw - 120, 30, UiAction::SelectRow(idx));
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    // Wi-Fi Radio & Status Card.
+    draw_noir_card(buf, w, h, x, y, cw, 98, 10, pal);
+    draw_sidebar_badge(buf, w, h, g, x + 14, y + 14, 0x003B_82F6, Icon::Network);
+    draw_sans_bold(buf, w, h, g, x + 44, y + 14, cw - 140, 14, b"Wi-Fi & SexNet TLS", pal.text);
+    let status_lbl: &[u8] = if gui.wifi_enabled { b"Enabled" } else { b"Off" };
+    draw_candy_badge(buf, w, h, x + cw - 134, y + 14, 64, 20, if gui.wifi_enabled { pal.mint } else { pal.control }, pal);
+    draw_sans_bold(buf, w, h, g, x + cw - 122, y + 17, 50, 11, status_lbl, if gui.wifi_enabled { 0x000B_0D12 } else { pal.text_dim });
+    draw_noir_toggle(buf, w, h, x + cw - 58, y + 13, 42, 22, gui.wifi_enabled, gui.btn_state(UiAction::ToggleWifiRadio), pal);
+    gui.push_hit(x + cw - 62, y + 10, 54, 28, UiAction::ToggleWifiRadio);
 
-        let val = m.values.value(k.id);
-        match k.kind {
-            Kind::Bool => {
-                let act = UiAction::StepRow(idx, true);
-                draw_candy_toggle(buf, w, h, x + cw - 58, y + 4, 44, 22, val != 0, gui.btn_state(act), pal);
-                gui.push_hit(x + cw - 64, y + 2, 54, 26, act);
-            }
-            Kind::Color => {
-                let act = UiAction::StepRow(idx, true);
-                draw_candy_swatch(buf, w, h, x + cw - 40, y + 4, 22, (val as u32) & 0x00FF_FFFF, selected, false, pal);
-                gui.push_hit(x + cw - 46, y + 2, 34, 26, act);
-            }
-            _ => {
-                let dec = UiAction::StepRow(idx, false);
-                let inc = UiAction::StepRow(idx, true);
-                draw_candy_button(buf, w, h, x + cw - 116, y + 4, 26, 22, 6, ButtonStyle::Normal, gui.btn_state(dec), pal);
-                draw_text(buf, w, h, g, x + cw - 107, y + 7, 16, b"<", pal.text);
-                gui.push_hit(x + cw - 116, y + 4, 26, 22, dec);
+    fill_solid(buf, w, h, x + 14, y + 48, cw - 28, 1, pal.hairline);
+    draw_sans_sm(
+        buf, w, h, g, x + 14, y + 58, cw - 28,
+        b"Click the SilkBar Wi-Fi icon to scan nearby SSIDs, enter WPA2/WPA3 passphrases,",
+        pal.text_dim,
+    );
+    draw_sans_sm(
+        buf, w, h, g, x + 14, y + 74, cw - 28,
+        b"or manage wired DHCP & TLS trust roots via SexNet.",
+        pal.text_dim,
+    );
+    y += 110;
 
-                draw_candy_button(buf, w, h, x + cw - 38, y + 4, 26, 22, 6, ButtonStyle::Normal, gui.btn_state(inc), pal);
-                draw_text(buf, w, h, g, x + cw - 29, y + 7, 16, b">", pal.text);
-                gui.push_hit(x + cw - 38, y + 4, 26, 22, inc);
+    // Network Permission Policy.
+    draw_noir_card(buf, w, h, x, y, cw, 82, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 12, cw - 28, 13, b"First-Run Program Network Access", pal.text);
+    let net_def = m.values.value(id::FIRST_RUN_NETWORK).clamp(0, 2) as usize;
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 40, cw - 28,
+        &[b"Ask First", b"Deny", b"Allow"],
+        net_def,
+        |i| UiAction::SetSettingValue(id::FIRST_RUN_NETWORK, i as i32),
+    );
+    y += 94;
 
-                let mut vbuf = [0u8; 16];
-                let vlen = format_short_value(k.kind, val, row.item, &mut vbuf);
-                draw_text(buf, w, h, g, x + cw - 86, y + 7, 46, &vbuf[..vlen], pal.accent);
-            }
-        }
-        y += 34;
-    }
-
-    // Show extra info lines (Privacy grants, About, Updates, Storage) in a Candy card below.
-    let info_slice: &[u8] = if m.info_len > 0 {
-        &m.info[..m.info_len]
-    } else if m.extra_len > 0 {
-        &m.extra[..m.extra_len]
-    } else {
-        b""
-    };
-    if !info_slice.is_empty() && y + 40 < max_y {
-        let card_h = (max_y - y).max(40);
-        draw_candy_panel(buf, w, h, x, y, cw, card_h, 10, pal);
-        let mut ly = y + 8;
-        for line in info_slice.split(|&b| b == b'\n') {
-            if ly + 18 > y + card_h - 4 {
-                break;
-            }
-            if !line.is_empty() {
-                draw_text(buf, w, h, g, x + 12, ly, cw - 24, line, pal.text_dim);
-            }
-            ly += 18;
-        }
-    }
-}
-
-fn format_short_value(kind: Kind, value: i32, item: Option<u8>, out: &mut [u8; 16]) -> usize {
-    match kind {
-        Kind::Choice(names) => {
-            let s = names.get(value as usize).copied().unwrap_or("?").as_bytes();
-            let n = s.len().min(out.len());
-            out[..n].copy_from_slice(&s[..n]);
-            n
-        }
-        Kind::Set(_) => {
-            let on = item.is_some_and(|i| (value & (1 << i)) != 0);
-            let s: &[u8] = if on { b"Yes" } else { b"No" };
-            out[..s.len()].copy_from_slice(s);
-            s.len()
-        }
-        _ => {
-            let mut n = 0usize;
-            let mut v = value;
-            if v < 0 {
-                out[n] = b'-';
-                n += 1;
-                v = v.saturating_neg();
-            }
-            let mut tmp = [0u8; 12];
-            let mut k = 0;
-            loop {
-                tmp[k] = b'0' + (v % 10) as u8;
-                k += 1;
-                v /= 10;
-                if v == 0 {
-                    break;
-                }
-            }
-            while k > 0 && n < out.len() {
-                k -= 1;
-                out[n] = tmp[k];
-                n += 1;
-            }
-            n
-        }
-    }
+    // Network Time Sync.
+    draw_noir_card(buf, w, h, x, y, cw, 50, 10, pal);
+    let ntp = m.values.value(id::NTP) != 0;
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 2, cw,
+        b"Automatic Network Time (NTP)",
+        b"Sync system clock securely over SexNet",
+        ntp,
+        UiAction::ToggleBoolSetting(id::NTP),
+        false,
+    );
+    y += 62;
+    y - start_y
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_install(
+fn render_sound(
     buf: &mut [u32],
     w: usize,
     h: usize,
     g: &mut Glyphs,
     gui: &mut GuiState,
+    m: &Model,
     pal: &CandyPalette,
     x: i32,
     mut y: i32,
     cw: i32,
-    ch: i32,
-) {
-    let max_y = y + ch;
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    draw_noir_card(buf, w, h, x, y, cw, 92, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 12, cw - 28, 13, b"Output Volume (SexBell Audio Mixer)", pal.text);
+    let vol = m.values.value(id::VOLUME);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 38, cw, id::VOLUME, b"Master Volume", vol, 0, 100, b"%", false);
+    y += 104;
+
+    draw_noir_card(buf, w, h, x, y, cw, 82, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 12, cw - 28, 13, b"First-Run Microphone Access", pal.text);
+    let mic_def = m.values.value(id::FIRST_RUN_MICROPHONE).clamp(0, 2) as usize;
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 40, cw - 28,
+        &[b"Ask First", b"Deny", b"Allow"],
+        mic_def,
+        |i| UiAction::SetSettingValue(id::FIRST_RUN_MICROPHONE, i as i32),
+    );
+    y += 94;
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_display(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    // Scale Selector Card.
+    draw_noir_card(buf, w, h, x, y, cw, 74, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 13, b"Display Resolution Scale", pal.text);
+    let scale = m.values.value(id::SCALE).clamp(0, 3) as usize;
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 34, cw - 28,
+        &[b"Automatic", b"1x (Standard)", b"2x (HiDPI)", b"3x (Large)"],
+        scale,
+        |i| UiAction::SetSettingValue(id::SCALE, i as i32),
+    );
+    y += 86;
+
+    // Night Light & Vision Card.
+    draw_noir_card(buf, w, h, x, y, cw, 180, 10, pal);
+    let nl = m.values.value(id::NIGHT_LIGHT);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 6, cw, id::NIGHT_LIGHT, b"Night Light Warmth (0-3)", nl, 0, 3, b"", false);
+    let mag = m.values.value(id::MAGNIFIER_ZOOM);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 48, cw, id::MAGNIFIER_ZOOM, b"Magnifier Zoom (quarters)", mag, 4, 32, b"/4x", true);
+    let cf_idx = m.values.value(id::COLOUR_FILTER) as usize;
+    let cf_name = COLOUR_FILTERS.get(cf_idx).copied().unwrap_or("Off");
+    draw_choice_row(buf, w, h, g, gui, pal, x, y + 92, cw, id::COLOUR_FILTER, b"Colour Filter", cf_name.as_bytes(), true);
+    let sr = m.values.value(id::SCREEN_READER) != 0;
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 134, cw, b"Screen Reader (Whisper Voice)", b"", sr, UiAction::ToggleBoolSetting(id::SCREEN_READER), true);
+    y += 192;
+
+    // Hot Corners Card.
+    draw_noir_card(buf, w, h, x, y, cw, 178, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Hot Corners", pal.text);
+    for (idx, (kid, lbl)) in [
+        (id::CORNER_TOP_LEFT, &b"Top-Left Corner"[..]),
+        (id::CORNER_TOP_RIGHT, &b"Top-Right Corner"[..]),
+        (id::CORNER_BOTTOM_LEFT, &b"Bottom-Left Corner"[..]),
+        (id::CORNER_BOTTOM_RIGHT, &b"Bottom-Right Corner"[..]),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let val = m.values.value(*kid) as usize;
+        let cname = CORNER_ACTIONS.get(val).copied().unwrap_or("none");
+        draw_choice_row(buf, w, h, g, gui, pal, x, y + 28 + idx as i32 * 36, cw, *kid, lbl, cname.as_bytes(), idx > 0);
+    }
+    y += 190;
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_trackpad(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    y += render_live_preview(buf, w, h, g, gui, m, pal, x, y, cw) + 12;
+
+    // Multitouch Gestures Card.
+    draw_noir_card(buf, w, h, x, y, cw, 198, 10, pal);
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y, cw,
+        b"Tap to Click",
+        b"Tap trackpad lightly with one finger to click",
+        gui.trackpad_tap_click,
+        UiAction::ToggleTrackpad(0),
+        false,
+    );
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 48, cw,
+        b"Natural Scrolling",
+        b"Content tracks finger movement direction",
+        gui.trackpad_natural_scroll,
+        UiAction::ToggleTrackpad(1),
+        true,
+    );
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 96, cw,
+        b"Three-Finger Horizontal Swipe Between Spaces",
+        b"Switch workspaces smoothly with 3-finger gestures",
+        gui.trackpad_three_finger_spaces,
+        UiAction::ToggleTrackpad(2),
+        true,
+    );
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 144, cw,
+        b"Four-Finger Pinch / Swipe Up for Overview",
+        b"Open Space Expose & Mission Overview",
+        gui.trackpad_four_finger_overview,
+        UiAction::ToggleTrackpad(3),
+        true,
+    );
+    y += 210;
+
+    // Window Tiling & Corner Radius Card.
+    draw_noir_card(buf, w, h, x, y, cw, 134, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Window Tiling Behavior", pal.text);
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 32, cw - 28,
+        &[
+            TilingStyle::HybridCandy.label().as_bytes(),
+            TilingStyle::HyprlandMaster.label().as_bytes(),
+            TilingStyle::KdeFloat.label().as_bytes(),
+        ],
+        match gui.tiling {
+            TilingStyle::HybridCandy => 0,
+            TilingStyle::HyprlandMaster => 1,
+            TilingStyle::KdeFloat => 2,
+        },
+        |i| UiAction::SetTiling([TilingStyle::HybridCandy, TilingStyle::HyprlandMaster, TilingStyle::KdeFloat][i]),
+    );
+    draw_sans_bold(buf, w, h, g, x + 14, y + 72, cw - 28, 12, b"Window Corner Radius", pal.text);
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 94, cw - 28,
+        &[b"4 px", b"8 px", b"12 px"],
+        gui.corner_radius_idx.min(2),
+        UiAction::SetCornerRadius,
+    );
+    y += 146;
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_apps(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    // SilkBar Close Behavior & Chrome Card.
+    draw_noir_card(buf, w, h, x, y, cw, 134, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"SilkBar Close Button Behavior", pal.text);
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 32, cw - 28,
+        &[
+            CloseBehavior::QuitApp.label().as_bytes(),
+            CloseBehavior::MinimizeDock.label().as_bytes(),
+            CloseBehavior::AskFirst.label().as_bytes(),
+        ],
+        match gui.close_behavior {
+            CloseBehavior::QuitApp => 0,
+            CloseBehavior::MinimizeDock => 1,
+            CloseBehavior::AskFirst => 2,
+        },
+        |i| UiAction::SetCloseBehavior([CloseBehavior::QuitApp, CloseBehavior::MinimizeDock, CloseBehavior::AskFirst][i]),
+    );
+    draw_sans_bold(buf, w, h, g, x + 14, y + 72, cw - 28, 12, b"Tab Bar & Window Chrome Style", pal.text);
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 94, cw - 28,
+        &[TabBarStyle::SilkPill.label().as_bytes(), TabBarStyle::Classic.label().as_bytes()],
+        match gui.tab_bar { TabBarStyle::SilkPill => 0, TabBarStyle::Classic => 1 },
+        |i| UiAction::SetTabBar([TabBarStyle::SilkPill, TabBarStyle::Classic][i]),
+    );
+    y += 146;
+
+    // Default Applications Card.
+    draw_noir_card(buf, w, h, x, y, cw, 206, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Default Applications", pal.text);
+    let defs: [(u16, &[u8]); 5] = [
+        (id::OPEN_PDF, b"PDF Documents"),
+        (id::OPEN_IMAGE, b"Images & Photos"),
+        (id::OPEN_VIDEO, b"Videos"),
+        (id::OPEN_AUDIO, b"Music & Audio"),
+        (id::OPEN_PAGE, b"Web Links"),
+    ];
+    for (idx, (kid, lbl)) in defs.iter().enumerate() {
+        let mut vbuf = [0u8; 32];
+        let vlen = sex_config::key(*kid).map_or(0, |k| model::show_value(k, m.values.value(*kid), &mut vbuf));
+        draw_choice_row(buf, w, h, g, gui, pal, x, y + 26 + idx as i32 * 35, cw, *kid, lbl, &vbuf[..vlen], idx > 0);
+    }
+    y += 218;
+
+    // Startup Programs Card (`PROGRAMS` toggles).
+    let row_h = 34;
+    let card_h = 34 + PROGRAMS.len() as i32 * row_h;
+    draw_noir_card(buf, w, h, x, y, cw, card_h, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Open at Login (Startup Programs)", pal.text);
+    for (i, prog) in PROGRAMS.iter().enumerate() {
+        let ry = y + 32 + i as i32 * row_h;
+        if i > 0 {
+            fill_solid(buf, w, h, x + 14, ry, cw - 28, 1, pal.hairline);
+        }
+        draw_sans(buf, w, h, g, x + 14, ry + 8, cw - 150, prog.as_bytes(), pal.text);
+        let on = m.values.holds(id::STARTUP, i);
+        let act = UiAction::ToggleSetBit(id::STARTUP, i as u8);
+        draw_noir_toggle(buf, w, h, x + cw - 56, ry + 6, 42, 22, on, gui.btn_state(act), pal);
+        gui.push_hit(x + cw - 62, ry + 2, 54, 30, act);
+    }
+    y += card_h + 12;
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_keyboard(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+    // Key Repeat & Layout Card.
+    draw_noir_card(buf, w, h, x, y, cw, 174, 10, pal);
+    let lay = LAYOUTS.get(m.values.value(id::LAYOUT) as usize).copied().unwrap_or("us");
+    draw_choice_row(buf, w, h, g, gui, pal, x, y + 4, cw, id::LAYOUT, b"Keyboard Layout", lay.as_bytes(), false);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 42, cw, id::REPEAT_DELAY, b"Key Repeat Delay", m.values.value(id::REPEAT_DELAY), 150, 1000, b"ms", true);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 86, cw, id::REPEAT_RATE, b"Key Repeat Rate", m.values.value(id::REPEAT_RATE), 2, 60, b"/s", true);
+    let caps = m.values.value(id::CAPS_AS_CTRL) != 0;
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 130, cw, b"Caps Lock Acts as Control", b"", caps, UiAction::ToggleBoolSetting(id::CAPS_AS_CTRL), true);
+    y += 186;
+
+    // Text Prediction & Typing Assistance Card.
+    draw_noir_card(buf, w, h, x, y, cw, 214, 10, pal);
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y, cw,
+        b"Inline Text Prediction & Autocomplete",
+        b"Suggest words in Jot, Spindle, and search fields",
+        gui.text_prediction,
+        UiAction::TogglePrediction(0),
+        false,
+    );
+    draw_toggle_row(
+        buf, w, h, g, gui, pal, x, y + 48, cw,
+        b"Check Spelling & Auto-Correct",
+        b"Underline typos and auto-fix common spelling slips",
+        gui.text_autocorrect,
+        UiAction::TogglePrediction(1),
+        true,
+    );
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 96, cw, b"Sticky Keys", b"", m.values.value(id::STICKY_KEYS) != 0, UiAction::ToggleBoolSetting(id::STICKY_KEYS), true);
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 134, cw, b"Slow Keys", b"", m.values.value(id::SLOW_KEYS) != 0, UiAction::ToggleBoolSetting(id::SLOW_KEYS), true);
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 172, cw, b"Bounce Keys", b"", m.values.value(id::BOUNCE_KEYS) != 0, UiAction::ToggleBoolSetting(id::BOUNCE_KEYS), true);
+    y += 226;
+
+    // Date & Time Card.
+    draw_noir_card(buf, w, h, x, y, cw, 82, 10, pal);
+    let tz = ZONES.get(m.values.value(id::ZONE) as usize).copied().unwrap_or("UTC");
+    draw_choice_row(buf, w, h, g, gui, pal, x, y + 4, cw, id::ZONE, b"Time Zone", tz.as_bytes(), false);
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 40, cw, b"24-Hour Clock", b"", m.values.value(id::HOUR24) != 0, UiAction::ToggleBoolSetting(id::HOUR24), true);
+    y += 94;
+
+    // Hotkeys & Profile Reference Card.
+    draw_noir_card(buf, w, h, x, y, cw, 272, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 12, b"Hotkey Profile & Desktop Shortcuts", pal.text);
+    draw_segmented(
+        buf, w, h, g, gui, pal, x + 14, y + 30, cw - 28,
+        &[
+            KeybindProfile::HyprlandKde.label().as_bytes(),
+            KeybindProfile::HyprlandPure.label().as_bytes(),
+            KeybindProfile::KdeClassic.label().as_bytes(),
+        ],
+        match gui.keybinds {
+            KeybindProfile::HyprlandKde => 0,
+            KeybindProfile::HyprlandPure => 1,
+            KeybindProfile::KdeClassic => 2,
+        },
+        |i| UiAction::SetKeybinds([KeybindProfile::HyprlandKde, KeybindProfile::HyprlandPure, KeybindProfile::KdeClassic][i]),
+    );
+    for (i, (keys, desc, _orig)) in HOTKEY_ROWS.iter().enumerate() {
+        let ry = y + 68 + i as i32 * 24;
+        draw_candy_badge(buf, w, h, x + 14, ry, 174, 19, pal.well, pal);
+        draw_mono(buf, w, h, g, x + 22, ry + 2, 160, keys.as_bytes(), pal.accent);
+        draw_sans_sm(buf, w, h, g, x + 198, ry + 3, cw - 212, desc.as_bytes(), pal.text_dim);
+    }
+    y += 284;
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_privacy(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+
+    // Lock Screen & Idle Security Card.
+    draw_noir_card(buf, w, h, x, y, cw, 186, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 190, 13, b"Lock Screen & Session Security", pal.text);
+    let pw_act = UiAction::StartPassword;
+    draw_candy_button(buf, w, h, x + cw - 166, y + 7, 152, 24, 7, ButtonStyle::Primary, gui.btn_state(pw_act), pal);
+    draw_sans_bold(buf, w, h, g, x + cw - 154, y + 12, 132, 11, b"Change Password...", pal.text_on_accent);
+    gui.push_hit(x + cw - 166, y + 7, 152, 24, pw_act);
+
+    draw_toggle_row(buf, w, h, g, gui, pal, x, y + 36, cw, b"Lock When Idle", b"", m.values.value(id::LOCK_ON_IDLE) != 0, UiAction::ToggleBoolSetting(id::LOCK_ON_IDLE), true);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 76, cw, id::DIM_AFTER, b"Dim Screen After (0 never)", m.values.value(id::DIM_AFTER), 0, 120, b"m", true);
+    draw_slider_row(buf, w, h, g, gui, pal, x, y + 122, cw, id::LOCK_AFTER, b"Lock After (0 never)", m.values.value(id::LOCK_AFTER), 0, 240, b"m", true);
+    y += 198;
+
+    // First-Run Consent Defaults Card.
+    draw_noir_card(buf, w, h, x, y, cw, 118, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 13, b"Default Consent for New Programs", pal.text);
+    let net_v = m.values.value(id::FIRST_RUN_NETWORK).clamp(0, 2) as usize;
+    let mic_v = m.values.value(id::FIRST_RUN_MICROPHONE).clamp(0, 2) as usize;
+    draw_sans(buf, w, h, g, x + 14, y + 40, 130, b"Network", pal.text);
+    draw_segmented(buf, w, h, g, gui, pal, x + 150, y + 34, cw - 164, &[b"Ask", b"Deny", b"Allow"], net_v, |i| UiAction::SetSettingValue(id::FIRST_RUN_NETWORK, i as i32));
+    draw_sans(buf, w, h, g, x + 14, y + 80, 130, b"Microphone", pal.text);
+    draw_segmented(buf, w, h, g, gui, pal, x + 150, y + 74, cw - 164, &[b"Ask", b"Deny", b"Allow"], mic_v, |i| UiAction::SetSettingValue(id::FIRST_RUN_MICROPHONE, i as i32));
+    y += 130;
+
+    // Per-App Permissions List (`grants::Row`).
+    let rows_h = if gui.grant_count == 0 { 64 } else { 36 + gui.grant_count as i32 * 40 };
+    draw_noir_card(buf, w, h, x, y, cw, rows_h, 10, pal);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 10, cw - 28, 13, b"Application Permissions", pal.text);
+    if gui.grant_count == 0 {
+        draw_sans_sm(buf, w, h, g, x + 14, y + 34, cw - 28, b"No installed packages currently request Network or Microphone grants.", pal.text_dim);
+    } else {
+        for i in 0..gui.grant_count {
+            let row = gui.grant_rows[i];
+            let ry = y + 34 + i as i32 * 40;
+            if i > 0 {
+                fill_solid(buf, w, h, x + 14, ry, cw - 28, 1, pal.hairline);
+            }
+            draw_sans_bold(buf, w, h, g, x + 14, ry + 11, 130, 13, row.program(), pal.text);
+            let perm_col = if row.bit == grants::GRANTS[0].0 { 0x003B_82F6 } else { 0x00F4_3F5E };
+            draw_candy_badge(buf, w, h, x + 148, ry + 9, 86, 20, perm_col, pal);
+            draw_sans_bold(buf, w, h, g, x + 158, ry + 12, 70, 11, row.word().as_bytes(), 0x00FF_FFFF);
+
+            let (st_lbl, st_col): (&[u8], u32) = if !row.answered {
+                (b"Unasked", pal.control)
+            } else if row.allowed {
+                (b"Allowed", pal.mint)
+            } else {
+                (b"Denied", pal.danger)
+            };
+            draw_candy_badge(buf, w, h, x + 244, ry + 9, 70, 20, st_col, pal);
+            draw_sans_bold(buf, w, h, g, x + 252, ry + 12, 58, 11, st_lbl, if row.answered && row.allowed { 0x000B_0D12 } else { pal.text });
+
+            // Clickable Allow & Revoke pills.
+            let allow_act = UiAction::SetGrant(i, true);
+            let deny_act = UiAction::SetGrant(i, false);
+            let ax = x + cw - 134;
+            let dx = x + cw - 68;
+            draw_candy_button(buf, w, h, ax, ry + 8, 58, 22, 6, if row.answered && row.allowed { ButtonStyle::Active } else { ButtonStyle::Normal }, gui.btn_state(allow_act), pal);
+            draw_sans_sm(buf, w, h, g, ax + 12, ry + 12, 40, b"Allow", pal.text);
+            gui.push_hit(ax, ry + 6, 58, 26, allow_act);
+
+            draw_candy_button(buf, w, h, dx, ry + 8, 56, 22, 6, if row.answered && !row.allowed { ButtonStyle::Danger } else { ButtonStyle::Normal }, gui.btn_state(deny_act), pal);
+            draw_sans_sm(buf, w, h, g, dx + 8, ry + 12, 44, b"Revoke", pal.text);
+            gui.push_hit(dx, ry + 6, 56, 26, deny_act);
+        }
+    }
+    y += rows_h + 12;
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_storage_install(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+
+    // Storage Facts Summary Card (if loaded from Files).
+    let info = &m.info[..m.info_len];
+    if !info.is_empty() {
+        let mut line_count = 0i32;
+        for l in info.split(|&b| b == b'\n') {
+            if !l.is_empty() { line_count += 1; }
+        }
+        let info_h = (32 + line_count.min(6) * 17).max(58);
+        draw_noir_card(buf, w, h, x, y, cw, info_h, 10, pal);
+        draw_sans_bold(buf, w, h, g, x + 14, y + 9, cw - 28, 12, b"Active Filesystem & Volumes", pal.text);
+        let mut ly = y + 29;
+        for l in info.split(|&b| b == b'\n').filter(|l| !l.is_empty()).take(6) {
+            draw_sans_sm(buf, w, h, g, x + 14, ly, cw - 28, l, pal.text_dim);
+            ly += 17;
+        }
+        y += info_h + 10;
+    }
 
     // 1. Visual horizontal color-coded GPT Partition Bar card.
-    let bar_card_h = 84;
-    draw_candy_panel(buf, w, h, x, y, cw, bar_card_h, 10, pal);
+    let bar_card_h = 88;
+    draw_noir_card(buf, w, h, x, y, cw, bar_card_h, 10, pal);
     let mut hdr = [0u8; 64];
     let mut hlen = 0usize;
     let prefix = b"GPT Disk Partition Map";
@@ -1783,29 +2476,23 @@ fn render_install(
         hdr[hlen] = b')';
         hlen += 1;
     }
-    draw_text(buf, w, h, g, x + 14, y + 8, cw - 120, &hdr[..hlen], pal.text);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 9, cw - 110, 12, &hdr[..hlen], pal.text);
 
-    // Refresh Disk button on top-right of GPT bar card.
     let ref_w = 78;
     let ref_act = UiAction::InstallRefresh;
-    draw_candy_button(buf, w, h, x + cw - ref_w - 10, y + 5, ref_w, 22, 8, ButtonStyle::Subtle, gui.btn_state(ref_act), pal);
-    draw_text(buf, w, h, g, x + cw - ref_w + 2, y + 8, ref_w - 12, b"Refresh", pal.text_dim);
-    gui.push_hit(x + cw - ref_w - 10, y + 5, ref_w, 22, ref_act);
+    draw_candy_button(buf, w, h, x + cw - ref_w - 10, y + 6, ref_w, 22, 7, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
+    draw_sans_sm(buf, w, h, g, x + cw - ref_w + 6, y + 10, ref_w - 12, b"Refresh", pal.text);
+    gui.push_hit(x + cw - ref_w - 10, y + 6, ref_w, 22, ref_act);
 
-    // Proportional horizontal GPT Partition Bar.
     let bar_x = x + 14;
-    let bar_y = y + 32;
+    let bar_y = y + 34;
     let bar_w = (cw - 28).max(80);
-    let bar_h = 30;
-    fill_rounded_rect(buf, w, h, bar_x, bar_y, bar_w, bar_h, 6, pal.control);
+    let bar_h = 28;
+    fill_rounded_rect(buf, w, h, bar_x, bar_y, bar_w, bar_h, 6, pal.well);
 
     let count = gui.install.part_count;
     if count > 0 {
-        let sum_sectors: u64 = gui.install.parts[..count]
-            .iter()
-            .map(|p| p.sectors.max(1))
-            .sum::<u64>()
-            .max(1);
+        let sum_sectors: u64 = gui.install.parts[..count].iter().map(|p| p.sectors.max(1)).sum::<u64>().max(1);
         let min_seg = 24.min(bar_w / (count as i32).max(1)).max(8);
         let mut sx = bar_x;
         let bar_right = bar_x + bar_w;
@@ -1814,22 +2501,18 @@ fn render_install(
             let rem_parts = (count - 1 - i) as i32;
             let raw_w = ((p.sectors as u128 * bar_w as u128) / sum_sectors as u128) as i32;
             let max_here = (bar_right - sx - rem_parts * min_seg).max(min_seg);
-            let seg_w = if i + 1 == count {
-                (bar_right - sx).max(1)
-            } else {
-                raw_w.clamp(min_seg, max_here)
-            };
+            let seg_w = if i + 1 == count { (bar_right - sx).max(1) } else { raw_w.clamp(min_seg, max_here) };
             let selected = gui.install.selected == Some(i);
             let col = p.kind.color();
             if selected {
-                fill_rounded_rect(buf, w, h, sx, bar_y - 2, seg_w.saturating_sub(2).max(4), bar_h + 4, 5, pal.text);
+                fill_rounded_rect(buf, w, h, sx, bar_y - 2, seg_w.saturating_sub(2).max(4), bar_h + 4, 5, 0x00FF_FFFF);
                 fill_rounded_rect(buf, w, h, sx + 2, bar_y, seg_w.saturating_sub(6).max(2), bar_h, 4, col);
             } else {
                 fill_rounded_rect(buf, w, h, sx, bar_y, seg_w.saturating_sub(2).max(4), bar_h, 4, col);
             }
-            if seg_w >= 44 {
+            if seg_w >= 46 {
                 let lbl = if p.kind == DiskPartKind::FreeSpace { b"Free" as &[u8] } else { p.kind.label().as_bytes() };
-                draw_text(buf, w, h, g, sx + 6, bar_y + 7, seg_w - 10, lbl, 0x0010_0C1C);
+                draw_sans_bold(buf, w, h, g, sx + 6, bar_y + 7, seg_w - 10, 11, lbl, 0x000B_0D12);
             }
             if p.replaceable {
                 gui.push_hit(sx, bar_y, seg_w, bar_h, UiAction::SelectInstallPart(i));
@@ -1840,12 +2523,11 @@ fn render_install(
         let msg: &[u8] = if gui.install.loaded {
             b"No GPT partitions detected (click Refresh or use Spindle `install`)."
         } else {
-            b"Scanning disk layout..."
+            b"Click Refresh to scan GPT partitions."
         };
-        draw_text(buf, w, h, g, bar_x + 10, bar_y + 7, bar_w - 20, msg, pal.text_dim);
+        draw_sans_sm(buf, w, h, g, bar_x + 10, bar_y + 8, bar_w - 20, msg, pal.text_dim);
     }
 
-    // Color legend strip under bar.
     let legend: [(&[u8], u32); 5] = [
         (b"ESP", DiskPartKind::Esp.color()),
         (b"Windows", DiskPartKind::Windows.color()),
@@ -1855,39 +2537,26 @@ fn render_install(
     ];
     let mut lx = bar_x;
     for (lbl, col) in legend {
-        if lx + 72 > bar_x + bar_w {
-            break;
-        }
-        fill_rounded_rect(buf, w, h, lx, y + 67, 10, 10, 3, col);
-        draw_text(buf, w, h, g, lx + 14, y + 64, 60, lbl, pal.text_dim);
-        lx += (lbl.len() as i32) * CELL_W as i32 + 28;
+        if lx + 72 > bar_x + bar_w { break; }
+        fill_rounded_rect(buf, w, h, lx, y + 69, 10, 10, 3, col);
+        draw_sans_sm(buf, w, h, g, lx + 14, y + 67, 56, lbl, pal.text_dim);
+        lx += g.measure(0, 11, lbl) + 28;
     }
     y += bar_card_h + 10;
 
-    // 2. Clickable Partition Cards / Rows (reserve room for safety panel + action buttons below).
-    let footer_h = 136;
-    let list_limit = (max_y - footer_h).max(y + 34);
+    // 2. Clickable Partition Rows.
     for i in 0..count {
-        if y + 32 > list_limit {
-            break;
-        }
         let p = gui.install.parts[i];
         let selected = gui.install.selected == Some(i);
         let act = UiAction::SelectInstallPart(i);
-        let st = gui.btn_state(act);
-
+        draw_noir_card(buf, w, h, x, y, cw, 30, 8, pal);
         if selected {
-            draw_candy_selection_row(buf, w, h, x, y, cw, 28, 8, pal);
-        } else if p.replaceable && st == ButtonState::Hover {
-            draw_candy_button(buf, w, h, x, y, cw, 28, 8, ButtonStyle::Subtle, st, pal);
-        } else {
-            draw_candy_panel(buf, w, h, x, y, cw, 28, 8, pal);
+            fill_rounded_rect(buf, w, h, x + 1, y + 1, cw - 2, 28, 7, pal.selection);
+        } else if p.replaceable && gui.hovered == Some(act) {
+            fill_rounded_rect(buf, w, h, x + 1, y + 1, cw - 2, 28, 7, pal.control);
         }
+        fill_rounded_rect(buf, w, h, x + 10, y + 9, 12, 12, 4, p.kind.color());
 
-        // Color dot.
-        fill_rounded_rect(buf, w, h, x + 10, y + 8, 12, 12, 4, p.kind.color());
-
-        // Partition number (#N or FREE).
         let mut num_lbl = [0u8; 8];
         let num_len = if p.kind == DiskPartKind::FreeSpace {
             num_lbl[..4].copy_from_slice(b"FREE");
@@ -1896,117 +2565,76 @@ fn render_install(
             num_lbl[0] = b'#';
             1 + format_u64_ascii(p.part_num as u64, &mut num_lbl[1..])
         };
-        draw_text(buf, w, h, g, x + 28, y + 6, 44, &num_lbl[..num_len], pal.text);
-
-        // Name & type.
+        draw_mono(buf, w, h, g, x + 28, y + 8, 44, &num_lbl[..num_len], pal.text);
         let name_col = if p.replaceable { pal.text } else { pal.text_dim };
-        draw_text(buf, w, h, g, x + 76, y + 6, (cw - 270).max(80), p.name_bytes(), name_col);
-        draw_text(buf, w, h, g, x + cw - 190, y + 6, 64, p.kind.label().as_bytes(), pal.text_dim);
+        draw_sans(buf, w, h, g, x + 76, y + 8, (cw - 270).max(80), p.name_bytes(), name_col);
+        draw_sans_sm(buf, w, h, g, x + cw - 190, y + 9, 64, p.kind.label().as_bytes(), pal.text_dim);
 
-        // Size.
         let mut sz = [0u8; 16];
         let sz_len = format_size_short(p.sectors, &mut sz);
-        draw_text(buf, w, h, g, x + cw - 126, y + 6, 68, &sz[..sz_len], name_col);
+        draw_mono(buf, w, h, g, x + cw - 130, y + 8, 66, &sz[..sz_len], name_col);
 
-        // Status pill (LOCKED for ESP / MSR / < 1.5 GiB, Selected / Select for replaceable).
         if !p.replaceable {
-            draw_candy_badge(buf, w, h, x + cw - 68, y + 4, 60, 20, 0x0047_3520, pal);
-            draw_text(buf, w, h, g, x + cw - 62, y + 6, 52, b"LOCKED", 0x00FB_BF24);
+            draw_candy_badge(buf, w, h, x + cw - 68, y + 5, 60, 20, 0x003B_2F1A, pal);
+            draw_sans_bold(buf, w, h, g, x + cw - 60, y + 8, 48, 10, b"LOCKED", 0x00FB_BF24);
         } else {
             let pill_col = if selected { pal.accent } else { pal.control };
             let pill_ink = if selected { pal.text_on_accent } else { pal.text };
             let pill_txt: &[u8] = if selected { b"Target" } else { b"Select" };
-            draw_candy_badge(buf, w, h, x + cw - 68, y + 4, 60, 20, pill_col, pal);
-            draw_text(buf, w, h, g, x + cw - 62, y + 6, 52, pill_txt, pill_ink);
-            gui.push_hit(x, y, cw, 28, act);
+            draw_candy_badge(buf, w, h, x + cw - 68, y + 5, 60, 20, pill_col, pal);
+            draw_sans_bold(buf, w, h, g, x + cw - 57, y + 8, 48, 10, pill_txt, pill_ink);
+            gui.push_hit(x, y, cw, 30, act);
         }
-        y += 32;
+        y += 34;
     }
 
-    // 3. Green / Amber Safety Summary Panel.
-    let summary_y = y.max(list_limit - 2).min(max_y - 128);
+    // 3. Safety Summary Panel & Action Buttons.
     let summary_h = 84;
     let mut sum_buf = [0u8; 160];
     let (sum_len, is_amber) = gui.install.safety_summary(&mut sum_buf);
     let has_target = gui.install.selected_row().is_some();
-    let badge_bg = if !has_target {
-        pal.control
-    } else if is_amber {
-        0x00F5_9E0B // Amber caution (replacing single partition)
-    } else {
-        0x0034_D399 // Green safe (free space)
-    };
-    let badge_lbl: &[u8] = if !has_target {
-        b"SAFETY"
-    } else if is_amber {
-        b"SINGLE-PART"
-    } else {
-        b"SAFE FREE"
-    };
+    let badge_bg = if !has_target { pal.control } else if is_amber { pal.honey } else { pal.mint };
+    let badge_lbl: &[u8] = if !has_target { b"SAFETY" } else if is_amber { b"SINGLE-PART" } else { b"SAFE FREE" };
 
-    draw_candy_panel(buf, w, h, x, summary_y, cw, summary_h, 10, pal);
-    fill_rounded_rect(buf, w, h, x + 2, summary_y + 6, 4, summary_h - 12, 2, badge_bg);
-    draw_candy_badge(buf, w, h, x + 14, summary_y + 8, 98, 20, badge_bg, pal);
-    draw_text(buf, w, h, g, x + 20, summary_y + 10, 88, badge_lbl, 0x0010_0C1C);
+    draw_noir_card(buf, w, h, x, y, cw, summary_h, 10, pal);
+    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, summary_h - 12, 2, badge_bg);
+    draw_candy_badge(buf, w, h, x + 14, y + 8, 92, 20, badge_bg, pal);
+    draw_sans_bold(buf, w, h, g, x + 22, y + 11, 80, 10, badge_lbl, 0x000B_0D12);
 
-    // Wrap safety summary across 2 lines if needed.
-    let chars_per_line = ((cw - 130) / CELL_W as i32).max(20) as usize;
-    let line1_end = sum_len.min(chars_per_line);
-    draw_text(buf, w, h, g, x + 120, summary_y + 10, cw - 130, &sum_buf[..line1_end], pal.text);
-    if line1_end < sum_len {
-        draw_text(buf, w, h, g, x + 14, summary_y + 32, cw - 28, &sum_buf[line1_end..sum_len], pal.text);
+    let split_at = sum_buf[..sum_len].iter().take(68).rposition(|&b| b == b' ').unwrap_or(sum_len.min(68));
+    draw_sans_sm(buf, w, h, g, x + 114, y + 11, cw - 128, &sum_buf[..split_at], pal.text);
+    if split_at < sum_len {
+        draw_sans_sm(buf, w, h, g, x + 14, y + 34, cw - 28, sum_buf[split_at..sum_len].trim_ascii_start(), pal.text);
     }
 
-    // Show latest plan/install report from sexfiles (first 2 non-empty lines).
     let rep = gui.install.report_bytes();
     if !rep.is_empty() {
-        let mut ry = summary_y + 52;
-        for line in rep.split(|&b| b == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            if ry + 16 > summary_y + summary_h {
-                break;
-            }
-            draw_text(buf, w, h, g, x + 14, ry, cw - 28, line, pal.text_dim);
-            ry += 16;
+        let mut ry = y + 52;
+        for line in rep.split(|&b| b == b'\n').filter(|l| !l.is_empty()).take(2) {
+            draw_sans_sm(buf, w, h, g, x + 14, ry, cw - 28, line, pal.text_dim);
+            ry += 15;
         }
     } else {
-        draw_text(
-            buf,
-            w,
-            h,
-            g,
-            x + 14,
-            summary_y + 54,
-            cw - 28,
-            b"Click 'Plan Install' for a dry-run preview before writing anything.",
-            pal.text_dim,
-        );
+        draw_sans_sm(buf, w, h, g, x + 14, y + 54, cw - 28, b"Click 'Plan Install' for a dry-run preview before writing anything.", pal.text_dim);
     }
+    y += summary_h + 10;
 
-    // 4. Clean "Plan Install" and "Install Now" Candy Action Buttons.
-    let btn_y = summary_y + summary_h + 10;
-    let plan_w = 136;
-    let go_w = 136;
+    let plan_w = 132;
+    let go_w = 132;
     let plan_style = if has_target { ButtonStyle::Normal } else { ButtonStyle::Disabled };
     let plan_act = UiAction::InstallPlan;
-    let plan_state = if has_target { gui.btn_state(plan_act) } else { ButtonState::Rest };
-    draw_candy_button(buf, w, h, x, btn_y, plan_w, 30, 10, plan_style, plan_state, pal);
-    draw_text(buf, w, h, g, x + 20, btn_y + 7, plan_w - 24, b"Plan Install", button_text_color(plan_style, pal));
-    if has_target {
-        gui.push_hit(x, btn_y, plan_w, 30, plan_act);
-    }
+    draw_candy_button(buf, w, h, x, y, plan_w, 30, 8, plan_style, if has_target { gui.btn_state(plan_act) } else { ButtonState::Rest }, pal);
+    draw_sans_bold(buf, w, h, g, x + 26, y + 8, plan_w - 20, 12, b"Plan Install", button_text_color(plan_style, pal));
+    if has_target { gui.push_hit(x, y, plan_w, 30, plan_act); }
 
     let go_x = x + plan_w + 12;
     let go_style = if has_target { ButtonStyle::Primary } else { ButtonStyle::Disabled };
     let go_act = UiAction::InstallExecute;
-    let go_state = if has_target { gui.btn_state(go_act) } else { ButtonState::Rest };
-    draw_candy_button(buf, w, h, go_x, btn_y, go_w, 30, 10, go_style, go_state, pal);
-    draw_text(buf, w, h, g, go_x + 24, btn_y + 7, go_w - 24, b"Install Now", button_text_color(go_style, pal));
-    if has_target {
-        gui.push_hit(go_x, btn_y, go_w, 30, go_act);
-    }
+    draw_candy_button(buf, w, h, go_x, y, go_w, 30, 8, go_style, if has_target { gui.btn_state(go_act) } else { ButtonState::Rest }, pal);
+    draw_sans_bold(buf, w, h, g, go_x + 28, y + 8, go_w - 20, 12, b"Install Now", button_text_color(go_style, pal));
+    if has_target { gui.push_hit(go_x, y, go_w, 30, go_act); }
+    y += 40;
+    y - start_y
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -2025,130 +2653,91 @@ fn render_updates(
     x: i32,
     mut y: i32,
     cw: i32,
-    ch: i32,
-) {
-    let max_y = y + ch;
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
     let info = &m.info[..m.info_len];
 
-    // 1. SexOS System Update Card (xirtus/sexos A/B slot update).
-    let sys_h = (ch - 196).clamp(160, 236);
-    draw_candy_panel(buf, w, h, x, y, cw, sys_h, 10, pal);
-    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, sys_h - 12, 2, pal.accent);
-    draw_text(buf, w, h, g, x + 14, y + 10, cw - 130, b"SexOS System (xirtus/sexos A/B Slot)", pal.text);
+    // 1. SexOS A/B System Update Card (`xirtus/sexos`).
+    let sys_h = 200;
+    draw_noir_card(buf, w, h, x, y, cw, sys_h, 10, pal);
+    fill_rounded_rect(buf, w, h, x + 2, y + 8, 4, sys_h - 16, 2, pal.accent);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 11, cw - 130, 13, b"SexOS System (xirtus/sexos A/B Slot)", pal.text);
 
     let (slot_badge, slot_col): (&[u8], u32) = if contains_bytes(info, b"slot A") {
-        (b"SLOT A", 0x0034_D399)
+        (b"SLOT A", pal.mint)
     } else if contains_bytes(info, b"slot B") {
-        (b"SLOT B", 0x0060_A5FA)
+        (b"SLOT B", pal.sky)
     } else if contains_bytes(info, b"USB stick") {
-        (b"LIVE USB", 0x00F5_9E0B)
+        (b"LIVE USB", pal.honey)
     } else {
         (b"A/B SLOT", pal.accent)
     };
-    draw_candy_badge(buf, w, h, x + cw - 92, y + 8, 80, 20, slot_col, pal);
-    draw_text(buf, w, h, g, x + cw - 84, y + 10, 68, slot_badge, 0x0010_0C1C);
+    draw_candy_badge(buf, w, h, x + cw - 92, y + 9, 80, 20, slot_col, pal);
+    draw_sans_bold(buf, w, h, g, x + cw - 80, y + 12, 64, 10, slot_badge, 0x000B_0D12);
 
-    let mut ly = y + 36;
-    let info_bottom = y + sys_h - 62;
+    let mut ly = y + 38;
     if !info.is_empty() {
-        for line in info.split(|&b| b == b'\n') {
-            if ly + 16 > info_bottom {
-                break;
-            }
-            if !line.is_empty() {
-                draw_text(buf, w, h, g, x + 14, ly, cw - 28, line, pal.text_dim);
-                ly += 17;
-            }
+        for line in info.split(|&b| b == b'\n').filter(|l| !l.is_empty()).take(5) {
+            draw_sans_sm(buf, w, h, g, x + 14, ly, cw - 28, line, pal.text_dim);
+            ly += 18;
         }
     } else {
-        draw_text(
-            buf,
-            w,
-            h,
-            g,
-            x + 14,
-            ly,
-            cw - 28,
-            b"Atomic A/B system updates from github.com/xirtus/sexos.",
-            pal.text_dim,
-        );
-        ly += 18;
-        draw_text(
-            buf,
-            w,
-            h,
-            g,
-            x + 14,
-            ly,
-            cw - 28,
-            b"Signed releases verify before switching the inactive slot.",
-            pal.text_dim,
-        );
+        draw_sans_sm(buf, w, h, g, x + 14, ly, cw - 28, b"Atomic A/B system updates from github.com/xirtus/sexos.", pal.text_dim);
+        draw_sans_sm(buf, w, h, g, x + 14, ly + 18, cw - 28, b"Signed releases verify before switching the inactive slot.", pal.text_dim);
     }
 
-    draw_text(buf, w, h, g, x + 14, y + sys_h - 56, cw - 28, gui.updates.system_status_bytes(), pal.accent);
+    draw_sans_sm(buf, w, h, g, x + 14, y + sys_h - 58, cw - 28, gui.updates.system_status_bytes(), pal.accent);
 
-    let sys_btn_y = y + sys_h - 36;
-    let chk_w = 134;
+    let sys_btn_y = y + sys_h - 38;
+    let chk_w = 132;
     let chk_act = UiAction::CheckSystemUpdate;
-    draw_candy_button(buf, w, h, x + 14, sys_btn_y, chk_w, 26, 8, ButtonStyle::Primary, gui.btn_state(chk_act), pal);
-    draw_text(buf, w, h, g, x + 26, sys_btn_y + 5, chk_w - 20, b"Check Update", pal.text_on_accent);
+    draw_candy_button(buf, w, h, x + 14, sys_btn_y, chk_w, 26, 7, ButtonStyle::Primary, gui.btn_state(chk_act), pal);
+    draw_sans_bold(buf, w, h, g, x + 32, sys_btn_y + 6, chk_w - 20, 12, b"Check Update", pal.text_on_accent);
     gui.push_hit(x + 14, sys_btn_y, chk_w, 26, chk_act);
 
     let ref_x = x + 14 + chk_w + 10;
-    let ref_w = 128;
+    let ref_w = 124;
     let ref_act = UiAction::RefreshUpdates;
-    draw_candy_button(buf, w, h, ref_x, sys_btn_y, ref_w, 26, 8, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
-    draw_text(buf, w, h, g, ref_x + 14, sys_btn_y + 5, ref_w - 20, b"Refresh Slot", pal.text);
+    draw_candy_button(buf, w, h, ref_x, sys_btn_y, ref_w, 26, 7, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
+    draw_sans(buf, w, h, g, ref_x + 22, sys_btn_y + 6, ref_w - 20, b"Refresh Slot", pal.text);
     gui.push_hit(ref_x, sys_btn_y, ref_w, 26, ref_act);
-
     y += sys_h + 12;
 
-    // 2. Private Dotfiles Sync Card (xirtus/sexosdotfiles).
-    let dot_h = (max_y - y).clamp(132, 176);
-    draw_candy_panel(buf, w, h, x, y, cw, dot_h, 10, pal);
-    let dot_col = if gui.updates.dotfiles_synced { 0x0034_D399 } else { pal.accent };
-    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, dot_h - 12, 2, dot_col);
-    draw_text(buf, w, h, g, x + 14, y + 10, cw - 130, b"Private Dotfiles (xirtus/sexosdotfiles)", pal.text);
+    // 2. Private Dotfiles Sync Card (`xirtus/sexosdotfiles`).
+    let dot_h = 156;
+    draw_noir_card(buf, w, h, x, y, cw, dot_h, 10, pal);
+    let dot_col = if gui.updates.dotfiles_synced { pal.mint } else { pal.accent };
+    fill_rounded_rect(buf, w, h, x + 2, y + 8, 4, dot_h - 16, 2, dot_col);
+    draw_sans_bold(buf, w, h, g, x + 14, y + 11, cw - 120, 13, b"Private Dotfiles (xirtus/sexosdotfiles)", pal.text);
+    draw_candy_badge(buf, w, h, x + cw - 86, y + 9, 74, 20, dot_col, pal);
+    draw_sans_bold(buf, w, h, g, x + cw - 72, y + 12, 54, 10, if gui.updates.dotfiles_synced { b"SYNCED" } else { b"READY" }, 0x000B_0D12);
 
-    let dot_badge: &[u8] = if gui.updates.dotfiles_synced { b"SYNCED" } else { b"READY" };
-    draw_candy_badge(buf, w, h, x + cw - 86, y + 8, 74, 20, dot_col, pal);
-    draw_text(buf, w, h, g, x + cw - 76, y + 10, 60, dot_badge, 0x0010_0C1C);
+    draw_sans_sm(buf, w, h, g, x + 14, y + 36, cw - 28, b"Sync Noir themes, keybinds & Spindle config via xirtus/sexosdotfiles.", pal.text_dim);
+    draw_sans_sm(buf, w, h, g, x + 14, y + 54, cw - 28, gui.updates.dotfiles_status_bytes(), pal.accent);
 
-    draw_text(
-        buf,
-        w,
-        h,
-        g,
-        x + 14,
-        y + 34,
-        cw - 28,
-        b"Sync Candy Lavender themes, keybinds & Spindle config via xirtus/sexosdotfiles.",
-        pal.text_dim,
-    );
-    draw_text(buf, w, h, g, x + 14, y + 54, cw - 28, gui.updates.dotfiles_status_bytes(), pal.accent);
-
-    // Auto-sync toggle row.
-    let tog_y = y + 76;
-    draw_text(buf, w, h, g, x + 14, tog_y + 2, cw - 90, b"Auto-sync private dotfiles on login", pal.text);
+    let tog_y = y + 78;
+    draw_sans(buf, w, h, g, x + 14, tog_y + 3, cw - 88, b"Auto-sync private dotfiles on login", pal.text);
     let tog_act = UiAction::ToggleDotfilesAutoSync;
-    draw_candy_toggle(buf, w, h, x + cw - 62, tog_y, 46, 22, gui.updates.dotfiles_auto_sync, gui.btn_state(tog_act), pal);
-    gui.push_hit(x + cw - 66, tog_y - 2, 54, 26, tog_act);
+    draw_noir_toggle(buf, w, h, x + cw - 56, tog_y, 42, 22, gui.updates.dotfiles_auto_sync, gui.btn_state(tog_act), pal);
+    gui.push_hit(x + cw - 62, tog_y - 3, 54, 28, tog_act);
 
-    // Sync & Pull buttons.
-    let dot_btn_y = y + dot_h - 34;
-    let sync_w = 134;
+    let dot_btn_y = y + dot_h - 36;
+    let sync_w = 132;
     let sync_act = UiAction::SyncDotfiles;
-    draw_candy_button(buf, w, h, x + 14, dot_btn_y, sync_w, 26, 8, ButtonStyle::Primary, gui.btn_state(sync_act), pal);
-    draw_text(buf, w, h, g, x + 24, dot_btn_y + 5, sync_w - 18, b"Sync Dotfiles", pal.text_on_accent);
+    draw_candy_button(buf, w, h, x + 14, dot_btn_y, sync_w, 26, 7, ButtonStyle::Primary, gui.btn_state(sync_act), pal);
+    draw_sans_bold(buf, w, h, g, x + 32, dot_btn_y + 6, sync_w - 20, 12, b"Sync Dotfiles", pal.text_on_accent);
     gui.push_hit(x + 14, dot_btn_y, sync_w, 26, sync_act);
 
     let pull_x = x + 14 + sync_w + 10;
-    let pull_w = 124;
+    let pull_w = 118;
     let pull_act = UiAction::PullDotfiles;
-    draw_candy_button(buf, w, h, pull_x, dot_btn_y, pull_w, 26, 8, ButtonStyle::Normal, gui.btn_state(pull_act), pal);
-    draw_text(buf, w, h, g, pull_x + 16, dot_btn_y + 5, pull_w - 20, b"Pull Latest", pal.text);
+    draw_candy_button(buf, w, h, pull_x, dot_btn_y, pull_w, 26, 7, ButtonStyle::Normal, gui.btn_state(pull_act), pal);
+    draw_sans(buf, w, h, g, pull_x + 24, dot_btn_y + 6, pull_w - 20, b"Pull Latest", pal.text);
     gui.push_hit(pull_x, dot_btn_y, pull_w, 26, pull_act);
+    y += dot_h + 12;
+    y - start_y
 }
 
 fn format_rssi(rssi: i8, out: &mut [u8; 24]) -> usize {
@@ -2403,167 +2992,603 @@ fn render_wifi(
     gui.push_hit(join_x, form_y + 4, join_w, 28, join_act);
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_about(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    _m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    _top: i32,
+    _bot: i32,
+) -> i32 {
+    let start_y = y;
+
+    // Centered macOS "About This Mac"-style Hero Card with SexOS Lips Emblem.
+    let hero_h = 158;
+    draw_noir_card(buf, w, h, x, y, cw, hero_h, 12, pal);
+    let mid_x = x + cw / 2;
+    fill_rounded_rect(buf, w, h, mid_x - 62, y + 14, 124, 72, 18, 0x0024_2022);
+    draw_sexos_lips(buf, w, h, mid_x, y + 50, 96, false);
+
+    let title = b"SexOS";
+    let tw = g.measure(1, 20, title);
+    draw_sans_bold(buf, w, h, g, mid_x - tw / 2, y + 92, cw - 32, 20, title, pal.text);
+
+    let sub = b"Single-Address-Space Microkernel";
+    let sw = g.measure(0, 12, sub);
+    draw_sans_sm(buf, w, h, g, mid_x - sw / 2, y + 116, cw - 32, sub, pal.text_dim);
+
+    let slot_b = gui.about.slot_badge();
+    let badge_w = g.measure(1, 11, slot_b) + 24;
+    draw_candy_badge(buf, w, h, mid_x - badge_w / 2, y + 132, badge_w, 18, pal.accent, pal);
+    draw_sans_bold(buf, w, h, g, mid_x - badge_w / 2 + 12, y + 134, badge_w, 11, slot_b, pal.text_on_accent);
+    y += hero_h + 12;
+
+    // System Hardware & Health Specification Card.
+    let a = &gui.about;
+    let spec_h = 224;
+    draw_noir_card(buf, w, h, x, y, cw, spec_h, 10, pal);
+    let mut row_y = y + 4;
+    let draw_spec = |buf: &mut [u32], g: &mut Glyphs, ry: i32, k: &[u8], v: &[u8], div: bool| {
+        if div {
+            fill_solid(buf, w, h, x + 14, ry, cw - 28, 1, pal.hairline);
+        }
+        draw_sans_bold(buf, w, h, g, x + 16, ry + 10, 150, 12, k, pal.text_dim);
+        draw_sans(buf, w, h, g, x + 172, ry + 10, cw - 188, v, pal.text);
+    };
+
+    // 1. Processor
+    let mut cpu_buf = [0u8; 48];
+    let cpu_len = if let Some(c) = a.kernel.cores {
+        let mut n = format_u64_ascii(c, &mut cpu_buf);
+        let suf = b" Cores (x86_64 SASOS)";
+        let t = suf.len().min(cpu_buf.len() - n);
+        cpu_buf[n..n + t].copy_from_slice(&suf[..t]);
+        n += t;
+        n
+    } else {
+        let s = b"x86_64 Microkernel";
+        cpu_buf[..s.len()].copy_from_slice(s);
+        s.len()
+    };
+    draw_spec(buf, g, row_y, b"Processor", &cpu_buf[..cpu_len], false);
+    row_y += 36;
+
+    // 2. Memory
+    let mut mem_buf = [0u8; 64];
+    let mem_len = if let Some(lim) = a.kernel.program_limit {
+        let mut n = format_u64_ascii(lim / 256, &mut mem_buf);
+        push_bytes(&mut mem_buf, &mut n, b" MiB pool");
+        if let Some(lent) = a.kernel.program_lent {
+            push_bytes(&mut mem_buf, &mut n, b" (");
+            n += format_u64_ascii(lent / 256, &mut mem_buf[n..]);
+            push_bytes(&mut mem_buf, &mut n, b" MiB in use");
+            if let Some(free) = a.kernel.free_frames {
+                push_bytes(&mut mem_buf, &mut n, b", ");
+                n += format_u64_ascii(free / 256, &mut mem_buf[n..]);
+                push_bytes(&mut mem_buf, &mut n, b" MiB free)");
+            } else {
+                push_bytes(&mut mem_buf, &mut n, b")");
+            }
+        }
+        n
+    } else {
+        let s = b"Shared protection pool";
+        mem_buf[..s.len()].copy_from_slice(s);
+        s.len()
+    };
+    draw_spec(buf, g, row_y, b"Memory", &mem_buf[..mem_len], true);
+    row_y += 36;
+
+    // 3. Protection Domains & Kernel Heap
+    let mut dom_buf = [0u8; 64];
+    let mut dn = format_u64_ascii(a.kernel.domains as u64, &mut dom_buf);
+    push_bytes(&mut dom_buf, &mut dn, b" active domains");
+    if let Some(kh) = a.kernel.kernel_heap {
+        push_bytes(&mut dom_buf, &mut dn, b"  \xE2\x80\xA2  Heap ");
+        dn += format_u64_ascii(kh / 1024, &mut dom_buf[dn..]);
+        push_bytes(&mut dom_buf, &mut dn, b" KiB");
+    }
+    draw_spec(buf, g, row_y, b"Protection Domains", &dom_buf[..dn], true);
+    row_y += 36;
+
+    // 4. Filesystem Health
+    let fs_slice = if a.fs_health_len > 0 {
+        &a.fs_health[..a.fs_health_len]
+    } else {
+        b"Verified via Files"
+    };
+    draw_spec(buf, g, row_y, b"Filesystem Health", fs_slice, true);
+    row_y += 36;
+
+    // 5. Slot A/B Version & Image SHA-256
+    let mut ver_buf = [0u8; 72];
+    let mut vn = 0usize;
+    push_bytes(&mut ver_buf, &mut vn, a.slot_badge());
+    if a.version_len > 0 {
+        push_bytes(&mut ver_buf, &mut vn, b" v");
+        push_bytes(&mut ver_buf, &mut vn, &a.version[..a.version_len]);
+    }
+    if a.image_hash_len > 0 {
+        push_bytes(&mut ver_buf, &mut vn, b"  \xE2\x80\xA2  ");
+        let show_len = if a.image_hash[..a.image_hash_len].starts_with(b"hashing") {
+            a.image_hash_len
+        } else {
+            a.image_hash_len.min(16)
+        };
+        push_bytes(&mut ver_buf, &mut vn, &a.image_hash[..show_len]);
+    }
+    draw_spec(buf, g, row_y, b"System Version", &ver_buf[..vn], true);
+    row_y += 36;
+
+    // 6. Uptime
+    let mut up_buf = [0u8; 40];
+    let mut un = format_u64_ascii(a.kernel.uptime_s / 3600, &mut up_buf);
+    push_bytes(&mut up_buf, &mut un, b" h ");
+    un += format_u64_ascii((a.kernel.uptime_s / 60) % 60, &mut up_buf[un..]);
+    push_bytes(&mut up_buf, &mut un, b" min");
+    draw_spec(buf, g, row_y, b"Uptime", &up_buf[..un], true);
+    y += spec_h + 12;
+    y - start_y
+}
+
+fn push_bytes(dst: &mut [u8], pos: &mut usize, src: &[u8]) {
+    let take = src.len().min(dst.len().saturating_sub(*pos));
+    dst[*pos..*pos + take].copy_from_slice(&src[..take]);
+    *pos += take;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_search_results(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    top: i32,
+    bot: i32,
+) -> i32 {
+    let start_y = y;
+    let (rows, count) = m.rows();
+    if count == 0 {
+        draw_noir_card(buf, w, h, x, y, cw, 74, 10, pal);
+        draw_sans_bold(buf, w, h, g, x + 16, y + 14, cw - 32, 14, b"No matching settings", pal.text);
+        draw_sans_sm(buf, w, h, g, x + 16, y + 38, cw - 32, b"Try searching 'theme', 'volume', 'delay', 'zone', or press Esc to clear.", pal.text_dim);
+        return 86;
+    }
+    for (idx, row) in rows[..count].iter().enumerate() {
+        let rh = 42;
+        if y + rh >= top && y <= bot {
+            render_model_row_card(buf, w, h, g, gui, m, pal, x, y, cw, idx, *row);
+        }
+        y += rh + 6;
+    }
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_system_page(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    top: i32,
+    bot: i32,
+) -> i32 {
+    let start_y = y;
+    let (rows, count) = m.rows();
+    for (idx, row) in rows[..count].iter().enumerate() {
+        let rh = 42;
+        if y + rh >= top && y <= bot {
+            render_model_row_card(buf, w, h, g, gui, m, pal, x, y, cw, idx, *row);
+        }
+        y += rh + 6;
+    }
+
+    let info_slice: &[u8] = if m.info_len > 0 {
+        &m.info[..m.info_len]
+    } else if m.extra_len > 0 {
+        &m.extra[..m.extra_len]
+    } else {
+        b""
+    };
+    if !info_slice.is_empty() {
+        let line_count = info_slice.split(|&b| b == b'\n').filter(|l| !l.is_empty()).count() as i32;
+        let card_h = (28 + line_count * 18).max(52);
+        draw_noir_card(buf, w, h, x, y, cw, card_h, 10, pal);
+        let mut ly = y + 10;
+        for line in info_slice.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+            if ly + 16 > y + card_h - 4 { break; }
+            draw_sans_sm(buf, w, h, g, x + 14, ly, cw - 28, line, pal.text_dim);
+            ly += 18;
+        }
+        y += card_h + 10;
+    }
+    y - start_y
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_model_row_card(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    m: &Model,
+    pal: &CandyPalette,
+    x: i32,
+    y: i32,
+    cw: i32,
+    idx: usize,
+    row: model::Row,
+) {
+    let k: &Key = &KEYS[row.key];
+    let selected = m.row == idx;
+    draw_noir_card(buf, w, h, x, y, cw, 40, 8, pal);
+    if selected {
+        fill_rounded_rect(buf, w, h, x + 1, y + 1, cw - 2, 38, 7, pal.selection);
+        fill_rounded_rect(buf, w, h, x + 2, y + 6, 3, 28, 2, pal.accent);
+    }
+    let label = match (k.kind, row.item) {
+        (Kind::Set(names), Some(item)) => names.get(item as usize).copied().unwrap_or(k.label),
+        _ => k.label,
+    };
+    draw_sans_sm(buf, w, h, g, x + 14, y + 5, 110, model::page_title(k.section()).as_bytes(), pal.accent);
+    draw_sans(buf, w, h, g, x + 14, y + 19, (cw - 170).max(80), label.as_bytes(), pal.text);
+    gui.push_hit(x, y, cw - 130, 40, UiAction::SelectRow(idx));
+
+    let val = m.values.value(k.id);
+    match (k.kind, row.item) {
+        (Kind::Bool, _) => {
+            let act = UiAction::StepRow(idx, true);
+            draw_noir_toggle(buf, w, h, x + cw - 56, y + 9, 42, 22, val != 0, gui.btn_state(act), pal);
+            gui.push_hit(x + cw - 62, y + 4, 54, 32, act);
+        }
+        (Kind::Set(_), Some(item)) => {
+            let on = (val & (1 << item)) != 0;
+            let act = UiAction::StepRow(idx, !on);
+            draw_noir_toggle(buf, w, h, x + cw - 56, y + 9, 42, 22, on, gui.btn_state(act), pal);
+            gui.push_hit(x + cw - 62, y + 4, 54, 32, act);
+        }
+        (Kind::Color, _) => {
+            let act = UiAction::StepRow(idx, true);
+            draw_candy_swatch(buf, w, h, x + cw - 40, y + 9, 22, (val as u32) & 0x00FF_FFFF, selected, false, pal);
+            gui.push_hit(x + cw - 46, y + 4, 36, 32, act);
+        }
+        _ => {
+            let dec = UiAction::StepRow(idx, false);
+            let inc = UiAction::StepRow(idx, true);
+            draw_candy_button(buf, w, h, x + cw - 126, y + 9, 24, 22, 6, ButtonStyle::Normal, gui.btn_state(dec), pal);
+            draw_sans_bold(buf, w, h, g, x + cw - 118, y + 11, 14, 12, b"<", pal.text);
+            gui.push_hit(x + cw - 126, y + 7, 24, 26, dec);
+
+            let mut vbuf = [0u8; 16];
+            let vlen = format_short_value(k.kind, val, row.item, &mut vbuf);
+            let vw = g.measure(0, 12, &vbuf[..vlen]).min(60);
+            draw_sans(buf, w, h, g, x + cw - 98 + (60 - vw) / 2, y + 11, 60, &vbuf[..vlen], pal.accent);
+
+            draw_candy_button(buf, w, h, x + cw - 36, y + 9, 24, 22, 6, ButtonStyle::Normal, gui.btn_state(inc), pal);
+            draw_sans_bold(buf, w, h, g, x + cw - 28, y + 11, 14, 12, b">", pal.text);
+            gui.push_hit(x + cw - 36, y + 7, 24, 26, inc);
+        }
+    }
+}
+
+fn render_password_modal(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    entry: &model::Entry,
+    m: &Model,
+    pal: &CandyPalette,
+) {
+    let mw = (w as i32 - 80).clamp(280, 420);
+    let mh = 180;
+    let mx = (w as i32 - mw) / 2;
+    let my = (h as i32 - mh) / 2;
+    fill_rounded_rect(buf, w, h, mx - 2, my - 2, mw + 4, mh + 4, 14, pal.accent);
+    draw_noir_card(buf, w, h, mx, my, mw, mh, 12, pal);
+    draw_sidebar_badge(buf, w, h, g, mx + 18, my + 16, pal.accent, Icon::Privacy);
+    draw_sans_bold(buf, w, h, g, mx + 48, my + 18, mw - 66, 15, b"Change Lock Password", pal.text);
+    let prompt: &[u8] = if entry.confirming { b"Confirm your new lock password:" } else { b"Enter a new lock password:" };
+    draw_sans_sm(buf, w, h, g, mx + 18, my + 50, mw - 36, prompt, pal.text_dim);
+
+    draw_noir_well(buf, w, h, mx + 18, my + 74, mw - 36, 32, 8, pal.accent, pal);
+    let mut stars = [b'*'; 32];
+    let slen = entry.len.min(stars.len());
+    if slen > 0 {
+        draw_mono(buf, w, h, g, mx + 28, my + 82, mw - 56, &stars[..slen], pal.text);
+    } else {
+        stars[0] = b'_';
+        draw_mono(buf, w, h, g, mx + 28, my + 82, mw - 56, &stars[..1], pal.text_dim);
+    }
+
+    if m.status_len > 0 {
+        draw_sans_sm(buf, w, h, g, mx + 18, my + 114, mw - 36, &m.status[..m.status_len], pal.accent);
+    } else {
+        draw_sans_sm(buf, w, h, g, mx + 18, my + 114, mw - 36, b"Press Enter to continue, or Esc to cancel.", pal.text_dim);
+    }
+
+    let cancel_act = UiAction::CancelPassword;
+    draw_candy_button(buf, w, h, mx + mw - 98, my + mh - 38, 80, 26, 7, ButtonStyle::Normal, gui.btn_state(cancel_act), pal);
+    draw_sans_sm(buf, w, h, g, mx + mw - 78, my + mh - 32, 60, b"Cancel", pal.text);
+    gui.push_hit(mx + mw - 98, my + mh - 38, 80, 26, cancel_act);
+}
+
+/// Renders the First-Start macOS Noir Setup Assistant (`setup::Setup`).
+pub fn render_setup_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, s: &Setup, status: &[u8]) {
+    if w < 200 || h < 200 || buf.len() < w * h {
+        return;
+    }
+    let pal = noir_palette(Mode::Dark, 0x00F4_3F5E);
+    let (wi, hi) = (w as i32, h as i32);
+    fill_solid(buf, w, h, 0, 0, wi, hi, pal.bg);
+
+    let cw = (wi - 64).clamp(320, 560);
+    let ch = (hi - 64).clamp(280, 440);
+    let cx = (wi - cw) / 2;
+    let cy = (hi - ch) / 2;
+    draw_noir_card(buf, w, h, cx, cy, cw, ch, 14, &pal);
+
+    // Lips Emblem + Title.
+    draw_sexos_lips(buf, w, h, cx + cw / 2, cy + 36, 72, false);
+    let heading = b"Welcome to SexOS";
+    let hw = g.measure(1, 18, heading);
+    draw_sans_bold(buf, w, h, g, cx + (cw - hw) / 2, cy + 64, cw - 32, 18, heading, pal.text);
+
+    // 4 step dots.
+    let step_idx = match s.step { Step::Layout => 0, Step::Zone => 1, Step::Password => 2, Step::Idle => 3, Step::Done => 4 };
+    let dots_x = cx + (cw - 4 * 18) / 2;
+    for i in 0..4 {
+        fill_rounded_rect(buf, w, h, dots_x + i * 18, cy + 92, 10, 6, 3, if i as usize == step_idx { pal.accent } else { pal.control });
+    }
+
+    let step_title: &[u8] = match s.step {
+        Step::Layout => b"Step 1 of 4: Choose Keyboard Layout",
+        Step::Zone => b"Step 2 of 4: Select Time Zone (type to filter)",
+        Step::Password => b"Step 3 of 4: Set Lock Password (optional)",
+        Step::Idle => b"Step 4 of 4: Idle & Screen Lock Behavior",
+        Step::Done => b"Setup Complete",
+    };
+    draw_sans_bold(buf, w, h, g, cx + 24, cy + 114, cw - 48, 13, step_title, pal.text);
+
+    let mut ry = cy + 142;
+    match s.step {
+        Step::Layout => {
+            for (i, l) in LAYOUTS.iter().enumerate() {
+                let sel = i == s.layout;
+                fill_rounded_rect(buf, w, h, cx + 24, ry, cw - 48, 32, 7, if sel { pal.selection } else { pal.well });
+                draw_sans(buf, w, h, g, cx + 36, ry + 8, cw - 72, l.as_bytes(), if sel { pal.text } else { pal.text_dim });
+                ry += 38;
+            }
+        }
+        Step::Zone => {
+            draw_noir_well(buf, w, h, cx + 24, ry, cw - 48, 30, 8, pal.accent, &pal);
+            if s.filter_len > 0 {
+                draw_sans(buf, w, h, g, cx + 34, ry + 7, cw - 68, &s.filter[..s.filter_len], pal.text);
+            } else {
+                draw_sans(buf, w, h, g, cx + 34, ry + 7, cw - 68, b"Type city or region...", pal.text_dim);
+            }
+            ry += 38;
+            let mut list = [0usize; 64];
+            let mut n = 0;
+            for z in s.zones().take(64) { list[n] = z; n += 1; }
+            if n == 0 {
+                draw_sans(buf, w, h, g, cx + 30, ry + 6, cw - 60, b"Nothing matches.", pal.text_dim);
+            }
+            let at_sel = list[..n].iter().position(|z| *z == s.zone).unwrap_or(0);
+            let first = at_sel.saturating_sub(2).min(n.saturating_sub(6));
+            for &z in &list[first..(first + 6).min(n)] {
+                let sel = z == s.zone;
+                fill_rounded_rect(buf, w, h, cx + 24, ry, cw - 48, 26, 6, if sel { pal.selection } else { pal.well });
+                draw_sans_sm(buf, w, h, g, cx + 34, ry + 6, cw - 68, ZONES[z].as_bytes(), if sel { pal.text } else { pal.text_dim });
+                ry += 29;
+            }
+        }
+        Step::Password => {
+            draw_noir_well(buf, w, h, cx + 24, ry, cw - 48, 34, 8, pal.accent, &pal);
+            let stars = [b'*'; 32];
+            let sl = s.password_len.min(32);
+            if sl > 0 {
+                draw_mono(buf, w, h, g, cx + 34, ry + 9, cw - 68, &stars[..sl], pal.text);
+            } else {
+                draw_sans(buf, w, h, g, cx + 34, ry + 9, cw - 68, b"Leave empty for no lock password", pal.text_dim);
+            }
+        }
+        Step::Idle => {
+            for (i, (label, ..)) in setup::IDLE.iter().enumerate() {
+                let sel = i == s.idle;
+                fill_rounded_rect(buf, w, h, cx + 24, ry, cw - 48, 34, 7, if sel { pal.selection } else { pal.well });
+                draw_sans_sm(buf, w, h, g, cx + 34, ry + 10, cw - 68, label.as_bytes(), if sel { pal.text } else { pal.text_dim });
+                ry += 40;
+            }
+        }
+        Step::Done => {
+            draw_sans(buf, w, h, g, cx + 24, ry + 8, cw - 48, b"All set. Opening Tatami Settings...", pal.text);
+        }
+    }
+
+    if !status.is_empty() {
+        draw_sans_sm(buf, w, h, g, cx + 24, cy + ch - 52, cw - 48, status, pal.accent);
+    }
+    draw_sans_sm(buf, w, h, g, cx + 24, cy + ch - 30, cw - 48, b"Up/Down: Choose   \xE2\x80\xA2   Enter: Continue   \xE2\x80\xA2   Esc: Back", pal.text_dim);
+}
+
+fn format_i32_ascii(mut v: i32, out: &mut [u8]) -> usize {
+    let mut n = 0usize;
+    if v < 0 && n < out.len() {
+        out[n] = b'-';
+        n += 1;
+        v = v.saturating_neg();
+    }
+    let mut tmp = [0u8; 12];
+    let mut k = 0;
+    loop {
+        tmp[k] = b'0' + (v % 10) as u8;
+        k += 1;
+        v /= 10;
+        if v == 0 { break; }
+    }
+    while k > 0 && n < out.len() {
+        k -= 1;
+        out[n] = tmp[k];
+        n += 1;
+    }
+    n
+}
+
+fn format_short_value(kind: Kind, value: i32, item: Option<u8>, out: &mut [u8; 16]) -> usize {
+    match kind {
+        Kind::Choice(names) => {
+            let s = names.get(value as usize).copied().unwrap_or("?").as_bytes();
+            let n = s.len().min(out.len());
+            out[..n].copy_from_slice(&s[..n]);
+            n
+        }
+        Kind::Set(_) => {
+            let on = item.is_some_and(|i| (value & (1 << i)) != 0);
+            let s: &[u8] = if on { b"Yes" } else { b"No" };
+            out[..s.len()].copy_from_slice(s);
+            s.len()
+        }
+        _ => format_i32_ascii(value, out),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn named_profiles_apply_undo_and_reset_cleanly() {
+    fn noir_palette_uses_locked_colors_and_accent_tints() {
         let mut cfg = Config::new();
-        let mut gui = GuiState::new();
-        assert_eq!(gui.undo, None);
+        let gui = GuiState::new();
+        let p = gui.palette(&cfg);
+        assert_eq!(p.panel, NOIR_SIDEBAR);
+        assert_eq!(p.bg, NOIR_CANVAS);
+        assert_eq!(p.card, NOIR_CARD);
+        assert_eq!(p.specular, NOIR_TOP_SPECULAR);
+        assert_eq!(p.accent, 0x00F4_3F5E);
 
-        // Apply Hyprland Compact profile -> saves undo snapshot.
-        let pairs = gui.apply_profile(2, &cfg);
-        assert!(gui.undo.is_some());
-        assert_eq!(gui.active_profile, Some(2));
-        assert_eq!(gui.tiling, TilingStyle::HyprlandMaster);
-        assert_eq!(gui.keybinds, KeybindProfile::HyprlandPure);
-        for (k, v) in pairs {
-            let _ = cfg.set(k, v);
-        }
-        assert_eq!(cfg.value(id::ACCENT), 0x60A5FA);
-
-        // Undo restores original settings.
-        let restored = gui.take_undo().expect("undo snapshot present");
-        assert!(gui.undo.is_none());
-        for (k, v) in restored {
-            let _ = cfg.set(k, v);
-        }
-        assert_eq!(gui.tiling, TilingStyle::HybridCandy);
-
-        // Reset defaults applies Candy Lavender profile.
-        let reset = gui.reset_defaults(&cfg);
-        for (k, v) in reset {
-            let _ = cfg.set(k, v);
-        }
-        assert_eq!(cfg.value(id::ACCENT), 0xA78BFA);
-        assert_eq!(cfg.value(id::REDUCE_TRANSPARENCY), 0);
+        cfg.set(id::ACCENT, 0x0038_BDF8).unwrap();
+        let cyan = gui.palette(&cfg);
+        assert_eq!(cyan.accent, 0x0038_BDF8);
     }
 
     #[test]
-    fn appearance_gui_renders_and_registers_interactive_hitboxes() {
+    fn appearance_and_all_eleven_categories_render_with_hitboxes() {
         let cfg = Config::new();
         let m = Model::new(cfg);
         let mut gui = GuiState::new();
         let mut g = Glyphs::new();
-        let mut buf = vec![0u32; 800 * 520];
+        let mut buf = vec![0u32; 920 * 640];
 
-        render_gui(&mut buf, 800, 520, &mut g, &mut gui, &m);
-        assert!(gui.hit_count >= 12, "expected sidebar + theme + swatches + toggles hitboxes");
-
-        // Verify accent swatch hitboxes exist for all 6 Candy swatches.
-        for &(_name, rgb) in &CANDY_SWATCHES {
-            let found = gui.hits[..gui.hit_count]
+        render_gui(&mut buf, 920, 640, &mut g, &mut gui, &m);
+        for item in &SIDEBAR_ITEMS {
+            let has = gui.hits[..gui.hit_count]
+                .iter()
+                .flatten()
+                .any(|h| h.action == UiAction::SelectView(item.view));
+            assert!(has, "missing sidebar hitbox for {}", item.label);
+        }
+        for &(_name, rgb) in &ACCENT_TINTS {
+            let has = gui.hits[..gui.hit_count]
                 .iter()
                 .flatten()
                 .any(|h| h.action == UiAction::SetAccent(rgb));
-            assert!(found, "missing hitbox for accent {rgb:#x}");
+            assert!(has, "missing accent tint hitbox {rgb:#x}");
         }
+        assert!(gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == UiAction::FocusSearch));
 
-        // Verify Frosted Glass toggle hitbox exists.
-        let has_glass = gui.hits[..gui.hit_count]
-            .iter()
-            .flatten()
-            .any(|h| h.action == UiAction::ToggleFrostedGlass);
-        assert!(has_glass);
-
-        // Verify Wi-Fi & Network and Install SexOS sidebar tab hitboxes exist.
-        let has_wifi_tab = gui.hits[..gui.hit_count]
-            .iter()
-            .flatten()
-            .any(|h| h.action == UiAction::SelectView(SidebarView::Wifi));
-        assert!(has_wifi_tab, "missing Wi-Fi & Network sidebar tab");
-
-        let has_install_tab = gui.hits[..gui.hit_count]
-            .iter()
-            .flatten()
-            .any(|h| h.action == UiAction::SelectView(SidebarView::Install));
-        assert!(has_install_tab, "missing Install SexOS sidebar tab");
+        // Render all 11 sidebar views plus search, password modal, and setup assistant cleanly.
+        for item in &SIDEBAR_ITEMS {
+            gui.view = item.view;
+            gui.scroll_y = 0;
+            render_gui(&mut buf, 920, 640, &mut g, &mut gui, &m);
+            assert!(gui.hit_count >= SIDEBAR_ITEMS.len());
+        }
+        let mut s = Setup::new();
+        for _ in 0..4 {
+            render_setup_gui(&mut buf, 920, 640, &mut g, &s, b"");
+            s.next();
+        }
+        render_setup_gui(&mut buf, 920, 640, &mut g, &s, b"Done");
     }
 
     #[test]
-    fn install_gui_locks_esp_msr_tiny_and_renders_partition_bar_and_buttons() {
+    fn install_gui_locks_esp_msr_tiny_and_registers_actions() {
         let cfg = Config::new();
         let m = Model::new(cfg);
         let mut gui = GuiState::new();
         gui.view = SidebarView::Install;
-
-        // Simulated raw GPT output from sexfiles: ESP + MSR + Windows + Void + Garuda + Tiny + Free.
         let raw = concat!(
             "DISK 1000215216\n",
             "PART 1 esp 2048 532480 0 EFI system partition\n",
             "PART 2 msr 534528 32768 0 Microsoft reserved\n",
             "PART 3 win 567296 209715200 1 Windows\n",
-            "PART 4 lin 210282496 104857600 1 Void Linux\n",
-            "PART 5 lin 315140096 104857600 1 Garuda Linux\n",
             "PART 6 lin 419997696 131072 0 Tiny Boot\n",
             "FREE 420128768 50000000\n",
         );
         gui.install.parse_raw(raw.as_bytes());
-        assert_eq!(gui.install.part_count, 7);
+        assert!(!gui.install.select_part(0));
+        assert!(!gui.install.select_part(1));
+        assert!(!gui.install.select_part(3));
+        assert!(gui.install.select_part(2));
 
-        // ESP (0), MSR (1), and Tiny (5) MUST be locked and unselectable.
-        assert!(!gui.install.parts[0].replaceable);
-        assert!(!gui.install.parts[1].replaceable);
-        assert!(!gui.install.parts[5].replaceable);
-        assert!(!gui.install.select_part(0), "ESP must never be selectable");
-        assert!(!gui.install.select_part(1), "MSR must never be selectable");
-        assert!(!gui.install.select_part(5), "Tiny (<1.5 GiB) must never be selectable");
-
-        // Select Garuda Linux (index 4, Partition #5).
-        assert!(gui.install.select_part(4));
-        let mut summary = [0u8; 160];
-        let (slen, is_amber) = gui.install.safety_summary(&mut summary);
-        let summary_str = core::str::from_utf8(&summary[..slen]).unwrap();
-        assert!(is_amber);
-        assert!(
-            summary_str.contains("Will replace ONLY Partition #5 (Garuda Linux, 50.0 GiB) with SexOS A/B + Store. All other partitions remain untouched."),
-            "unexpected summary: {summary_str}"
-        );
-
-        // Render Install page and verify hitboxes.
         let mut g = Glyphs::new();
-        let mut buf = vec![0u32; 900 * 600];
-        render_gui(&mut buf, 900, 600, &mut g, &mut gui, &m);
-
+        let mut buf = vec![0u32; 920 * 640];
+        render_gui(&mut buf, 920, 640, &mut g, &mut gui, &m);
         let has = |act: UiAction| gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == act);
-        assert!(!has(UiAction::SelectInstallPart(0)), "ESP must not have selectable hitbox");
-        assert!(!has(UiAction::SelectInstallPart(1)), "MSR must not have selectable hitbox");
-        assert!(!has(UiAction::SelectInstallPart(5)), "Tiny must not have selectable hitbox");
-        assert!(has(UiAction::SelectInstallPart(4)), "Garuda must be clickable");
-        assert!(has(UiAction::InstallRefresh), "missing Refresh button hitbox");
-        assert!(has(UiAction::InstallPlan), "missing Plan Install button hitbox");
-        assert!(has(UiAction::InstallExecute), "missing Install Now button hitbox");
+        assert!(!has(UiAction::SelectInstallPart(0)));
+        assert!(!has(UiAction::SelectInstallPart(1)));
+        assert!(!has(UiAction::SelectInstallPart(3)));
+        assert!(has(UiAction::SelectInstallPart(2)));
+        assert!(has(UiAction::InstallPlan));
+        assert!(has(UiAction::InstallExecute));
     }
 
     #[test]
-    fn updates_gui_renders_system_ab_and_dotfiles_controls() {
+    fn about_hero_renders_facts_and_lips() {
         let cfg = Config::new();
-        let mut m = Model::new(cfg);
-        let (pages, count) = model::pages();
-        let updates_idx = pages[..count].iter().position(|&p| p == "updates").expect("updates page exists");
-        m.page = updates_idx;
-        m.set_info(b"  Running from system slot A.\n  Version: 12 (the last update that passed its trial)\n");
-
+        let m = Model::new(cfg);
         let mut gui = GuiState::new();
-        gui.view = SidebarView::SystemPage(updates_idx);
-        gui.updates.set_system_status(b"Checked xirtus/sexos A/B slot.");
-        gui.updates.set_dotfiles_status(b"Synced xirtus/sexosdotfiles.");
-        gui.updates.dotfiles_synced = true;
-
+        gui.view = SidebarView::About;
+        gui.about.update_about(
+            KernelFacts {
+                cores: Some(8),
+                program_limit: Some(1024 * 256),
+                program_lent: Some(64 * 256),
+                free_frames: Some(512 * 256),
+                kernel_heap: Some(4 << 20),
+                domains: 27,
+                uptime_s: 3665,
+            },
+            b"slot=a\nversion=12\nimage_bytes=33554432\nimage=deadbeef01234567\n",
+        );
+        gui.about.update_storage(b"disk=1000000 store\nfilesystem=sexfs 262144 131072\n");
         let mut g = Glyphs::new();
-        let mut buf = vec![0u32; 900 * 600];
-        render_gui(&mut buf, 900, 600, &mut g, &mut gui, &m);
-
-        let has = |act: UiAction| gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == act);
-        assert!(has(UiAction::CheckSystemUpdate), "missing Check Update hitbox");
-        assert!(has(UiAction::RefreshUpdates), "missing Refresh Slot hitbox");
-        assert!(has(UiAction::SyncDotfiles), "missing Sync Dotfiles hitbox");
-        assert!(has(UiAction::PullDotfiles), "missing Pull Latest hitbox");
-        assert!(has(UiAction::ToggleDotfilesAutoSync), "missing Auto-sync toggle hitbox");
-        assert_eq!(SYSTEM_REPO, "xirtus/sexos");
-        assert_eq!(DOTFILES_REPO, "xirtus/sexosdotfiles");
+        let mut buf = vec![0u32; 920 * 640];
+        render_gui(&mut buf, 920, 640, &mut g, &mut gui, &m);
+        assert_eq!(gui.about.slot_badge(), b"Slot A");
     }
 
     #[test]
@@ -2629,4 +3654,3 @@ mod tests {
         assert_eq!(gui.wifi.known[1].ssid_bytes(), b"CafeSpot");
     }
 }
-

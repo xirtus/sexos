@@ -1,88 +1,221 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Pixels for a sex-app window: filled boxes and Geist Mono text in grid cells,
-//! anti-aliased by sex-font and blended over what is already there. The glyphs of
-//! ASCII are drawn once per face and kept; anything else is drawn each time.
+//! macOS Bluetooth & Nearby Device Pairing Noir pixel drawing helpers (`sex-font` + `sex-theme`).
 
-use sex_font::{raster::scratch_len, Font};
-use sex_std::sex_pdx;
+use sex_font::raster::{scratch_len, FX};
+use sex_font::Font;
+use sex_theme::candy_ui::fill_rounded_rect;
 
-pub struct Face {
-    pub w: usize,
-    pub h: usize,
-    font: Font<'static>,
-    cache: Vec<u8>,
-    ready: [bool; 95],
+#[derive(Clone, Copy)]
+pub enum FontKind {
+    Sans,
+    Bold,
+    Mono,
+}
+
+pub struct Fonts {
+    sans: Option<Font<'static>>,
+    bold: Option<Font<'static>>,
+    mono: Option<Font<'static>>,
     acc: Vec<i32>,
-    scratch: Vec<u8>,
+    glyph: Vec<u8>,
 }
 
-impl Face {
-    pub fn new(w: usize, h: usize) -> Face {
-        let font = Font::new(sex_font::GEIST_MONO).unwrap_or_else(|| sex_pdx::task_finish(4));
-        Face { w, h, font, cache: vec![0; 95 * w * h], ready: [false; 95], acc: vec![0; scratch_len(w, h)], scratch: vec![0; w * h] }
-    }
-    /// The glyph's coverage, `w * h` bytes, or None for a blank or missing one.
-    fn coverage(&mut self, c: char) -> Option<&[u8]> {
-        let cell = self.w * self.h;
-        let ascii = (c as u32).wrapping_sub(32);
-        if c == ' ' { return None; }
-        if ascii < 95 {
-            let i = ascii as usize;
-            if !self.ready[i] {
-                self.acc.fill(0);
-                let out = &mut self.cache[i * cell..(i + 1) * cell];
-                sex_font::draw_cell(&self.font, c as u32, self.w, self.h, &mut self.acc, out);
-                self.ready[i] = true;
-            }
-            return Some(&self.cache[i * cell..(i + 1) * cell]);
+impl Fonts {
+    pub fn new() -> Self {
+        Self {
+            sans: Font::new(sex_font::GEIST_SANS),
+            bold: Font::new(sex_font::GEIST_SANS_BOLD).or_else(|| Font::new(sex_font::GEIST_SANS)),
+            mono: Font::new(sex_font::GEIST_MONO).or_else(|| Font::new(sex_font::GEIST_SANS)),
+            acc: Vec::new(),
+            glyph: Vec::new(),
         }
-        self.acc.fill(0);
-        self.scratch.fill(0);
-        sex_font::draw_cell(&self.font, c as u32, self.w, self.h, &mut self.acc, &mut self.scratch).then_some(&self.scratch[..])
     }
-}
 
-/// Mixes `color` over `under` by coverage `a` (0..=255), per channel.
-fn blend(under: u32, color: u32, a: u32) -> u32 {
-    let mix = |s: u32| ((((color >> s) & 0xFF) * a + ((under >> s) & 0xFF) * (255 - a)) / 255) << s;
-    mix(16) | mix(8) | mix(0)
-}
-
-pub struct Canvas<'a> { pub px: &'a mut [u32], pub w: usize, pub h: usize }
-
-impl Canvas<'_> {
-    pub fn fill(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
-        let (x0, y0) = (x.max(0) as usize, y.max(0) as usize);
-        let (x1, y1) = ((x + w).clamp(0, self.w as i32) as usize, (y + h).clamp(0, self.h as i32) as usize);
-        for row in y0..y1 { self.px[row * self.w + x0.min(x1)..row * self.w + x1].fill(color); }
+    fn font(&self, kind: FontKind) -> Option<&Font<'static>> {
+        match kind {
+            FontKind::Sans => self.sans.as_ref(),
+            FontKind::Bold => self.bold.as_ref(),
+            FontKind::Mono => self.mono.as_ref(),
+        }
     }
-    /// Text from (`x`, `y`), its cells' top left, cut at `max_w` pixels wide.
-    /// Returns where the next character would go.
-    pub fn text(&mut self, face: &mut Face, x: i32, y: i32, text: &str, color: u32, max_w: i32) -> i32 {
-        let (fw, fh) = (face.w as i32, face.h as i32);
-        let mut at = x;
-        for c in text.chars() {
-            if at + fw > x + max_w { break; }
-            if let Some(cov) = face.coverage(c) {
-                for gy in 0..fh {
-                    let py = y + gy;
-                    if py < 0 || py >= self.h as i32 { continue; }
-                    for gx in 0..fw {
-                        let px = at + gx;
-                        let a = cov[(gy * fw + gx) as usize] as u32;
-                        if a == 0 || px < 0 || px >= self.w as i32 { continue; }
-                        let p = &mut self.px[py as usize * self.w + px as usize];
-                        *p = blend(*p, color, a);
+
+    pub fn measure(&self, kind: FontKind, px_h: i32, text: &str) -> i32 {
+        let Some(font) = self.font(kind) else {
+            return text.chars().count() as i32 * (px_h / 2).max(6);
+        };
+        let size = (px_h.max(10) as u32) * 64;
+        let mut pen = 0i32;
+        let mut prev = None;
+        for ch in text.chars() {
+            let Some(id) = font.glyph(ch as u32) else {
+                pen += (px_h / 2) * FX;
+                prev = None;
+                continue;
+            };
+            if let Some(p) = prev {
+                pen += font.kerning(p, id, size);
+            }
+            pen += font.advance(id, size);
+            prev = Some(id);
+        }
+        pen / FX
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        &mut self,
+        kind: FontKind,
+        buf: &mut [u32],
+        bw: usize,
+        bh: usize,
+        x: i32,
+        y: i32,
+        max_w: i32,
+        px_h: i32,
+        text: &str,
+        color: u32,
+    ) -> i32 {
+        let font = match kind {
+            FontKind::Sans => self.sans.as_ref(),
+            FontKind::Bold => self.bold.as_ref(),
+            FontKind::Mono => self.mono.as_ref(),
+        };
+        let Some(font) = font else {
+            return x;
+        };
+        let px_size = px_h.max(10) as usize;
+        let size = (px_size * 64) as u32;
+        let asc = font.ascender(size);
+        let line_h = ((font.ascender(size) - font.descender(size)) / FX + 2).max(px_size as i32) as usize;
+        let limit = (x + max_w).min(bw as i32);
+        let cr = (color >> 16) & 0xFF;
+        let cg = (color >> 8) & 0xFF;
+        let cb = color & 0xFF;
+        let pad = 2usize;
+        let mut pen = x * FX;
+        let mut prev = None;
+        for ch in text.chars() {
+            if pen / FX >= limit - 4 {
+                break;
+            }
+            let Some(id) = font.glyph(ch as u32) else {
+                pen += (px_h / 2) * FX;
+                prev = None;
+                continue;
+            };
+            if let Some(p) = prev {
+                pen += font.kerning(p, id, size);
+            }
+            let adv = font.advance(id, size);
+            let gx0 = (pen / FX) - pad as i32;
+            let gw = ((adv / FX).max(0) as usize + 2 * pad + 2).min(64);
+            if gw > 0 && line_h > 0 && line_h <= 64 {
+                let slen = scratch_len(gw, line_h);
+                if self.acc.len() < slen {
+                    self.acc.resize(slen, 0);
+                }
+                if self.glyph.len() < gw * line_h {
+                    self.glyph.resize(gw * line_h, 0);
+                }
+                self.glyph[..gw * line_h].fill(0);
+                let sub = pen - (pen / FX) * FX + pad as i32 * FX;
+                font.draw(
+                    id,
+                    size,
+                    sub,
+                    asc + FX,
+                    gw,
+                    line_h,
+                    &mut self.acc[..slen],
+                    &mut self.glyph[..gw * line_h],
+                );
+                for row in 0..line_h {
+                    let py = y + row as i32;
+                    if py < 0 || py >= bh as i32 {
+                        continue;
+                    }
+                    let row_off = py as usize * bw;
+                    for col in 0..gw {
+                        let px = gx0 + col as i32;
+                        if px < 0 || px >= limit {
+                            continue;
+                        }
+                        let a = self.glyph[row * gw + col] as u32;
+                        if a == 0 {
+                            continue;
+                        }
+                        let dst = buf[row_off + px as usize];
+                        let dr = (dst >> 16) & 0xFF;
+                        let dg = (dst >> 8) & 0xFF;
+                        let db = dst & 0xFF;
+                        let inv = 255 - a;
+                        buf[row_off + px as usize] = (((cr * a + dr * inv) / 255) << 16)
+                            | (((cg * a + dg * inv) / 255) << 8)
+                            | ((cb * a + db * inv) / 255);
                     }
                 }
             }
-            at += fw;
+            pen += adv;
+            prev = Some(id);
         }
-        at
+        pen / FX
     }
 }
 
-/// Text cut to `n` characters, on a character boundary.
+pub fn fill_rect(buf: &mut [u32], bw: usize, bh: usize, x: i32, y: i32, w: i32, h: i32, color: u32) {
+    let x0 = x.max(0) as usize;
+    let y0 = y.max(0) as usize;
+    let x1 = (x + w).clamp(0, bw as i32) as usize;
+    let y1 = (y + h).clamp(0, bh as i32) as usize;
+    if x0 >= x1 {
+        return;
+    }
+    for row in y0..y1 {
+        buf[row * bw + x0..row * bw + x1].fill(color);
+    }
+}
+
+pub fn fill_bordered_card(
+    buf: &mut [u32],
+    bw: usize,
+    bh: usize,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    r: i32,
+    fill: u32,
+    border: u32,
+) {
+    fill_rounded_rect(buf, bw, bh, x, y, w, h, r, border);
+    if w > 2 && h > 2 {
+        fill_rounded_rect(buf, bw, bh, x + 1, y + 1, w - 2, h - 2, (r - 1).max(0), fill);
+    }
+}
+
+/// Draws a 4-bar RSSI / link signal meter.
+pub fn draw_rssi_bars(
+    buf: &mut [u32],
+    bw: usize,
+    bh: usize,
+    x: i32,
+    y: i32,
+    bars_lit: usize,
+    lit_color: u32,
+    dim_color: u32,
+) {
+    for i in 0..4 {
+        let bh_bar = 4 + (i as i32) * 3;
+        let bx = x + (i as i32) * 4;
+        let by = y + (13 - bh_bar);
+        let col = if i < bars_lit { lit_color } else { dim_color };
+        fill_rounded_rect(buf, bw, bh, bx, by, 3, bh_bar, 1, col);
+    }
+}
+
 pub fn clip(text: &str, n: usize) -> &str {
-    match text.char_indices().nth(n) { Some((i, _)) => &text[..i], None => text }
+    match text.char_indices().nth(n) {
+        Some((i, _)) => &text[..i],
+        None => text,
+    }
 }

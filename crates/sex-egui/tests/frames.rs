@@ -10,7 +10,7 @@ const H: usize = 200;
 struct Rig { ctx: egui::Context, painter: Painter, pixels: Vec<u32>, time: f64 }
 
 impl Rig {
-    fn new() -> Self { Self { ctx: egui::Context::default(), painter: Painter::new(), pixels: vec![0; W * H], time: 0.0 } }
+    fn new() -> Self { Self { ctx: sex_egui::new_context(), painter: Painter::new(), pixels: vec![0; W * H], time: 0.0 } }
     fn frame(&mut self, events: Vec<egui::Event>, ui: &mut dyn FnMut(&mut egui::Ui)) {
         self.time += 0.1;
         let out = self.ctx.run_ui(raw_input(W, H, 1.0, 1.0, self.time, events), |u| ui(u));
@@ -137,6 +137,202 @@ fn wheel_steps_scroll_a_scroll_area_under_the_pointer() {
         rig.frame(e, &mut ui);
     }
     for _ in 0..20 { rig.frame(vec![], &mut ui); }
-    drop(ui);
     assert!(first.get() > 0, "first visible line stayed {}", first.get());
+}
+
+#[test]
+fn noir_fonts_and_obsidian_visuals_apply_cleanly() {
+    let defs = sex_egui::noir_font_definitions();
+    let prop = &defs.families[&egui::FontFamily::Proportional];
+    let semibold = &defs.families[&egui::FontFamily::Name("SemiBold".into())];
+    let mono = &defs.families[&egui::FontFamily::Monospace];
+    assert_eq!(prop.first().map(String::as_str), Some("Geist-Medium"));
+    assert_eq!(semibold.first().map(String::as_str), Some("Geist-SemiBold"));
+    assert_eq!(mono.first().map(String::as_str), Some("GeistMono-Medium"));
+    assert!(prop.iter().any(|f| f == "egui-icons"));
+
+    let ctx = sex_egui::new_context();
+    let style = ctx.global_style();
+    assert_eq!(style.visuals.panel_fill, egui::Color32::from_rgb(0x0B, 0x0D, 0x12));
+    assert_eq!(style.visuals.window_fill, egui::Color32::from_rgb(0x13, 0x16, 0x1F));
+    assert_eq!(style.visuals.extreme_bg_color, egui::Color32::from_rgb(0x08, 0x0A, 0x0E));
+    assert_eq!(style.visuals.widgets.inactive.bg_fill, egui::Color32::from_rgb(0x1B, 0x20, 0x2C));
+    assert_eq!(style.visuals.widgets.hovered.bg_fill, egui::Color32::from_rgb(0x23, 0x29, 0x38));
+    assert_eq!(style.text_styles[&egui::TextStyle::Button].family, egui::FontFamily::Name("SemiBold".into()));
+    assert_eq!(style.text_styles[&egui::TextStyle::Heading].family, egui::FontFamily::Name("SemiBold".into()));
+    assert_eq!(style.text_styles[&egui::TextStyle::Body].family, egui::FontFamily::Proportional);
+
+    // Distinct active fills across all 4 NoirAccent variants.
+    let actives: Vec<_> = sex_egui::NoirAccent::ALL
+        .into_iter()
+        .map(|a| {
+            sex_egui::apply_noir_theme_with_accent(&ctx, a);
+            ctx.global_style().visuals.widgets.active.bg_fill
+        })
+        .collect();
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            assert_ne!(actives[i], actives[j]);
+        }
+    }
+}
+
+fn click_with(x: i16, y: i16, button: u8, mods: egui::Modifiers) -> Vec<egui::Event> {
+    let mut e = Vec::new();
+    keys::pointer_events(x, y, PointerKind::Down(button), 1.0, mods, &mut e);
+    keys::pointer_events(x, y, PointerKind::Up(button), 1.0, mods, &mut e);
+    e
+}
+
+fn press_key(code: u8, shift: bool, ctrl: bool, alt: bool, sup: bool, ch: Option<char>, clip: &str) -> Vec<egui::Event> {
+    let mut e = Vec::new();
+    keys::key_events_with(code, shift, ctrl, alt, sup, ch, clip, &mut e);
+    e
+}
+
+#[test]
+fn super_and_ctrl_shortcuts_work_plus_alt_and_super_navigation() {
+    use std::cell::RefCell;
+    let mut rig = Rig::new();
+    let text = RefCell::new(String::from("alpha beta gamma"));
+    let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+    let mut ui = |u: &mut egui::Ui| {
+        let mut s = text.borrow_mut();
+        rect.set(u.add(sex_egui::TextEdit::singleline(&mut *s)).rect);
+    };
+    rig.frame(vec![], &mut ui);
+    let c = rect.get().center();
+    rig.frame(click(c.x as i16, c.y as i16), &mut ui);
+
+    // Super+Right jumps to end, Alt+Backspace deletes last word
+    rig.frame(press_key(0x4D, false, false, false, true, None, ""), &mut ui);
+    rig.frame(press_key(0x0E, false, false, true, false, None, ""), &mut ui);
+    assert_eq!(*text.borrow(), "alpha beta ");
+
+    // Super+A, Super+C, Super+X, Super+V, Super+Z, Super+Shift+Z
+    rig.frame(press_key(0x1E, false, false, false, true, Some('a'), ""), &mut ui);
+    let out = rig.ctx.run_ui(raw_input(W, H, 1.0, 1.0, rig.time + 0.1, press_key(0x2E, false, false, false, true, Some('c'), "")), |u| ui(u));
+    let copied = out.platform_output.commands.iter().find_map(|c| match c {
+        egui::OutputCommand::CopyText(t) => Some(t.clone()),
+        _ => None,
+    });
+    assert_eq!(copied.as_deref(), Some("alpha beta "));
+    rig.frame(press_key(0x2D, false, false, false, true, Some('x'), ""), &mut ui);
+    assert!(text.borrow().is_empty());
+    // Allow egui's 1s undo coalescing window to seal before pasting.
+    rig.time += 1.2;
+    rig.frame(vec![], &mut ui);
+    rig.frame(press_key(0x2F, false, false, false, true, Some('v'), "noir"), &mut ui);
+    assert_eq!(*text.borrow(), "noir");
+    rig.time += 1.2;
+    rig.frame(vec![], &mut ui);
+    rig.frame(press_key(0x2C, false, false, false, true, Some('z'), ""), &mut ui);
+    assert_eq!(*text.borrow(), "");
+    rig.frame(press_key(0x2C, true, false, false, true, Some('z'), ""), &mut ui);
+    assert_eq!(*text.borrow(), "noir");
+    rig.frame(press_key(0x2C, false, false, false, true, Some('z'), ""), &mut ui);
+    assert_eq!(*text.borrow(), "");
+    rig.frame(press_key(0x15, false, false, false, true, Some('y'), ""), &mut ui);
+    assert_eq!(*text.borrow(), "noir");
+}
+
+#[test]
+fn noir_text_edit_ghost_completion_tab_and_right_arrow_plus_autocorrect_revert() {
+    use std::cell::RefCell;
+    let mut rig = Rig::new();
+    let text = RefCell::new(String::new());
+    let other = RefCell::new(String::new());
+    let field_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+
+    let mut ui = |u: &mut egui::Ui| {
+        field_rect.set(u.add(sex_egui::TextEdit::singleline(&mut *text.borrow_mut())).rect);
+        u.add(sex_egui::TextEdit::singleline(&mut *other.borrow_mut()));
+    };
+
+    rig.frame(vec![], &mut ui);
+    let c = field_rect.get().center();
+    rig.frame(click(c.x as i16, c.y as i16), &mut ui);
+
+    // Type "pref" -> ghost completion "erences" shown -> Tab accepts without moving focus!
+    let mut evs = Vec::new();
+    for (code, ch) in [(0x19u8, 'p'), (0x13, 'r'), (0x12, 'e'), (0x21, 'f')] {
+        keys::key_events(code, false, false, Some(ch), "", &mut evs);
+    }
+    rig.frame(evs, &mut ui);
+    assert_eq!(*text.borrow(), "pref");
+
+    // Tab accepts -> "preferences"
+    rig.frame(press_key(0x0F, false, false, false, false, None, ""), &mut ui);
+    assert_eq!(*text.borrow(), "preferences");
+
+    // Type " avail" -> Right Arrow accepts -> "preferences available"
+    let mut evs2 = Vec::new();
+    for (code, ch) in [(0x39u8, ' '), (0x1E, 'a'), (0x2F, 'v'), (0x1E, 'a'), (0x17, 'i'), (0x26, 'l')] {
+        keys::key_events(code, false, false, Some(ch), "", &mut evs2);
+    }
+    rig.frame(evs2, &mut ui);
+    rig.frame(press_key(0x4D, false, false, false, false, None, ""), &mut ui);
+    assert_eq!(*text.borrow(), "preferences available");
+
+    // Type " teh" then Space -> autocorrect to "preferences available the ", then 1 Backspace reverts!
+    let mut evs3 = Vec::new();
+    for (code, ch) in [(0x39u8, ' '), (0x14, 't'), (0x12, 'e'), (0x23, 'h')] {
+        keys::key_events(code, false, false, Some(ch), "", &mut evs3);
+    }
+    rig.frame(evs3, &mut ui);
+    rig.frame(press_key(0x39, false, false, false, false, Some(' '), ""), &mut ui);
+    assert_eq!(*text.borrow(), "preferences available the ");
+
+    // 1 Backspace reverts "the " -> "teh "
+    rig.frame(press_key(0x0E, false, false, false, false, None, ""), &mut ui);
+    assert_eq!(*text.borrow(), "preferences available teh ");
+    assert!(other.borrow().is_empty(), "Tab stayed inside field while accepting ghost text");
+}
+
+#[test]
+fn noir_text_edit_ctrl_click_context_menu_replaces_misspelling() {
+    use std::cell::RefCell;
+    let mut rig = Rig::new();
+    let text = RefCell::new(String::from("recieve"));
+    let field_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+
+    let mut ui = |u: &mut egui::Ui| {
+        field_rect.set(u.add(sex_egui::TextEdit::singleline(&mut *text.borrow_mut())).rect);
+    };
+    rig.frame(vec![], &mut ui);
+
+    let r = field_rect.get();
+    // Ctrl + Left-Click near start of "recieve" opens Noir context popup with "receive" at top!
+    let ctrl_mod = keys::modifiers_with(false, true, false, false);
+    rig.frame(click_with((r.left() + 18.0) as i16, r.center().y as i16, 0, ctrl_mod), &mut ui);
+    rig.frame(vec![], &mut ui);
+
+    // Click first row ("receive") inside the popup
+    rig.frame(click((r.left() + 45.0) as i16, (r.center().y + 18.0) as i16), &mut ui);
+    assert_eq!(*text.borrow(), "receive");
+}
+
+#[test]
+fn noir_text_edit_code_mode_disables_autocorrect_and_ghost() {
+    use std::cell::RefCell;
+    let mut rig = Rig::new();
+    let text = RefCell::new(String::new());
+    let field_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+
+    let mut ui = |u: &mut egui::Ui| {
+        field_rect.set(
+            u.add(sex_egui::TextEdit::singleline(&mut *text.borrow_mut()).mode(sex_egui::TextMode::Code))
+                .rect,
+        );
+    };
+    rig.frame(vec![], &mut ui);
+    let c = field_rect.get().center();
+    rig.frame(click(c.x as i16, c.y as i16), &mut ui);
+
+    let mut evs = Vec::new();
+    for (code, ch) in [(0x14u8, 't'), (0x12, 'e'), (0x23, 'h'), (0x39, ' ')] {
+        keys::key_events(code, false, false, Some(ch), "", &mut evs);
+    }
+    rig.frame(evs, &mut ui);
+    assert_eq!(*text.borrow(), "teh ");
 }

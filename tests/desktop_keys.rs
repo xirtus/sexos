@@ -37,10 +37,17 @@ fn volume_keys_belong_to_shell() {
     assert_eq!(k.event(keys::KEY_MUTE, 1), Volume(0));
     assert_eq!(k.event(keys::KEY_MUTE, 2), Consume);
     assert_eq!(k.event(keys::KEY_MUTE, 0), Consume);
-    assert_eq!(sex_codes(), (0x75, 0x76, 0x77));
+    assert_eq!(k.event(keys::KEY_MIC_MUTE, 1), MicVolume(0));
+    assert_eq!(k.event(keys::KEY_MIC_MUTE, 2), Consume);
+    assert_eq!(k.event(keys::KEY_MIC_MUTE, 0), Consume);
+    assert_eq!(k.event(0x1D, 1), Pass);
+    assert_eq!(k.event(keys::KEY_VOLUME_UP, 1), MicVolume(keys::VOLUME_STEP));
+    assert_eq!(k.event(keys::KEY_VOLUME_DOWN, 2), MicVolume(-keys::VOLUME_STEP));
+    assert_eq!(k.event(0x1D, 0), Pass);
+    assert_eq!(sex_codes(), (0x75, 0x76, 0x77, 0x79));
 }
-fn sex_codes() -> (u8, u8, u8) {
+fn sex_codes() -> (u8, u8, u8, u8) {
     let s = std::fs::read_to_string("crates/sex-pdx/src/app_key.rs").unwrap();
     let get = |name: &str| s.lines().find(|l| l.contains(name)).and_then(|l| l.split("0x").nth(1)).and_then(|h| u8::from_str_radix(&h[..2], 16).ok()).unwrap_or(0);
-    (get("KEY_MUTE:"), get("KEY_VOLUME_DOWN:"), get("KEY_VOLUME_UP:"))
+    (get("KEY_MUTE:"), get("KEY_VOLUME_DOWN:"), get("KEY_VOLUME_UP:"), get("KEY_MIC_MUTE:"))
 }

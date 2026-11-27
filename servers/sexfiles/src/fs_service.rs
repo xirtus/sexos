@@ -416,9 +416,15 @@ fn bring_up_on(sectors: u64) -> State {
     let blocks = (sectors - w::BASE_LBA) / SECTORS;
     place(blocks);
     match Fs::mount(Disk { blocks }, memory()) {
-        Ok(fs) => {
+        Ok(mut fs) => {
             let s = fs.statfs();
             sex_pdx::serial_record!("[files.fs.mounted] total={} free={} generation={}", s.total, s.free, s.generation);
+            if bin_needs_seed(&mut fs) {
+                unsafe { NEEDS_MEDIA_SEED = true; }
+                if seed_bin_from_media(&mut fs) > 0 {
+                    unsafe { NEEDS_MEDIA_SEED = false; }
+                }
+            }
             State::Ready(fs)
         }
         Err(Error::Unformatted) => match Fs::format(Disk { blocks }, memory()) {
@@ -426,6 +432,10 @@ fn bring_up_on(sectors: u64) -> State {
                 sex_pdx::serial_record!("[files.fs.formatted] total={}", fs.statfs().total);
                 let mut fs = fs;
                 if fs.mkdir(b"/bin", 0).and_then(|_| fs.commit()).is_err() { sex_pdx::serial_record!("[files.fs.bin.failed]"); }
+                unsafe { NEEDS_MEDIA_SEED = true; }
+                if seed_bin_from_media(&mut fs) > 0 {
+                    unsafe { NEEDS_MEDIA_SEED = false; }
+                }
                 State::Ready(fs)
             }
             Err(e) => { sex_pdx::serial_record!("[files.fs.format.failed] error={:?}", e); State::Absent }
@@ -444,6 +454,107 @@ fn bring_up_on(sectors: u64) -> State {
             }
         }
         Err(e) => { sex_pdx::serial_record!("[files.fs.mount.failed] error={:?}", e); State::Absent }
+    }
+}
+
+static mut NEEDS_MEDIA_SEED: bool = false;
+
+fn bin_needs_seed(fs: &mut Fs<'static, Disk>) -> bool {
+    match fs.open(b"/bin") {
+        Ok(st) if st.kind == Kind::Dir => {
+            let mut name = [0u8; sexfs::NAME_MAX];
+            fs.read_dir(st.id, 0, &mut name).ok().flatten().is_none()
+        }
+        Ok(_) => false,
+        Err(Error::NotFound) => true,
+        Err(_) => false,
+    }
+}
+
+/// Copies any `/media/<vol>/programs/<name>` binaries missing from `/bin/` onto the mounted
+/// SexOS filesystem. No-op if no `/media/` USB programs are present.
+fn seed_bin_from_media(fs: &mut Fs<'static, Disk>) -> usize {
+    let progs = crate::volumes::usb_programs();
+    if progs.is_empty() {
+        return 0;
+    }
+    if writes_pending() {
+        commit_writes(fs);
+    }
+    let now = sex_pdx::civil_time_ms().map(|ms| ms / 1000).unwrap_or(0);
+    match fs.open(b"/bin") {
+        Ok(st) if st.kind == Kind::Dir => {}
+        Ok(_) => return 0,
+        Err(Error::NotFound) => {
+            if fs.mkdir(b"/bin", now).and_then(|_| fs.commit()).is_err() {
+                let _ = fs.rollback();
+                return 0;
+            }
+        }
+        Err(_) => return 0,
+    }
+    let mut chunk = alloc::vec::Vec::new();
+    if chunk.try_reserve_exact(64 * 1024).is_err() {
+        return 0;
+    }
+    chunk.resize(64 * 1024, 0u8);
+
+    let reserve_blocks = (fs.statfs().total / 8).clamp(4096, 16384);
+    let mut seeded = 0usize;
+    let mut seeded_bytes = 0u64;
+    for p in progs {
+        let mut path = [0u8; 32];
+        let prefix = sex_pdx::program_store::BIN;
+        path[..prefix.len()].copy_from_slice(prefix);
+        path[prefix.len()..prefix.len() + p.name.len()].copy_from_slice(p.name.as_bytes());
+        let full_path = &path[..prefix.len() + p.name.len()];
+        if fs.open(full_path).is_ok() {
+            continue;
+        }
+        let need_blocks = p.size.div_ceil(BLOCK as u64) + 16;
+        if fs.statfs().free <= reserve_blocks + need_blocks {
+            continue;
+        }
+        let Ok(id) = fs.create(full_path, now) else {
+            let _ = fs.rollback();
+            continue;
+        };
+        let wrote = crate::volumes::stream_usb_program(p.mount_idx, p.name.as_bytes(), &mut chunk, |off, bytes| {
+            let mut put = 0usize;
+            while put < bytes.len() {
+                match fs.write(id, off + put as u64, &bytes[put..], now) {
+                    Ok(0) | Err(_) => return Err(()),
+                    Ok(n) => put += n,
+                }
+            }
+            Ok(())
+        });
+        match wrote {
+            Ok(bytes) if fs.commit().is_ok() => {
+                seeded += 1;
+                seeded_bytes += bytes;
+            }
+            _ => {
+                let _ = fs.rollback();
+            }
+        }
+    }
+    if seeded > 0 {
+        forget_stats(None);
+        sex_pdx::serial_record!("[files.fs.seed] programs={} bytes={}", seeded, seeded_bytes);
+    }
+    seeded
+}
+
+/// Called after USB media mounts so an initially empty `/bin/` gets seeded once USB arrives.
+pub fn maybe_seed_on_usb_mount() {
+    if !unsafe { NEEDS_MEDIA_SEED } {
+        return;
+    }
+    if let State::Ready(fs) = unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        if seed_bin_from_media(fs) > 0 {
+            unsafe { NEEDS_MEDIA_SEED = false; }
+        }
     }
 }
 pub fn status(e: Error) -> u8 {

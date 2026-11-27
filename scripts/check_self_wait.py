@@ -223,7 +223,9 @@ ACPI_AUX_COHORTS=(
  # x17 trackpad: ACPI _HID/_CID match ignores case (wait loop unchanged), 2026-11-26
  ('2dd1de9e1bb4de69e2e1cca06d56bc130d04173dc47a50caa4d57039257d34de','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'),
  # x17 trackpad + battery/lid ref unwrap, _BIF fallback, 16th SSDT & _CST diagnostics + power::PROFILE (wait loop unchanged), 2026-11-26
- ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','58d75780cd168c6538c0388da110fbc966e13b7cd169b20a012070ee75821884'))
+ ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','58d75780cd168c6538c0388da110fbc966e13b7cd169b20a012070ee75821884'),
+ # x17 WMI hotkeys (Brightness, GModeToggle, MicMute counter in Sensors; wait loop unchanged), 2026-11-27
+ ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','19c24cbf7758b2a07386c8d4f4756c585cf2ba7e365e5aed65f64f5e3ec21363'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')

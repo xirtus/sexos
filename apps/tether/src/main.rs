@@ -84,7 +84,7 @@ struct TetherApp {
     console: Vec<String>,
     approval: Option<PendingApproval>,
     wave_review: Option<PendingWaveReview>,
-    input: String,
+    input: sex_app::RichTextInput,
     status_line: String,
     scroll_lines: usize,
     ui: TetherUi,
@@ -123,7 +123,13 @@ impl TetherApp {
             console: Vec::new(),
             approval: None,
             wave_review: None,
-            input: String::new(),
+            input: {
+                let mut f = sex_app::RichTextInput::new("", sex_app::TextMode::SingleLineProse)
+                    .with_placeholder("Message Antigravity over ACP, or /connect HOST PIN | /help")
+                    .with_max_bytes(512);
+                f.focused = true;
+                f
+            },
             status_line: String::from("Disconnected. Type /connect HOST[:PORT] [PIN] or click the host pill."),
             scroll_lines: 0,
             ui: TetherUi::new(),
@@ -747,12 +753,22 @@ impl TetherApp {
         );
     }
 
+    fn sync_input_mode(&mut self) {
+        let mode = if self.input.text().starts_with('/') {
+            sex_app::TextMode::Code
+        } else {
+            sex_app::TextMode::SingleLineProse
+        };
+        self.input.set_mode(mode);
+    }
+
     fn submit_input(&mut self, window: &mut Window) {
-        let text = String::from(self.input.trim());
+        let text = String::from(self.input.text().trim());
         if text.is_empty() {
             return;
         }
         self.input.clear();
+        self.sync_input_mode();
 
         if let Some(rest) = text.strip_prefix("/connect ") {
             let mut parts = rest.split_whitespace();
@@ -887,7 +903,7 @@ impl TetherApp {
             &self.console,
             self.approval.as_ref(),
             self.wave_review.as_ref(),
-            &self.input,
+            &mut self.input,
             &self.status_line,
             self.scroll_lines,
         );
@@ -984,6 +1000,7 @@ pub extern "C" fn _start() -> ! {
 
         if let Some(ev) = window.next_within(40) {
             dirty = true;
+            app.input.observe_event(&ev);
             match ev {
                 Event::Close => {
                     let _ = tray::remove(TRAY_ID);
@@ -992,15 +1009,23 @@ pub extern "C" fn _start() -> ! {
                 }
                 Event::Resize { .. } => {}
                 Event::Pointer(p) => {
-                    if let sex_pdx::app_pointer::Kind::Down { button: 0 } = p.kind {
-                        if let Some(act) = app.ui.hit_test(p.x as i32, p.y as i32) {
-                            app.handle_action(&mut window, act);
-                        }
-                    } else if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
-                        if steps > 0 {
-                            app.scroll_lines = app.scroll_lines.saturating_add(steps as usize * 3);
-                        } else {
-                            app.scroll_lines = app.scroll_lines.saturating_sub((-steps) as usize * 3);
+                    let pf = if app.center_tab == CenterTab::Chat {
+                        app.input.handle_pointer(&mut window, p)
+                    } else {
+                        sex_app::TextFieldEvent::default()
+                    };
+                    app.sync_input_mode();
+                    if !pf.handled {
+                        if let sex_pdx::app_pointer::Kind::Down { button: 0 } = p.kind {
+                            if let Some(act) = app.ui.hit_test(p.x as i32, p.y as i32) {
+                                app.handle_action(&mut window, act);
+                            }
+                        } else if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
+                            if steps > 0 {
+                                app.scroll_lines = app.scroll_lines.saturating_add(steps as usize * 3);
+                            } else {
+                                app.scroll_lines = app.scroll_lines.saturating_sub((-steps) as usize * 3);
+                            }
                         }
                     }
                 }
@@ -1008,18 +1033,12 @@ pub extern "C" fn _start() -> ! {
                     // F12 hardware kill switch
                     app.toggle_kill_switch(&mut window);
                 }
-                Event::Key(key) if key.code == 0x1C => {
-                    // Enter
-                    app.submit_input(&mut window);
-                }
-                Event::Key(key) if key.code == 0x0E => {
-                    // Backspace
-                    app.input.pop();
-                }
                 Event::Key(key) => {
-                    if let Some(ch) = key.char() {
-                        if !key.control && !ch.is_control() && app.input.len() < 512 {
-                            app.input.push(ch);
+                    if app.center_tab == CenterTab::Chat && app.input.focused {
+                        let ke = app.input.handle_key(&mut window, key);
+                        app.sync_input_mode();
+                        if ke.submitted {
+                            app.submit_input(&mut window);
                         }
                     }
                 }

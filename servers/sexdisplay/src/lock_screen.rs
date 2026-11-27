@@ -12,15 +12,20 @@ const INK: u32 = 0x00E8_ECF4;
 const SOFT: u32 = 0x00A0_A8BC;
 const WARN: u32 = 0x00FF_9C8A;
 
-fn line(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], y0: usize, scale: u32, ink: u32) {
-    let Some(width) = super::glyphs::ui_width(text, scale) else { return };
+fn line_weight(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], y0: usize, scale: u32, ink: u32, body: bool) {
+    let Some(width) = (if body { super::glyphs::ui_body_width(text, scale) } else { super::glyphs::ui_width(text, scale) }) else { return };
     let x0 = w.saturating_sub(width) / 2;
     let lh = super::glyphs::UI_H * scale as usize;
     for y in y0..(y0 + lh).min(h) {
         for x in x0..(x0 + width + 1).min(w) {
             let at = y * w + x;
             if at >= total { return; }
-            let Some(alpha) = super::glyphs::ui_coverage(text, (x - x0) as i32, y - y0, scale) else { return };
+            let cov = if body {
+                super::glyphs::ui_body_coverage(text, (x - x0) as i32, y - y0, scale)
+            } else {
+                super::glyphs::ui_coverage(text, (x - x0) as i32, y - y0, scale)
+            };
+            let Some(alpha) = cov else { return };
             if alpha == 0 { continue; }
             unsafe {
                 let p = fb.add(at);
@@ -28,6 +33,14 @@ fn line(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], y0: usize, 
             }
         }
     }
+}
+
+fn line(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], y0: usize, scale: u32, ink: u32) {
+    line_weight(fb, w, h, total, text, y0, scale, ink, false);
+}
+
+fn body_line(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], y0: usize, scale: u32, ink: u32) {
+    line_weight(fb, w, h, total, text, y0, scale, ink, true);
 }
 
 /// Paints the lock surface over the whole target when locked; false otherwise.
@@ -68,6 +81,6 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize) -> bool {
         s::SAY_NO_PASSWORD => b"No password is set. Press Enter to unlock; set one in Settings.",
         _ => b"Type your password and press Enter.",
     };
-    line(fb, w, h, total, say, mid + 2 * lh, scale, if lock.say == s::SAY_WRONG { WARN } else { SOFT });
+    body_line(fb, w, h, total, say, mid + 2 * lh, scale, if lock.say == s::SAY_WRONG { WARN } else { SOFT });
     true
 }

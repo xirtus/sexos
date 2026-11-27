@@ -737,3 +737,17 @@ fn obs_ws_v5_protocol_browser_bridge_streamdeck_script_rpc_and_cli() {
     assert_eq!(studio.transition_preset, ActiveTransitionPreset::Wipe29);
     let _ = status_code::SUCCESS;
 }
+
+#[test]
+fn noir_theme_paints_and_meets_contrast() {
+    let theme = cabaret::noir_theme();
+    assert_eq!(theme.palette.window, weft::Color::hex(0x0D1017));
+    assert_eq!(theme.palette.surface, weft::Color::hex(0x151924));
+    assert_eq!(theme.palette.border, weft::Color::hex(0x252C3D));
+    assert!(theme.palette.text.contrast(theme.palette.window) >= 7.0);
+    assert!(theme.palette.text_dim.contrast(theme.palette.window) >= 4.5);
+    assert!(theme.palette.on_accent.contrast(theme.palette.accent) >= 4.5);
+    let mut ui = Ui::new(1280, 860, theme, Strings::new("en"));
+    let _app = Cabaret::build(&mut ui);
+    paint_assert(&mut ui, 1280, 860);
+}

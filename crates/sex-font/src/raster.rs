@@ -180,6 +180,39 @@ pub fn div_round(n: i64, d: i64) -> i64 {
     if (n < 0) != (d < 0) { (n - d / 2) / d } else { (n + d / 2) / d }
 }
 
+/// Subtle Apple CoreText-style in-place coverage stem darkening for small UI glyphs.
+///
+/// Warms partially covered stem pixels (`0 < v < 255`) toward adjacent horizontal
+/// stems by `strength / 255` (typically ~16..20 for ~6–8% weight gain at <=16 px)
+/// while keeping zero exterior pixels strictly zero (no edge halo or width bloat).
+pub fn stem_darken_coverage(w: usize, h: usize, out: &mut [u8], strength: u8) {
+    if strength == 0 || w == 0 || h == 0 || out.len() < w * h {
+        return;
+    }
+    let s = strength as u32;
+    for y in 0..h {
+        let row = &mut out[y * w..(y + 1) * w];
+        let mut prev_left = 0u8;
+        for x in 0..w {
+            let v = row[x];
+            if v > 0 && v < 255 {
+                let right = if x + 1 < w { row[x + 1] } else { 0 };
+                let max_h = prev_left.max(right);
+                let edge_boost = if max_h > v {
+                    ((max_h - v) as u32 * s + 127) / 255
+                } else {
+                    0
+                };
+                // Subtle midtone stroke lift for 1px hairline stems.
+                let core_boost = ((v as u32 * (255 - v as u32) * s) + 32512) / 65025;
+                let boost = edge_boost.max(core_boost);
+                row[x] = v.saturating_add(boost.min(255) as u8);
+            }
+            prev_left = v;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +284,18 @@ mod tests {
         let total: u32 = out.iter().map(|v| *v as u32).sum();
         assert!((total as i32 - 32 * 255).abs() <= 8, "{total}");
         for i in 0..8 { assert_eq!(out[i * 8 + i], 128); }
+    }
+
+    #[test]
+    fn stem_darken_coverage_warms_edges_without_zero_halo() {
+        let mut out = [0, 96, 255, 96, 0, 0, 128, 128, 0, 0];
+        let orig = out;
+        stem_darken_coverage(5, 2, &mut out, 20);
+        assert_eq!(out[0], 0);
+        assert_eq!(out[4], 0);
+        assert_eq!(out[2], 255);
+        assert!(out[1] > orig[1]);
+        assert!(out[3] > orig[3]);
+        assert!(out[6] > orig[6]);
     }
 }

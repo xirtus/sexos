@@ -50,6 +50,12 @@ pub const LAST_PLAYER: u64 = 11;
 /// or locks the screen. Its own tag keeps the answer apart from the other mixer
 /// answers, which the Shell matches to its asks in order.
 pub const STREAMING: u64 = 12;
+/// Master microphone mute: `a` 0 off, 1 on, 2 toggle. Replies with `state`.
+pub const MUTE_MIC: u64 = 13;
+/// Master microphone gain by `a` as i64 (0..=100, clamped). Replies with `state`.
+pub const STEP_MIC: u64 = 14;
+/// Master microphone gain to `a` (0..=100). Replies with `state`.
+pub const SET_MIC: u64 = 15;
 pub const STREAMING_TAG: u64 = 0x4E << 56;
 pub const fn is_streaming_reply(word: u64) -> bool { word >> 8 == STREAMING_TAG >> 8 }
 /// Set in the outputs word while Bell follows the headphone jack.
@@ -88,11 +94,24 @@ pub const fn is_reply(word: u64) -> bool { word >> 56 == TAG >> 56 }
 /// Reply when the caller may not ask, or the request is malformed.
 pub const REFUSED: u64 = TAG | 1 << 55;
 
-/// Master state word: volume in bits 0..8, muted bit 8, sound card present bit 9.
+/// Master state word: volume in bits 0..8, muted bit 8, sound card present bit 9,
+/// microphone attenuation (100 - mic_volume) in bits 16..24 (0 at default 100%), and
+/// microphone muted bit 24. Keeping bits 0..10 and upper bits zero at default (100%,
+/// unmuted) preserves exact wire compatibility with legacy callers.
 pub const fn state(volume: u8, muted: bool, card: bool) -> u64 { TAG | volume as u64 | (muted as u64) << 8 | (card as u64) << 9 }
+pub const fn state_with_mic(volume: u8, muted: bool, card: bool, mic_volume: u8, mic_muted: bool) -> u64 {
+    let mic = if mic_volume > 100 { 100 } else { mic_volume };
+    let atten = 100u8 - mic;
+    state(volume, muted, card) | (atten as u64) << 16 | (mic_muted as u64) << 24
+}
 pub const fn state_volume(word: u64) -> u8 { word as u8 }
 pub const fn state_muted(word: u64) -> bool { word & 1 << 8 != 0 }
 pub const fn state_card(word: u64) -> bool { word & 1 << 9 != 0 }
+pub const fn state_mic_volume(word: u64) -> u8 {
+    let atten = (word >> 16) as u8;
+    100u8.saturating_sub(if atten > 100 { 100 } else { atten })
+}
+pub const fn state_mic_muted(word: u64) -> bool { word & 1 << 24 != 0 }
 
 /// One row's stream word: the person's volume (bits 0..8), muted (bit 8), playing
 /// (bit 9), may hear the microphone (bit 10), hearing it now (bit 11), the volume the program asks for (bits 16..24), its PD (bits 32..56), and
@@ -384,4 +403,27 @@ pub fn decode_private_sink_reply(word: u64) -> Option<(u32, PrivateSinkRoute, bo
     let route = PrivateSinkRoute::from_u8(((word >> 24) & 0xFF) as u8)?;
     let active = ((word >> 32) & 1) != 0;
     Some((sink_id, route, active))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn master_state_preserves_legacy_word_and_packs_mic() {
+        assert_eq!(state(100, false, true), 0x4d00_0000_0000_0264);
+        assert_eq!(state_with_mic(100, false, true, 100, false), 0x4d00_0000_0000_0264);
+        assert_eq!(state_with_mic(50, true, true, 100, false), 0x4d00_0000_0000_0332);
+        let w = state_with_mic(75, false, true, 85, true);
+        assert_eq!(state_volume(w), 75);
+        assert!(!state_muted(w));
+        assert!(state_card(w));
+        assert_eq!(state_mic_volume(w), 85);
+        assert!(state_mic_muted(w));
+        let zero = state_with_mic(10, true, false, 0, false);
+        assert_eq!(state_mic_volume(zero), 0);
+        assert!(!state_mic_muted(zero));
+        assert_eq!(state_mic_volume(state(55, false, true)), 100);
+        assert!(!state_mic_muted(state(55, false, true)));
+    }
 }

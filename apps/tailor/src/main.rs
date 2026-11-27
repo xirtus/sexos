@@ -553,8 +553,7 @@ struct AppState {
     proxy_base: Option<String>,
     runner: SexToolRunner,
     transcript: String,
-    input: String,
-    input_selected: bool,
+    input: sex_app::RichTextInput,
     status: String,
     scroll_lines: usize,
     stream: Option<ActiveStream>,
@@ -886,8 +885,19 @@ impl AppState {
         }
     }
 
+    fn sync_input_mode(&mut self) {
+        let mode = if self.input.text().starts_with('/') {
+            sex_app::TextMode::Code
+        } else {
+            sex_app::TextMode::SingleLineProse
+        };
+        self.input.set_mode(mode);
+    }
+
     fn handle_submit(&mut self, window: &mut Window) {
-        let line = core::mem::take(&mut self.input);
+        let line = String::from(self.input.text());
+        self.input.clear();
+        self.sync_input_mode();
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return;
@@ -1084,8 +1094,7 @@ impl AppState {
             pending_approval,
             &self.transcript,
             self.scroll_lines,
-            &self.input,
-            self.input_selected,
+            &mut self.input,
             &self.status,
         );
     }
@@ -1123,8 +1132,13 @@ pub extern "C" fn _start() -> ! {
         proxy_base: None,
         runner: SexToolRunner::new(),
         transcript: String::new(),
-        input: String::new(),
-        input_selected: false,
+        input: {
+            let mut f = sex_app::RichTextInput::new("", sex_app::TextMode::SingleLineProse)
+                .with_placeholder("Ask Tailor anything, or type /proxy <url> or /key <provider> <key> ...")
+                .with_max_bytes(1024);
+            f.focused = true;
+            f
+        },
         status: String::from("Loading keys & OAuth into Shibari vault..."),
         scroll_lines: 0,
         stream: None,
@@ -1165,6 +1179,7 @@ pub extern "C" fn _start() -> ! {
         let mut dirty = false;
         let timeout = if app.stream.is_some() { 20 } else { 250 };
         if let Some(event) = window.next_within(timeout) {
+            app.input.observe_event(&event);
             match event {
                 Event::Close => {
                     if let Some(mut active) = app.stream.take() {
@@ -1176,8 +1191,12 @@ pub extern "C" fn _start() -> ! {
                 Event::Resize { .. } => {
                     dirty = true;
                 }
-                Event::Pointer(p) => match p.kind {
-                    sex_pdx::app_pointer::Kind::Down { button: 0 } => {
+                Event::Pointer(p) => {
+                    let pf = app.input.handle_pointer(&mut window, p);
+                    app.sync_input_mode();
+                    if pf.handled {
+                        dirty = true;
+                    } else if let sex_pdx::app_pointer::Kind::Down { button: 0 } = p.kind {
                         let px = p.x as i32;
                         let py = p.y as i32;
                         if let Some(hit) = app.ui.hits.iter().find(|h| h.contains(px, py)).copied() {
@@ -1194,31 +1213,29 @@ pub extern "C" fn _start() -> ! {
                                     dirty = true;
                                 }
                                 ui::HitAction::Approve if app.stream.is_none() => {
-                                    app.input = String::from("/approve");
+                                    app.input.set_text("/approve");
                                     app.handle_submit(&mut window);
                                     dirty = true;
                                 }
                                 ui::HitAction::Deny if app.stream.is_none() => {
-                                    app.input = String::from("/deny");
+                                    app.input.set_text("/deny");
                                     app.handle_submit(&mut window);
                                     dirty = true;
                                 }
                                 ui::HitAction::Send if app.stream.is_none() => {
                                     app.handle_submit(&mut window);
-                                    app.input_selected = false;
                                     dirty = true;
                                 }
                                 ui::HitAction::Clear => {
                                     app.input.clear();
-                                    app.input_selected = false;
+                                    app.sync_input_mode();
                                     app.status = String::from("Input cleared.");
                                     dirty = true;
                                 }
                                 _ => {}
                             }
                         }
-                    }
-                    sex_pdx::app_pointer::Kind::Wheel { steps } => {
+                    } else if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
                         if steps > 0 {
                             app.scroll_lines = app.scroll_lines.saturating_add(3);
                         } else if steps < 0 {
@@ -1226,39 +1243,18 @@ pub extern "C" fn _start() -> ! {
                         }
                         dirty = true;
                     }
-                    _ => {}
-                },
-                Event::Key(key) if key.control && key.code == 0x1E => {
-                    // Ctrl+A: select all prompt text
-                    app.input_selected = !app.input.is_empty();
-                    dirty = true;
                 }
-                Event::Key(key) if key.control && key.code == 0x2F => {
-                    // Ctrl+V: paste clipboard into prompt
-                    if app.stream.is_none() {
-                        if let Ok(clip) = sex_app::clipboard::paste(&mut window) {
-                            if app.input_selected {
-                                app.input.clear();
-                                app.input_selected = false;
-                            }
-                            for ch in clip.chars() {
-                                if !ch.is_control() && app.input.len() < 1024 {
-                                    app.input.push(ch);
-                                }
-                            }
-                            app.status = String::from("Pasted from clipboard.");
-                            dirty = true;
-                        }
-                    }
-                }
-                Event::Key(key) if key.control && key.code == 0x2e => {
-                    // Ctrl+C: cancel active stream, or copy prompt/transcript to clipboard.
+                Event::Key(key) if key.control && !key.shift && !key.alt && key.code == 0x2e && app.stream.is_some() => {
                     if let Some(mut active) = app.stream.take() {
                         active.duplex.close(&mut window);
                         app.push_log("\n[cancelled]");
                         app.status = String::from("Stream cancelled.");
-                    } else if !app.input.is_empty() {
-                        let _ = sex_app::clipboard::copy(&mut window, &app.input);
+                    }
+                    dirty = true;
+                }
+                Event::Key(key) if key.control && !key.shift && !key.alt && key.code == 0x2e && app.input.editor.doc.selection().is_none() => {
+                    if !app.input.text().is_empty() {
+                        let _ = sex_app::clipboard::copy(&mut window, app.input.text());
                         app.status = String::from("Copied prompt to clipboard.");
                     } else if !app.transcript.is_empty() {
                         let _ = sex_app::clipboard::copy(&mut window, &app.transcript);
@@ -1266,50 +1262,26 @@ pub extern "C" fn _start() -> ! {
                     }
                     dirty = true;
                 }
-                Event::Key(key) if key.code == 0x1C => {
-                    // Enter
-                    if app.stream.is_none() {
-                        app.input_selected = false;
-                        app.handle_submit(&mut window);
-                        dirty = true;
-                    }
+                Event::Key(key) if !key.shift && !key.control && !key.alt && app.input.super_down == 0 && matches!(sex_app::nav(key), Some(Nav::Up)) => {
+                    app.scroll_lines = app.scroll_lines.saturating_add(3);
+                    dirty = true;
                 }
-                Event::Key(key) if key.code == 0x0E => {
-                    // Backspace
-                    if app.stream.is_none() {
-                        if app.input_selected {
-                            app.input.clear();
-                            app.input_selected = false;
-                        } else {
-                            app.input.pop();
+                Event::Key(key) if !key.shift && !key.control && !key.alt && app.input.super_down == 0 && matches!(sex_app::nav(key), Some(Nav::Down)) => {
+                    app.scroll_lines = app.scroll_lines.saturating_sub(3);
+                    dirty = true;
+                }
+                Event::Key(key) => {
+                    if app.stream.is_none() && app.input.focused {
+                        let ke = app.input.handle_key(&mut window, key);
+                        app.sync_input_mode();
+                        if ke.submitted {
+                            app.handle_submit(&mut window);
                         }
-                        dirty = true;
-                    }
-                }
-                Event::Key(key) => match sex_app::nav(key) {
-                    Some(Nav::Up) => {
-                        app.scroll_lines = app.scroll_lines.saturating_add(3);
-                        dirty = true;
-                    }
-                    Some(Nav::Down) => {
-                        app.scroll_lines = app.scroll_lines.saturating_sub(3);
-                        dirty = true;
-                    }
-                    _ => {
-                        if app.stream.is_none() {
-                            if let Some(ch) = sex_app::text(key) {
-                                if !ch.is_control() && app.input.len() < 1024 {
-                                    if app.input_selected {
-                                        app.input.clear();
-                                        app.input_selected = false;
-                                    }
-                                    app.input.push(ch);
-                                    dirty = true;
-                                }
-                            }
+                        if ke.handled || ke.changed || ke.submitted {
+                            dirty = true;
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }

@@ -147,6 +147,7 @@ mod shell {
     mod tray_items_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
     mod spotlight_glue{pub unsafe fn key(_:u8,_:u64)->bool{false} pub unsafe fn toggle(){}}
     mod silkbar_menus_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
+    mod bg_apps_glue{pub unsafe fn close_window(_:u64)->bool{false}}
     unsafe fn is_closeable_surface(_:u64)->bool{false}
     unsafe fn close_surface_from_frame_light(_:u64)->bool{false}
     unsafe fn selected_frame_id()->Option<usize>{None}
@@ -171,6 +172,8 @@ mod shell {
     static mut SENT:Vec<(u64,u64,[u64;3])>=Vec::new();
     static mut VOLUME_STEPS:Vec<i8>=Vec::new();
     unsafe fn volume_key(step:i8){VOLUME_STEPS.push(step);}
+    static mut MIC_VOLUME_STEPS:Vec<i8>=Vec::new();
+    unsafe fn mic_volume_key(step:i8){MIC_VOLUME_STEPS.push(step);}
     static mut PREEDIT_NOTICES:usize=0;
     unsafe fn keyboard_preedit_notice()->bool{PREEDIT_NOTICES+=1;true}
     static mut PLAYER_KEYS:Vec<u8>=Vec::new();
@@ -203,7 +206,7 @@ mod shell {
     static mut PROGRAM_HELD:[Option<(u8,Key,Participant)>;8]=[None;8];
     unsafe fn program_held_note(_:u8,_:Key,_:Participant){}
     include!(env!("APP_INPUT_PRODUCTION"));
-    unsafe fn reset(){keyboard_layout::reset();KEY_REPEAT=key_repeat::Repeat::new();KEY_REPEATING=false;CAPS_AS_CTRL=false;crate::TICKS=1;POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
+    unsafe fn reset(){keyboard_layout::reset();KEY_REPEAT=key_repeat::Repeat::new();KEY_REPEATING=false;CAPS_AS_CTRL=false;crate::TICKS=1;POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();MIC_VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
         let _guard=LOCK.lock().unwrap();unsafe{reset();
             assert!(desktop_shortcut(0x1d,1));assert!(desktop_shortcut(0x38,1));
@@ -231,7 +234,10 @@ mod shell {
     #[test] fn volume_keys_go_to_bell_never_to_the_focused_app(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();
         for (code,value) in [(0x77,1),(0x77,2),(0x77,0),(0x76,1),(0x76,0),(0x75,1),(0x75,0)]{assert!(desktop_shortcut(code,value));}
-        assert_eq!(VOLUME_STEPS,vec![5,5,-5,0]);assert!(!APP_INPUT.pending());}
+        assert_eq!(VOLUME_STEPS,vec![5,5,-5,0]);assert!(!APP_INPUT.pending());
+        // Mic mute key and Ctrl+Volume step Bell's mic mute/gain instead of speaker volume.
+        for (code,value) in [(0x79,1),(0x79,2),(0x79,0),(0x1d,1),(0x77,1),(0x76,1),(0x76,2),(0x1d,0)]{assert!(desktop_shortcut(code,value));}
+        assert_eq!(MIC_VOLUME_STEPS,vec![0,5,-5,-5]);assert_eq!(VOLUME_STEPS,vec![5,5,-5,0]);assert!(!APP_INPUT.pending());}
     }
     #[test] fn player_keys_go_to_bell_once_per_press_never_to_the_focused_app(){
         let _lock=LOCK.lock().unwrap();unsafe{reset();

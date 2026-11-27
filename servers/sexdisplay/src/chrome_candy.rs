@@ -15,15 +15,29 @@ pub const CANDY_COUNT: usize = 8;
 /// Harmonious 8-color candy palette (`0x00RRGGBB`).
 /// Index 0..8 correspond to explicit swatches 1..=8 (0 = Auto per-window hue).
 pub const CANDY_PALETTE: [u32; CANDY_COUNT] = [
-    0x00D6_336C, // 1: Berry / SexOS Rose
-    0x00A7_8BFA, // 2: Lavender / Mauve
-    0x0060_A5FA, // 3: Sky / Sapphire
+    0x00F4_3F5E, // 1: Crimson / SexOS Rose
+    0x00A7_8BFA, // 2: Noir Lavender / Mauve
+    0x0038_BDF8, // 3: Ice Cyan / Sky
     0x0034_D399, // 4: Mint / Emerald
     0x00FB_923C, // 5: Peach / Apricot
     0x00FB_BF24, // 6: Honey / Lemon
     0x002D_D4BF, // 7: Aqua / Teal
     0x00F4_72B6, // 8: Coral / Flamingo
 ];
+
+/// Four selectable macOS Noir Accent Tints (`0..=3`), matching `sex_theme::NoirAccent`.
+pub const NOIR_ACCENTS: [u32; 4] = [
+    0x00F4_3F5E, // 0: SexOS Crimson / Rose (Default)
+    0x0094_A3B8, // 1: Graphite / Silver
+    0x00A7_8BFA, // 2: Noir Lavender
+    0x0038_BDF8, // 3: Ice Cyan
+];
+
+/// Maps `accent_tint_idx` (`0..=3`, wrapping) to its macOS Noir accent RGB (`0x00RRGGBB`).
+#[inline]
+pub const fn noir_accent(idx: u8) -> u32 {
+    NOIR_ACCENTS[(idx % 4) as usize]
+}
 
 /// Returns the swatch RGB for `swatch` (1..=8), clamped into the palette.
 #[inline]
@@ -99,26 +113,26 @@ pub const fn window_palette(
     let hue = candy_hue & 0x00FF_FFFF;
     match mode_id {
         MODE_DARK => {
-            // Refined slightly-colored dark glass: rich charcoal base softly
-            // tinted with the window's candy hue — never garish or muddy.
-            let base_bar = 0x001A_1926;
-            let base_band = 0x0014_131E;
-            let base_canvas = 0x000D_1019;
-            let bar_t: u8 = if focused { 66 } else { 36 };
-            let band_t: u8 = if focused { 52 } else { 28 };
+            // macOS Noir Obsidian surfaces (`#0B0D12` base, `#13161F` elevated, `#2A3142` rim)
+            // subtly kissed by each window's candy hue — crisp dark glass, never purple-washed.
+            let base_bar = 0x0013_161F;
+            let base_band = 0x000B_0D12;
+            let base_canvas = 0x000B_0D12;
+            let bar_t: u8 = if focused { 32 } else { 14 };
+            let band_t: u8 = if focused { 24 } else { 10 };
             let rim_t: u8 = if frame_hovered {
-                180
+                160
             } else if focused {
-                148
+                112
             } else {
-                76
+                44
             };
             let title_bar = mix_u8(base_bar, hue, bar_t);
-            let inactive_tab = mix_u8(0x0012_111C, hue, if focused { 32 } else { 18 });
+            let inactive_tab = mix_u8(0x000E_1118, hue, if focused { 18 } else { 8 });
             let band = mix_u8(base_band, hue, band_t);
-            let rim = mix_u8(title_bar, hue, rim_t);
-            let title_divider = mix_u8(title_bar, hue, if focused { 96 } else { 48 });
-            let interior = mix_u8(base_canvas, hue, if focused { 20 } else { 12 });
+            let rim = mix_u8(0x002A_3142, hue, rim_t);
+            let title_divider = mix_u8(0x0022_2836, hue, if focused { 64 } else { 28 });
+            let interior = mix_u8(base_canvas, hue, if focused { 12 } else { 6 });
             WindowPalette { title_bar, inactive_tab, title_divider, band, rim, interior }
         }
         MODE_HIGH_CONTRAST => WindowPalette {
@@ -309,14 +323,14 @@ pub fn control_button_pixel(
     bg
 }
 
-/// Candy & Lavender SilkBar palette constants (`0x00RRGGBB`),
-/// aligned with `sex_theme::candy_lavender`.
-pub const SILKBAR_DARK_TOP: u32 = 0x0021_1635;
-pub const SILKBAR_DARK_BOTTOM: u32 = 0x0031_224C;
-pub const SILKBAR_DARK_SPECULAR: u32 = 0x00EC_DFFF;
-pub const SILKBAR_DARK_HAIRLINE: u32 = 0x00B8_8CFF;
-pub const SILKBAR_DARK_PILL_FILL: u32 = 0x003D_2B5E;
-pub const SILKBAR_DARK_PILL_RIM: u32 = 0x00C9_A8FF;
+/// macOS Noir Obsidian Glass SilkBar palette constants (`0x00RRGGBB`),
+/// aligned with `sex_theme::noir`.
+pub const SILKBAR_DARK_TOP: u32 = 0x000B_0D12;
+pub const SILKBAR_DARK_BOTTOM: u32 = 0x0013_161F;
+pub const SILKBAR_DARK_SPECULAR: u32 = 0x00E2_E8F0;
+pub const SILKBAR_DARK_HAIRLINE: u32 = 0x002A_3142;
+pub const SILKBAR_DARK_PILL_FILL: u32 = 0x001B_202C;
+pub const SILKBAR_DARK_PILL_RIM: u32 = 0x002A_3142;
 
 pub const SILKBAR_LIGHT_TOP: u32 = 0x00F1_E8FF;
 pub const SILKBAR_LIGHT_BOTTOM: u32 = 0x00E4_D6FC;
@@ -325,8 +339,10 @@ pub const SILKBAR_LIGHT_HAIRLINE: u32 = 0x00A7_8BFA;
 pub const SILKBAR_LIGHT_PILL_FILL: u32 = 0x00FA_F6FF;
 pub const SILKBAR_LIGHT_PILL_RIM: u32 = 0x00B8_9CF8;
 
-pub const SILKBAR_ORCHID_ACCENT: u32 = 0x00A7_8BFA;
-pub const SILKBAR_ORCHID_GLOW: u32 = 0x00D8_B4FE;
+pub const SILKBAR_NOIR_ACCENT: u32 = 0x00F4_3F5E;
+pub const SILKBAR_NOIR_GLOW: u32 = 0x00FB_7185;
+pub const SILKBAR_ORCHID_ACCENT: u32 = SILKBAR_NOIR_ACCENT;
+pub const SILKBAR_ORCHID_GLOW: u32 = SILKBAR_NOIR_GLOW;
 
 /// Smooth, modern candy-lavender frosted glass SilkBar pixel at row `y` (bar height `bar_h`).
 /// Renders a vertical candy-lavender frosted gradient with a crisp 1px pastel-lavender
@@ -353,19 +369,19 @@ pub const fn bar_glass_pixel(
             if y + 1 >= bar_h { 0x00FF_FFFF } else { 0x0000_0000 }
         }
         MODE_DARK => {
-            // Deep-plum / lavender-velvet top -> translucent lavender-lilac sheen bottom.
+            // Deep macOS Noir obsidian top -> elevated obsidian bottom glass.
             let body = if reduce_transparency {
                 panel_fill & 0x00FF_FFFF
             } else {
                 let tint = mix_u8(SILKBAR_DARK_TOP, SILKBAR_DARK_BOTTOM, grad_t);
-                mix_u8(blurred_wall & 0x00FF_FFFF, tint, 198)
+                mix_u8(blurred_wall & 0x00FF_FFFF, tint, 212)
             };
             if y == 0 {
-                // Crisp 1px pastel-lavender specular highlight along the top edge.
-                mix_u8(body, SILKBAR_DARK_SPECULAR, 78)
+                // Crisp 1px macOS top specular rim highlight.
+                mix_u8(body, SILKBAR_DARK_SPECULAR, 34)
             } else if y + 1 >= bar_h {
-                // Soft orchid bottom hairline separator.
-                mix_u8(body, SILKBAR_DARK_HAIRLINE, 118)
+                // Obsidian `#2A3142` hairline bottom separator.
+                mix_u8(body, SILKBAR_DARK_HAIRLINE, 180)
             } else {
                 body
             }
@@ -391,9 +407,8 @@ pub const fn bar_glass_pixel(
     }
 }
 
-/// Smooth anti-aliased frosted candy-lavender pill framing a SilkBar cluster or badge
-/// inside box `(bx, by, bw, bh)`. Uses a half-pixel rounded-rectangle SDF with a 1px
-/// anti-aliased edge, subtle vertical lavender frost, and crisp pastel-lavender rim.
+/// Smooth anti-aliased frosted macOS Noir obsidian / Light pearl pill framing a
+/// SilkBar cluster or badge inside box `(bx, by, bw, bh)` with the default accent.
 #[inline]
 pub fn candy_pill_pixel(
     x: usize,
@@ -407,6 +422,56 @@ pub fn candy_pill_pixel(
     accent_glow: bool,
     bg: u32,
 ) -> u32 {
+    candy_pill_pixel_tinted(
+        x,
+        y,
+        bx,
+        by,
+        bw,
+        bh,
+        scale,
+        mode_id,
+        accent_glow,
+        SILKBAR_NOIR_ACCENT,
+        bg,
+    )
+}
+
+/// Alias for [`candy_pill_pixel_tinted`].
+#[inline]
+pub fn noir_pill_pixel(
+    x: usize,
+    y: usize,
+    bx: usize,
+    by: usize,
+    bw: usize,
+    bh: usize,
+    scale: usize,
+    mode_id: u8,
+    accent_glow: bool,
+    accent_rgb: u32,
+    bg: u32,
+) -> u32 {
+    candy_pill_pixel_tinted(x, y, bx, by, bw, bh, scale, mode_id, accent_glow, accent_rgb, bg)
+}
+
+/// Smooth anti-aliased frosted obsidian/pearl pill tinted with `accent_rgb` when `accent_glow` is set.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub fn candy_pill_pixel_tinted(
+    x: usize,
+    y: usize,
+    bx: usize,
+    by: usize,
+    bw: usize,
+    bh: usize,
+    scale: usize,
+    mode_id: u8,
+    accent_glow: bool,
+    accent_rgb: u32,
+    bg: u32,
+) -> u32 {
+    let accent_rgb = accent_rgb & 0x00FF_FFFF;
     let s = scale.max(1);
     let pad_y = 2 * s;
     let ph = bh.saturating_sub(2 * pad_y);
@@ -462,17 +527,18 @@ pub fn candy_pill_pixel(
     let mut fill = match mode_id {
         MODE_DARK => {
             let base_fill = if accent_glow {
-                mix_u8(SILKBAR_DARK_PILL_FILL, SILKBAR_ORCHID_ACCENT, 42)
+                mix_u8(SILKBAR_DARK_PILL_FILL, accent_rgb, 44)
             } else {
                 SILKBAR_DARK_PILL_FILL
             };
-            let top_tint = mix_u8(base_fill, SILKBAR_DARK_SPECULAR, 24);
+            let top_tint = mix_u8(base_fill, SILKBAR_DARK_SPECULAR, 20);
             let pill_col = mix_u8(top_tint, base_fill, local_t);
-            mix_u8(bg, pill_col, if accent_glow { 148 } else { 126 })
+            mix_u8(bg, pill_col, if accent_glow { 176 } else { 154 })
         }
         _ => {
+            let glow = mix_u8(accent_rgb, 0x00FF_FFFF, 96);
             let base_fill = if accent_glow {
-                mix_u8(SILKBAR_LIGHT_PILL_FILL, SILKBAR_ORCHID_GLOW, 38)
+                mix_u8(SILKBAR_LIGHT_PILL_FILL, glow, 38)
             } else {
                 SILKBAR_LIGHT_PILL_FILL
             };
@@ -486,16 +552,33 @@ pub fn candy_pill_pixel(
         let (rim_col, rim_a) = match mode_id {
             MODE_DARK => {
                 if on_top_edge {
-                    (SILKBAR_DARK_SPECULAR, if accent_glow { 96 } else { 72 })
+                    let top_spec = if accent_glow {
+                        mix_u8(SILKBAR_DARK_SPECULAR, accent_rgb, 96)
+                    } else {
+                        SILKBAR_DARK_SPECULAR
+                    };
+                    (top_spec, if accent_glow { 72 } else { 42 })
                 } else {
-                    (SILKBAR_DARK_PILL_RIM, if accent_glow { 92 } else { 62 })
+                    let side_rim = if accent_glow {
+                        mix_u8(SILKBAR_DARK_PILL_RIM, accent_rgb, 128)
+                    } else {
+                        SILKBAR_DARK_PILL_RIM
+                    };
+                    (side_rim, if accent_glow { 168 } else { 140 })
                 }
             }
             _ => {
                 if on_top_edge {
                     (0x00FF_FFFF, 155)
                 } else {
-                    (SILKBAR_LIGHT_PILL_RIM, if accent_glow { 116 } else { 88 })
+                    (
+                        if accent_glow {
+                            mix_u8(SILKBAR_LIGHT_PILL_RIM, accent_rgb, 96)
+                        } else {
+                            SILKBAR_LIGHT_PILL_RIM
+                        },
+                        if accent_glow { 116 } else { 88 },
+                    )
                 }
             }
         };

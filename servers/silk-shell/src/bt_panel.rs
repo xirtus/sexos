@@ -100,6 +100,36 @@ pub fn receive(msg: &sex_pdx::PdxMessage) -> bool {
     true
 }
 
+/// Summary `(available, enabled, connected_count)` for the Meta Control Hub.
+pub fn summary() -> (bool, bool, u8) {
+    let s = st();
+    if s.snap.is_none() {
+        if let Some(r) = region() {
+            if let Some(snap) = r.read() {
+                s.snap = Some(snap);
+            }
+        }
+    }
+    let Some(snap) = s.snap else {
+        return (false, s.ui.open, 0);
+    };
+    let available = snap.phase != b::UNAVAILABLE && snap.phase != b::NO_CONTROLLER;
+    let enabled = snap.phase == b::READY || snap.phase == b::STARTING;
+    let connected = snap
+        .devices()
+        .iter()
+        .filter(|d| d.has(b::CONNECTED))
+        .count() as u8;
+    (available, enabled, connected)
+}
+
+/// Sends a Bluetooth scan command (used by Meta/Spotlight quick commands).
+pub fn set_scan(on: bool) -> bool {
+    let sent = region().is_some_and(|r| r.push_command(b::Command::Scan(on)));
+    sex_pdx::serial_record!("[shell.bt.command] MetaScan({}) sent={}", on as u8, sent as u8);
+    sent
+}
+
 /// Super+Shift+B. Without the region (no Cufflinks in this boot) the panel says so.
 pub fn toggle() -> bool {
     let s = st();

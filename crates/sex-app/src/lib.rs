@@ -13,6 +13,11 @@ pub mod sound;
 pub mod mailbox;
 pub mod autofill;
 pub mod settings;
+pub mod text_field;
+
+pub use text_field::{
+    RichTextInput, TextFieldEvent, TextFieldPalette, TextFieldRect, TextMode,
+};
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
 /// than the 64 KiB a run starts with (deep layout, script engines, decoders).

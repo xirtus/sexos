@@ -26,8 +26,44 @@ use alloc::vec::Vec;
 
 use calc::Angle;
 use weft::menu::{Command, Menu};
+use weft::theme::{Color, Density, Palette, Theme};
 use weft::widget::{Column, Id, Layout, Rows, TextStyle};
 use weft::{Align, ButtonStyle, Response, Ui};
+
+/// macOS Noir palette for Abacus: deep obsidian canvas (`#0D1017`), elevated
+/// card surfaces (`#151924`), hairline borders (`#252C3D`), and SexOS Rose (`#F43F5E`).
+pub fn noir_theme() -> Theme {
+    let accent = Color::hex(0xF43F5E);
+    let palette = Palette {
+        window: Color::hex(0x0D1017),
+        surface: Color::hex(0x151924),
+        field: Color::hex(0x0F131D),
+        control: Color::hex(0x1A202E),
+        control_hover: Color::hex(0x232B3D),
+        control_pressed: Color::hex(0x2C354A),
+        border: Color::hex(0x252C3D),
+        text: Color::hex(0xF1F5F9),
+        text_dim: Color::hex(0x94A3B8),
+        text_disabled: Color::hex(0x64748B),
+        accent,
+        on_accent: Color::hex(0xFFFFFF),
+        selection: accent.with_alpha(0x45),
+        focus: accent,
+        danger: Color::hex(0xE11D48),
+        on_danger: Color::hex(0xFFFFFF),
+        shadow: Color::hex(0x000000).with_alpha(0x80),
+        scrim: Color::hex(0x05070B).with_alpha(0x90),
+    };
+    Theme {
+        mode: weft::theme::Mode::Dark,
+        palette,
+        scale: 1.0,
+        density: Density::Comfortable,
+        font_size: 14.0,
+        radius: 10.0,
+        accent,
+    }
+}
 
 /// The keypad, row by row: what each key shows.
 pub const KEYS: [[&str; 5]; 7] = [
@@ -59,6 +95,14 @@ pub struct Abacus {
     pub memory: f64,
     /// The small line above the result that shows the memory.
     pub mem_line: Id,
+    /// Small expression-history line above the large result readout.
+    pub prev_expr: Id,
+    /// Live Hex/Dec/Bin readout in Programmer mode.
+    pub base_line: Id,
+    /// Quick DEG/RAD pill button.
+    pub angle_pill: Id,
+    /// Quick Copy button on the display card.
+    pub copy_btn: Id,
     /// The past answer picked with Up and Down, 0 the newest.
     pub picked: Option<usize>,
     /// The result on screen was just worked out: a sum that starts with an operator
@@ -179,33 +223,58 @@ impl Abacus {
         let body = ui.group(
             scroll,
             Layout::column()
-                .gap(10.0)
-                .padding(12.0)
+                .gap(8.0)
+                .padding(10.0)
                 .fill_width()
                 .shrink(0.0),
         );
         let mode_row = ui.row(body);
         let modes = [
             (ui.button(mode_row, "Scientific"), Mode::Scientific),
-            (ui.button(mode_row, "Programmer"), Mode::Programmer),
+            (ui.button(mode_row, "Hex/Bin"), Mode::Programmer),
             (ui.button(mode_row, "Convert"), Mode::Convert),
         ];
-        let help = ui.paragraph(
-            body,
-            "Scientific: functions, factorial, degrees/radians and ans.",
-        );
-        let mem_line = ui.text(body, "", TextStyle::Caption);
+        let angle_pill = ui.button(mode_row, "DEG");
+        ui.set_button_style(angle_pill, ButtonStyle::Flat);
+        ui.set_tooltip(angle_pill, "Toggle Degrees / Radians (Ctrl+D)");
+        let copy_btn = ui.button(mode_row, "Copy");
+        ui.set_button_style(copy_btn, ButtonStyle::Flat);
+        ui.set_tooltip(copy_btn, "Copy result to clipboard (Ctrl+Shift+C)");
+
+        let display_card = ui.card(body, Layout::column().gap(3.0).fill_width());
+        ui.set_layout(display_card, Layout::column().gap(3.0).padding(8.0).fill_width());
+        let status_row = ui.row(display_card);
+        ui.set_layout(status_row, Layout::row().gap(8.0).fill_width());
+        let prev_expr = ui.text(status_row, "", TextStyle::Caption);
+        ui.set_layout(prev_expr, Layout::default().grow(1.0));
+        ui.set_label(prev_expr, "Previous Expression");
+        let mem_line = ui.text(status_row, "", TextStyle::Caption);
         ui.set_align(mem_line, Align::End);
-        ui.set_layout(mem_line, Layout::default().fill_width());
         ui.set_label(mem_line, "Memory");
-        let result = ui.paragraph(body, "0");
+
+        let result = ui.text(display_card, "0", TextStyle::Display);
         ui.set_align(result, Align::End);
-        ui.set_layout(result, Layout::default().fill_width().min_height(48.0));
+        ui.set_layout(result, Layout::default().fill_width().min_height(38.0));
         ui.set_label(result, "Result");
-        let expr = ui.field(body, "", "Type a sum, like 12 + 30");
+
+        let base_line = ui.text(display_card, "", TextStyle::Mono);
+        ui.set_align(base_line, Align::End);
+        ui.set_layout(base_line, Layout::default().fill_width());
+        ui.set_color(base_line, Some(ui.theme().palette.text_dim));
+        ui.set_visible(base_line, false);
+
+        let expr = ui.field(display_card, "", "Type an expression, like 12 + 30");
         ui.set_layout(expr, Layout::default().fill_width());
         ui.set_label(expr, "Expression");
         ui.set_max_length(expr, Some(512));
+
+        let help = ui.text(
+            display_card,
+            "Scientific: functions, factorial, degrees/radians and ans.",
+            TextStyle::Caption,
+        );
+        ui.set_layout(help, Layout::default().fill_width());
+
         let extra_pad = ui.group(body, Layout::grid(7).gap(4.0));
         let mut extra_keys = Vec::new();
         for k in [
@@ -216,15 +285,18 @@ impl Abacus {
             extra_keys.push((id, k));
         }
         let split = ui.split(body, false, 0.62);
-        let pad = ui.group(split, Layout::grid(5).gap(6.0));
+        let pad_card = ui.card(split, Layout::column().gap(4.0).fill_width());
+        ui.set_layout(pad_card, Layout::column().gap(4.0).padding(6.0).fill_width());
+        let pad = ui.group(pad_card, Layout::grid(5).gap(5.0).fill_width());
         let mut keys = Vec::new();
         for row in KEYS {
             for k in row {
                 let b = ui.button(pad, k);
-                ui.set_layout(b, Layout::default().fill_width().min_height(40.0));
+                ui.set_layout(b, Layout::default().fill_width().min_height(34.0));
                 match k {
                     "=" => ui.set_button_style(b, ButtonStyle::Primary),
                     "C" => ui.set_button_style(b, ButtonStyle::Danger),
+                    "+" | "−" | "×" | "÷" => ui.set_button_style(b, ButtonStyle::Normal),
                     "⌫" => ui.set_label(b, "Backspace"),
                     "MC" => ui.set_label(b, "Memory clear"),
                     "MR" => ui.set_label(b, "Memory recall"),
@@ -236,8 +308,8 @@ impl Abacus {
                 keys.push((b, k));
             }
         }
-        let side = ui.column(split);
-        ui.text(side, "History", TextStyle::Caption);
+        let side = ui.card(split, Layout::column().gap(6.0));
+        ui.text(side, "History", TextStyle::Heading);
         let history = ui.list_with(
             side,
             alloc::boxed::Box::new(Rows::default()),
@@ -266,6 +338,10 @@ impl Abacus {
             history_context: Vec::new(),
             memory: 0.0,
             mem_line,
+            prev_expr,
+            base_line,
+            angle_pill,
+            copy_btn,
             picked: None,
             fresh: false,
         };
@@ -312,6 +388,7 @@ impl Abacus {
     pub fn clear(&mut self, ui: &mut Ui) {
         ui.set_text(self.expr, "");
         ui.set_text(self.result, "0");
+        ui.set_text(self.prev_expr, "");
         ui.set_color(self.result, None);
         ui.focus(Some(self.expr));
         self.fresh = false;
@@ -336,6 +413,7 @@ impl Abacus {
         self.angle = if degrees { Angle::Degrees } else { Angle::Radians };
         ui.commands.set_checked("abacus.degrees", degrees);
         ui.commands.set_checked("abacus.radians", !degrees);
+        ui.set_text(self.angle_pill, if degrees { "DEG" } else { "RAD" });
         ui.toast(if degrees { "Angles in degrees" } else { "Angles in radians" }, None, 2000);
     }
 
@@ -400,8 +478,12 @@ impl Abacus {
         };
         match evaluated {
             Ok(value) => {
+                ui.set_text(self.prev_expr, &format!("{expr} ="));
                 ui.set_text(self.result, &value);
                 ui.set_color(self.result, None);
+                if self.mode == Mode::Programmer {
+                    self.update_base_line(ui);
+                }
                 self.past.insert(0, (expr.clone(), value.clone()));
                 self.past.truncate(500);
                 self.history_context
@@ -470,8 +552,21 @@ impl Abacus {
         for (id, _) in &self.extra_keys {
             ui.set_visible(*id, mode == Mode::Programmer);
         }
+        ui.set_visible(self.base_line, mode == Mode::Programmer);
+        ui.set_visible(self.angle_pill, mode == Mode::Scientific);
+        if mode == Mode::Programmer {
+            self.update_base_line(ui);
+        }
         ui.set_text(self.help,&match mode{Mode::Scientific=>"Scientific: functions, factorial, degrees/radians and ans.".into(),Mode::Programmer=>format!("{}-bit unsigned wrapping arithmetic. Literals 0x/0b/0o; ^ means XOR. Output radix {} (Words menu).",self.word_bits,self.radix),Mode::Convert=>"Type: 32 F to C. Units: m/km/cm/mm/in/ft/mi; kg/g/lb/oz; s/ms/min/h/day; K/C/F; B/kB/MB/GB/KiB/MiB/GiB.".into()});
         ui.focus(Some(self.expr));
+    }
+
+    fn update_base_line(&self, ui: &mut Ui) {
+        let v = self.integer_ans;
+        let hex = programmer::format(v, 16);
+        let dec = programmer::format(v, 10);
+        let bin = programmer::format(v, 2);
+        ui.set_text(self.base_line, &format!("HEX {hex}  ·  DEC {dec}  ·  BIN {bin}"));
     }
 
     fn recall(&mut self, ui: &mut Ui, row: usize) -> Option<Note> {
@@ -510,6 +605,18 @@ impl Abacus {
                 return Some(self.equals(ui));
             }
             Response::Clicked(id) => {
+                if *id == self.angle_pill {
+                    let deg = self.angle != Angle::Degrees;
+                    self.set_angle(ui, deg);
+                    return Some(Note::Angle(deg));
+                }
+                if *id == self.copy_btn {
+                    let t = String::from(self.result_text(ui));
+                    ui.set_clipboard(&t);
+                    ui.toast("Copied result", None, 1500);
+                    ui.focus(Some(self.expr));
+                    return None;
+                }
                 if let Some((_, mode)) = self.modes.iter().find(|(b, _)| b == id) {
                     let mode = *mode;
                     self.set_mode(ui, mode);

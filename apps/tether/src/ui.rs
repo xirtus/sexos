@@ -9,7 +9,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use sex_app::Window;
+use sex_app::{RichTextInput, TextFieldPalette, TextFieldRect, Window};
 use sex_font::raster::{scratch_len, FX};
 use sex_font::Font;
 use sex_theme::candy_ui::{
@@ -260,7 +260,7 @@ impl TetherUi {
         console: &[String],
         approval: Option<&PendingApproval>,
         wave_review: Option<&PendingWaveReview>,
-        input: &str,
+        input: &mut RichTextInput,
         status_line: &str,
         scroll_lines: usize,
     ) {
@@ -642,22 +642,18 @@ impl TetherUi {
                 Self::fill_rect(buf, w, h, cx, comp_y, cw, composer_h, BG_PANE);
                 Self::fill_rect(buf, w, h, cx, comp_y, cw, 1, BORDER_SUBTLE);
                 let well_w = (cw - 168).max(80);
-                fill_rounded_rect(buf, w, h, cx + 10, comp_y + 8, well_w, 32, 8, BG_INPUT);
-                let shown = if input.is_empty() {
-                    "Message Antigravity over ACP, or /connect HOST PIN | /help"
-                } else {
-                    input
-                };
-                self.draw_text(
+                let mut input_pal = TextFieldPalette::noir();
+                input_pal.bg = BG_INPUT;
+                input_pal.border = BORDER_SUBTLE;
+                input_pal.text = TEXT_PRIMARY;
+                input_pal.placeholder = TEXT_DIM;
+                input.render(
                     buf,
                     w,
                     h,
-                    cx + 18,
-                    comp_y + 15,
-                    well_w - 16,
-                    13,
-                    shown,
-                    if input.is_empty() { TEXT_DIM } else { TEXT_PRIMARY },
+                    TextFieldRect::new(cx + 10, comp_y + 8, well_w, 32),
+                    input.focused,
+                    &input_pal,
                 );
 
                 let sx = cx + 10 + well_w + 8;
@@ -816,6 +812,11 @@ impl TetherUi {
         Self::fill_rect(buf, w, h, 0, sy, w as i32, status_h, BG_PANE);
         Self::fill_rect(buf, w, h, 0, sy, w as i32, 1, BORDER_SUBTLE);
         self.draw_text(buf, w, h, 12, sy + 5, w as i32 - 24, 11, status_line, TEXT_MUTED);
+
+        let mut menu_pal = TextFieldPalette::noir();
+        menu_pal.bg = BG_INPUT;
+        menu_pal.border = BORDER_SUBTLE;
+        input.render_context_menu(buf, w, h, &menu_pal);
 
         window.show_pixels(w, h);
     }

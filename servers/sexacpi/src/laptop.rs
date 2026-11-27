@@ -131,7 +131,7 @@ fn path_of(aml: &Aml, target: &WrappedObject) -> Option<AmlName> {
 }
 
 /// What a firmware notification asks of us.
-pub enum Event { Refresh, Brightness(bool), None }
+pub enum Event { Refresh, Brightness(bool), GModeToggle, MicMute, None }
 
 pub fn notifications(aml: &Aml, d: &Devices, light: &Backlight, hotkeys: Option<&crate::wmi::Hotkeys>) -> Vec<Event> {
     let mut out = Vec::new();
@@ -139,7 +139,18 @@ pub fn notifications(aml: &Aml, d: &Devices, light: &Backlight, hotkeys: Option<
         let path = path_of(aml, &target);
         // Dell/Alienware WMI hotkeys: logged and decoded in `wmi`.
         if let (Some(h), Some(p)) = (hotkeys, &path) {
-            if h.take(aml, p, value).is_some() { continue; }
+            if let Some(keys) = h.take(aml, p, value) {
+                for k in keys {
+                    match k {
+                        sex_laptop::dell_wmi::Key::BrightnessUp => out.push(Event::Brightness(true)),
+                        sex_laptop::dell_wmi::Key::BrightnessDown => out.push(Event::Brightness(false)),
+                        sex_laptop::dell_wmi::Key::Program(1) => out.push(Event::GModeToggle),
+                        sex_laptop::dell_wmi::Key::MicMute => out.push(Event::MicMute),
+                        _ => {}
+                    }
+                }
+                continue;
+            }
         }
         let kind = match &path {
             Some(p) if d.lids.contains(p) => "lid",

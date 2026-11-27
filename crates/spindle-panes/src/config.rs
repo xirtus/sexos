@@ -4,7 +4,7 @@
 //! keeps its default. The window reads it again whenever it changes.
 //!
 //! ```text
-//! theme = nord            # mocha latte gruvbox nord solarized-dark solarized-light
+//! theme = noir            # noir mocha latte gruvbox nord solarized-dark solarized-light
 //!                         # tokyo-night dracula high-contrast
 //! font = jetbrains-mono    # geist-mono (the default) or jetbrains-mono, with
 //!                         # coding ligatures
@@ -27,6 +27,8 @@ pub struct Config {
     pub font_size: usize,
     pub padding: usize,
     pub scrollback: usize,
+    /// Window background opacity percentage (`10..=100`, e.g. `background-opacity = 0.55` -> `55`).
+    pub opacity: u8,
     /// Colour overrides on top of the theme: (key, 0xRRGGBB), key one of `foreground`,
     /// `background`, `cursor`, `selection`, `color0`..`color15`.
     pub colors: Vec<(String, u32)>,
@@ -55,11 +57,11 @@ fn ssh_target(v: &str) -> Option<(String, String, u16)> {
 
 impl Default for Config {
     fn default() -> Config {
-        Config { theme: String::from("mocha"), font: String::from("geist-mono"), font_size: 18, padding: 4, scrollback: 10_000, colors: Vec::new(), ssh: Vec::new(), problems: Vec::new() }
+        Config { theme: String::from("noir"), font: String::from("geist-mono"), font_size: 18, padding: 4, scrollback: 10_000, opacity: 100, colors: Vec::new(), ssh: Vec::new(), problems: Vec::new() }
     }
 }
 
-pub const THEME_NAMES: [&str; 9] = ["mocha", "latte", "gruvbox", "nord", "solarized-dark", "solarized-light", "tokyo-night", "dracula", "high-contrast"];
+pub const THEME_NAMES: [&str; 10] = ["noir", "mocha", "latte", "gruvbox", "nord", "solarized-dark", "solarized-light", "tokyo-night", "dracula", "high-contrast"];
 
 pub const FONT_NAMES: [&str; 2] = ["geist-mono", "jetbrains-mono"];
 
@@ -67,6 +69,22 @@ fn color(v: &str) -> Option<u32> {
     let h = v.strip_prefix('#').or_else(|| v.strip_prefix("0x")).unwrap_or(v);
     if h.len() != 6 { return None; }
     u32::from_str_radix(h, 16).ok()
+}
+
+fn parse_opacity(v: &str) -> Option<u8> {
+    let v = v.trim();
+    if let Some((whole, frac)) = v.split_once('.') {
+        let w = if whole.is_empty() { 0 } else { whole.parse::<u32>().ok()? };
+        let f_digits = frac.as_bytes();
+        if f_digits.is_empty() || !f_digits.iter().all(u8::is_ascii_digit) { return None; }
+        let d1 = (f_digits[0] - b'0') as u32;
+        let d2 = f_digits.get(1).map_or(0, |b| (*b - b'0') as u32);
+        let pct = w * 100 + d1 * 10 + d2;
+        (10..=100).contains(&pct).then_some(pct as u8)
+    } else {
+        let pct = v.parse::<u32>().ok()?;
+        (10..=100).contains(&pct).then_some(pct as u8)
+    }
 }
 
 pub fn parse(text: &str) -> Config {
@@ -108,6 +126,10 @@ impl Config {
             "font-size" => match num(10, 48) { Some(x) => self.font_size = x, None => self.problems.push(bad("must be 10 to 48")) },
             "padding" => match num(0, 64) { Some(x) => self.padding = x, None => self.problems.push(bad("must be 0 to 64")) },
             "scrollback" => match num(0, 1_000_000) { Some(x) => self.scrollback = x, None => self.problems.push(bad("must be 0 to 1000000")) },
+            "opacity" | "background-opacity" | "background_opacity" => match parse_opacity(v) {
+                Some(x) => self.opacity = x,
+                None => self.problems.push(bad("must be 0.10 to 1.0 or 10 to 100")),
+            },
             "foreground" | "background" | "cursor" | "selection" => match color(v) { Some(x) => self.colors.push((String::from(key), x)), None => self.problems.push(bad("must be #rrggbb")) },
             k if k.strip_prefix("color").and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| n < 16) => match color(v) {
                 Some(x) => self.colors.push((String::from(k), x)),

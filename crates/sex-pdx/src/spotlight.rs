@@ -127,6 +127,88 @@ pub enum LaunchTarget {
     QueryProgram(Query),
 }
 
+impl LaunchTarget {
+    /// Canonical ELF binary name for this launch target, when applicable.
+    pub const fn program_name(self) -> Option<&'static str> {
+        match self {
+            Self::Browser => Some("kaleidoscope"),
+            Self::Spindle => Some("spindle"),
+            Self::Quil => Some("quil"),
+            Self::PdGraph => Some("mesh"),
+            Self::Files => Some("loom"),
+            Self::Settings => Some("tatami"),
+            Self::Audio => Some("qupid"),
+            Self::Program(name) => Some(name),
+            Self::QueryProgram(_) => None,
+        }
+    }
+}
+
+/// Canonical human-friendly program aliases mapped to SexOS program binary names.
+const PROGRAM_ALIASES: &[(&str, &str)] = &[
+    ("settings", "tatami"),
+    ("preferences", "tatami"),
+    ("prefs", "tatami"),
+    ("system-settings", "tatami"),
+    ("store", "sexshop"),
+    ("appstore", "sexshop"),
+    ("app-store", "sexshop"),
+    ("packages", "sexshop"),
+    ("pkg", "sexshop"),
+    ("files", "loom"),
+    ("finder", "loom"),
+    ("explorer", "loom"),
+    ("browser", "kaleidoscope"),
+    ("web", "kaleidoscope"),
+    ("internet", "kaleidoscope"),
+    ("monitor", "mesh"),
+    ("activity", "mesh"),
+    ("tasks", "mesh"),
+    ("top", "mesh"),
+    ("htop", "mesh"),
+    ("calendar", "date"),
+    ("schedule", "date"),
+    ("music", "qupid"),
+    ("audio", "qupid"),
+    ("player", "qupid"),
+    ("vlc", "qupid"),
+    ("chat", "flirt"),
+    ("messages", "flirt"),
+    ("messaging", "flirt"),
+    ("daw", "moan-studio"),
+    ("moan", "moan-studio"),
+    ("synth", "moan-studio"),
+    ("notes", "jot"),
+    ("notepad", "jot"),
+    ("editor", "vellum"),
+    ("textedit", "vellum"),
+    ("calc", "abacus"),
+    ("calculator", "abacus"),
+    ("ai", "tailor"),
+    ("assistant", "tailor"),
+    ("claude", "tailor"),
+    ("codex", "tailor"),
+    ("bridge", "tether"),
+    ("remote", "tether"),
+    ("mcp", "tether"),
+    ("torrent", "swingers"),
+    ("p2p", "swingers"),
+    ("webcam", "flash"),
+    ("camera", "flash"),
+];
+
+/// Zero-alloc lookup mapping human-friendly app aliases (case-insensitive) to
+/// canonical SexOS program names. Unrecognized names are returned trimmed as-is.
+pub fn resolve_program_alias(name: &str) -> &str {
+    let trimmed = name.trim();
+    for &(alias, target) in PROGRAM_ALIASES {
+        if trimmed.eq_ignore_ascii_case(alias) {
+            return target;
+        }
+    }
+    trimmed
+}
+
 /// Descriptor for one app tile in the Spotlight grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpotlightApp {
@@ -164,7 +246,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "TH",
         category: Category::AiDev,
         badge_rgb: 0x00C6_A0F6,
-        keywords: "tether antigravity acp remote agent bridge waves snapshots hotswap",
+        keywords: "tether antigravity acp remote agent bridge mcp waves snapshots hotswap",
         target: LaunchTarget::Program("tether"),
     },
     SpotlightApp {
@@ -194,7 +276,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "QP",
         category: Category::Media,
         badge_rgb: 0x00EC_4899,
-        keywords: "qupid music audio video player media sound mixer volume play",
+        keywords: "qupid music audio video player vlc media sound mixer volume play",
         target: LaunchTarget::Audio,
     },
     SpotlightApp {
@@ -224,7 +306,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "FS",
         category: Category::Apps,
         badge_rgb: 0x00F5_9E0B,
-        keywords: "files loom linen folder explorer storage",
+        keywords: "files loom linen finder folder explorer storage",
         target: LaunchTarget::Files,
     },
     SpotlightApp {
@@ -254,7 +336,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "ST",
         category: Category::System,
         badge_rgb: 0x007C_6A9A,
-        keywords: "settings tatami preferences display theme config",
+        keywords: "settings tatami preferences prefs system-settings wifi network display theme config",
         target: LaunchTarget::Settings,
     },
     SpotlightApp {
@@ -264,7 +346,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "PD",
         category: Category::System,
         badge_rgb: 0x00A8_55F7,
-        keywords: "pd graph mesh domains capabilities monitor",
+        keywords: "pd graph mesh domains capabilities monitor activity tasks top htop",
         target: LaunchTarget::PdGraph,
     },
     SpotlightApp {
@@ -274,18 +356,18 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "SS",
         category: Category::System,
         badge_rgb: 0x0014_B8A6,
-        keywords: "store sexshop shop packages install apps software",
+        keywords: "store appstore app-store sexshop shop packages pkg install apps software",
         target: LaunchTarget::Program("sexshop"),
     },
     SpotlightApp {
         id: "moan",
-        name: "Moan",
+        name: "Moan Studio",
         icon: "moan",
         monogram: "MN",
         category: Category::Media,
         badge_rgb: 0x00E1_1D48,
-        keywords: "moan daw synth audio music studio midi",
-        target: LaunchTarget::Program("moan"),
+        keywords: "moan moan-studio daw synth audio music studio midi",
+        target: LaunchTarget::Program("moan-studio"),
     },
     SpotlightApp {
         id: "cabaret",
@@ -324,7 +406,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "VL",
         category: Category::Apps,
         badge_rgb: 0x00EF_4444,
-        keywords: "vellum pdf document reader viewer",
+        keywords: "vellum editor textedit pdf document reader viewer",
         target: LaunchTarget::Program("vellum"),
     },
     SpotlightApp {
@@ -334,7 +416,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "FT",
         category: Category::Apps,
         badge_rgb: 0x00F4_72B6,
-        keywords: "flirt talk chat messaging social",
+        keywords: "flirt talk chat messages messaging social",
         target: LaunchTarget::Program("flirt"),
     },
     SpotlightApp {
@@ -364,7 +446,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "AB",
         category: Category::Apps,
         badge_rgb: 0x0022_C55E,
-        keywords: "abacus calculator math compute",
+        keywords: "abacus calc calculator math compute",
         target: LaunchTarget::Program("abacus"),
     },
     SpotlightApp {
@@ -434,7 +516,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "JT",
         category: Category::Apps,
         badge_rgb: 0x0081_8CF8,
-        keywords: "jot notes memo scratchpad quick",
+        keywords: "jot notes notepad memo scratchpad quick",
         target: LaunchTarget::Program("jot"),
     },
     SpotlightApp {
@@ -474,7 +556,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "CS",
         category: Category::System,
         badge_rgb: 0x0064_748B,
-        keywords: "corset disks partitions format storage",
+        keywords: "corset firewall security disks partitions format storage",
         target: LaunchTarget::Program("corset"),
     },
     SpotlightApp {
@@ -504,7 +586,7 @@ pub const CATALOG: [SpotlightApp; 41] = [
         monogram: "HK",
         category: Category::System,
         badge_rgb: 0x0038_BDF8,
-        keywords: "hookup phone link kdeconnect mobile sync",
+        keywords: "hookup bluetooth bt wireless phone link kdeconnect mobile sync",
         target: LaunchTarget::Program("hookup"),
     },
     SpotlightApp {
@@ -728,6 +810,8 @@ pub fn filter_catalog(category: Category, query: &str) -> ([usize; CATALOG_LEN],
     let mut scores = [0u32; CATALOG_LEN];
     let mut n = 0usize;
     let trimmed = query.trim();
+    let canonical = if trimmed.is_empty() { "" } else { resolve_program_alias(trimmed) };
+    let has_alias = !trimmed.is_empty() && !canonical.eq_ignore_ascii_case(trimmed);
 
     for (idx, app) in CATALOG.iter().enumerate() {
         if category != Category::All && app.category != category {
@@ -736,11 +820,17 @@ pub fn filter_catalog(category: Category, query: &str) -> ([usize; CATALOG_LEN],
         let s = if trimmed.is_empty() {
             0
         } else {
+            let alias_bonus = if has_alias && app.target.program_name() == Some(canonical) {
+                1000
+            } else {
+                0
+            };
             let by_name = score_text(trimmed, app.name).map(|v| v * 2);
             let by_id = score_text(trimmed, app.id).map(|v| v * 2);
             let by_kw = app.keywords.split(' ').filter_map(|w| score_text(trimmed, w)).max();
             match by_name.max(by_id).max(by_kw) {
-                Some(v) => v,
+                Some(v) => v + alias_bonus,
+                None if alias_bonus > 0 => alias_bonus,
                 None => continue,
             }
         };
@@ -1509,5 +1599,83 @@ mod tests {
         assert_eq!(ctrl.handle_key(0x03, 1, false, false), KeyOutcome::Redraw); // '2'
         assert_eq!(ctrl.handle_key(0x1C, 1, false, false), KeyOutcome::Consumed);
         assert!(ctrl.is_open());
+    }
+
+    #[test]
+    fn canonical_aliases_and_keyword_rankings() {
+        let alias_cases: &[(&str, &str)] = &[
+            ("settings", "tatami"),
+            ("Preferences", "tatami"),
+            ("prefs", "tatami"),
+            ("system-settings", "tatami"),
+            ("store", "sexshop"),
+            ("appstore", "sexshop"),
+            ("app-store", "sexshop"),
+            ("packages", "sexshop"),
+            ("pkg", "sexshop"),
+            ("files", "loom"),
+            ("finder", "loom"),
+            ("explorer", "loom"),
+            ("browser", "kaleidoscope"),
+            ("web", "kaleidoscope"),
+            ("internet", "kaleidoscope"),
+            ("monitor", "mesh"),
+            ("activity", "mesh"),
+            ("tasks", "mesh"),
+            ("top", "mesh"),
+            ("htop", "mesh"),
+            ("calendar", "date"),
+            ("schedule", "date"),
+            ("music", "qupid"),
+            ("audio", "qupid"),
+            ("player", "qupid"),
+            ("vlc", "qupid"),
+            ("chat", "flirt"),
+            ("messages", "flirt"),
+            ("messaging", "flirt"),
+            ("daw", "moan-studio"),
+            ("moan", "moan-studio"),
+            ("synth", "moan-studio"),
+            ("notes", "jot"),
+            ("notepad", "jot"),
+            ("editor", "vellum"),
+            ("textedit", "vellum"),
+            ("calc", "abacus"),
+            ("calculator", "abacus"),
+            ("ai", "tailor"),
+            ("assistant", "tailor"),
+            ("claude", "tailor"),
+            ("codex", "tailor"),
+            ("bridge", "tether"),
+            ("remote", "tether"),
+            ("mcp", "tether"),
+            ("torrent", "swingers"),
+            ("p2p", "swingers"),
+            ("webcam", "flash"),
+            ("camera", "flash"),
+            ("tatami", "tatami"),
+            ("custom-tool", "custom-tool"),
+        ];
+        for &(alias, expected) in alias_cases {
+            assert_eq!(resolve_program_alias(alias), expected, "alias={}", alias);
+        }
+
+        let top_tile_cases: &[(&str, &str)] = &[
+            ("store", "sexshop"),
+            ("preferences", "settings"),
+            ("calculator", "abacus"),
+            ("music", "qupid"),
+            ("wifi", "settings"),
+            ("bluetooth", "hookup"),
+            ("firewall", "corset"),
+            ("backup", "aftercare"),
+            ("daw", "moan"),
+            ("moan", "moan"),
+        ];
+        for &(query, expected_id) in top_tile_cases {
+            let (order, n) = filter_catalog(Category::All, query);
+            assert!(n >= 1, "expected match for {}", query);
+            assert_eq!(CATALOG[order[0]].id, expected_id, "query={}", query);
+        }
     }
 }

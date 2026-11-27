@@ -13,6 +13,15 @@ mod lips {
 }
 pub use lips::{BRIGHT, CHARCOAL, DESIGN_H, DESIGN_W, RICH, WALL_BOTTOM, WALL_TOP};
 
+/// SexOS Crimson/Rose satin stops (`#E11D48` -> `#F43F5E` -> `#FB7185` -> `#E11D48`)
+/// for the sculpted SilkBar Lips button.
+pub const CRIMSON: [(u32, u32); 4] = [
+    (0, 0xE11D48),
+    (92, 0xF43F5E),
+    (180, 0xFB7185),
+    (255, 0xE11D48),
+];
+
 /// Which gradient the mark wears.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tone {
@@ -22,6 +31,9 @@ pub enum Tone {
     /// Lighter throughout, for small sizes on dark glass (the Silkbar button),
     /// where the dark corner would disappear.
     Bright,
+    /// Sculpted SexOS Crimson/Rose gradient (`#E11D48` / `#F43F5E`) with satin
+    /// highlight for the macOS Noir SilkBar Launcher logo button.
+    Crimson,
 }
 
 /// The mark's height for a given width, keeping its proportions.
@@ -75,13 +87,41 @@ pub fn coverage_row(width: u32, y: u32, out: &mut [u8]) {
 
 /// The gradient's colour (0xRRGGBB) at column `x` of a mark `width` pixels wide.
 pub fn color_at(tone: Tone, x: u32, width: u32) -> u32 {
-    let stops: &[(u32, u32)] = match tone { Tone::Rich => &RICH, Tone::Bright => &BRIGHT };
+    let stops: &[(u32, u32)] = match tone {
+        Tone::Rich => &RICH,
+        Tone::Bright => &BRIGHT,
+        Tone::Crimson => &CRIMSON,
+    };
     let t = if width <= 1 { 0 } else { (x.min(width - 1) * 255) / (width - 1) };
     let mut i = 0;
     while i + 2 < stops.len() && t > stops[i + 1].0 { i += 1; }
     let ((t0, c0), (t1, c1)) = (stops[i], stops[i + 1]);
     let f = if t1 > t0 { ((t.clamp(t0, t1) - t0) * 256) / (t1 - t0) } else { 0 };
     mix(c1, c0, f.min(256))
+}
+
+/// Sculpted 2D colour at `(x, y)` of a `width x height` mark with optional
+/// specular bow sheen and hover/active `boost` (`0..=255` toward warm rose).
+pub fn color_at_sculpted(tone: Tone, x: u32, y: u32, width: u32, height: u32, boost: u8) -> u32 {
+    let base = color_at(tone, x, width);
+    let h = height.max(1);
+    // Gentle vertical sculpting: subtle highlight on upper cupid's bow (~28%) and lower lip fullness (~70%),
+    // slight contour shadow along the mouth parting seam (~50%) and bottom rim.
+    let v = (y.min(h - 1) * 255) / (h - 1).max(1);
+    let sculpted = if v >= 50 && v <= 95 {
+        mix(0xFFE4E6, base, 42)
+    } else if v >= 158 && v <= 205 {
+        mix(0xFDA4AF, base, 52)
+    } else if v >= 115 && v <= 145 {
+        mix(0x9F1239, base, 44)
+    } else {
+        base
+    };
+    if boost == 0 {
+        sculpted
+    } else {
+        mix(0xFFE4E6, sculpted, ((boost as u32) * 112) / 255)
+    }
 }
 
 /// `fg` over `bg` by `coverage` (0..=255); both 0xRRGGBB, the top byte of `bg` kept.

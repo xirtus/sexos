@@ -73,10 +73,18 @@ pub struct Wifi {
     scan: Option<Scan>,
     /// Scans started, the first one included (the `wifi` command's count).
     scans: u16,
+    /// Radio enabled (`wifi_status::RADIO`); false disables scanning and links.
+    enabled: bool,
     /// Stage W5a: joining a network heard in the last scan.
     join: Option<Join>,
     joined_ssid: [u8; 32],
+    joined_ssid_len: usize,
     joined_bss: Option<Bss>,
+    joined_rssi: i8,
+    joined_channel: u8,
+    joined_security: u8,
+    /// DHCPv4 address observed in `DHCPACK` on this Wi-Fi link, if any.
+    dhcp_ip: Option<[u8; 4]>,
     /// Stage W5b: authentication and association once joined.
     assoc: Option<Assoc>,
     /// Stage W5c: the WPA2 handshake once associated.
@@ -195,6 +203,35 @@ fn log_dhcp(way: &str, f: &[u8]) {
         u16::from_be_bytes([f[16], f[17]]), f.len(), u16::from_be_bytes([f[udp + 6], f[udp + 7]]));
 }
 
+/// Extracts `yiaddr` from a DHCPv4 ACK (`op == 2`, option 53 == 5) Ethernet frame.
+fn dhcp_ack_ip(f: &[u8]) -> Option<[u8; 4]> {
+    if ip_kind(f) != 3 { return None; }
+    let ihl = (*f.get(14)? & 0xf) as usize * 4;
+    let d = 14 + ihl + 8;
+    if ihl < 20 || f.len() < d + 240 || *f.get(d)? != 2 { return None; }
+    let mut at = d + 240;
+    while at + 1 < f.len() {
+        match f[at] { 0 => { at += 1; continue; } 255 => break, _ => {} }
+        let len = f[at + 1] as usize;
+        if f[at] == 53 && len >= 1 && f.get(at + 2) == Some(&5) {
+            let yi = [f[d + 16], f[d + 17], f[d + 18], f[d + 19]];
+            return (yi != [0; 4]).then_some(yi);
+        }
+        at += 2 + len;
+    }
+    None
+}
+
+const fn security_to_ws(s: Security) -> u8 {
+    match s {
+        Security::Open => ws::OPEN,
+        Security::Wpa2Personal => ws::WPA2,
+        Security::Wpa3Personal => ws::WPA3,
+        Security::Wpa3Transition => ws::WPA2_WPA3,
+        Security::Unsupported => ws::UNSUPPORTED,
+    }
+}
+
 /// A DHCP client message (UDP 68 -> 67) with the broadcast flag set, copied into
 /// `out`, and the UDP checksum cleared (0 = none, allowed for UDP over IPv4).
 fn dhcp_broadcast(f: &[u8], out: &mut [u8]) -> Option<usize> {
@@ -284,16 +321,17 @@ impl Wifi {
         };
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
-        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false,
+        Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, enabled: true, join: None, joined_ssid: [0; 32], joined_ssid_len: 0, joined_bss: None, joined_rssi: 0, joined_channel: 0, joined_security: 0, dhcp_ip: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false,
             saved: None, restart_at: None, want_join: false, attempts: 0, restarts: 0, settle_until: 0, why: Why::NONE })
     }
 
     /// True while the chip is busy (starting, scanning, joining) or recovering.
     pub fn pending(&self) -> bool {
-        !self.finished || self.restart_at.is_some() || self.link.as_ref().is_some_and(|l| !l.up())
+        self.enabled && (!self.finished || self.restart_at.is_some() || self.link.as_ref().is_some_and(|l| !l.up()))
     }
 
     pub fn advance(&mut self, now_ticks: u64) {
+        if !self.enabled { return; }
         if let Some(down) = self.link.as_ref().and_then(|l| l.down) { self.link_lost(down, now_ticks); }
         if let Some(at) = self.restart_at {
             if now_ticks >= at { self.restart(now_ticks); }
@@ -398,6 +436,12 @@ impl Wifi {
         }
         sex_pdx::serial_record!("[wifi.scan.done] networks={} frames={} dropped={} channels={} ticks={}",
             sc.count, sc.frames, sc.dropped, sc.channels, now_ticks);
+        if self.joined_ssid_len > 0 {
+            let cur = &self.joined_ssid[..self.joined_ssid_len];
+            if let Some(best) = sc.networks().filter(|n| n.bss.ssid() == cur).max_by_key(|n| n.rssi) {
+                self.joined_rssi = best.rssi.clamp(-128, 127) as i8;
+            }
+        }
         if self.want_join { self.join_saved(now_ticks); }
     }
 
@@ -427,7 +471,7 @@ impl Wifi {
         self.restart_at = None;
         let stopped = csr::stop(&mut self.mmio);
         self.init = None; self.last_init = None; self.scan = None; self.join = None; self.assoc = None; self.rsna = None;
-        self.link = None; self.rx = RxQueue::EMPTY; self.joined_bss = None;
+        self.link = None; self.rx = RxQueue::EMPTY; self.joined_bss = None; self.dhcp_ip = None;
         self.password = [0; ws::PASSWORD_MAX];
         self.password_len = 0;
         self.restarts = self.restarts.wrapping_add(1);
@@ -480,6 +524,7 @@ impl Wifi {
             wlink::Down::Failed(f) => self.why.set(format_args!("connected, then the link failed: {:?}", f)),
         }
         self.link = None;
+        self.dhcp_ip = None;
         self.attempts = 0;
         self.retry(now_ticks);
     }
@@ -500,9 +545,41 @@ impl Wifi {
         sex_pdx::serial_record!("[wifi.leave] connected={}", self.link_up() as u8);
         self.why = Why::NONE;
         self.saved = None;
+        self.joined_ssid = [0; 32];
+        self.joined_ssid_len = 0;
+        self.joined_rssi = 0;
+        self.joined_channel = 0;
+        self.joined_security = 0;
+        self.dhcp_ip = None;
         self.attempts = 0;
         self.want_join = false;
-        self.restart_at = Some(now_ticks);
+        if self.enabled { self.restart_at = Some(now_ticks); }
+    }
+
+    /// Turns the Intel Wi-Fi chip off or back on (`wifi_status::RADIO`).
+    fn set_enabled(&mut self, on: bool, now_ticks: u64) {
+        if !on {
+            if !self.enabled { return; }
+            self.enabled = false;
+            let _ = csr::stop(&mut self.mmio);
+            self.init = None; self.last_init = None; self.scan = None;
+            self.join = None; self.assoc = None; self.rsna = None;
+            self.link = None; self.rx = RxQueue::EMPTY; self.joined_bss = None;
+            self.joined_ssid = [0; 32]; self.joined_ssid_len = 0;
+            self.joined_rssi = 0; self.joined_channel = 0; self.joined_security = 0;
+            self.dhcp_ip = None;
+            self.password = [0; ws::PASSWORD_MAX]; self.password_len = 0;
+            self.saved = None; self.restart_at = None; self.want_join = false;
+            self.attempts = 0; self.why = Why::NONE; self.finished = true;
+            sex_pdx::serial_record!("[wifi.radio] enabled=0");
+        } else if !self.enabled {
+            self.enabled = true;
+            self.why = Why::NONE;
+            self.want_join = false;
+            self.attempts = 0;
+            self.restart(now_ticks);
+            sex_pdx::serial_record!("[wifi.radio] enabled=1");
+        }
     }
 
     /// Stage W5a: onto the chosen network's channel (contexts, station, queue).
@@ -682,11 +759,17 @@ impl Wifi {
     /// passphrase just given) and joins at once when the chip is idle, or after a
     /// restart when it is on another network or a join failed.
     fn request_join(&mut self, index: u64, now_ticks: u64) -> bool {
+        if !self.enabled { return false; }
         let Some(n) = self.scan.as_ref().and_then(|sc| sc.networks().nth(index as usize)) else { return false };
         if n.bss.security != ieee80211::Security::Open && self.password_len == 0 { return false; }
         if n.bss.security == ieee80211::Security::Unsupported { return false; }
         let mut saved = Saved { ssid: [0; 32], ssid_len: n.bss.ssid().len(), password: self.password, password_len: self.password_len };
         saved.ssid[..saved.ssid_len].copy_from_slice(n.bss.ssid());
+        self.joined_ssid = saved.ssid;
+        self.joined_ssid_len = saved.ssid_len;
+        self.joined_rssi = n.rssi.clamp(-128, 127) as i8;
+        self.joined_channel = if n.bss.channel != 0 { n.bss.channel } else { n.heard_on };
+        self.joined_security = security_to_ws(n.bss.security);
         self.saved = Some(saved);
         self.attempts = 0;
         if self.start_join(index, now_ticks) { return true; }
@@ -699,7 +782,7 @@ impl Wifi {
 
     /// Starts joining network `index` of the last finished scan.
     fn start_join(&mut self, index: u64, now_ticks: u64) -> bool {
-        if !self.finished || self.join.is_some() { return false; }
+        if !self.enabled || !self.finished || self.join.is_some() { return false; }
         let (Some(sc), Some(i)) = (self.scan.as_ref(), self.init.as_ref()) else { return false };
         if sc.step != scan::Step::Done || i.step != init::Step::Ready { return false; }
         let Some(n) = sc.networks().nth(index as usize) else { return false };
@@ -708,8 +791,12 @@ impl Wifi {
         let versions = join::Versions::of(&fw, &i.features, self.hw_rev);
         let target = join::Target::of(&n.bss, n.heard_on).with_ours(i.ours(&fw));
         self.joined_ssid = [0; 32];
-        self.joined_ssid[..n.bss.ssid().len()].copy_from_slice(n.bss.ssid());
+        self.joined_ssid_len = n.bss.ssid().len().min(32);
+        self.joined_ssid[..self.joined_ssid_len].copy_from_slice(&n.bss.ssid()[..self.joined_ssid_len]);
         self.joined_bss = Some(n.bss);
+        self.joined_rssi = n.rssi.clamp(-128, 127) as i8;
+        self.joined_channel = if n.bss.channel != 0 { n.bss.channel } else { n.heard_on };
+        self.joined_security = security_to_ws(n.bss.security);
         let j = Join::new(target, versions, i.mac, i.valid_rx_antennas(), now_ticks * 1000);
         let m = target.mode();
         sex_pdx::serial_record!("[wifi.join.start] index={} channel={} step={:?} wifi={} width={} ticks={}", index, target.channel, j.step, m.generation(), m.width.mhz(), now_ticks);
@@ -821,6 +908,7 @@ impl Wifi {
         // Compared with what the last turn saw, not this turn's start: link_send
         // counts between turns, and requests nobody answers must still show.
         let ip = q.seen;
+        let mut ack_ip = None;
         // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
         let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
@@ -831,7 +919,16 @@ impl Wifi {
                     sex_pdx::serial_record!("[wifi.link.unicast] in={} type={:02x}{:02x} len={}", q.unicast_in, frame[12], frame[13], frame.len());
                 }
             }
-            match ip_kind(frame) { 1 => q.rx_v4 += 1, 2 => q.rx_arp += 1, 3 => { q.rx_dhcp += 1; if q.rx_dhcp <= 24 { log_dhcp("in", frame); } } _ => {} }
+            match ip_kind(frame) {
+                1 => q.rx_v4 += 1,
+                2 => q.rx_arp += 1,
+                3 => {
+                    q.rx_dhcp += 1;
+                    if let Some(yi) = dhcp_ack_ip(frame) { ack_ip = Some(yi); }
+                    if q.rx_dhcp <= 24 { log_dhcp("in", frame); }
+                }
+                _ => {}
+            }
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
@@ -839,6 +936,7 @@ impl Wifi {
             q.len[at] = frame.len() as u16;
             q.count += 1;
         });
+        if let Some(yi) = ack_ip { self.dhcp_ip = Some(yi); }
         if !up {
             sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
             *q = RxQueue::EMPTY;
@@ -889,6 +987,9 @@ impl Wifi {
 
     /// What the desktop sees (`sex_pdx::wifi_status`).
     fn state(&self) -> ws::State {
+        if !self.enabled {
+            return ws::State { phase: ws::OFF, networks: 0, scans: self.scans, channels: 0 };
+        }
         if self.restart_at.is_some() || (self.want_join && !self.finished) {
             let phase = if self.want_join { ws::JOINING } else { ws::STARTING };
             return ws::State { phase, networks: 0, scans: self.scans, channels: 0 };
@@ -925,6 +1026,7 @@ impl Wifi {
 
     /// A fresh scan, when the chip is ready and the last scan has ended.
     fn rescan(&mut self, now_ticks: u64) -> bool {
+        if !self.enabled { return false; }
         // After a failed join (or a chip that stopped) a scan needs a fresh chip.
         if self.finished && self.restart_at.is_none() && !self.link_up() && self.link.is_none()
             && (self.join.is_some() || self.init.as_ref().is_none_or(|i| i.step != init::Step::Ready)) {
@@ -951,19 +1053,61 @@ impl Wifi {
         ws::bytes_word(&self.why.bytes[from..self.why.len])
     }
 
+    fn active_ssid_slice(&self) -> &[u8] {
+        if self.joined_ssid_len > 0 {
+            &self.joined_ssid[..self.joined_ssid_len]
+        } else if let Some(s) = self.saved.as_ref() {
+            s.ssid()
+        } else {
+            &[]
+        }
+    }
+
+    fn active_info(&self) -> u64 {
+        if !self.enabled { return ws::MISSING; }
+        let phase = self.state().phase;
+        if !matches!(phase, ws::JOINING | ws::JOINED | ws::ASSOCIATING | ws::ASSOCIATED | ws::HANDSHAKE | ws::CONNECTED) {
+            return ws::MISSING;
+        }
+        let ssid = self.active_ssid_slice();
+        if ssid.is_empty() { return ws::MISSING; }
+        ws::Info {
+            channel: self.joined_channel,
+            rssi: self.joined_rssi,
+            security: self.joined_security,
+            ssid_len: ssid.len().min(32) as u8,
+            beacons: 0,
+        }.word()
+    }
+
+    fn active_ssid_part(&self, part: u64) -> u64 {
+        let ssid = self.active_ssid_slice();
+        if !self.enabled || ssid.is_empty() || part >= ws::SSID_PARTS { return ws::MISSING; }
+        let from = (part * 7) as usize;
+        if from >= ssid.len() { return ws::MISSING; }
+        ws::bytes_word(&ssid[from..])
+    }
+
     fn network(&self, index: u64, part: u64) -> u64 {
         let Some(n) = self.scan.as_ref().and_then(|sc| sc.networks().nth(index as usize)) else { return ws::MISSING };
         let b = &n.bss;
-        let security = match b.security {
-            Security::Open => ws::OPEN, Security::Wpa2Personal => ws::WPA2, Security::Wpa3Personal => ws::WPA3,
-            Security::Wpa3Transition => ws::WPA2_WPA3, Security::Unsupported => ws::UNSUPPORTED,
-        };
         let info = ws::Info {
             channel: if b.channel != 0 { b.channel } else { n.heard_on },
-            rssi: n.rssi.clamp(-128, 127) as i8, security, ssid_len: b.ssid().len() as u8, beacons: n.frames,
+            rssi: n.rssi.clamp(-128, 127) as i8, security: security_to_ws(b.security), ssid_len: b.ssid().len() as u8, beacons: n.frames,
         };
         ws::network_part(info, &b.bssid, b.ssid(), part)
     }
+}
+
+fn local_ipv4_word(wifi: Option<&Wifi>) -> u64 {
+    if let Some(ip) = wifi.and_then(|w| w.dhcp_ip) {
+        return ws::ip4_word(ip, true);
+    }
+    let cfg = sex_pdx::device_network_config(sex_pdx::SLOT_NIC).ok()
+        .or_else(|| sex_pdx::device_network_config(sex_pdx::usb_net::SLOT).ok());
+    let link_up = wifi.is_some_and(|w| w.link_up()) || cfg.is_some();
+    let ip = cfg.map_or([0; 4], |c| c.local);
+    ws::ip4_word(ip, link_up)
 }
 
 /// Answers a desktop request (`sex_pdx::wifi_status::OP`). Shell, SilkBar and Spindle
@@ -976,26 +1120,31 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
     }
     let none = ws::State { phase: ws::NONE, networks: 0, scans: 0, channels: 0 }.word();
     match (action, wifi) {
-        (ws::STATE, None) | (ws::SCAN, None) => none,
-        (ws::NETWORK, None) => ws::MISSING,
+        (ws::STATE, None) | (ws::SCAN, None) | (ws::RADIO, None) | (ws::JOIN, None) | (ws::LEAVE, None) => none,
+        (ws::NETWORK, None) | (ws::WHY, None) => ws::MISSING,
+        (ws::ACTIVE, None) => if a == ws::ACTIVE_IP4 { local_ipv4_word(None) } else { ws::MISSING },
         (ws::STATE, Some(w)) => {
             // Spindle's `wifi` (not SilkBar's polling): its counters, for `wifi` to show.
             if spindle { w.log_link_now(); }
             w.state().word()
         }
         (ws::SCAN, Some(w)) if caller != 6 => { w.rescan(now_ticks); w.state().word() }
+        (ws::RADIO, Some(w)) if caller != 6 => { w.set_enabled(a != 0, now_ticks); w.state().word() }
         (ws::NETWORK, Some(w)) => w.network(a, b),
-        (ws::JOIN, None) => none,
+        (ws::ACTIVE, Some(w)) => match a {
+            ws::ACTIVE_INFO => w.active_info(),
+            ws::ACTIVE_IP4 => local_ipv4_word(Some(w)),
+            p if p >= ws::ACTIVE_SSID && p < ws::ACTIVE_SSID + ws::SSID_PARTS => w.active_ssid_part(p - ws::ACTIVE_SSID),
+            _ => ws::MISSING,
+        },
         (ws::JOIN, Some(w)) if caller != 6 => {
             if w.needs_password(a) { return ws::NEEDS_PASSWORD; }
             w.request_join(a, now_ticks);
             w.state().word()
         }
         (ws::LEAVE, Some(w)) if caller != 6 => { w.leave(now_ticks); w.state().word() }
-        (ws::LEAVE, None) => none,
         (ws::TUNE, Some(w)) if spindle => { w.tune(a, b != 0); w.state().word() }
         (ws::WHY, Some(w)) => w.why_part(a),
-        (ws::WHY, None) => ws::MISSING,
         (ws::PASSWORD, Some(w)) if caller != 6 => if w.password_part(a, b) { w.state().word() } else { ws::REFUSED },
         _ => ws::REFUSED,
     }

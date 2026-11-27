@@ -10,12 +10,12 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use sex_app::Window;
+use sex_app::{RichTextInput, TextFieldPalette, TextFieldRect, Window};
 use sex_font::raster::{scratch_len, FX};
 use sex_font::Font;
 use sex_theme::candy_ui::{
     draw_candy_badge, draw_candy_button, draw_candy_panel, draw_candy_tab, draw_candy_toolbar,
-    fill_rounded_rect, ButtonState, ButtonStyle, CandyPalette,
+    ButtonState, ButtonStyle, CandyPalette,
 };
 use tailor_core::Provider;
 
@@ -168,8 +168,7 @@ impl TailorUi {
         pending_approval: bool,
         transcript: &str,
         scroll_lines: usize,
-        input: &str,
-        input_selected: bool,
+        input: &mut RichTextInput,
         status: &str,
     ) {
         if !window.ready() {
@@ -326,22 +325,20 @@ impl TailorUi {
         let ih = (input_h - 10) as i32;
         draw_candy_panel(buf, w, h, 8, iy, (w - 16) as i32, ih, 12, &pal);
 
-        // Input well
+        // Input well (shared RichTextInput with spellcheck, ghost prediction, autocorrect, & Noir menu)
         let well_x = 18i32;
         let well_y = iy + 8;
         let well_w = (w as i32 - 178).max(100);
         let well_h = 28i32;
-        fill_rounded_rect(buf, w, h, well_x, well_y, well_w, well_h, 8, pal.well);
-        if input_selected && !input.is_empty() {
-            fill_rounded_rect(buf, w, h, well_x + 4, well_y + 4, well_w - 8, well_h - 8, 5, pal.selection);
-        }
-        let prompt_text = if input.is_empty() {
-            String::from("Ask Tailor anything, or type /proxy <url> or /key <provider> <key> ...")
-        } else {
-            format!("{}|", input)
-        };
-        let prompt_col = if input.is_empty() { pal.text_dim } else { pal.text };
-        self.draw_text(buf, w, h, well_x + 10, well_y + 6, well_w - 20, 13, &prompt_text, prompt_col);
+        let input_pal = TextFieldPalette::from_candy(&pal);
+        input.render(
+            buf,
+            w,
+            h,
+            TextFieldRect::new(well_x, well_y, well_w, well_h),
+            input.focused,
+            &input_pal,
+        );
 
         // Send & Clear buttons
         let sx = well_x + well_w + 8;
@@ -356,9 +353,10 @@ impl TailorUi {
         self.hits.push(HitBox { x: cx, y: well_y, w: 62, h: well_h, action: HitAction::Clear });
 
         // Status footer line
-        let footer = format!("{} · {}  |  Ctrl+A/C/V", model, status);
+        let footer = format!("{} · {}  |  ⌘/Ctrl+A/C/V/Z", model, status);
         self.draw_text(buf, w, h, 20, iy + 41, (w as i32 - 40).max(100), 11, &footer, pal.text_dim);
 
+        input.render_context_menu(buf, w, h, &input_pal);
         window.show_pixels(w, h);
     }
 }
