@@ -761,6 +761,7 @@ pub extern "C" fn _start() -> ! {
     let given = files::args(&mut window, &mut args);
     let words: Vec<&[u8]> = given.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
     let number = |w: Option<&&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok()).and_then(|t| t.parse::<u32>().ok());
+    if words.is_empty() { library::run(&mut window, &[]); }
     if words.first() == Some(&&b"--library"[..]) { library::run(&mut window, &words[1..]); }
     if matches!(words.first().copied(), Some(b"--addons" | b"--add-repo" | b"--install")) { kodi::run(&mut window, &words); }
     let file = if words.first() == Some(&&b"--encode-proof"[..]) {

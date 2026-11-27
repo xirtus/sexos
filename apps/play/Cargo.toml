@@ -16,3 +16,4 @@ sex-font = { path = "../../crates/sex-font" }
 sex-episodes = { path = "../../crates/sex-episodes" }
 sex-kodi = { path = "../../crates/sex-kodi" }
 sex-fetch = { path = "../../crates/sex-fetch" }
+sex-theme = { path = "../../crates/sex-theme" }
