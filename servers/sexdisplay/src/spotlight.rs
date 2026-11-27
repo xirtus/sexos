@@ -495,12 +495,14 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         draw_text(fb, w, h, total, lbl, tx, ty, ink, sc, r.2.saturating_sub(4 * s));
     }
 
-    // 4. App Icon Grid (5 columns x 2 rows)
+    // 4. App Icon Grid (5 columns x 4 rows)
     let (order, count) = filter_catalog(st.category, st.query.as_str());
     let shown = count.min(spotlight::GRID_COLS * spotlight::GRID_ROWS);
     if shown == 0 {
         let msg: &[u8] = if calc.is_some() {
             b"Calculator result ready above"
+        } else if !st.query.as_str().trim().is_empty() {
+            b"Press Enter to run program directly"
         } else {
             b"No matching apps found"
         };

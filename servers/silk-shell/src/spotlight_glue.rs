@@ -70,7 +70,23 @@ unsafe fn launch_named_program(name: &str, network: bool) -> bool {
 }
 
 fn program_needs_network(name: &str) -> bool {
-    matches!(name, "kaleidoscope" | "tailor" | "flirt" | "gossip" | "sexshop")
+    matches!(
+        name,
+        "kaleidoscope"
+            | "tailor"
+            | "flirt"
+            | "gossip"
+            | "sexshop"
+            | "brootlite"
+            | "qupid"
+            | "swingers"
+            | "tatami"
+            | "cabaret"
+            | "rendezvous"
+            | "hookup"
+            | "lurk"
+            | "needle"
+    )
 }
 
 unsafe fn dispatch_launch(target: LaunchTarget) {
@@ -95,7 +111,7 @@ unsafe fn dispatch_launch(target: LaunchTarget) {
             }
         }
         LaunchTarget::Settings => {
-            if !launch_named_program("tatami", false) {
+            if !launch_named_program("tatami", true) {
                 crate::toggle_scene_settings_panel();
             }
         }
@@ -106,6 +122,12 @@ unsafe fn dispatch_launch(target: LaunchTarget) {
         }
         LaunchTarget::Program(name) => {
             let _ = launch_named_program(name, program_needs_network(name));
+        }
+        LaunchTarget::QueryProgram(query) => {
+            let name = query.as_str().trim();
+            if !name.is_empty() {
+                let _ = launch_named_program(name, true);
+            }
         }
     }
 }

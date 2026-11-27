@@ -107,7 +107,7 @@ fn every_catalog_app_maps_to_real_sex_icons_app_icon() {
             app.id, app.icon
         );
     }
-    assert_eq!(CATALOG_LEN, GRID_COLS * GRID_ROWS);
+    assert!(CATALOG_LEN >= GRID_COLS * GRID_ROWS);
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn grid_arrow_navigation_and_enter_launch_dispatch() {
     assert_eq!(ctrl.handle_key(0x4D, 1, false, false), KeyOutcome::Redraw);
     assert_eq!(ctrl.state().selected, 1);
 
-    // Down moves 1 -> 1 + GRID_COLS (6 = Settings).
+    // Down moves 1 -> 1 + GRID_COLS.
     assert_eq!(ctrl.handle_key(0x50, 1, false, false), KeyOutcome::Redraw);
     assert_eq!(ctrl.state().selected as usize, 1 + GRID_COLS);
 
@@ -186,11 +186,11 @@ fn grid_arrow_navigation_and_enter_launch_dispatch() {
     assert_eq!(ctrl.handle_key(0x48, 1, false, false), KeyOutcome::Redraw);
     assert_eq!(ctrl.state().selected, 1);
 
-    // Left wraps 0 -> last item.
+    // Left wraps 0 -> last visible grid slot.
     assert_eq!(ctrl.handle_key(0x4B, 1, false, false), KeyOutcome::Redraw);
     assert_eq!(ctrl.state().selected, 0);
     assert_eq!(ctrl.handle_key(0x4B, 1, false, false), KeyOutcome::Redraw);
-    assert_eq!(ctrl.state().selected as usize, CATALOG_LEN - 1);
+    assert_eq!(ctrl.state().selected as usize, (GRID_COLS * GRID_ROWS).min(CATALOG_LEN) - 1);
 
     // Move back to index 1 (Kaleidoscope) and press Enter -> Launch(Browser) and close.
     assert_eq!(ctrl.handle_key(0x4D, 1, false, false), KeyOutcome::Redraw); // 0
