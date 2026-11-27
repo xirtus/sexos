@@ -120,4 +120,33 @@ mod tests {
         let prompt = acp_session_prompt(2, "sess-1", "Check Wi-Fi");
         assert!(prompt.contains("\"session/prompt\""));
     }
+
+    #[test]
+    fn heartbeat_ping_pong_and_base64_and_fnv_update() {
+        use crate::auth::{fnv64_update, FNV64_OFFSET};
+        use crate::frame::{HEARTBEAT_PING, HEARTBEAT_PONG};
+        use crate::rpc::decode_base64;
+
+        let ping = Frame::heartbeat_ping(0x1122_3344_5566_7788);
+        assert_eq!(ping.kind, FrameKind::Heartbeat);
+        assert_eq!(ping.payload[0], HEARTBEAT_PING);
+        assert_eq!(ping.payload.len(), 9);
+
+        let pong = Frame::heartbeat_pong(&ping.payload);
+        assert_eq!(pong.kind, FrameKind::Heartbeat);
+        assert_eq!(pong.payload[0], HEARTBEAT_PONG);
+        assert_eq!(&pong.payload[1..], &ping.payload[1..]);
+
+        assert_eq!(decode_base64("").unwrap(), Vec::<u8>::new());
+        assert_eq!(decode_base64("Zg==").unwrap(), b"f");
+        assert_eq!(decode_base64("Zm8=").unwrap(), b"fo");
+        assert_eq!(decode_base64("Zm9v\nYmFy").unwrap(), b"foobar");
+        assert_eq!(decode_base64("f0VMRg==").unwrap(), b"\x7fELF");
+        assert!(decode_base64("!!!").is_err());
+        assert!(decode_base64("Zg=").is_err());
+
+        let h = fnv64_update(FNV64_OFFSET, b"foo");
+        let h = fnv64_update(h, b"bar");
+        assert_eq!(h, fnv64(b"foobar"));
+    }
 }

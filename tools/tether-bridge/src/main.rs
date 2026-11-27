@@ -250,4 +250,206 @@ mod tests {
         let blocked = control_call(&ctrl_addr, "{\"method\":\"sysinfo\",\"caller\":\"mcp\"}").unwrap();
         assert!(blocked.contains("kill_switch"));
     }
+
+    #[test]
+    fn binary_fs_write_hotswap_heartbeat_and_clean_preemption() {
+        use tether_proto::auth::fnv64;
+        use tether_proto::frame::{HEARTBEAT_PING, HEARTBEAT_PONG};
+        use tether_proto::rpc::{json_get_bool, json_get_u64};
+
+        let (listen_addr, ctrl_addr, state) = start_test_bridge(None);
+
+        let connect_client = |cap: CapabilityMode| -> (TcpStream, FrameDecoder) {
+            let mut s = TcpStream::connect(&listen_addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut dec = FrameDecoder::new(true);
+            let mut hello = Vec::new();
+            hello.extend_from_slice(&MAGIC);
+            Frame::control(
+                FrameKind::Hello,
+                format!("{{\"role\":\"sexos-tether\",\"capability\":{}}}", cap as u8).into_bytes(),
+            )
+            .encode(&mut hello);
+            s.write_all(&hello).unwrap();
+
+            let mut buf = [0u8; 4096];
+            let mut got_ok = false;
+            while !got_ok {
+                let n = s.read(&mut buf).unwrap();
+                assert!(n > 0);
+                dec.push(&buf[..n]).unwrap();
+                while let Some(f) = dec.next_frame().unwrap() {
+                    if f.kind == FrameKind::AuthOk {
+                        got_ok = true;
+                        break;
+                    }
+                }
+            }
+            (s, dec)
+        };
+
+        let read_one = |s: &mut TcpStream, d: &mut FrameDecoder| -> Frame {
+            let mut buf = [0u8; 16384];
+            loop {
+                if let Some(f) = d.next_frame().unwrap() {
+                    return f;
+                }
+                let n = s.read(&mut buf).unwrap();
+                assert!(n > 0);
+                d.push(&buf[..n]).unwrap();
+            }
+        };
+
+        // Session 1 connects, then Session 2 preempts it; Session 1 must receive EOF/shutdown cleanly.
+        let (mut old_client, _old_dec) = connect_client(CapabilityMode::Observe);
+        let (mut client, mut dec) = connect_client(CapabilityMode::Dev);
+        let mut eof_buf = [0u8; 64];
+        old_client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let old_res = old_client.read(&mut eof_buf);
+        assert!(matches!(old_res, Ok(0) | Err(_)), "preempted session should close");
+        drop(old_client);
+
+        // 1. Heartbeat Ping -> Pong (and verify Pong is NOT echoed back)
+        client
+            .write_all(&Frame::heartbeat_ping(0x1234).to_bytes())
+            .unwrap();
+        let pong = read_one(&mut client, &mut dec);
+        assert_eq!(pong.kind, FrameKind::Heartbeat);
+        assert_eq!(pong.payload[0], HEARTBEAT_PONG);
+        assert_eq!(&pong.payload[1..], &0x1234u64.to_le_bytes());
+
+        // Sending a Pong must NOT trigger another Heartbeat from host
+        client
+            .write_all(&Frame::heartbeat_pong(&[HEARTBEAT_PING, 9, 9]).to_bytes())
+            .unwrap();
+
+        // 2. Binary fs_write via local_path (multi-chunk > 64 KiB with null bytes)
+        let tmp_bin = std::env::temp_dir().join(format!(
+            "tether-test-bin-{}.elf",
+            std::process::id()
+        ));
+        let mut payload = vec![0x7f, b'E', b'L', b'F'];
+        for i in 0..(70 * 1024usize) {
+            payload.push((i % 251) as u8);
+        }
+        std::fs::write(&tmp_bin, &payload).unwrap();
+        let expected_hash = format!("{:016x}", fnv64(&payload));
+
+        let ctrl_c = ctrl_addr.clone();
+        let lp = tmp_bin.to_string_lossy().into_owned();
+        let write_thread = thread::spawn(move || {
+            let req = format!(
+                "{{\"method\":\"fs_write\",\"caller\":\"mcp\",\"params\":{{\"path\":\"/bin/splicy\",\"local_path\":\"{}\"}}}}",
+                tether_proto::rpc::json_escape(&lp)
+            );
+            control_call(&ctrl_c, &req).unwrap()
+        });
+
+        let req_frame = read_one(&mut client, &mut dec);
+        assert_eq!(req_frame.kind, FrameKind::RpcRequest);
+        let req_str = String::from_utf8(req_frame.payload).unwrap();
+        assert_eq!(json_get_str(&req_str, "method").as_deref(), Some("fs_write"));
+        assert_eq!(json_get_bool(&req_str, "stream"), Some(true));
+        assert_eq!(json_get_u64(&req_str, "size"), Some(payload.len() as u64));
+        assert_eq!(json_get_str(&req_str, "fnv64").as_deref(), Some(expected_hash.as_str()));
+
+        let mut received = Vec::new();
+        let mut chunk_count = 0usize;
+        loop {
+            let f = read_one(&mut client, &mut dec);
+            assert_eq!(f.stream_id, req_frame.stream_id);
+            match f.kind {
+                FrameKind::RpcStreamChunk => {
+                    chunk_count += 1;
+                    received.extend_from_slice(&f.payload);
+                }
+                FrameKind::RpcStreamEnd => break,
+                other => panic!("unexpected frame during upload: {:?}", other),
+            }
+        }
+        assert!(chunk_count >= 3, "expected multi-chunk upload");
+        assert_eq!(received, payload);
+
+        let reply = rpc_ok_json(1, &format!("{{\"written\":{}}}", received.len()));
+        client
+            .write_all(
+                &Frame::new(req_frame.stream_id, FrameKind::RpcResponse, 0, reply.into_bytes())
+                    .to_bytes(),
+            )
+            .unwrap();
+        let write_out = write_thread.join().unwrap();
+        assert!(write_out.contains(&format!("\"written\":{}", payload.len())));
+
+        // 3. Binary fs_write via base64
+        let ctrl_c = ctrl_addr.clone();
+        let b64_thread = thread::spawn(move || {
+            let req = "{\"method\":\"fs_write\",\"caller\":\"mcp\",\"params\":{\"path\":\"/tmp/b64.bin\",\"base64\":\"f0VMRgAA\"}}";
+            control_call(&ctrl_c, req).unwrap()
+        });
+        let b64_req = read_one(&mut client, &mut dec);
+        assert_eq!(b64_req.kind, FrameKind::RpcRequest);
+        let b64_chunk = read_one(&mut client, &mut dec);
+        assert_eq!(b64_chunk.kind, FrameKind::RpcStreamChunk);
+        assert_eq!(b64_chunk.payload, b"\x7fELF\x00\x00");
+        let b64_end = read_one(&mut client, &mut dec);
+        assert_eq!(b64_end.kind, FrameKind::RpcStreamEnd);
+        client
+            .write_all(
+                &Frame::new(
+                    b64_req.stream_id,
+                    FrameKind::RpcResponse,
+                    0,
+                    rpc_ok_json(2, "{\"written\":6}").into_bytes(),
+                )
+                .to_bytes(),
+            )
+            .unwrap();
+        assert!(b64_thread.join().unwrap().contains("\"written\":6"));
+
+        // 4. Hotswap via local ELF path streams chunks + RpcStreamEnd
+        let ctrl_c = ctrl_addr.clone();
+        let lp = tmp_bin.to_string_lossy().into_owned();
+        let hs_thread = thread::spawn(move || {
+            let req = format!(
+                "{{\"method\":\"hotswap\",\"caller\":\"mcp\",\"params\":{{\"server\":\"sexbell\",\"elf_path\":\"{}\"}}}}",
+                tether_proto::rpc::json_escape(&lp)
+            );
+            control_call(&ctrl_c, &req).unwrap()
+        });
+        let hs_req = read_one(&mut client, &mut dec);
+        assert_eq!(hs_req.kind, FrameKind::RpcRequest);
+        let hs_str = String::from_utf8(hs_req.payload).unwrap();
+        assert_eq!(json_get_str(&hs_str, "method").as_deref(), Some("hotswap"));
+        assert_eq!(json_get_str(&hs_str, "server").as_deref(), Some("sexbell"));
+        assert_eq!(json_get_bool(&hs_str, "stream"), Some(true));
+        let mut hs_bytes = Vec::new();
+        loop {
+            let f = read_one(&mut client, &mut dec);
+            match f.kind {
+                FrameKind::RpcStreamChunk => hs_bytes.extend_from_slice(&f.payload),
+                FrameKind::RpcStreamEnd => break,
+                other => panic!("unexpected hotswap frame: {:?}", other),
+            }
+        }
+        assert_eq!(hs_bytes, payload);
+        client
+            .write_all(
+                &Frame::new(
+                    hs_req.stream_id,
+                    FrameKind::RpcResponse,
+                    0,
+                    rpc_ok_json(3, "{\"server\":\"sexbell\",\"pd\":10}").into_bytes(),
+                )
+                .to_bytes(),
+            )
+            .unwrap();
+        assert!(hs_thread.join().unwrap().contains("\"pd\":10"));
+
+        let _ = std::fs::remove_file(&tmp_bin);
+        drop(client);
+        thread::sleep(Duration::from_millis(100));
+        assert!(!state.connected.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }
