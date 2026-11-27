@@ -502,10 +502,370 @@ pub enum SidebarView {
     WindowsTabs,
     Keybinds,
     Profiles,
+    /// Candy Lavender Wi-Fi & Network Manager (shares `/data/wifi.conf` with Spindle).
+    Wifi,
     /// Candy Lavender Graphical Installer & Partition Manager.
     Install,
     /// One of the existing `sex-config` schema / info pages by index.
     SystemPage(usize),
+}
+
+/// Maximum saved Wi-Fi networks shared with Spindle (`/data/wifi.conf`).
+pub const MAX_WIFI_KNOWN: usize = 16;
+/// Maximum visible scanned Wi-Fi networks tracked in Tatami Settings.
+pub const MAX_WIFI_SCAN: usize = 12;
+/// Maximum serialized byte size for `/data/wifi.conf`.
+pub const WIFI_CONF_MAX: usize = 2048;
+/// Shared Wi-Fi configuration file path.
+pub const WIFI_CONF_PATH: &[u8] = b"/data/wifi.conf";
+
+/// Active text field focus in the Wi-Fi Quick Join form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiFieldFocus {
+    None,
+    Ssid,
+    Password,
+}
+
+/// One saved Wi-Fi network entry from `/data/wifi.conf`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WifiKnownEntry {
+    pub ssid: [u8; 32],
+    pub ssid_len: usize,
+    pub pass: [u8; 63],
+    pub pass_len: usize,
+}
+
+impl WifiKnownEntry {
+    pub const EMPTY: Self = Self {
+        ssid: [0; 32],
+        ssid_len: 0,
+        pass: [0; 63],
+        pass_len: 0,
+    };
+
+    pub fn from_slices(ssid: &[u8], pass: &[u8]) -> Option<Self> {
+        if ssid.is_empty() || ssid.len() > 32 || pass.len() > 63 {
+            return None;
+        }
+        let mut e = Self::EMPTY;
+        e.ssid[..ssid.len()].copy_from_slice(ssid);
+        e.ssid_len = ssid.len();
+        e.pass[..pass.len()].copy_from_slice(pass);
+        e.pass_len = pass.len();
+        Some(e)
+    }
+
+    pub fn ssid_bytes(&self) -> &[u8] {
+        &self.ssid[..self.ssid_len]
+    }
+
+    pub fn pass_bytes(&self) -> &[u8] {
+        &self.pass[..self.pass_len]
+    }
+}
+
+/// One visible scanned Wi-Fi network from `sexnet`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WifiScanEntry {
+    pub scan_idx: u16,
+    pub ssid: [u8; 32],
+    pub ssid_len: usize,
+    pub rssi: i8,
+    pub channel: u8,
+    pub security: u8,
+}
+
+impl WifiScanEntry {
+    pub const EMPTY: Self = Self {
+        scan_idx: 0,
+        ssid: [0; 32],
+        ssid_len: 0,
+        rssi: 0,
+        channel: 0,
+        security: 0,
+    };
+
+    pub fn ssid_bytes(&self) -> &[u8] {
+        &self.ssid[..self.ssid_len]
+    }
+}
+
+/// Zero-heap state for the Candy Lavender Wi-Fi & Network Manager page.
+pub struct WifiState {
+    pub loaded: bool,
+    pub connected: bool,
+    pub status_label: [u8; 64],
+    pub status_label_len: usize,
+    pub active_ssid: [u8; 32],
+    pub active_ssid_len: usize,
+    pub ip_text: [u8; 32],
+    pub ip_text_len: usize,
+    pub signal_rssi: i8,
+    pub known: [WifiKnownEntry; MAX_WIFI_KNOWN],
+    pub known_count: usize,
+    pub scanned: [WifiScanEntry; MAX_WIFI_SCAN],
+    pub scan_count: usize,
+    pub focus: WifiFieldFocus,
+    pub form_ssid: [u8; 32],
+    pub form_ssid_len: usize,
+    pub form_pass: [u8; 63],
+    pub form_pass_len: usize,
+}
+
+impl WifiState {
+    pub const fn new() -> Self {
+        Self {
+            loaded: false,
+            connected: false,
+            status_label: [0; 64],
+            status_label_len: 0,
+            active_ssid: [0; 32],
+            active_ssid_len: 0,
+            ip_text: [0; 32],
+            ip_text_len: 0,
+            signal_rssi: 0,
+            known: [WifiKnownEntry::EMPTY; MAX_WIFI_KNOWN],
+            known_count: 0,
+            scanned: [WifiScanEntry::EMPTY; MAX_WIFI_SCAN],
+            scan_count: 0,
+            focus: WifiFieldFocus::None,
+            form_ssid: [0; 32],
+            form_ssid_len: 0,
+            form_pass: [0; 63],
+            form_pass_len: 0,
+        }
+    }
+
+    pub fn set_status(&mut self, msg: &[u8]) {
+        let n = msg.len().min(self.status_label.len());
+        self.status_label[..n].copy_from_slice(&msg[..n]);
+        self.status_label_len = n;
+    }
+
+    pub fn status_bytes(&self) -> &[u8] {
+        if self.status_label_len > 0 {
+            &self.status_label[..self.status_label_len]
+        } else if self.connected {
+            b"Connected"
+        } else {
+            b"Disconnected"
+        }
+    }
+
+    pub fn set_active_ssid(&mut self, ssid: &[u8]) {
+        let n = ssid.len().min(self.active_ssid.len());
+        self.active_ssid[..n].copy_from_slice(&ssid[..n]);
+        self.active_ssid_len = n;
+    }
+
+    pub fn set_ip(&mut self, ip: &[u8]) {
+        let n = ip.len().min(self.ip_text.len());
+        self.ip_text[..n].copy_from_slice(&ip[..n]);
+        self.ip_text_len = n;
+    }
+
+    pub fn ip_bytes(&self) -> &[u8] {
+        if self.ip_text_len > 0 {
+            &self.ip_text[..self.ip_text_len]
+        } else {
+            b"--"
+        }
+    }
+
+    pub fn signal_quality_label(rssi: i8) -> &'static [u8] {
+        if rssi == 0 {
+            b"--"
+        } else if rssi >= -55 {
+            b"Excellent"
+        } else if rssi >= -67 {
+            b"Good"
+        } else if rssi >= -78 {
+            b"Fair"
+        } else {
+            b"Weak"
+        }
+    }
+
+    pub fn find_known(&self, ssid: &[u8]) -> Option<usize> {
+        self.known[..self.known_count]
+            .iter()
+            .position(|e| e.ssid_bytes() == ssid)
+    }
+
+    /// Parses `/data/wifi.conf` in either multi-network (`ssid=<SSID>\tpass=<PASS>\n`)
+    /// or legacy 2-line (`<SSID>\n<PASS>\n` / `<SSID>\n`) format.
+    pub fn parse_wifi_conf(&mut self, data: &[u8]) {
+        self.known_count = 0;
+        self.loaded = true;
+        fn trim_cr(s: &[u8]) -> &[u8] {
+            if let [rest @ .., b'\r'] = s { rest } else { s }
+        }
+        let has_kv = data.split(|&b| b == b'\n').map(trim_cr).any(|l| l.starts_with(b"ssid="));
+        if has_kv {
+            for raw in data.split(|&b| b == b'\n') {
+                let line = trim_cr(raw);
+                if line.is_empty() || line[0] == b'#' {
+                    continue;
+                }
+                let Some(rest) = line.strip_prefix(b"ssid=") else { continue };
+                let (ssid, pass) = if let Some(pos) = rest.windows(6).position(|w| w == b"\tpass=") {
+                    (&rest[..pos], &rest[pos + 6..])
+                } else if let Some(pos) = rest.iter().position(|&b| b == b'\t') {
+                    let tail = &rest[pos + 1..];
+                    (&rest[..pos], tail.strip_prefix(b"pass=").unwrap_or(tail))
+                } else {
+                    (rest, &b""[..])
+                };
+                if self.find_known(ssid).is_some() || self.known_count >= MAX_WIFI_KNOWN {
+                    continue;
+                }
+                if let Some(entry) = WifiKnownEntry::from_slices(ssid, pass) {
+                    self.known[self.known_count] = entry;
+                    self.known_count += 1;
+                }
+            }
+            return;
+        }
+        // Legacy 2-line fallback: `<ssid>\n<pass>\n` or `<ssid>\n`.
+        let mut lines = data.split(|&b| b == b'\n').map(trim_cr);
+        let Some(line1) = lines.next() else { return };
+        if line1.is_empty() || line1.len() > 32 {
+            return;
+        }
+        let line2 = lines.next().unwrap_or(b"");
+        if line2.len() <= 63 {
+            if let Some(entry) = WifiKnownEntry::from_slices(line1, line2) {
+                self.known[0] = entry;
+                self.known_count = 1;
+            }
+        }
+    }
+
+    /// Serializes known networks as `ssid=<SSID>\tpass=<PASS>\n` (MRU first).
+    pub fn serialize_wifi_conf(&self, out: &mut [u8]) -> usize {
+        let mut at = 0;
+        let put = |out: &mut [u8], at: &mut usize, bytes: &[u8]| {
+            let take = bytes.len().min(out.len().saturating_sub(*at));
+            out[*at..*at + take].copy_from_slice(&bytes[..take]);
+            *at += take;
+        };
+        for entry in &self.known[..self.known_count] {
+            put(out, &mut at, b"ssid=");
+            put(out, &mut at, entry.ssid_bytes());
+            put(out, &mut at, b"\tpass=");
+            put(out, &mut at, entry.pass_bytes());
+            put(out, &mut at, b"\n");
+        }
+        at
+    }
+
+    /// Upserts `(ssid, pass)` to the top (MRU index 0) of the known networks list.
+    pub fn upsert_known(&mut self, ssid: &[u8], pass: &[u8]) -> bool {
+        let Some(entry) = WifiKnownEntry::from_slices(ssid, pass) else {
+            return false;
+        };
+        if let Some(idx) = self.find_known(ssid) {
+            for i in (1..=idx).rev() {
+                self.known[i] = self.known[i - 1];
+            }
+            self.known[0] = entry;
+            return true;
+        }
+        let shift_end = self.known_count.min(MAX_WIFI_KNOWN - 1);
+        for i in (1..=shift_end).rev() {
+            self.known[i] = self.known[i - 1];
+        }
+        self.known[0] = entry;
+        if self.known_count < MAX_WIFI_KNOWN {
+            self.known_count += 1;
+        }
+        true
+    }
+
+    /// Removes known network at `idx`.
+    pub fn forget_known(&mut self, idx: usize) -> bool {
+        if idx >= self.known_count {
+            return false;
+        }
+        for i in idx + 1..self.known_count {
+            self.known[i - 1] = self.known[i];
+        }
+        self.known_count -= 1;
+        self.known[self.known_count] = WifiKnownEntry::EMPTY;
+        true
+    }
+
+    /// Populates the quick-join form from scanned network `idx`.
+    pub fn select_scanned(&mut self, idx: usize) -> bool {
+        if idx >= self.scan_count {
+            return false;
+        }
+        let s = self.scanned[idx];
+        self.form_ssid = s.ssid;
+        self.form_ssid_len = s.ssid_len;
+        self.form_pass = [0; 63];
+        self.form_pass_len = 0;
+        self.focus = if s.security == 0 {
+            WifiFieldFocus::Ssid
+        } else {
+            WifiFieldFocus::Password
+        };
+        true
+    }
+
+    /// Appends a printable ASCII character to the focused quick-join input field.
+    pub fn type_char(&mut self, c: u8) -> bool {
+        if !(0x20..0x7F).contains(&c) {
+            return false;
+        }
+        match self.focus {
+            WifiFieldFocus::Ssid => {
+                if self.form_ssid_len < self.form_ssid.len() {
+                    self.form_ssid[self.form_ssid_len] = c;
+                    self.form_ssid_len += 1;
+                    true
+                } else {
+                    false
+                }
+            }
+            WifiFieldFocus::Password => {
+                if self.form_pass_len < self.form_pass.len() {
+                    self.form_pass[self.form_pass_len] = c;
+                    self.form_pass_len += 1;
+                    true
+                } else {
+                    false
+                }
+            }
+            WifiFieldFocus::None => false,
+        }
+    }
+
+    /// Deletes the last byte from the focused quick-join input field.
+    pub fn backspace(&mut self) -> bool {
+        match self.focus {
+            WifiFieldFocus::Ssid if self.form_ssid_len > 0 => {
+                self.form_ssid_len -= 1;
+                self.form_ssid[self.form_ssid_len] = 0;
+                true
+            }
+            WifiFieldFocus::Password if self.form_pass_len > 0 => {
+                self.form_pass_len -= 1;
+                self.form_pass[self.form_pass_len] = 0;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn form_ssid_bytes(&self) -> &[u8] {
+        &self.form_ssid[..self.form_ssid_len]
+    }
+
+    pub fn form_pass_bytes(&self) -> &[u8] {
+        &self.form_pass[..self.form_pass_len]
+    }
 }
 
 /// Snapshot of editable desktop preferences for one-click Undo.
@@ -604,6 +964,14 @@ pub enum UiAction {
     SyncDotfiles,
     PullDotfiles,
     ToggleDotfilesAutoSync,
+    WifiScan,
+    WifiRefresh,
+    WifiConnectKnown(usize),
+    WifiForgetKnown(usize),
+    WifiSelectScan(usize),
+    WifiFocusSsid,
+    WifiFocusPass,
+    WifiJoinSubmit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -636,6 +1004,7 @@ pub struct GuiState {
     pub hit_count: usize,
     pub install: InstallState,
     pub updates: UpdatesState,
+    pub wifi: WifiState,
 }
 
 impl GuiState {
@@ -654,6 +1023,7 @@ impl GuiState {
             hit_count: 0,
             install: InstallState::new(),
             updates: UpdatesState::new(),
+            wifi: WifiState::new(),
         }
     }
 
@@ -868,6 +1238,7 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
         SidebarView::WindowsTabs => b"Windows, Chrome & Tiling",
         SidebarView::Keybinds => b"Keybinds (Hyprland + KDE)",
         SidebarView::Profiles => b"Desktop Profiles (HyprMod)",
+        SidebarView::Wifi => b"Wi-Fi & Network Manager",
         SidebarView::Install => b"Install SexOS & Partition Manager",
         SidebarView::SystemPage(idx) => {
             let (pages, n) = model::pages();
@@ -910,11 +1281,12 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
     draw_text(buf, w, h, g, 14, sy, SIDEBAR_W - 24, b"PERSONALIZE", pal.text_dim);
     sy += 20;
 
-    let primary_items: [(&[u8], SidebarView); 5] = [
+    let primary_items: [(&[u8], SidebarView); 6] = [
         (b"Appearance", SidebarView::Appearance),
         (b"Windows & Tabs", SidebarView::WindowsTabs),
         (b"Keybinds", SidebarView::Keybinds),
         (b"Profiles", SidebarView::Profiles),
+        (b"Wi-Fi & Network", SidebarView::Wifi),
         (b"Install SexOS", SidebarView::Install),
     ];
     for (label, view) in primary_items {
@@ -971,6 +1343,7 @@ pub fn render_gui(buf: &mut [u32], w: usize, h: usize, g: &mut Glyphs, gui: &mut
         SidebarView::WindowsTabs => render_windows_tabs(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
         SidebarView::Keybinds => render_keybinds(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
         SidebarView::Profiles => render_profiles(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch),
+        SidebarView::Wifi => render_wifi(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
         SidebarView::Install => render_install(buf, w, h, g, gui, &pal, cx, cy, cw, ch),
         SidebarView::SystemPage(idx) if idx < page_count && pages[idx] == "updates" => {
             render_updates(buf, w, h, g, gui, m, &pal, cx, cy, cw, ch)
@@ -1778,6 +2151,258 @@ fn render_updates(
     gui.push_hit(pull_x, dot_btn_y, pull_w, 26, pull_act);
 }
 
+fn format_rssi(rssi: i8, out: &mut [u8; 24]) -> usize {
+    let mut n = 0usize;
+    if rssi == 0 {
+        out[..2].copy_from_slice(b"--");
+        return 2;
+    }
+    if rssi < 0 {
+        out[n] = b'-';
+        n += 1;
+    }
+    let abs = rssi.unsigned_abs() as u64;
+    n += format_u64_ascii(abs, &mut out[n..]);
+    let suf = b" dBm";
+    let take = suf.len().min(out.len().saturating_sub(n));
+    out[n..n + take].copy_from_slice(&suf[..take]);
+    n + take
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_wifi(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    mut y: i32,
+    cw: i32,
+    ch: i32,
+) {
+    let max_y = y + ch;
+
+    // 1. Current Connection Status Card.
+    let status_h = 78;
+    draw_candy_panel(buf, w, h, x, y, cw, status_h, 10, pal);
+    let accent_bar = if gui.wifi.connected { 0x0034_D399 } else { pal.accent };
+    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, status_h - 12, 2, accent_bar);
+
+    draw_text(buf, w, h, g, x + 14, y + 8, cw - 240, b"Current Wi-Fi Connection", pal.text);
+
+    // Status pill badge.
+    let badge_lbl: &[u8] = if gui.wifi.connected { b"CONNECTED" } else { b"DISCONNECTED" };
+    let badge_col = if gui.wifi.connected { 0x0034_D399 } else { pal.control };
+    let badge_ink = if gui.wifi.connected { 0x0010_0C1C } else { pal.text_dim };
+    let badge_w = if gui.wifi.connected { 88 } else { 108 };
+    draw_candy_badge(buf, w, h, x + 14, y + 30, badge_w, 20, badge_col, pal);
+    draw_text(buf, w, h, g, x + 20, y + 32, badge_w - 8, badge_lbl, badge_ink);
+
+    // Connected SSID / Status text next to badge.
+    let ssid_text: &[u8] = if gui.wifi.active_ssid_len > 0 {
+        &gui.wifi.active_ssid[..gui.wifi.active_ssid_len]
+    } else {
+        gui.wifi.status_bytes()
+    };
+    draw_text(buf, w, h, g, x + 22 + badge_w, y + 32, (cw - badge_w - 220).max(80), ssid_text, pal.text);
+
+    // Second info line: IP & Signal quality.
+    let mut meta = [0u8; 96];
+    let mut mn = 0usize;
+    let put_meta = |buf: &mut [u8; 96], at: &mut usize, bytes: &[u8]| {
+        let take = bytes.len().min(buf.len().saturating_sub(*at));
+        buf[*at..*at + take].copy_from_slice(&bytes[..take]);
+        *at += take;
+    };
+    put_meta(&mut meta, &mut mn, b"IP: ");
+    put_meta(&mut meta, &mut mn, gui.wifi.ip_bytes());
+    put_meta(&mut meta, &mut mn, b"   Signal: ");
+    let mut rbuf = [0u8; 24];
+    let rlen = format_rssi(gui.wifi.signal_rssi, &mut rbuf);
+    put_meta(&mut meta, &mut mn, &rbuf[..rlen]);
+    if gui.wifi.signal_rssi != 0 {
+        put_meta(&mut meta, &mut mn, b" (");
+        put_meta(&mut meta, &mut mn, WifiState::signal_quality_label(gui.wifi.signal_rssi));
+        put_meta(&mut meta, &mut mn, b")");
+    }
+    draw_text(buf, w, h, g, x + 14, y + 54, cw - 220, &meta[..mn], pal.text_dim);
+
+    // Action buttons on right of Status card: Scan Wi-Fi + Refresh.
+    let scan_w = 96;
+    let ref_w = 78;
+    let ref_x = x + cw - ref_w - 10;
+    let scan_x = ref_x - scan_w - 8;
+    let scan_act = UiAction::WifiScan;
+    draw_candy_button(buf, w, h, scan_x, y + 10, scan_w, 26, 8, ButtonStyle::Primary, gui.btn_state(scan_act), pal);
+    draw_text(buf, w, h, g, scan_x + 12, y + 15, scan_w - 16, b"Scan Wi-Fi", pal.text_on_accent);
+    gui.push_hit(scan_x, y + 10, scan_w, 26, scan_act);
+
+    let ref_act = UiAction::WifiRefresh;
+    draw_candy_button(buf, w, h, ref_x, y + 10, ref_w, 26, 8, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
+    draw_text(buf, w, h, g, ref_x + 11, y + 15, ref_w - 14, b"Refresh", pal.text);
+    gui.push_hit(ref_x, y + 10, ref_w, 26, ref_act);
+
+    y += status_h + 10;
+
+    // 2. Known / Saved Networks Card (`/data/wifi.conf`).
+    let known_count = gui.wifi.known_count;
+    let known_rows = known_count.min(4);
+    let known_h = (38 + known_rows.max(1) as i32 * 30 + 6).min((max_y - y - 160).max(74));
+    draw_candy_panel(buf, w, h, x, y, cw, known_h, 10, pal);
+    draw_text(buf, w, h, g, x + 14, y + 8, cw - 130, b"Known / Saved Networks (/data/wifi.conf)", pal.text);
+
+    let mut cnt_buf = [0u8; 16];
+    let mut cn = format_u64_ascii(known_count as u64, &mut cnt_buf);
+    let suf = b" saved";
+    cnt_buf[cn..cn + suf.len()].copy_from_slice(suf);
+    cn += suf.len();
+    draw_candy_badge(buf, w, h, x + cw - 82, y + 6, 70, 20, pal.control, pal);
+    draw_text(buf, w, h, g, x + cw - 74, y + 8, 58, &cnt_buf[..cn], pal.accent);
+
+    let mut ky = y + 32;
+    if known_count == 0 {
+        draw_text(
+            buf,
+            w,
+            h,
+            g,
+            x + 14,
+            ky + 4,
+            cw - 28,
+            b"No saved networks yet. Add or join a network below for boot auto-connect.",
+            pal.text_dim,
+        );
+    } else {
+        for i in 0..known_rows {
+            if ky + 28 > y + known_h - 4 {
+                break;
+            }
+            let entry = gui.wifi.known[i];
+            draw_candy_selection_row(buf, w, h, x + 10, ky, cw - 20, 26, 7, pal);
+            draw_text(buf, w, h, g, x + 18, ky + 5, (cw - 290).max(80), entry.ssid_bytes(), pal.text);
+
+            // Auto-connect Candy badge.
+            let ac_w = 104;
+            let ac_x = x + cw - 252;
+            if ac_x > x + 120 {
+                draw_candy_badge(buf, w, h, ac_x, ky + 3, ac_w, 20, pal.accent, pal);
+                draw_text(buf, w, h, g, ac_x + 6, ky + 5, ac_w - 8, b"Auto-connect", pal.text_on_accent);
+            }
+
+            // Connect button.
+            let conn_w = 68;
+            let conn_x = x + cw - 142;
+            let conn_act = UiAction::WifiConnectKnown(i);
+            draw_candy_button(buf, w, h, conn_x, ky + 2, conn_w, 22, 6, ButtonStyle::Normal, gui.btn_state(conn_act), pal);
+            draw_text(buf, w, h, g, conn_x + 6, ky + 5, conn_w - 8, b"Connect", pal.text);
+            gui.push_hit(conn_x, ky + 2, conn_w, 22, conn_act);
+
+            // Forget button.
+            let fgt_w = 58;
+            let fgt_x = x + cw - 68;
+            let fgt_act = UiAction::WifiForgetKnown(i);
+            draw_candy_button(buf, w, h, fgt_x, ky + 2, fgt_w, 22, 6, ButtonStyle::Subtle, gui.btn_state(fgt_act), pal);
+            draw_text(buf, w, h, g, fgt_x + 5, ky + 5, fgt_w - 8, b"Forget", pal.text_dim);
+            gui.push_hit(fgt_x, ky + 2, fgt_w, 22, fgt_act);
+
+            ky += 30;
+        }
+    }
+    y += known_h + 10;
+
+    // 3. Scan & Quick Join Card (available networks + SSID/Password form).
+    let join_h = (max_y - y).max(126);
+    draw_candy_panel(buf, w, h, x, y, cw, join_h, 10, pal);
+    draw_text(buf, w, h, g, x + 14, y + 8, cw - 28, b"Available Networks & Quick Join", pal.text);
+
+    // Available scanned networks list (above quick-join form).
+    let form_y = (y + join_h - 46).max(y + 56);
+    let mut sy = y + 30;
+    if gui.wifi.scan_count == 0 {
+        draw_text(
+            buf,
+            w,
+            h,
+            g,
+            x + 14,
+            sy + 2,
+            cw - 28,
+            b"Click 'Scan Wi-Fi' to list nearby networks, or enter an SSID below.",
+            pal.text_dim,
+        );
+    } else {
+        for i in 0..gui.wifi.scan_count {
+            if sy + 24 > form_y - 6 {
+                break;
+            }
+            let s = gui.wifi.scanned[i];
+            let act = UiAction::WifiSelectScan(i);
+            let st = gui.btn_state(act);
+            let style = if st == ButtonState::Hover { ButtonStyle::Active } else { ButtonStyle::Subtle };
+            draw_candy_button(buf, w, h, x + 10, sy, cw - 20, 22, 6, style, st, pal);
+            let name = if s.ssid_len > 0 { s.ssid_bytes() } else { b"(hidden)" };
+            draw_text(buf, w, h, g, x + 18, sy + 3, (cw - 210).max(80), name, pal.text);
+
+            let mut rb = [0u8; 24];
+            let rl = format_rssi(s.rssi, &mut rb);
+            draw_text(buf, w, h, g, x + cw - 178, sy + 3, 72, &rb[..rl], pal.text_dim);
+
+            let sec_lbl: &[u8] = if s.security == 0 { b"Open" } else { b"WPA2/3" };
+            draw_candy_badge(buf, w, h, x + cw - 86, sy + 2, 64, 18, pal.control, pal);
+            draw_text(buf, w, h, g, x + cw - 78, sy + 3, 52, sec_lbl, pal.accent);
+
+            gui.push_hit(x + 10, sy, cw - 20, 22, act);
+            sy += 24;
+        }
+    }
+
+    // Quick-join input row: [SSID input] [Password input] [Save & Join].
+    fill_solid(buf, w, h, x + 12, form_y - 6, cw - 24, 1, pal.hairline);
+    let join_w = 104;
+    let field_area = (cw - 36 - join_w).max(160);
+    let ssid_w = (field_area * 48) / 100;
+    let pass_w = (field_area - ssid_w - 8).max(76);
+    let ssid_x = x + 12;
+    let pass_x = ssid_x + ssid_w + 8;
+    let join_x = x + cw - join_w - 12;
+
+    // SSID box.
+    let ssid_focused = gui.wifi.focus == WifiFieldFocus::Ssid;
+    let ssid_act = UiAction::WifiFocusSsid;
+    let ssid_style = if ssid_focused { ButtonStyle::Active } else { ButtonStyle::Normal };
+    draw_candy_button(buf, w, h, ssid_x, form_y + 4, ssid_w, 28, 7, ssid_style, gui.btn_state(ssid_act), pal);
+    if gui.wifi.form_ssid_len > 0 {
+        draw_text(buf, w, h, g, ssid_x + 8, form_y + 10, ssid_w - 14, gui.wifi.form_ssid_bytes(), pal.text);
+    } else {
+        draw_text(buf, w, h, g, ssid_x + 8, form_y + 10, ssid_w - 14, b"SSID...", pal.text_dim);
+    }
+    gui.push_hit(ssid_x, form_y + 4, ssid_w, 28, ssid_act);
+
+    // Password box (masked with '*').
+    let pass_focused = gui.wifi.focus == WifiFieldFocus::Password;
+    let pass_act = UiAction::WifiFocusPass;
+    let pass_style = if pass_focused { ButtonStyle::Active } else { ButtonStyle::Normal };
+    draw_candy_button(buf, w, h, pass_x, form_y + 4, pass_w, 28, 7, pass_style, gui.btn_state(pass_act), pal);
+    if gui.wifi.form_pass_len > 0 {
+        let mask = [b'*'; 63];
+        draw_text(buf, w, h, g, pass_x + 8, form_y + 10, pass_w - 14, &mask[..gui.wifi.form_pass_len], pal.text);
+    } else {
+        draw_text(buf, w, h, g, pass_x + 8, form_y + 10, pass_w - 14, b"Passphrase...", pal.text_dim);
+    }
+    gui.push_hit(pass_x, form_y + 4, pass_w, 28, pass_act);
+
+    // Save & Join button.
+    let can_join = gui.wifi.form_ssid_len > 0;
+    let join_act = UiAction::WifiJoinSubmit;
+    let join_style = if can_join { ButtonStyle::Primary } else { ButtonStyle::Disabled };
+    let join_state = if can_join { gui.btn_state(join_act) } else { ButtonState::Rest };
+    draw_candy_button(buf, w, h, join_x, form_y + 4, join_w, 28, 8, join_style, join_state, pal);
+    draw_text(buf, w, h, g, join_x + 8, form_y + 10, join_w - 12, b"Save & Join", button_text_color(join_style, pal));
+    gui.push_hit(join_x, form_y + 4, join_w, 28, join_act);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1843,7 +2468,13 @@ mod tests {
             .any(|h| h.action == UiAction::ToggleFrostedGlass);
         assert!(has_glass);
 
-        // Verify Install SexOS sidebar tab hitbox exists.
+        // Verify Wi-Fi & Network and Install SexOS sidebar tab hitboxes exist.
+        let has_wifi_tab = gui.hits[..gui.hit_count]
+            .iter()
+            .flatten()
+            .any(|h| h.action == UiAction::SelectView(SidebarView::Wifi));
+        assert!(has_wifi_tab, "missing Wi-Fi & Network sidebar tab");
+
         let has_install_tab = gui.hits[..gui.hit_count]
             .iter()
             .flatten()
@@ -1933,6 +2564,69 @@ mod tests {
         assert!(has(UiAction::ToggleDotfilesAutoSync), "missing Auto-sync toggle hitbox");
         assert_eq!(SYSTEM_REPO, "xirtus/sexos");
         assert_eq!(DOTFILES_REPO, "xirtus/sexosdotfiles");
+    }
+
+    #[test]
+    fn wifi_gui_renders_status_known_networks_scan_and_join_form() {
+        let cfg = Config::new();
+        let m = Model::new(cfg);
+        let mut gui = GuiState::new();
+        gui.view = SidebarView::Wifi;
+
+        // Parse multi-network /data/wifi.conf format shared with Spindle.
+        gui.wifi.parse_wifi_conf(b"ssid=HomeNet\tpass=test-pass-123\nssid=CafeSpot\tpass=\n");
+        assert_eq!(gui.wifi.known_count, 2);
+        assert_eq!(gui.wifi.known[0].ssid_bytes(), b"HomeNet");
+        assert_eq!(gui.wifi.known[1].ssid_bytes(), b"CafeSpot");
+
+        // Upsert moves/adds to MRU top and roundtrips cleanly.
+        assert!(gui.wifi.upsert_known(b"Lab 5G", b"lab-pass-456"));
+        assert_eq!(gui.wifi.known_count, 3);
+        assert_eq!(gui.wifi.known[0].ssid_bytes(), b"Lab 5G");
+        let mut ser = [0u8; WIFI_CONF_MAX];
+        let slen = gui.wifi.serialize_wifi_conf(&mut ser);
+        assert_eq!(
+            &ser[..slen],
+            b"ssid=Lab 5G\tpass=lab-pass-456\nssid=HomeNet\tpass=test-pass-123\nssid=CafeSpot\tpass=\n"
+        );
+
+        // Simulate connected state + scanned network.
+        gui.wifi.connected = true;
+        gui.wifi.set_active_ssid(b"Lab 5G");
+        gui.wifi.set_ip(b"192.0.2.15");
+        gui.wifi.signal_rssi = -52;
+        gui.wifi.scanned[0] = WifiScanEntry {
+            scan_idx: 0,
+            ssid: {
+                let mut s = [0u8; 32];
+                s[..6].copy_from_slice(b"Lab 5G");
+                s
+            },
+            ssid_len: 6,
+            rssi: -52,
+            channel: 36,
+            security: 2,
+        };
+        gui.wifi.scan_count = 1;
+
+        let mut g = Glyphs::new();
+        let mut buf = vec![0u32; 900 * 600];
+        render_gui(&mut buf, 900, 600, &mut g, &mut gui, &m);
+
+        let has = |act: UiAction| gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == act);
+        assert!(has(UiAction::WifiScan), "missing Scan Wi-Fi hitbox");
+        assert!(has(UiAction::WifiRefresh), "missing Refresh hitbox");
+        assert!(has(UiAction::WifiConnectKnown(0)), "missing Connect known hitbox");
+        assert!(has(UiAction::WifiForgetKnown(0)), "missing Forget known hitbox");
+        assert!(has(UiAction::WifiSelectScan(0)), "missing Scanned network hitbox");
+        assert!(has(UiAction::WifiFocusSsid), "missing SSID input hitbox");
+        assert!(has(UiAction::WifiFocusPass), "missing Password input hitbox");
+        assert!(has(UiAction::WifiJoinSubmit), "missing Save & Join hitbox");
+
+        // Forget removes entry cleanly.
+        assert!(gui.wifi.forget_known(1));
+        assert_eq!(gui.wifi.known_count, 2);
+        assert_eq!(gui.wifi.known[1].ssid_bytes(), b"CafeSpot");
     }
 }
 

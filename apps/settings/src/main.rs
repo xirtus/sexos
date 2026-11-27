@@ -160,6 +160,164 @@ fn run_install_action(window: &mut Window, gui: &mut GuiState, m: &mut Model, go
     }
 }
 
+/// Bounded-timeout `sexnet` Wi-Fi status RPC (`sex_pdx::wifi_status`).
+fn wifi_rpc(action: u64, a: u64, b: u64) -> Option<u64> {
+    use sex_pdx::wifi_status as ws;
+    sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, ws::OP, action, a, b).ok()?;
+    let began = sex_pdx::get_ticks();
+    while sex_pdx::get_ticks().saturating_sub(began) < 350 {
+        if let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
+            if msg.type_id == 1 && msg.caller_pd == 13 && ws::is_reply(msg.arg0) {
+                return Some(msg.arg0);
+            }
+        } else {
+            sex_pdx::sys_yield();
+        }
+    }
+    None
+}
+
+/// Loads `/data/wifi.conf` (shared with Spindle) into `gui.wifi`.
+fn load_wifi_conf(window: &mut Window, gui: &mut GuiState) {
+    let mut buf = [0u8; candy_gui::WIFI_CONF_MAX];
+    match sex_app::files::read(window, candy_gui::WIFI_CONF_PATH, &mut buf) {
+        Ok(n) => {
+            gui.wifi.parse_wifi_conf(&buf[..n]);
+            sex_pdx::serial_record!("[settings.wifi.load] known={} bytes={}", gui.wifi.known_count, n);
+        }
+        Err(_) => {
+            gui.wifi.known_count = 0;
+            gui.wifi.loaded = true;
+        }
+    }
+}
+
+/// Persists `gui.wifi.known` to `/data/wifi.conf` in the multi-network format shared with Spindle.
+fn save_wifi_conf(window: &mut Window, gui: &GuiState, m: &mut Model) -> bool {
+    let _ = sex_app::files::mkdir(window, b"/data");
+    let mut buf = [0u8; candy_gui::WIFI_CONF_MAX];
+    let n = gui.wifi.serialize_wifi_conf(&mut buf);
+    match sex_app::files::write(window, candy_gui::WIFI_CONF_PATH, &buf[..n]) {
+        Ok(()) => {
+            sex_pdx::serial_record!("[settings.wifi.save] known={} bytes={}", gui.wifi.known_count, n);
+            true
+        }
+        Err(_) => {
+            m.say("Could not write /data/wifi.conf.");
+            false
+        }
+    }
+}
+
+/// Queries live Wi-Fi chip status and visible scanned networks from `sexnet`.
+fn refresh_wifi_live(gui: &mut GuiState) {
+    use sex_pdx::wifi_status as ws;
+    let Some(word) = wifi_rpc(ws::STATE, 0, 0) else {
+        gui.wifi.connected = false;
+        gui.wifi.set_status(b"Wi-Fi service unavailable");
+        return;
+    };
+    let s = ws::State::of(word);
+    gui.wifi.connected = matches!(s.phase, ws::ASSOCIATED | ws::CONNECTED);
+    match s.phase {
+        ws::NONE => gui.wifi.set_status(b"No Intel Wi-Fi hardware detected"),
+        ws::STARTING => gui.wifi.set_status(b"Starting Wi-Fi firmware..."),
+        ws::SCANNING => gui.wifi.set_status(b"Scanning nearby networks..."),
+        ws::READY => gui.wifi.set_status(b"Ready (disconnected)"),
+        ws::JOINING | ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE => gui.wifi.set_status(b"Connecting..."),
+        ws::ASSOCIATED => gui.wifi.set_status(b"Connected (Open)"),
+        ws::CONNECTED => gui.wifi.set_status(b"Connected (WPA2/WPA3)"),
+        _ => gui.wifi.set_status(b"Last join failed - click Scan Wi-Fi"),
+    }
+
+    // Fetch up to MAX_WIFI_SCAN visible networks when available.
+    gui.wifi.scan_count = 0;
+    let limit = (s.networks as usize).min(candy_gui::MAX_WIFI_SCAN);
+    for idx in 0..limit {
+        let Some(info_word) = wifi_rpc(ws::NETWORK, idx as u64, ws::PART_INFO) else { break };
+        if info_word == ws::MISSING || info_word == ws::REFUSED { break; }
+        let info = ws::Info::of(info_word);
+        let ssid_len = (info.ssid_len as usize).min(32);
+        let mut ssid_buf = [0u8; 35];
+        let parts = (ssid_len + 6) / 7;
+        for p in 0..parts {
+            if let Some(w) = wifi_rpc(ws::NETWORK, idx as u64, ws::PART_SSID + p as u64) {
+                ws::word_bytes(w, &mut ssid_buf[p * 7..]);
+            }
+        }
+        let mut entry = candy_gui::WifiScanEntry::EMPTY;
+        entry.scan_idx = idx as u16;
+        entry.ssid[..ssid_len].copy_from_slice(&ssid_buf[..ssid_len]);
+        entry.ssid_len = ssid_len;
+        entry.rssi = info.rssi;
+        entry.channel = info.channel;
+        entry.security = info.security;
+        gui.wifi.scanned[gui.wifi.scan_count] = entry;
+        gui.wifi.scan_count += 1;
+    }
+
+    if gui.wifi.connected && gui.wifi.active_ssid_len == 0 && gui.wifi.known_count > 0 {
+        let first = gui.wifi.known[0];
+        gui.wifi.set_active_ssid(first.ssid_bytes());
+    }
+    if gui.wifi.active_ssid_len > 0 {
+        let cur = gui.wifi.active_ssid;
+        let clen = gui.wifi.active_ssid_len;
+        for i in 0..gui.wifi.scan_count {
+            if gui.wifi.scanned[i].ssid_bytes() == &cur[..clen] {
+                gui.wifi.signal_rssi = gui.wifi.scanned[i].rssi;
+                break;
+            }
+        }
+    }
+}
+
+/// Attempts to join `ssid` using `sexnet` if it appears in the current scan list.
+fn wifi_join_ssid(gui: &mut GuiState, ssid: &[u8], pass: &[u8], m: &mut Model) {
+    use sex_pdx::wifi_status as ws;
+    let found = (0..gui.wifi.scan_count)
+        .find(|&i| gui.wifi.scanned[i].ssid_bytes() == ssid)
+        .map(|i| gui.wifi.scanned[i].scan_idx as u64);
+    let Some(scan_idx) = found else {
+        m.say("Saved to /data/wifi.conf (auto-connects when in range).");
+        return;
+    };
+    if pass.len() >= ws::PASSWORD_MIN {
+        let parts = (pass.len() + 6) / 7;
+        for p in 0..parts {
+            let from = p * 7;
+            let word = ws::bytes_word(&pass[from..pass.len().max(from)]);
+            let _ = wifi_rpc(ws::PASSWORD, (p as u64) | ((pass.len() as u64) << 8), word);
+        }
+    }
+    let _ = wifi_rpc(ws::JOIN, scan_idx, 0);
+    gui.wifi.set_active_ssid(ssid);
+    gui.wifi.set_status(b"Connecting...");
+    m.say("Saved to /data/wifi.conf and joining Wi-Fi...");
+}
+
+fn submit_wifi_join(window: &mut Window, gui: &mut GuiState, m: &mut Model) {
+    use sex_pdx::wifi_status as ws;
+    let ssid_len = gui.wifi.form_ssid_len;
+    let pass_len = gui.wifi.form_pass_len;
+    if ssid_len == 0 || ssid_len > 32 {
+        m.say("Enter an SSID (1-32 characters) first.");
+        return;
+    }
+    if pass_len > 0 && !(ws::PASSWORD_MIN..=ws::PASSWORD_MAX).contains(&pass_len) {
+        m.say("Wi-Fi passphrase must be 8-63 characters (or empty for open).");
+        return;
+    }
+    let ssid = gui.wifi.form_ssid;
+    let pass = gui.wifi.form_pass;
+    gui.wifi.upsert_known(&ssid[..ssid_len], &pass[..pass_len]);
+    let _ = save_wifi_conf(window, gui, m);
+    wifi_join_ssid(gui, &ssid[..ssid_len], &pass[..pass_len], m);
+    gui.wifi.form_pass = [0; 63];
+    gui.wifi.form_pass_len = 0;
+    gui.wifi.focus = candy_gui::WifiFieldFocus::None;
+}
+
 static mut GUI: GuiState = GuiState::new();
 static mut GLYPHS: Glyphs = Glyphs::new();
 
@@ -294,11 +452,17 @@ pub extern "C" fn _start() -> ! {
                         match act {
                             UiAction::SelectView(v) => {
                                 gui.view = v;
+                                gui.wifi.focus = candy_gui::WifiFieldFocus::None;
                                 if let SidebarView::SystemPage(idx) = v {
                                     m.page = idx;
                                     m.row = 0;
                                 } else if v == SidebarView::Install && !gui.install.loaded {
                                     refresh_install_parts(&mut window, gui, &mut m);
+                                } else if v == SidebarView::Wifi {
+                                    if !gui.wifi.loaded {
+                                        load_wifi_conf(&mut window, gui);
+                                    }
+                                    refresh_wifi_live(gui);
                                 }
                             }
                             UiAction::SetTheme(val) => {
@@ -428,6 +592,45 @@ pub extern "C" fn _start() -> ! {
                                     "Dotfiles auto-sync disabled."
                                 });
                             }
+                            UiAction::WifiScan => {
+                                let _ = wifi_rpc(sex_pdx::wifi_status::SCAN, 0, 0);
+                                refresh_wifi_live(gui);
+                                m.say("Wi-Fi scan requested.");
+                            }
+                            UiAction::WifiRefresh => {
+                                load_wifi_conf(&mut window, gui);
+                                refresh_wifi_live(gui);
+                                m.say("Wi-Fi status and /data/wifi.conf refreshed.");
+                            }
+                            UiAction::WifiConnectKnown(idx) => {
+                                if idx < gui.wifi.known_count {
+                                    let entry = gui.wifi.known[idx];
+                                    gui.wifi.upsert_known(entry.ssid_bytes(), entry.pass_bytes());
+                                    let _ = save_wifi_conf(&mut window, gui, &mut m);
+                                    wifi_join_ssid(gui, entry.ssid_bytes(), entry.pass_bytes(), &mut m);
+                                }
+                            }
+                            UiAction::WifiForgetKnown(idx) => {
+                                if gui.wifi.forget_known(idx) && save_wifi_conf(&mut window, gui, &mut m) {
+                                    m.say("Removed network from /data/wifi.conf.");
+                                }
+                            }
+                            UiAction::WifiSelectScan(idx) => {
+                                if gui.wifi.select_scanned(idx) {
+                                    m.say("Selected network - enter passphrase if needed, then click Save & Join.");
+                                }
+                            }
+                            UiAction::WifiFocusSsid => {
+                                gui.wifi.focus = candy_gui::WifiFieldFocus::Ssid;
+                                m.say("Type Wi-Fi SSID (Tab for passphrase, Enter to join).");
+                            }
+                            UiAction::WifiFocusPass => {
+                                gui.wifi.focus = candy_gui::WifiFieldFocus::Password;
+                                m.say("Type Wi-Fi passphrase (Enter to Save & Join).");
+                            }
+                            UiAction::WifiJoinSubmit => {
+                                submit_wifi_join(&mut window, gui, &mut m);
+                            }
                         }
                         if m.page != old_page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
                         if m.page != old_page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }
@@ -439,6 +642,32 @@ pub extern "C" fn _start() -> ! {
             }
             Event::Key(key) => {
                 sex_pdx::serial_record!("[settings.key] code={} page={} row={}", key.code, m.page, m.row);
+                if gui.view == SidebarView::Wifi && gui.wifi.focus != candy_gui::WifiFieldFocus::None {
+                    match key.code {
+                        ESC => gui.wifi.focus = candy_gui::WifiFieldFocus::None,
+                        TAB => {
+                            gui.wifi.focus = match gui.wifi.focus {
+                                candy_gui::WifiFieldFocus::Ssid => candy_gui::WifiFieldFocus::Password,
+                                _ => candy_gui::WifiFieldFocus::Ssid,
+                            };
+                        }
+                        BACKSPACE => { gui.wifi.backspace(); }
+                        ENTER => {
+                            if gui.wifi.focus == candy_gui::WifiFieldFocus::Ssid && gui.wifi.form_pass_len == 0 {
+                                gui.wifi.focus = candy_gui::WifiFieldFocus::Password;
+                            } else {
+                                submit_wifi_join(&mut window, gui, &mut m);
+                            }
+                        }
+                        _ => {
+                            if let Some(c) = sex_app::typed(key) {
+                                gui.wifi.type_char(c);
+                            }
+                        }
+                    }
+                    show(&mut window, &m, gui);
+                    continue;
+                }
                 // Ctrl+P: the Shell keeps F-keys and Tab for itself, so Settings uses keys a
                 // program receives.
                 const KEY_P: u8 = 0x19;

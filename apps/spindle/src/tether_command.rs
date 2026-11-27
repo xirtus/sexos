@@ -52,6 +52,10 @@ pub const CMD_MAX: usize = 256;
 const STATE_EVERY: u32 = 25;
 /// Connecting gives up after this long.
 const CONNECT_MS: u64 = 20_000;
+/// Automatic outbound connect attempts before failing (handles post-Wi-Fi-join ARP/DHCP warm-up).
+const CONNECT_MAX_ATTEMPTS: u8 = 3;
+/// Short backoff between automatic outbound connect retries.
+const CONNECT_RETRY_MS: u64 = 1_750;
 /// An answer not back by then is taken as lost.
 const LOST_MS: u64 = 1_500;
 
@@ -59,7 +63,12 @@ const LOST_MS: u64 = 1_500;
 enum Phase { Idle, Up,
     /// An IPv4 host: wait until DHCP gave this machine an IPv4 address (an IPv6-only
     /// network is up too, but cannot reach it).
-    V4Wait, ResolveAsk, ResolveWait, Connect, Opening, Live, Close,
+    V4Wait, ResolveAsk, ResolveWait, Connect, Opening,
+    /// Closing a transiently failed connect flow before backing off for a retry.
+    RetryClose,
+    /// Waiting `CONNECT_RETRY_MS` before the next automatic connect attempt.
+    RetryWait,
+    Live, Close,
     /// `tether listen`: make the listener, say the address, wait for the Mac, and drop a
     /// finished connection to wait for the next one.
     Listen, Addresses, Accept, Drop, CloseListener,
@@ -250,6 +259,8 @@ pub struct Tether {
     pullfile: PullfileTx,
     /// Control tether to reconnect automatically after a `tether sweep` completes.
     resume: Resume,
+    /// Current outbound connect attempt (`1..=CONNECT_MAX_ATTEMPTS`, or `0` when idle/live).
+    connect_attempt: u8,
 }
 
 pub static mut TETHER: Tether = Tether {
@@ -263,6 +274,7 @@ pub static mut TETHER: Tether = Tether {
     pushfile: PUSHFILE_IDLE,
     pullfile: PULLFILE_IDLE,
     resume: RESUME_NONE,
+    connect_attempt: 0,
 };
 
 fn net() -> Option<&'static mut [u8]> {
@@ -397,6 +409,8 @@ impl Tether {
         if args.is_empty() {
             if self.phase == Phase::Live {
                 say!(sb, "tether: up to {}:{}, {} bytes sent, {} commands run", core::str::from_utf8(&self.host[..self.host_len]).unwrap_or("?"), self.port, self.bytes_out, self.commands);
+            } else if matches!(self.phase, Phase::RetryWait | Phase::RetryClose) {
+                say!(sb, "tether: retrying ({}/{})...", self.connect_attempt, CONNECT_MAX_ATTEMPTS);
             } else if self.active() {
                 sb.push(b"tether: connecting.");
             } else {
@@ -408,8 +422,14 @@ impl Tether {
         }
         if args == b"off" || args == b"stop" {
             if !self.active() { sb.push(b"tether: not running."); return; }
-            sb.push(b"tether: closing.");
+            self.connect_attempt = 0;
             self.resume = RESUME_NONE;
+            if self.phase == Phase::RetryWait {
+                self.phase = Phase::Idle;
+                sb.push(b"tether: closed.");
+                return;
+            }
+            sb.push(b"tether: closing.");
             if self.sweep.active {
                 self.sweep.active = false;
                 self.note(b"sweep stopped by tether off");
@@ -459,6 +479,7 @@ impl Tether {
                 self.resume = RESUME_NONE;
                 self.listening = false;
             }
+            self.connect_attempt = 0;
             self.host[..hlen].copy_from_slice(&sweep_host[..hlen]);
             self.host_len = hlen;
             self.port = port;
@@ -496,6 +517,7 @@ impl Tether {
             let Some(port) = port else { sb.push(b"Usage: tether listen [PORT]"); return };
             self.reset(sb);
             self.listening = true;
+            self.connect_attempt = 0;
             self.port = port;
             self.host_len = 0;
             self.phase = Phase::Up;
@@ -504,6 +526,7 @@ impl Tether {
         }
         let Some((host, port)) = parse_target(args) else { sb.push(b"Usage: tether HOST[:PORT] | tether listen [PORT] | tether sweep HOST [ROUNDS]"); return };
         self.listening = false;
+        self.connect_attempt = 1;
         self.host[..host.len()].copy_from_slice(host);
         self.host_len = host.len();
         self.port = port;
@@ -590,6 +613,7 @@ impl Tether {
 
     fn end(&mut self) {
         // A call still out is answered and dropped by `receive` (phase Close).
+        self.connect_attempt = 0;
         self.hotswap_reset();
         self.pushfile_reset();
         self.pullfile_reset();
@@ -604,6 +628,28 @@ impl Tether {
         // Listening: a session that ends drops its connection and waits for the next.
         if self.listening && self.phase == Phase::Live { self.phase = Phase::Drop; self.next_at = 0; return; }
         self.end();
+    }
+
+    fn fail_retryable(&mut self, sb: &mut Scrollback, why: &str) {
+        if !self.listening
+            && !self.sweep.active
+            && self.connect_attempt > 0
+            && self.connect_attempt < CONNECT_MAX_ATTEMPTS
+        {
+            let need_close = matches!(self.phase, Phase::Connect | Phase::Opening);
+            self.connect_attempt += 1;
+            say!(sb, "tether: retrying ({}/{})...", self.connect_attempt, CONNECT_MAX_ATTEMPTS);
+            sex_pdx::serial_record!("[spindle.tether.retry] attempt={} reason={}", self.connect_attempt, why);
+            if need_close {
+                self.phase = Phase::RetryClose;
+                self.next_at = 0;
+            } else {
+                self.phase = Phase::RetryWait;
+                self.next_at = sex_pdx::get_ticks() + CONNECT_RETRY_MS;
+            }
+            return;
+        }
+        self.fail(sb, why);
     }
 
     fn net_call(&mut self, kind: u8, value: u64, call: Call) { self.net_call_on(FLOW, kind, value, call) }
@@ -682,12 +728,21 @@ impl Tether {
         if self.phase == Phase::Live && self.sweep.active && self.sweep_check(sb, now) { return true; }
         if now < self.next_at { return false; }
         if self.phase == Phase::Gap { self.gap(sb, now); return true; }
+        if self.phase == Phase::RetryWait {
+            self.deadline = now + CONNECT_MS;
+            self.told_v4 = false;
+            self.phase = Phase::Up;
+            self.next_at = 0;
+        }
         if self.phase == Phase::V4Wait && now > self.deadline {
-            self.fail(sb, "no IPv4 address: the router never answered DHCP (`hw dhcp` shows the lease when it comes)");
+            self.fail_retryable(sb, "no IPv4 address: the router never answered DHCP (`hw dhcp` shows the lease when it comes)");
             return true;
         }
-        if !self.listening && self.phase != Phase::Live && self.phase != Phase::Close && now > self.deadline {
-            self.fail(sb, "could not reach the other computer (is tether_host.py running, and the firewall open?)");
+        if !self.listening
+            && !matches!(self.phase, Phase::Live | Phase::Close | Phase::RetryClose | Phase::RetryWait)
+            && now > self.deadline
+        {
+            self.fail_retryable(sb, "could not reach the other computer (is tether_host.py running, and the firewall open?)");
             return true;
         }
         if region_busy { return false; }
@@ -702,6 +757,7 @@ impl Tether {
                 None => self.net_call(w::CONNECT, w::address_port(self.address, self.port), Call::Plain),
             },
             Phase::Opening => self.net_call(w::STATE, 0, Call::Plain),
+            Phase::RetryClose => self.net_call(w::CLOSE, 0, Call::Close),
             Phase::Close => self.net_call(w::CLOSE, 0, Call::Close),
             Phase::Listen => self.net_call_on(LISTEN_FLOW, w::LISTEN, self.port as u64, Call::Plain),
             Phase::Addresses => self.net_call_on(LISTEN_FLOW, w::ADDRESSES, 0, Call::Plain),
@@ -732,7 +788,7 @@ impl Tether {
                     self.net_call(w::RECEIVE, room as u64, Call::Receive);
                 }
             }
-            Phase::Idle | Phase::Gap => {}
+            Phase::Idle | Phase::Gap | Phase::RetryWait => {}
         }
         true
     }
@@ -744,6 +800,12 @@ impl Tether {
         if seq != self.seq { return false; }
         self.sent = false;
         let now = sex_pdx::get_ticks();
+        if self.phase == Phase::RetryClose {
+            if self.call != Call::Close { return true; }
+            self.phase = Phase::RetryWait;
+            self.next_at = now + CONNECT_RETRY_MS;
+            return true;
+        }
         if self.phase == Phase::Close {
             // The answer to a call made before the end: the flow still needs its CLOSE.
             if self.call != Call::Close { return true; }
@@ -783,7 +845,22 @@ impl Tether {
         if self.listening && self.phase == Phase::Up && status == w::OFFLINE { self.next_at = now + 2_000; return true; }
         if status == w::BUSY && self.phase == Phase::ResolveAsk { self.next_at = now + POLL_MS * 5; return true; }
         if !matches!(status, w::OK | w::WAIT) {
-            self.fail(sb, match status { w::OFFLINE => "no network (join Wi-Fi with `wifi join N PASSWORD`, or plug in Ethernet)", w::NO_NAME => "name not found (use the computer's IP address)", w::BUSY => "the network is busy", w::DENIED => "not allowed to use the network", _ => "network error" });
+            let reason = match status {
+                w::OFFLINE => "no network (join Wi-Fi with `wifi join N PASSWORD`, or plug in Ethernet)",
+                w::NO_NAME => "name not found (use the computer's IP address)",
+                w::BUSY => "the network is busy",
+                w::DENIED => "not allowed to use the network",
+                _ => "network error",
+            };
+            let connecting = matches!(
+                self.phase,
+                Phase::Up | Phase::V4Wait | Phase::ResolveAsk | Phase::ResolveWait | Phase::Connect | Phase::Opening
+            );
+            if connecting && status != w::DENIED {
+                self.fail_retryable(sb, reason);
+            } else {
+                self.fail(sb, reason);
+            }
             return true;
         }
         let Some(region) = net() else { self.phase = Phase::Idle; return true };
@@ -821,6 +898,7 @@ impl Tether {
             Phase::Connect => { self.phase = Phase::Opening; self.next_at = now + POLL_MS; }
             Phase::Opening => match value {
                 w::STATE_OPEN => {
+                    self.connect_attempt = 0;
                     self.phase = Phase::Live;
                     let host = core::str::from_utf8(&self.host[..self.host_len]).unwrap_or("?");
                     if self.sweep.active {
@@ -837,7 +915,7 @@ impl Tether {
                     sex_pdx::serial_record!("[spindle.tether.up] port={}", self.port);
                 }
                 w::STATE_OPENING => self.next_at = now + POLL_MS,
-                _ => self.fail(sb, "the other computer refused the connection (is tether_host.py running?)"),
+                _ => self.fail_retryable(sb, "the other computer refused the connection (is tether_host.py running?)"),
             },
             Phase::Listen => { self.phase = Phase::Addresses; }
             Phase::Addresses => {
