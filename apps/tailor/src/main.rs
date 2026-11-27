@@ -681,8 +681,7 @@ pub extern "C" fn _start() -> ! {
     let (workspace_root, initial_provider) = parse_launch_args(files::args(&mut window, &mut args_buf));
 
     let owner = Owner(window.target);
-    let mut vault = KeyVault::new(owner, sex_pdx::get_ticks() ^ 0x5A17_7A11_0001);
-    let loaded = vault.load_from_files(&mut window);
+    let vault = KeyVault::new(owner, sex_pdx::get_ticks() ^ 0x5A17_7A11_0001);
 
     let mut app = AppState {
         workspace_root,
@@ -691,15 +690,20 @@ pub extern "C" fn _start() -> ! {
         runner: SexToolRunner::new(),
         transcript: String::new(),
         input: String::new(),
-        status: format!(
-            "Ready ({} key(s) loaded in Shibari). Type a prompt or /help.",
-            loaded
-        ),
+        status: String::from("Loading keys into Shibari vault..."),
         scroll_lines: 0,
         stream: None,
     };
     app.push_log("Tailor — Native Multi-Provider AI Coding Agent for SexOS.");
-    app.push_log("Type a coding request, or /help for providers, keys, and approvals.");
+    app.push_log("Providers: /provider claude | claude-deepseek | gemini | codex");
+    app.push_log("Keys & models: /key <provider> <secret>   /model <model-id>   /help");
+    app.render(&mut window);
+
+    let loaded = app.vault.load_from_files(&mut window);
+    app.status = format!(
+        "Ready ({} key(s) loaded in Shibari). Type a prompt or /help.",
+        loaded
+    );
     app.render(&mut window);
 
     sex_pdx::serial_record!(

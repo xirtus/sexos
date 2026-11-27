@@ -15,11 +15,11 @@ use super::{Usb, Failure, Ring, xhci, trb, page, isoch, uvc_scan, uvc_stream, CC
 /// Transfer ring positions (31 data TRBs + 1 link TRB) and 4 KiB DMA buffer per position.
 const UVC_TRBS: u32 = 32;
 const UVC_BUF_SLOT: u64 = 4096;
-const UVC_IN_FLIGHT: u32 = 8;
+const UVC_IN_FLIGHT: u32 = 16;
 
 /// Completion codes an isochronous IN endpoint reports without being broken.
 const CC_RING_UNDERRUN: u32 = 14;
-const CC_RING_OVERRUN: u32 = 21;
+const CC_RING_OVERRUN: u32 = 15;
 const CC_MISSED_SERVICE: u32 = 23;
 const CC_STOPPED: u32 = 26;
 const CC_STOPPED_LENGTH: u32 = 27;
