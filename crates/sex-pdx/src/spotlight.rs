@@ -146,7 +146,7 @@ pub struct SpotlightApp {
 /// Curated SexOS Spotlight catalog — every tile launches a real shipped SexOS program.
 /// First 20 entries populate the default 5x4 "All" grid; all entries are searchable and
 /// browsable via category pills.
-pub const CATALOG: [SpotlightApp; 41] = [
+pub const CATALOG: [SpotlightApp; 42] = [
     SpotlightApp {
         id: "tailor",
         name: "Tailor AI",
