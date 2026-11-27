@@ -1121,8 +1121,26 @@ impl AppState {
 
     fn set_access_scope(&mut self, scope: AccessScope) {
         self.access_scope = scope;
+        if scope == AccessScope::FullSystem && (self.workspace_root.is_empty() || self.workspace_root == ".") {
+            self.workspace_root = String::from("@/");
+            self.active_mut().workspace_dir = String::from("@/");
+        }
+        let sys_prompt = match scope {
+            AccessScope::WorkspaceOnly => format!(
+                "{}\n\nActive SexOS space: `{}`\nAccess Scope: WORKSPACE ONLY.",
+                tailor_core::DEFAULT_SYSTEM_PROMPT, self.workspace_root
+            ),
+            AccessScope::FullSystem => format!(
+                "{}\n\nActive SexOS space: `{}`\n\
+                 Access Scope: FULL SYSTEM ACCESS GRANTED.\n\
+                 You have explicit user permission to inspect and work across SexOS.\n\
+                 Pass `@/`, `/data`, `/bin`, `/media/Ventoy`, `/projects`, or any absolute path directly to `list_dir`, `view_file`, `find_by_name`, `grep_search`, `write_to_file`, `replace_file_content`, `delete_file`, `move_file`, and `run_command`.",
+                tailor_core::DEFAULT_SYSTEM_PROMPT, self.workspace_root
+            ),
+        };
         for sess in &mut self.sessions {
             sess.agent.set_access_scope(scope);
+            sess.agent.set_system_prompt(sys_prompt.clone());
         }
         self.status = match scope {
             AccessScope::WorkspaceOnly => {
