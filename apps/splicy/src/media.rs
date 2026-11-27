@@ -61,16 +61,60 @@ impl Peaks {
     }
 }
 
-/// Filmstrips and waveforms by media id.
+/// Max 48 kHz stereo PCM frames cached in RAM per clip (~5 minutes = 57.6 MiB).
+pub const MAX_PCM_FRAMES: usize = 48_000 * 300;
+
+/// Filmstrips, waveforms, and decoded 48 kHz stereo PCM by media id.
 #[derive(Clone, Debug, Default)]
 pub struct Library {
     pub thumbs: BTreeMap<u32, Vec<Thumb>>,
     pub peaks: BTreeMap<u32, Peaks>,
     /// RMS loudness for placing cut edges between words (20 ms buckets).
     pub levels: BTreeMap<u32, sex_splice::edges::Levels>,
+    /// Sample-exact 48 kHz stereo PCM scanned on open for zero-seek real-time playback.
+    pub pcm: BTreeMap<u32, Vec<[i16; 2]>>,
 }
 
 impl Library {
+    /// Append decoded stereo PCM starting at `at_us` (`rate` Hz, normally 48_000).
+    pub fn append_pcm(&mut self, media: u32, at_us: Micros, samples: &[[i16; 2]], rate: u32) {
+        if samples.is_empty() || rate == 0 {
+            return;
+        }
+        let buf = self.pcm.entry(media).or_default();
+        if buf.len() >= MAX_PCM_FRAMES {
+            return;
+        }
+        let start_idx = ((at_us.max(0) as u64 * rate as u64) / 1_000_000) as usize;
+        if start_idx > MAX_PCM_FRAMES {
+            return;
+        }
+        if start_idx > buf.len() {
+            let pad_to = start_idx.min(MAX_PCM_FRAMES);
+            if buf.try_reserve(pad_to - buf.len()).is_err() {
+                return;
+            }
+            buf.resize(pad_to, [0, 0]);
+        }
+        let end_idx = (start_idx + samples.len()).min(MAX_PCM_FRAMES);
+        let copy_n = end_idx.saturating_sub(start_idx);
+        if copy_n == 0 {
+            return;
+        }
+        if end_idx > buf.len() {
+            let need = end_idx - buf.len();
+            if buf.try_reserve(need).is_err() {
+                return;
+            }
+            let overlap = buf.len().saturating_sub(start_idx);
+            if overlap > 0 {
+                buf[start_idx..start_idx + overlap].copy_from_slice(&samples[..overlap]);
+            }
+            buf.extend_from_slice(&samples[overlap..copy_n]);
+        } else {
+            buf[start_idx..start_idx + copy_n].copy_from_slice(&samples[..copy_n]);
+        }
+    }
     /// Keep a picture, in time order.
     pub fn add_thumb(&mut self, media: u32, t: Thumb) {
         let list = self.thumbs.entry(media).or_default();

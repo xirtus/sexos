@@ -11,6 +11,7 @@ use crate::json::JsonValue;
 pub enum StreamEvent {
     TextDelta(String),
     ThinkingDelta(String),
+    ThoughtSignature(String),
     ToolCall {
         id: String,
         name: String,

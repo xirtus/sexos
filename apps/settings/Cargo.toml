@@ -14,3 +14,4 @@ sex-app = { path = "../../crates/sex-app" }
 sex-config = { path = "../../crates/sex-config" }
 sex-theme = { path = "../../crates/sex-theme" }
 sex-font = { path = "../../crates/sex-font" }
+sex-fetch = { path = "../../crates/sex-fetch" }

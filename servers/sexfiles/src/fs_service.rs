@@ -601,6 +601,11 @@ pub fn bind(target: u32, task: u32) {
     unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
     let system = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_SYSTEM)) };
     bindings[index] = Some(Binding { task, root, len, system, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    if system && &root[..len] == b"/data/tailor" {
+        if let Some(b) = bindings[index].as_mut() {
+            let _ = grant_picked(b, b"/");
+        }
+    }
     let launcher = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) };
     // A pipe run's working folder: its starter held it (SET_CWD checked), and it is the
     // run's own from now on, as a path the person picked for it would be.

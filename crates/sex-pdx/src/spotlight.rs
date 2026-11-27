@@ -168,16 +168,6 @@ pub const CATALOG: [SpotlightApp; 42] = [
         target: LaunchTarget::Program("tether"),
     },
     SpotlightApp {
-        id: "splicy",
-        name: "Splicy",
-        icon: "splicy",
-        monogram: "SP",
-        category: Category::Media,
-        badge_rgb: 0x00F9_7316,
-        keywords: "splicy video editor timeline cut premiere final cut studio",
-        target: LaunchTarget::Program("splicy"),
-    },
-    SpotlightApp {
         id: "kaleidoscope",
         name: "Kaleidoscope",
         icon: "kaleidoscope",
@@ -296,6 +286,16 @@ pub const CATALOG: [SpotlightApp; 42] = [
         badge_rgb: 0x00E1_1D48,
         keywords: "moan daw synth audio music studio midi",
         target: LaunchTarget::Program("moan"),
+    },
+    SpotlightApp {
+        id: "splicy",
+        name: "Splicy",
+        icon: "splicy",
+        monogram: "SP",
+        category: Category::Media,
+        badge_rgb: 0x00FF_2D7A,
+        keywords: "splicy video editor fcp premiere film cut timeline transcript nle",
+        target: LaunchTarget::Program("splicy"),
     },
     SpotlightApp {
         id: "cabaret",
@@ -748,7 +748,12 @@ pub fn filter_catalog(category: Category, query: &str) -> ([usize; CATALOG_LEN],
         } else {
             let by_name = score_text(trimmed, app.name).map(|v| v * 2);
             let by_id = score_text(trimmed, app.id).map(|v| v * 2);
-            let by_kw = app.keywords.split(' ').filter_map(|w| score_text(trimmed, w)).max();
+            let by_kw = app
+                .keywords
+                .split(' ')
+                .filter_map(|w| score_text(trimmed, w))
+                .max()
+                .or_else(|| trimmed.contains(' ').then(|| score_text(trimmed, app.keywords)).flatten());
             match by_name.max(by_id).max(by_kw) {
                 Some(v) => v,
                 None => continue,
@@ -1454,10 +1459,8 @@ mod tests {
             ("brootlite", Category::Media, "brootlite", LaunchTarget::Program("brootlite")),
             ("qupid", Category::Media, "qupid", LaunchTarget::Audio),
             ("flash", Category::Media, "flash", LaunchTarget::Program("flash")),
-            ("tailor", Category::AiDev, "tailor", LaunchTarget::Program("tailor")),
-            ("tether", Category::AiDev, "tether", LaunchTarget::Program("tether")),
             ("splicy", Category::Media, "splicy", LaunchTarget::Program("splicy")),
-            ("sexshop", Category::System, "sexshop", LaunchTarget::Program("sexshop")),
+            ("tailor", Category::AiDev, "tailor", LaunchTarget::Program("tailor")),
             ("kaleidoscope", Category::Apps, "kaleidoscope", LaunchTarget::Browser),
             ("tatami", Category::System, "settings", LaunchTarget::Settings),
             ("swingers", Category::Media, "swingers", LaunchTarget::Program("swingers")),

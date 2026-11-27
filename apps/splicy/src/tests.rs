@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::cache::{CacheConfig, CachedFrame, FrameCache};
-use crate::compositor::{composite_cpu, BlendMode, LayerInput, LayerTransform, QualityMode};
+use crate::compositor::{
+    composite_cpu, fit_anamorphic_rect, sample_ken_burns_q16, BlendMode, LayerInput,
+    LayerTransform, QualityMode,
+};
 use crate::media::{Library, Peaks, Thumb};
-use crate::view::{self, View, SELECT};
+use crate::view::{self, LayoutMode, ToolbarHit, View, SELECT};
 use crate::vu::{VuStrip, VU_AMBER, VU_BG, VU_GREEN, VU_PEAK, VU_STRIP_H};
-use crate::{words, AuditionMode, Editor};
+use crate::{words, AuditionMode, Editor, ToolKind};
 use alloc::string::String;
 use alloc::vec::Vec;
 use sex_splice::export::{export_pictures, sound_pieces, Frames, Pictures};
@@ -586,3 +589,224 @@ fn a_j_cut_at_a_join_brings_the_next_voice_in_early() {
     assert_eq!(tl.duration(), before, "the runtime stays");
     assert!(ed.undo());
 }
+
+fn write_ppm_if_requested(var: &str, px: &[u32], w: usize, h: usize) {
+    if let Ok(path) = std::env::var(var) {
+        let mut ppm = alloc::format!("P6\n{w} {h}\n255\n").into_bytes();
+        for p in px {
+            ppm.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+}
+
+#[test]
+fn dual_layout_final_cut_vs_premiere_geometry_and_toolbar_hit_testing() {
+    let (w, h) = (1280, 800);
+    let fcp = view::areas_for(w, h, LayoutMode::FinalCut, false);
+    let pre = view::areas_for(w, h, LayoutMode::Premiere, false);
+
+    // FinalCut: 3-column top (Transcript/Cards | Viewer | Inspector) + full-width bottom timeline.
+    assert!(fcp.text.x < fcp.player.x && fcp.player.x + fcp.player.w <= fcp.inspector.x);
+    assert!(fcp.inspector.w >= 200);
+    assert_eq!(fcp.tracks.x, view::HEAD_W);
+    assert_eq!(fcp.tracks.w, w - view::HEAD_W);
+
+    // Premiere: 4 quadrants (Top-Left Transcript, Top-Right Viewer, Bottom-Left Cards, Bottom-Right Timeline).
+    assert_eq!(pre.text.x, pre.cards.x);
+    assert!(pre.cards.y > pre.text.y + pre.text.h);
+    assert!(pre.player.x > pre.text.x + pre.text.w);
+    assert!(pre.tracks.x > pre.cards.x + pre.cards.w);
+
+    // Toolbar pill hit-testing: `[Final Cut | Premiere]` and right-side tool/panel pills.
+    let view = View::default();
+    let tb = view::toolbar_buttons(w);
+    assert_eq!(
+        view.toolbar_hit(w, h, tb.fcp_segment.x + tb.fcp_segment.w / 2, tb.fcp_segment.y + 4),
+        Some(ToolbarHit::Layout(LayoutMode::FinalCut))
+    );
+    assert_eq!(
+        view.toolbar_hit(w, h, tb.premiere_segment.x + tb.premiere_segment.w / 2, tb.premiere_segment.y + 4),
+        Some(ToolbarHit::Layout(LayoutMode::Premiere))
+    );
+    assert_eq!(
+        view.toolbar_hit(w, h, tb.select_btn.x + 6, tb.select_btn.y + 4),
+        Some(ToolbarHit::Tool(ToolKind::Select))
+    );
+    assert_eq!(
+        view.toolbar_hit(w, h, tb.blade_btn.x + 6, tb.blade_btn.y + 4),
+        Some(ToolbarHit::Tool(ToolKind::Blade))
+    );
+    assert_eq!(
+        view.toolbar_hit(w, h, tb.vu_btn.x + 6, tb.vu_btn.y + 4),
+        Some(ToolbarHit::ToggleVu)
+    );
+    assert_eq!(
+        view.toolbar_hit(w, h, tb.inspector_btn.x + 6, tb.inspector_btn.y + 4),
+        Some(ToolbarHit::ToggleInspector)
+    );
+
+    // Paint both layouts and check Candy Noir palette accents (LCD_WELL, INSPECTOR_BG, CANDY_LAVENDER, CANDY_TEAL).
+    let mut ed = talk();
+    let lib = talk_library(&ed);
+    ed.mark_in(1 * SECOND);
+    ed.mark_out(5 * SECOND);
+    ed.suggest_cleanup();
+    let picture = alloc::vec![0x002288cc; 320 * 180];
+
+    let mut view_fcp = View::default();
+    let mut px_fcp = alloc::vec![0u32; (w * h) as usize];
+    view_fcp.paint(&mut px_fcp, w as usize, h as usize, &ed, &lib, Some((&picture, 320, 180)), 2 * SECOND, "");
+    assert!(px_fcp.contains(&view::LCD_WELL), "recessed FCP LCD well painted");
+    assert!(px_fcp.contains(&view::INSPECTOR_BG), "inspector background painted");
+    assert!(px_fcp.contains(&view::CANDY_LAVENDER), "Candy Lavender accent painted");
+    assert!(px_fcp.contains(&view::CANDY_TEAL), "Candy Teal waveform highlight painted");
+    assert!(px_fcp.contains(&view::RANGE_AMBER), "In/Out range amber painted");
+    write_ppm_if_requested("SPLICY_FCP_SHOT", &px_fcp, w as usize, h as usize);
+
+    let mut view_pre = View::default();
+    view_pre.layout = LayoutMode::Premiere;
+    let mut px_pre = alloc::vec![0u32; (w * h) as usize];
+    view_pre.paint(&mut px_pre, w as usize, h as usize, &ed, &lib, Some((&picture, 320, 180)), 2 * SECOND, "");
+    assert!(px_pre.contains(&view::FCP_BLUE), "Premiere layout pill & active clip accent painted");
+    write_ppm_if_requested("SPLICY_PREMIERE_SHOT", &px_pre, w as usize, h as usize);
+}
+
+#[test]
+fn fcp_hotkeys_blade_in_out_and_jkl_shuttle_reset() {
+    let mut ed = talk();
+    assert_eq!(ed.shuttle_rate, 0);
+    assert_eq!(ed.active_tool, ToolKind::Select);
+
+    // J/K/L shuttle progression and reset on K.
+    assert_eq!(ed.shuttle_forward(), 1);
+    assert_eq!(ed.shuttle_forward(), 2);
+    assert_eq!(ed.shuttle_forward(), 4);
+    assert_eq!(ed.shuttle_forward(), 4);
+    ed.shuttle_pause();
+    assert_eq!(ed.shuttle_rate, 0, "K pauses and resets shuttle speed to 0");
+    assert_eq!(ed.shuttle_reverse(), -1);
+    assert_eq!(ed.shuttle_reverse(), -2);
+    assert_eq!(ed.shuttle_reverse(), -4);
+    ed.shuttle_pause();
+    assert_eq!(ed.shuttle_rate, 0);
+
+    // In/Out marks and clear.
+    ed.mark_in(2 * SECOND);
+    ed.mark_out(6 * SECOND);
+    assert_eq!((ed.in_point, ed.out_point), (Some(2 * SECOND), Some(6 * SECOND)));
+    ed.clear_in_out();
+    assert_eq!((ed.in_point, ed.out_point), (None, None));
+
+    // Blade at 3.0 s splits both Video and Audio tracks (2 clips -> 4 clips) and commits to History.
+    assert!(!ed.blade_at(0).unwrap(), "blade at timeline boundary is a no-op");
+    assert!(ed.blade_at(3 * SECOND).unwrap());
+    let total_clips: usize = ed.timeline().tracks.iter().map(|t| t.clips.len()).sum();
+    assert_eq!(total_clips, 4, "video + audio clips both split at 3.0 s");
+    assert_eq!(ed.history.versions().last().unwrap().summary, "Blade cut");
+    assert!(ed.undo());
+    assert_eq!(ed.timeline().tracks.iter().map(|t| t.clips.len()).sum::<usize>(), 2);
+    assert!(ed.redo());
+    assert_eq!(ed.timeline().tracks.iter().map(|t| t.clips.len()).sum::<usize>(), 4);
+
+    // Toggle clip enabled state (`V` / `Shift+V`).
+    assert!(ed.toggle_clip_enabled_at(1 * SECOND).unwrap());
+    for track in &ed.timeline().tracks {
+        assert!(!track.clips[0].enabled, "first clip disabled on both tracks");
+        assert!(track.clips[1].enabled, "second clip remains enabled");
+    }
+    assert!(ed.toggle_clip_enabled_at(1 * SECOND).unwrap());
+    for track in &ed.timeline().tracks {
+        assert!(track.clips[0].enabled, "first clip re-enabled");
+    }
+}
+
+#[test]
+fn anamorphic_sar_fit_and_ken_burns_subpixel_bilinear() {
+    // 1440x1080 HDV with 4:3 SAR -> exact 1920x1080 16:9 display aspect.
+    assert_eq!(fit_anamorphic_rect(1440, 1080, 4, 3, 1920, 1080), (0, 0, 1920, 1080));
+    // 1440x1080 HDV 4:3 SAR inside 1280x800 (16:10) -> letterboxed to 1280x720 centered at y=40.
+    assert_eq!(fit_anamorphic_rect(1440, 1080, 4, 3, 1280, 800), (0, 40, 1280, 720));
+    // Vertical 1080x1920 1:1 SAR inside 1920x1080 -> pillarboxed.
+    let (px, py, pw, ph) = fit_anamorphic_rect(1080, 1920, 1, 1, 1920, 1080);
+    assert_eq!(py, 0);
+    assert_eq!(ph, 1080);
+    assert_eq!(pw, 607);
+    assert_eq!(px, (1920 - 607) / 2);
+
+    // Subpixel Q16 Ken Burns sampler: identity at 1000‰ center (0.5, 0.5).
+    let src: Vec<u32> = (0..4 * 4)
+        .map(|i| {
+            let x = (i % 4) as u32 * 60;
+            let y = (i / 4) as u32 * 60;
+            (x << 16) | (y << 8) | 0x40
+        })
+        .collect();
+    let id = sample_ken_burns_q16(&src, 4, 4, 4, 4, 32768, 32768, 1000);
+    assert_eq!(id, src, "1.0x centered Ken Burns is exact identity");
+
+    // 2.0x zoom produces smooth bilinear subpixel interpolation (not stair-stepped).
+    let zoomed = sample_ken_burns_q16(&src, 4, 4, 4, 4, 32768, 32768, 2000);
+    let r0 = (zoomed[0] >> 16) & 0xff;
+    let r1 = (zoomed[1] >> 16) & 0xff;
+    let r2 = (zoomed[2] >> 16) & 0xff;
+    let r3 = (zoomed[3] >> 16) & 0xff;
+    // Pixel centers sample x = 0.75, 1.25, 1.75, 2.25 -> red = 45, 75, 105, 135.
+    assert_eq!([r0, r1, r2, r3], [45, 75, 105, 135]);
+}
+
+#[test]
+fn interactive_transport_viewer_cards_and_track_switches() {
+    use view::{transport_buttons, CardHit, TrackSwitchHit, TransportHit};
+
+    let mut ed = talk();
+    let lib = talk_library(&ed);
+    let mut v = View::default();
+    let (w, h) = (1280, 800);
+    let a = v.areas(w, h);
+
+    // 1. Spacebar / Play button `toggle_play` cycles 0 -> 1 -> 0.
+    assert_eq!(ed.shuttle_rate, 0);
+    assert_eq!(ed.toggle_play(), 1);
+    assert_eq!(ed.toggle_play(), 0);
+
+    // 2. Transport buttons all hit-test cleanly inside `a.transport`.
+    let tb = transport_buttons(a.transport);
+    assert_eq!(v.transport_hit(w, h, tb.play_btn.x + 4, tb.play_btn.y + 4), Some(TransportHit::PlayPause));
+    assert_eq!(v.transport_hit(w, h, tb.start_btn.x + 4, tb.start_btn.y + 4), Some(TransportHit::Start));
+    assert_eq!(v.transport_hit(w, h, tb.back_btn.x + 4, tb.back_btn.y + 4), Some(TransportHit::StepBack));
+    assert_eq!(v.transport_hit(w, h, tb.fwd_btn.x + 4, tb.fwd_btn.y + 4), Some(TransportHit::StepFwd));
+    assert_eq!(v.transport_hit(w, h, tb.end_btn.x + 4, tb.end_btn.y + 4), Some(TransportHit::End));
+    assert_eq!(v.transport_hit(w, h, tb.action_btn.x + 4, tb.action_btn.y + 4), Some(TransportHit::CleanupOrAudition));
+
+    // 3. Viewer canvas click hit-tests `player_hit`.
+    assert!(v.player_hit(w, h, a.player.x + 20, a.player.y + 20));
+    assert!(!v.player_hit(w, h, a.text.x + 10, a.text.y + 10));
+
+    // 4. Suggestion cards: empty click triggers `RunCleanup`, then `[Take]` and `[Skip]` hit-test.
+    assert_eq!(v.card_hit(&ed, w, h, a.cards.x + 12, a.cards.y + 6), Some(CardHit::RunCleanup));
+    let staged = ed.suggest_cleanup();
+    assert!(staged >= 1);
+    let lh = v.areas(w, h).cards;
+    assert_eq!(v.card_hit(&ed, w, h, lh.x + 14, lh.y + 28), Some(CardHit::Select(0)));
+    assert_eq!(v.card_hit(&ed, w, h, lh.x + lh.w - 60, lh.y + 48), Some(CardHit::Accept(0)));
+    assert_eq!(v.card_hit(&ed, w, h, lh.x + lh.w - 20, lh.y + 48), Some(CardHit::Skip(0)));
+
+    // 5. Track header switches (`eye` on Video track 0, `M` on Audio track 1) hit-test and commit undoable ops.
+    let v_hit = v.track_switch_hit(ed.timeline(), w, h, a.heads.x + 14, a.tracks.y + 4 + 84 - 18);
+    assert_eq!(v_hit, Some(TrackSwitchHit::ToggleVideo(0)));
+    assert!(!ed.toggle_track_enabled(0).unwrap(), "video track hidden");
+    assert!(ed.toggle_track_enabled(0).unwrap(), "video track shown again");
+
+    let a_hit = v.track_switch_hit(ed.timeline(), w, h, a.heads.x + 14, a.tracks.y + 4 + 84 + 60 - 18);
+    assert_eq!(a_hit, Some(TrackSwitchHit::ToggleMute(1)));
+    assert!(ed.toggle_track_muted(1), "audio track muted");
+    assert!(!ed.toggle_track_muted(1), "audio track unmuted");
+
+    // 6. Dynamic preview slate renders cleanly when `picture` is `None`.
+    let mut px = alloc::vec![0u32; (w * h) as usize];
+    v.paint(&mut px, w as usize, h as usize, &ed, &lib, None, 500 * MS, "");
+    let slate_lit = px.iter().filter(|&&c| c == view::CANDY_TEAL || c == view::FCP_BLUE).count();
+    assert!(slate_lit > 100, "dynamic preview slate rendered waveform bars");
+}
+

@@ -19,6 +19,7 @@ use sex_theme::candy_ui::{
 use sex_theme::Mode;
 
 use crate::model::{self, Model};
+use crate::updates::{self, DotfilesConfig, UpdateCheckResult, DOTFILES_PLACEHOLDER};
 
 const CELL_W: usize = 8;
 const CELL_H: usize = 16;
@@ -881,17 +882,37 @@ pub struct PrefSnapshot {
     pub keybinds: KeybindProfile,
 }
 
-/// Default upstream repositories shown in the Updates & Dotfiles panel.
-pub const SYSTEM_REPO: &str = "xirtus/sexos";
-pub const DOTFILES_REPO: &str = "xirtus/sexosdotfiles";
+/// Editable text fields in the Tatami Updates & Private Dotfiles panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdatesField {
+    FeedUrl,
+    DotfilesRepo,
+    DotfilesBranch,
+    DotfilesToken,
+}
+
+impl UpdatesField {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::FeedUrl => Self::DotfilesRepo,
+            Self::DotfilesRepo => Self::DotfilesBranch,
+            Self::DotfilesBranch => Self::DotfilesToken,
+            Self::DotfilesToken => Self::FeedUrl,
+        }
+    }
+}
 
 /// Zero-heap state for the Tatami Software Update & Private Dotfiles Sync panel.
 pub struct UpdatesState {
+    pub config: DotfilesConfig,
+    pub config_loaded: bool,
+    pub focused_field: Option<UpdatesField>,
+    pub local_version: Option<u64>,
+    pub update_result: UpdateCheckResult,
     pub system_checked: bool,
     pub system_status: [u8; 96],
     pub system_status_len: usize,
     pub dotfiles_synced: bool,
-    pub dotfiles_auto_sync: bool,
     pub dotfiles_status: [u8; 96],
     pub dotfiles_status_len: usize,
 }
@@ -899,11 +920,15 @@ pub struct UpdatesState {
 impl UpdatesState {
     pub const fn new() -> Self {
         Self {
+            config: DotfilesConfig::new(),
+            config_loaded: false,
+            focused_field: None,
+            local_version: None,
+            update_result: UpdateCheckResult::None,
             system_checked: false,
             system_status: [0; 96],
             system_status_len: 0,
             dotfiles_synced: false,
-            dotfiles_auto_sync: true,
             dotfiles_status: [0; 96],
             dotfiles_status_len: 0,
         }
@@ -919,7 +944,7 @@ impl UpdatesState {
         if self.system_status_len > 0 {
             &self.system_status[..self.system_status_len]
         } else {
-            b"Ready - click Check Update or run 'update' in Spindle."
+            b"Click 'Check for Updates' to query github.com/xirtus/sexos releases."
         }
     }
 
@@ -932,9 +957,44 @@ impl UpdatesState {
     pub fn dotfiles_status_bytes(&self) -> &[u8] {
         if self.dotfiles_status_len > 0 {
             &self.dotfiles_status[..self.dotfiles_status_len]
+        } else if self.config.has_valid_repo() {
+            b"Ready - click 'Sync Dotfiles Now' to fetch configs."
         } else {
-            b"Repo: xirtus/sexosdotfiles (private) - click Sync or Pull."
+            b"Enter your repo (owner/sexosdotfiles) and click Save Config."
         }
+    }
+
+    pub fn type_char(&mut self, c: u8) -> bool {
+        let Some(field) = self.focused_field else {
+            return false;
+        };
+        match field {
+            UpdatesField::FeedUrl => self.config.push_feed_url_char(c),
+            UpdatesField::DotfilesRepo => self.config.push_repo_char(c),
+            UpdatesField::DotfilesBranch => self.config.push_branch_char(c),
+            UpdatesField::DotfilesToken => self.config.push_token_char(c),
+        }
+        true
+    }
+
+    pub fn backspace(&mut self) -> bool {
+        let Some(field) = self.focused_field else {
+            return false;
+        };
+        match field {
+            UpdatesField::FeedUrl => self.config.pop_feed_url_char(),
+            UpdatesField::DotfilesRepo => self.config.pop_repo_char(),
+            UpdatesField::DotfilesBranch => self.config.pop_branch_char(),
+            UpdatesField::DotfilesToken => self.config.pop_token_char(),
+        }
+        true
+    }
+
+    pub fn next_field(&mut self) {
+        self.focused_field = Some(match self.focused_field {
+            Some(f) => f.next(),
+            None => UpdatesField::FeedUrl,
+        });
     }
 }
 
@@ -959,10 +1019,12 @@ pub enum UiAction {
     InstallRefresh,
     InstallPlan,
     InstallExecute,
+    FocusUpdatesField(UpdatesField),
     CheckSystemUpdate,
+    InstallSystemUpdate,
     RefreshUpdates,
+    SaveDotfilesConfig,
     SyncDotfiles,
-    PullDotfiles,
     ToggleDotfilesAutoSync,
     WifiScan,
     WifiRefresh,
@@ -2013,6 +2075,85 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
 }
 
+/// Draws a clickable Candy Lavender rounded text input field.
+/// When `masked` is true and `value` is non-empty, renders crisp masked dots (`••••••••`).
+#[allow(clippy::too_many_arguments)]
+fn draw_text_input(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    g: &mut Glyphs,
+    gui: &mut GuiState,
+    pal: &CandyPalette,
+    x: i32,
+    y: i32,
+    iw: i32,
+    ih: i32,
+    value: &[u8],
+    placeholder: &[u8],
+    masked: bool,
+    field: UpdatesField,
+) {
+    let focused = gui.updates.focused_field == Some(field);
+    let act = UiAction::FocusUpdatesField(field);
+    let hovered = gui.hovered == Some(act);
+
+    let rim = if focused {
+        pal.accent
+    } else if hovered {
+        pal.rim_accent
+    } else {
+        pal.hairline
+    };
+    fill_rounded_rect(buf, w, h, x, y, iw, ih, 6, rim);
+    fill_rounded_rect(buf, w, h, x + 1, y + 1, iw - 2, ih - 2, 5, pal.control);
+
+    let inner_x = x + 8;
+    let inner_w = (iw - 16).max(8);
+    let text_y = y + (ih - CELL_H as i32) / 2;
+
+    if value.is_empty() {
+        if focused {
+            draw_text(buf, w, h, g, inner_x, text_y, inner_w, b"_", pal.accent);
+        } else {
+            draw_text(buf, w, h, g, inner_x, text_y, inner_w, placeholder, pal.text_dim);
+        }
+    } else if masked {
+        // Render masked password dots (up to 16 crisp dots, minimum 8 when set).
+        let max_dots = ((inner_w - 12) / 10).clamp(1, 16) as usize;
+        let dot_count = value.len().clamp(8, max_dots).min(max_dots);
+        let dot_y = y + ih / 2 - 2;
+        for i in 0..dot_count {
+            fill_rounded_rect(buf, w, h, inner_x + i as i32 * 10, dot_y, 5, 5, 2, pal.text);
+        }
+        if focused {
+            let cx = inner_x + dot_count as i32 * 10 + 2;
+            if cx + 8 <= x + iw - 4 {
+                draw_text(buf, w, h, g, cx, text_y, 10, b"_", pal.accent);
+            }
+        }
+    } else {
+        // Show the trailing portion of long values when focused so typing stays visible.
+        let max_chars = (inner_w / CELL_W as i32).max(1) as usize;
+        let show_chars = if focused { max_chars.saturating_sub(1).max(1) } else { max_chars };
+        let start = if focused && value.len() > show_chars {
+            value.len() - show_chars
+        } else {
+            0
+        };
+        let slice = &value[start..];
+        draw_text(buf, w, h, g, inner_x, text_y, inner_w, slice, pal.text);
+        if focused {
+            let cx = inner_x + (slice.len().min(show_chars) as i32) * CELL_W as i32;
+            if cx + CELL_W as i32 <= x + iw - 4 {
+                draw_text(buf, w, h, g, cx, text_y, CELL_W as i32, b"_", pal.accent);
+            }
+        }
+    }
+
+    gui.push_hit(x, y, iw, ih, act);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_updates(
     buf: &mut [u32],
@@ -2030,11 +2171,18 @@ fn render_updates(
     let max_y = y + ch;
     let info = &m.info[..m.info_len];
 
-    // 1. SexOS System Update Card (xirtus/sexos A/B slot update).
-    let sys_h = (ch - 196).clamp(160, 236);
+    // 1. SexOS System Update Card (public github.com/xirtus/sexos Releases).
+    let sys_h = 186;
     draw_candy_panel(buf, w, h, x, y, cw, sys_h, 10, pal);
-    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, sys_h - 12, 2, pal.accent);
-    draw_text(buf, w, h, g, x + 14, y + 10, cw - 130, b"SexOS System (xirtus/sexos A/B Slot)", pal.text);
+    let update_avail = matches!(gui.updates.update_result, UpdateCheckResult::Available { .. });
+    let sys_bar_col = match gui.updates.update_result {
+        UpdateCheckResult::Available { .. } => 0x00A7_8BFA, // Candy Lavender alert
+        UpdateCheckResult::UpToDate { .. } => 0x0034_D399,  // Mint up-to-date
+        UpdateCheckResult::Error => 0x00F4_3F5E,            // Rose error
+        UpdateCheckResult::None => pal.accent,
+    };
+    fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, sys_h - 12, 2, sys_bar_col);
+    draw_text(buf, w, h, g, x + 14, y + 8, cw - 120, b"SexOS System Updates (xirtus/sexos)", pal.text);
 
     let (slot_badge, slot_col): (&[u8], u32) = if contains_bytes(info, b"slot A") {
         (b"SLOT A", 0x0034_D399)
@@ -2045,19 +2193,21 @@ fn render_updates(
     } else {
         (b"A/B SLOT", pal.accent)
     };
-    draw_candy_badge(buf, w, h, x + cw - 92, y + 8, 80, 20, slot_col, pal);
-    draw_text(buf, w, h, g, x + cw - 84, y + 10, 68, slot_badge, 0x0010_0C1C);
+    draw_candy_badge(buf, w, h, x + cw - 92, y + 6, 80, 20, slot_col, pal);
+    draw_text(buf, w, h, g, x + cw - 84, y + 8, 68, slot_badge, 0x0010_0C1C);
 
-    let mut ly = y + 36;
-    let info_bottom = y + sys_h - 62;
+    // Compact local slot & version summary (up to 2 lines from Files).
+    let mut ly = y + 32;
+    let mut shown_lines = 0usize;
     if !info.is_empty() {
         for line in info.split(|&b| b == b'\n') {
-            if ly + 16 > info_bottom {
+            if shown_lines >= 2 {
                 break;
             }
             if !line.is_empty() {
                 draw_text(buf, w, h, g, x + 14, ly, cw - 28, line, pal.text_dim);
                 ly += 17;
+                shown_lines += 1;
             }
         }
     } else {
@@ -2069,86 +2219,247 @@ fn render_updates(
             x + 14,
             ly,
             cw - 28,
-            b"Atomic A/B system updates from github.com/xirtus/sexos.",
-            pal.text_dim,
-        );
-        ly += 18;
-        draw_text(
-            buf,
-            w,
-            h,
-            g,
-            x + 14,
-            ly,
-            cw - 28,
-            b"Signed releases verify before switching the inactive slot.",
+            b"Atomic A/B system updates from github.com/xirtus/sexos Releases.",
             pal.text_dim,
         );
     }
 
-    draw_text(buf, w, h, g, x + 14, y + sys_h - 56, cw - 28, gui.updates.system_status_bytes(), pal.accent);
+    // Editable Release Feed URL row.
+    let cfg = gui.updates.config;
+    let feed_y = y + 70;
+    draw_text(buf, w, h, g, x + 14, feed_y + 4, 48, b"Feed:", pal.text_dim);
+    let feed_val = if cfg.feed_url_len > 0 {
+        &cfg.feed_url[..cfg.feed_url_len]
+    } else {
+        updates::DEFAULT_FEED_URL.as_bytes()
+    };
+    draw_text_input(
+        buf,
+        w,
+        h,
+        g,
+        gui,
+        pal,
+        x + 62,
+        feed_y,
+        (cw - 76).max(120),
+        24,
+        feed_val,
+        updates::DEFAULT_FEED_URL.as_bytes(),
+        false,
+        UpdatesField::FeedUrl,
+    );
 
+    // Candy Lavender Update Alert Banner.
+    let banner_y = y + 100;
+    let banner_h = 34;
+    let mut banner_buf = [0u8; 96];
+    let banner_len = updates::format_update_banner(gui.updates.update_result, &mut banner_buf);
+    let (banner_bg, banner_fg, banner_txt): (u32, u32, &[u8]) = match gui.updates.update_result {
+        UpdateCheckResult::Available { .. } => (
+            mix_rgb(pal.card, 0x00A7_8BFA, 72),
+            pal.text,
+            &banner_buf[..banner_len],
+        ),
+        UpdateCheckResult::UpToDate { .. } => (
+            mix_rgb(pal.card, 0x0034_D399, 54),
+            pal.text,
+            &banner_buf[..banner_len],
+        ),
+        UpdateCheckResult::Error => (
+            mix_rgb(pal.card, 0x00F4_3F5E, 56),
+            pal.text,
+            gui.updates.system_status_bytes(),
+        ),
+        UpdateCheckResult::None => (
+            pal.control,
+            pal.text_dim,
+            gui.updates.system_status_bytes(),
+        ),
+    };
+    fill_rounded_rect(buf, w, h, x + 14, banner_y, cw - 28, banner_h, 8, banner_bg);
+    if update_avail {
+        draw_candy_badge(buf, w, h, x + 22, banner_y + 7, 52, 20, pal.accent, pal);
+        draw_text(buf, w, h, g, x + 32, banner_y + 9, 40, b"NEW", pal.text_on_accent);
+        draw_text(buf, w, h, g, x + 82, banner_y + 9, cw - 106, banner_txt, banner_fg);
+    } else {
+        draw_text(buf, w, h, g, x + 24, banner_y + 9, cw - 48, banner_txt, banner_fg);
+    }
+
+    // System update buttons: Check for Updates | Install Update | Refresh Slot.
     let sys_btn_y = y + sys_h - 36;
-    let chk_w = 134;
+    let chk_w = 160;
     let chk_act = UiAction::CheckSystemUpdate;
-    draw_candy_button(buf, w, h, x + 14, sys_btn_y, chk_w, 26, 8, ButtonStyle::Primary, gui.btn_state(chk_act), pal);
-    draw_text(buf, w, h, g, x + 26, sys_btn_y + 5, chk_w - 20, b"Check Update", pal.text_on_accent);
+    let chk_style = if update_avail { ButtonStyle::Normal } else { ButtonStyle::Primary };
+    draw_candy_button(buf, w, h, x + 14, sys_btn_y, chk_w, 26, 8, chk_style, gui.btn_state(chk_act), pal);
+    draw_text(
+        buf,
+        w,
+        h,
+        g,
+        x + 26,
+        sys_btn_y + 5,
+        chk_w - 20,
+        b"Check for Updates",
+        button_text_color(chk_style, pal),
+    );
     gui.push_hit(x + 14, sys_btn_y, chk_w, 26, chk_act);
 
-    let ref_x = x + 14 + chk_w + 10;
-    let ref_w = 128;
-    let ref_act = UiAction::RefreshUpdates;
-    draw_candy_button(buf, w, h, ref_x, sys_btn_y, ref_w, 26, 8, ButtonStyle::Normal, gui.btn_state(ref_act), pal);
-    draw_text(buf, w, h, g, ref_x + 14, sys_btn_y + 5, ref_w - 20, b"Refresh Slot", pal.text);
-    gui.push_hit(ref_x, sys_btn_y, ref_w, 26, ref_act);
+    let inst_x = x + 14 + chk_w + 10;
+    let inst_w = 136;
+    let inst_act = UiAction::InstallSystemUpdate;
+    let inst_style = if update_avail { ButtonStyle::Primary } else { ButtonStyle::Normal };
+    draw_candy_button(buf, w, h, inst_x, sys_btn_y, inst_w, 26, 8, inst_style, gui.btn_state(inst_act), pal);
+    draw_text(
+        buf,
+        w,
+        h,
+        g,
+        inst_x + 14,
+        sys_btn_y + 5,
+        inst_w - 20,
+        b"Install Update",
+        button_text_color(inst_style, pal),
+    );
+    gui.push_hit(inst_x, sys_btn_y, inst_w, 26, inst_act);
 
-    y += sys_h + 12;
+    let ref_x = inst_x + inst_w + 10;
+    let ref_w = 116;
+    if ref_x + ref_w <= x + cw - 10 {
+        let ref_act = UiAction::RefreshUpdates;
+        draw_candy_button(buf, w, h, ref_x, sys_btn_y, ref_w, 26, 8, ButtonStyle::Subtle, gui.btn_state(ref_act), pal);
+        draw_text(buf, w, h, g, ref_x + 10, sys_btn_y + 5, ref_w - 16, b"Refresh Slot", pal.text_dim);
+        gui.push_hit(ref_x, sys_btn_y, ref_w, 26, ref_act);
+    }
 
-    // 2. Private Dotfiles Sync Card (xirtus/sexosdotfiles).
-    let dot_h = (max_y - y).clamp(132, 176);
+    y += sys_h + 10;
+
+    // 2. User-Configurable Private Dotfiles Sync Card (/data/tatami/dotfiles.conf).
+    let dot_h = (max_y - y).clamp(210, 240);
     draw_candy_panel(buf, w, h, x, y, cw, dot_h, 10, pal);
-    let dot_col = if gui.updates.dotfiles_synced { 0x0034_D399 } else { pal.accent };
+    let dot_col = if gui.updates.dotfiles_synced {
+        0x0034_D399
+    } else if cfg.has_valid_repo() {
+        pal.accent
+    } else {
+        0x0064_748B
+    };
     fill_rounded_rect(buf, w, h, x + 2, y + 6, 4, dot_h - 12, 2, dot_col);
-    draw_text(buf, w, h, g, x + 14, y + 10, cw - 130, b"Private Dotfiles (xirtus/sexosdotfiles)", pal.text);
+    draw_text(buf, w, h, g, x + 14, y + 8, cw - 124, b"Private Dotfiles Sync (GitHub Raw)", pal.text);
 
-    let dot_badge: &[u8] = if gui.updates.dotfiles_synced { b"SYNCED" } else { b"READY" };
-    draw_candy_badge(buf, w, h, x + cw - 86, y + 8, 74, 20, dot_col, pal);
-    draw_text(buf, w, h, g, x + cw - 76, y + 10, 60, dot_badge, 0x0010_0C1C);
+    let dot_badge: &[u8] = if gui.updates.dotfiles_synced {
+        b"SYNCED"
+    } else if cfg.has_valid_repo() {
+        b"READY"
+    } else {
+        b"SETUP"
+    };
+    draw_candy_badge(buf, w, h, x + cw - 86, y + 6, 74, 20, dot_col, pal);
+    draw_text(buf, w, h, g, x + cw - 76, y + 8, 60, dot_badge, 0x0010_0C1C);
 
+    // Row 1: Dotfiles Repo (owner/repo) + Branch.
+    let r1_y = y + 34;
+    let branch_lbl_w = 62;
+    let branch_in_w = 96;
+    let repo_in_w = (cw - 14 - 56 - 10 - branch_lbl_w - branch_in_w - 14).max(120);
+    draw_text(buf, w, h, g, x + 14, r1_y + 4, 52, b"Repo:", pal.text_dim);
+    draw_text_input(
+        buf,
+        w,
+        h,
+        g,
+        gui,
+        pal,
+        x + 68,
+        r1_y,
+        repo_in_w,
+        24,
+        &cfg.repo[..cfg.repo_len],
+        DOTFILES_PLACEHOLDER.as_bytes(),
+        false,
+        UpdatesField::DotfilesRepo,
+    );
+
+    let br_lbl_x = x + 68 + repo_in_w + 10;
+    draw_text(buf, w, h, g, br_lbl_x, r1_y + 4, branch_lbl_w, b"Branch:", pal.text_dim);
+    let br_val = if cfg.branch_len > 0 {
+        &cfg.branch[..cfg.branch_len]
+    } else {
+        b""
+    };
+    draw_text_input(
+        buf,
+        w,
+        h,
+        g,
+        gui,
+        pal,
+        br_lbl_x + branch_lbl_w,
+        r1_y,
+        branch_in_w,
+        24,
+        br_val,
+        updates::DEFAULT_BRANCH.as_bytes(),
+        false,
+        UpdatesField::DotfilesBranch,
+    );
+
+    // Row 2: GitHub Token (masked as dots).
+    let r2_y = y + 64;
+    draw_text(buf, w, h, g, x + 14, r2_y + 4, 52, b"Token:", pal.text_dim);
+    draw_text_input(
+        buf,
+        w,
+        h,
+        g,
+        gui,
+        pal,
+        x + 68,
+        r2_y,
+        (cw - 82).max(120),
+        24,
+        &cfg.token[..cfg.token_len],
+        b"ghp_... (optional, masked for private repos)",
+        true,
+        UpdatesField::DotfilesToken,
+    );
+
+    // Row 3: Auto-sync toggle.
+    let tog_y = y + 95;
+    draw_text(buf, w, h, g, x + 14, tog_y + 2, cw - 90, b"Auto-sync dotfiles on login", pal.text);
+    let tog_act = UiAction::ToggleDotfilesAutoSync;
+    draw_candy_toggle(buf, w, h, x + cw - 62, tog_y, 46, 22, gui.updates.config.auto_sync, gui.btn_state(tog_act), pal);
+    gui.push_hit(x + cw - 66, tog_y - 2, 54, 26, tog_act);
+
+    // Row 4: Sync targets & status.
     draw_text(
         buf,
         w,
         h,
         g,
         x + 14,
-        y + 34,
+        y + 123,
         cw - 28,
-        b"Sync Candy Lavender themes, keybinds & Spindle config via xirtus/sexosdotfiles.",
+        b"Files: brootlite/provider_pack.json, tailor/proxy.conf, wifi.conf",
         pal.text_dim,
     );
-    draw_text(buf, w, h, g, x + 14, y + 54, cw - 28, gui.updates.dotfiles_status_bytes(), pal.accent);
+    let st_col = if gui.updates.dotfiles_synced { 0x0034_D399 } else { pal.accent };
+    draw_text(buf, w, h, g, x + 14, y + 144, cw - 28, gui.updates.dotfiles_status_bytes(), st_col);
 
-    // Auto-sync toggle row.
-    let tog_y = y + 76;
-    draw_text(buf, w, h, g, x + 14, tog_y + 2, cw - 90, b"Auto-sync private dotfiles on login", pal.text);
-    let tog_act = UiAction::ToggleDotfilesAutoSync;
-    draw_candy_toggle(buf, w, h, x + cw - 62, tog_y, 46, 22, gui.updates.dotfiles_auto_sync, gui.btn_state(tog_act), pal);
-    gui.push_hit(x + cw - 66, tog_y - 2, 54, 26, tog_act);
-
-    // Sync & Pull buttons.
+    // Row 5: Save Config & Sync Dotfiles Now buttons.
     let dot_btn_y = y + dot_h - 34;
-    let sync_w = 134;
-    let sync_act = UiAction::SyncDotfiles;
-    draw_candy_button(buf, w, h, x + 14, dot_btn_y, sync_w, 26, 8, ButtonStyle::Primary, gui.btn_state(sync_act), pal);
-    draw_text(buf, w, h, g, x + 24, dot_btn_y + 5, sync_w - 18, b"Sync Dotfiles", pal.text_on_accent);
-    gui.push_hit(x + 14, dot_btn_y, sync_w, 26, sync_act);
+    let save_w = 120;
+    let save_act = UiAction::SaveDotfilesConfig;
+    draw_candy_button(buf, w, h, x + 14, dot_btn_y, save_w, 26, 8, ButtonStyle::Normal, gui.btn_state(save_act), pal);
+    draw_text(buf, w, h, g, x + 28, dot_btn_y + 5, save_w - 20, b"Save Config", pal.text);
+    gui.push_hit(x + 14, dot_btn_y, save_w, 26, save_act);
 
-    let pull_x = x + 14 + sync_w + 10;
-    let pull_w = 124;
-    let pull_act = UiAction::PullDotfiles;
-    draw_candy_button(buf, w, h, pull_x, dot_btn_y, pull_w, 26, 8, ButtonStyle::Normal, gui.btn_state(pull_act), pal);
-    draw_text(buf, w, h, g, pull_x + 16, dot_btn_y + 5, pull_w - 20, b"Pull Latest", pal.text);
-    gui.push_hit(pull_x, dot_btn_y, pull_w, 26, pull_act);
+    let sync_x = x + 14 + save_w + 10;
+    let sync_w = 166;
+    let sync_act = UiAction::SyncDotfiles;
+    draw_candy_button(buf, w, h, sync_x, dot_btn_y, sync_w, 26, 8, ButtonStyle::Primary, gui.btn_state(sync_act), pal);
+    draw_text(buf, w, h, g, sync_x + 16, dot_btn_y + 5, sync_w - 20, b"Sync Dotfiles Now", pal.text_on_accent);
+    gui.push_hit(sync_x, dot_btn_y, sync_w, 26, sync_act);
 }
 
 fn format_rssi(rssi: i8, out: &mut [u8; 24]) -> usize {
@@ -2548,8 +2859,15 @@ mod tests {
 
         let mut gui = GuiState::new();
         gui.view = SidebarView::SystemPage(updates_idx);
-        gui.updates.set_system_status(b"Checked xirtus/sexos A/B slot.");
-        gui.updates.set_dotfiles_status(b"Synced xirtus/sexosdotfiles.");
+        gui.updates.local_version = Some(12);
+        gui.updates.update_result = UpdateCheckResult::Available {
+            remote_version: 14,
+            bytes: 36 * 1024 * 1024,
+            local_version: 12,
+        };
+        gui.updates.config.set_repo(b"alice/sexosdotfiles");
+        gui.updates.config.set_token(b"ghp_test_secret");
+        gui.updates.set_dotfiles_status(b"Synced 2 file(s) from alice/sexosdotfiles");
         gui.updates.dotfiles_synced = true;
 
         let mut g = Glyphs::new();
@@ -2557,13 +2875,18 @@ mod tests {
         render_gui(&mut buf, 900, 600, &mut g, &mut gui, &m);
 
         let has = |act: UiAction| gui.hits[..gui.hit_count].iter().flatten().any(|h| h.action == act);
-        assert!(has(UiAction::CheckSystemUpdate), "missing Check Update hitbox");
+        assert!(has(UiAction::FocusUpdatesField(UpdatesField::FeedUrl)), "missing Feed URL input hitbox");
+        assert!(has(UiAction::FocusUpdatesField(UpdatesField::DotfilesRepo)), "missing Repo input hitbox");
+        assert!(has(UiAction::FocusUpdatesField(UpdatesField::DotfilesBranch)), "missing Branch input hitbox");
+        assert!(has(UiAction::FocusUpdatesField(UpdatesField::DotfilesToken)), "missing Token input hitbox");
+        assert!(has(UiAction::CheckSystemUpdate), "missing Check for Updates hitbox");
+        assert!(has(UiAction::InstallSystemUpdate), "missing Install Update hitbox");
         assert!(has(UiAction::RefreshUpdates), "missing Refresh Slot hitbox");
-        assert!(has(UiAction::SyncDotfiles), "missing Sync Dotfiles hitbox");
-        assert!(has(UiAction::PullDotfiles), "missing Pull Latest hitbox");
+        assert!(has(UiAction::SaveDotfilesConfig), "missing Save Config hitbox");
+        assert!(has(UiAction::SyncDotfiles), "missing Sync Dotfiles Now hitbox");
         assert!(has(UiAction::ToggleDotfilesAutoSync), "missing Auto-sync toggle hitbox");
-        assert_eq!(SYSTEM_REPO, "xirtus/sexos");
-        assert_eq!(DOTFILES_REPO, "xirtus/sexosdotfiles");
+        assert_eq!(updates::SYSTEM_REPO, "xirtus/sexos");
+        assert_eq!(DOTFILES_PLACEHOLDER, "owner/sexosdotfiles");
     }
 
     #[test]

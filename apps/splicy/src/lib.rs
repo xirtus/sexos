@@ -21,7 +21,11 @@ pub mod vu;
 pub mod words;
 
 pub use cache::{CacheConfig, CachedFrame, FrameCache};
-pub use compositor::{composite_cpu, BlendMode, CompositeOutput, LayerInput, LayerTransform, QualityMode};
+pub use compositor::{
+    composite_cpu, fit_anamorphic_rect, sample_ken_burns_q16, BlendMode, CompositeOutput,
+    LayerInput, LayerTransform, QualityMode,
+};
+pub use view::LayoutMode;
 pub use vu::{TrackMeter, VuStrip, VU_STRIP_H};
 
 use alloc::format;
@@ -47,6 +51,29 @@ pub enum AuditionMode {
     HearRemoved,
 }
 
+/// Active timeline/editing tool (FCP + Premiere parity).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolKind {
+    #[default]
+    Select,
+    Blade,
+    Trim,
+    Range,
+    Hand,
+}
+
+impl ToolKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            ToolKind::Select => "Select",
+            ToolKind::Blade => "Blade",
+            ToolKind::Trim => "Trim",
+            ToolKind::Range => "Range",
+            ToolKind::Hand => "Hand",
+        }
+    }
+}
+
 pub struct Editor {
     pub history: History,
     pub transcript: Transcript,
@@ -58,6 +85,12 @@ pub struct Editor {
     /// Which pending suggestion card has the focus.
     pub card: usize,
     pub audition: AuditionMode,
+    /// Optional In/Out range marks on the timeline.
+    pub in_point: Option<Micros>,
+    pub out_point: Option<Micros>,
+    /// J/K/L shuttle speed: `0` paused, `1, 2, 4` forward (`L`), `-1, -2, -4` reverse (`J`).
+    pub shuttle_rate: i8,
+    pub active_tool: ToolKind,
 }
 
 impl Editor {
@@ -85,6 +118,10 @@ impl Editor {
             anchor: None,
             card: 0,
             audition: AuditionMode::HearJoin,
+            in_point: None,
+            out_point: None,
+            shuttle_rate: 0,
+            active_tool: ToolKind::Select,
         }
     }
 
@@ -365,6 +402,148 @@ impl Editor {
     pub fn decided(&self) -> (usize, usize) {
         let s = &self.suggestions.items;
         (s.iter().filter(|s| s.status == Status::Applied).count(), s.iter().filter(|s| s.status == Status::Skipped).count())
+    }
+
+    /// Set the In mark at timeline time `t` (clamped to `[0, duration]`).
+    pub fn mark_in(&mut self, t: Micros) {
+        let clamped = t.clamp(0, self.timeline().duration());
+        self.in_point = Some(clamped);
+        if self.out_point.is_some_and(|out| out < clamped) {
+            self.out_point = None;
+        }
+    }
+
+    /// Set the Out mark at timeline time `t` (clamped to `[0, duration]`).
+    pub fn mark_out(&mut self, t: Micros) {
+        let clamped = t.clamp(0, self.timeline().duration());
+        self.out_point = Some(clamped);
+        if self.in_point.is_some_and(|inp| inp > clamped) {
+            self.in_point = None;
+        }
+    }
+
+    /// Clear both In and Out marks (`X` / `Alt+X`).
+    pub fn clear_in_out(&mut self) {
+        self.in_point = None;
+        self.out_point = None;
+    }
+
+    /// Step J/K/L shuttle forward (`L`: 1 -> 2 -> 4).
+    pub fn shuttle_forward(&mut self) -> i8 {
+        self.shuttle_rate = match self.shuttle_rate {
+            1 => 2,
+            2 | 4 => 4,
+            _ => 1,
+        };
+        self.shuttle_rate
+    }
+
+    /// Step J/K/L shuttle backward (`J`: -1 -> -2 -> -4).
+    pub fn shuttle_reverse(&mut self) -> i8 {
+        self.shuttle_rate = match self.shuttle_rate {
+            -1 => -2,
+            -2 | -4 => -4,
+            _ => -1,
+        };
+        self.shuttle_rate
+    }
+
+    /// Pause J/K/L shuttle (`K` resets speed to `0`).
+    pub fn shuttle_pause(&mut self) {
+        self.shuttle_rate = 0;
+    }
+
+    /// Toggle standard `1x` forward playback and pause (`Space` or Play button).
+    pub fn toggle_play(&mut self) -> i8 {
+        if self.shuttle_rate == 0 {
+            self.shuttle_rate = 1;
+        } else {
+            self.shuttle_rate = 0;
+        }
+        self.shuttle_rate
+    }
+
+    /// Toggle `muted` on track `track_idx` and commit to undo history.
+    pub fn toggle_track_muted(&mut self, track_idx: usize) -> bool {
+        let mut next = self.timeline().clone();
+        let Some(track) = next.tracks.get_mut(track_idx) else {
+            return false;
+        };
+        track.muted = !track.muted;
+        let muted = track.muted;
+        let summary = if muted {
+            format!("Mute {}", track.name)
+        } else {
+            format!("Unmute {}", track.name)
+        };
+        self.history.commit(&summary, next);
+        muted
+    }
+
+    /// Toggle `enabled` on all clips of track `track_idx` (video `eye` switch).
+    pub fn toggle_track_enabled(&mut self, track_idx: usize) -> Result<bool, EditError> {
+        let tl = self.timeline();
+        let Some(track) = tl.tracks.get(track_idx) else {
+            return Ok(false);
+        };
+        let Some(first) = track.clips.first() else {
+            return Ok(false);
+        };
+        let target = !first.enabled;
+        let ops: Vec<Op> = track
+            .clips
+            .iter()
+            .map(|c| Op::SetEnabled { clip: c.id, enabled: target })
+            .collect();
+        let next = tl.apply_all(&ops)?;
+        let summary = if target {
+            format!("Show {}", track.name)
+        } else {
+            format!("Hide {}", track.name)
+        };
+        self.history.commit(&summary, next);
+        Ok(target)
+    }
+
+    /// Split all clips spanning `at` across video and audio tracks and commit `"Blade cut"`.
+    pub fn blade_at(&mut self, at: Micros) -> Result<bool, EditError> {
+        let tl = self.timeline();
+        let ops: Vec<Op> = tl
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.at < at && at < c.end())
+            .map(|c| Op::Split { clip: c.id, at })
+            .collect();
+        if ops.is_empty() {
+            return Ok(false);
+        }
+        let next = tl.apply_all(&ops)?;
+        self.history.commit("Blade cut", next);
+        Ok(true)
+    }
+
+    /// Toggle enabled state (`V` / `Shift+V` in FCP) for all clips under `at`.
+    pub fn toggle_clip_enabled_at(&mut self, at: Micros) -> Result<bool, EditError> {
+        let tl = self.timeline();
+        let clips: Vec<_> = tl
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .filter(|c| c.at <= at && at < c.end())
+            .collect();
+        let Some(first) = clips.first() else {
+            return Ok(false);
+        };
+        let target = !first.enabled;
+        let ops: Vec<Op> = clips
+            .into_iter()
+            .map(|c| Op::SetEnabled { clip: c.id, enabled: target })
+            .collect();
+        let next = tl.apply_all(&ops)?;
+        let summary = if target { "Enable clip" } else { "Disable clip" };
+        self.history.commit(summary, next);
+        Ok(true)
     }
 }
 
