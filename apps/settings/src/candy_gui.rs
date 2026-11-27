@@ -20,8 +20,8 @@ pub use noir_ui::{NOIR_CANVAS, NOIR_CARD, NOIR_SIDEBAR, NOIR_TOP_SPECULAR};
 
 use sex_config::{id, Config, Key, Kind, COLOUR_FILTERS, CORNER_ACTIONS, KEYS, LAYOUTS, PROGRAMS, WALLPAPERS, ZONES};
 use sex_theme::candy_ui::{
-    button_text_color, draw_candy_badge, draw_candy_button, draw_candy_swatch, fill_rounded_rect,
-    ButtonState, ButtonStyle, CandyPalette,
+    button_text_color, draw_candy_badge, draw_candy_button, draw_candy_selection_row,
+    draw_candy_swatch, fill_rounded_rect, ButtonState, ButtonStyle, CandyPalette,
 };
 use sex_theme::Mode;
 
