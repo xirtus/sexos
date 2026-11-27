@@ -658,13 +658,22 @@ impl<'a> SexWorkspace<'a> {
             });
         }
         if self.scope == AccessScope::FullSystem {
-            if trimmed.starts_with('/') || trimmed.starts_with('@') || self.root.is_empty() {
+            if trimmed.starts_with('@') {
+                return Ok(String::from(trimmed));
+            }
+            if trimmed == "/" {
+                return Ok(String::from("@/"));
+            }
+            if trimmed.starts_with('/') {
+                return Ok(format!("@{}", trimmed));
+            }
+            if self.root.is_empty() {
                 return Ok(String::from(trimmed));
             }
             let base = self.root.trim_end_matches('/');
             let rel = trimmed.trim_start_matches("./").trim_start_matches('/');
             return Ok(if base == "@" || base.is_empty() {
-                format!("{}/{}", base, rel)
+                format!("@/{}", rel)
             } else {
                 format!("{}/{}", base, rel)
             });
@@ -737,8 +746,16 @@ impl<'a> Workspace for SexWorkspace<'a> {
 
     fn list_dir(&mut self, path: &str) -> Result<Vec<String>, String> {
         let full = self.resolve(path)?;
-        let entries = files::list(self.window, full.as_bytes())
-            .map_err(|e| format!("files::list({}) failed: code {}", full, e))?;
+        let entries = files::list(self.window, full.as_bytes()).map_err(|e| {
+            if full.starts_with("@/") {
+                format!(
+                    "files::list({}) denied (code {}). SexOS requires a launch grant: run /bin/tailor +net @/",
+                    full, e
+                )
+            } else {
+                format!("files::list({}) failed: code {}", full, e)
+            }
+        })?;
         Ok(entries
             .into_iter()
             .map(|e| {
