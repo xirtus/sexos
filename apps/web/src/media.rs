@@ -14,8 +14,8 @@ use sex_web::sex_html;
 use sex_web::{Fonts, Image};
 
 /// Largest decoded picture: the window's content area, which is all a video can fill.
-pub const MAX_W: usize = 640;
-pub const MAX_H: usize = 480;
+pub const MAX_W: usize = 1280;
+pub const MAX_H: usize = 720;
 /// Height of the control bar drawn over a video with `controls`.
 const BAR_H: usize = 20;
 /// How often a playing element reports `timeupdate`, as browsers do (about 4 Hz).
@@ -174,6 +174,7 @@ impl Media {
             "mse" => {
                 self.player = None;
                 self.pending = None;
+                self.frames = 0;
                 self.mse = Some(crate::mse::Mse::new());
                 self.state = State::Empty;
                 self.events.push("emptied");
@@ -192,6 +193,7 @@ impl Media {
             }
             "load" => {
                 self.player = None;
+                self.frames = 0;
                 self.src = source(dom, self.node);
                 self.state = if self.src.is_empty() { State::Empty } else { State::Waiting };
                 self.events.push("emptied");
@@ -300,7 +302,7 @@ impl Media {
             }
             None => (0.0, String::new(), true, false, 0, 0, 0),
         };
-        Some(alloc::format!("media\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", self.node, events, t, d, paused as u8, ended as u8, w, h, ready))
+        Some(alloc::format!("media\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", self.node, events, t, d, paused as u8, ended as u8, w, h, ready, self.frames))
     }
 
     /// Space/K: play or pause.

@@ -481,14 +481,17 @@ impl<'a> Engine<'a>{
         Ok(None)
     }
     fn tcp_handle(&self,flow:usize)->Result<SocketHandle,Error>{self.open.as_ref().ok_or(Error::Config)?.tcp.get(flow).copied().ok_or(Error::Length)}
-    /// Connects flow `flow` to `address`. IPv4 needs the lease; IPv6 takes its source
-    /// address by RFC 6724 from the ones SLAAC gave.
+    /// Connects flow `flow` to `address`. IPv4 needs the lease (except `127.0.0.0/8`
+    /// loopback, which routes to the local stack); IPv6 takes its source address by
+    /// RFC 6724 from the ones SLAAC gave.
     pub fn open_connect(&mut self,flow:usize,address:Address,remote:u16)->Result<(),Error>{
         let local=self.network.local;
         let six=self.open_global6().is_some();
+        let loopback=matches!(address,Address::V4(a) if a[0]==127);
+        let target=if loopback{Address::V4(local)}else{address};
         let open=self.open.as_mut().ok_or(Error::Config)?;
-        match address{
-            Address::V4(_) if open.lease.is_none()=>return Err(Error::Config),
+        match target{
+            Address::V4(_) if !loopback&&open.lease.is_none()=>return Err(Error::Config),
             Address::V6(a) if !six&&!is_link_local(&a)=>return Err(Error::Config),
             _=>{}
         }
@@ -498,10 +501,10 @@ impl<'a> Engine<'a>{
         open.groups[flow]=None;
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
         let_go(flow);
-        let local=match address{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
+        let local=match target{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
         // A reused flow starts without the last owner's keep-alives.
         flow.set_keep_alive(None);
-        flow.connect(self.iface.context(),(address.ip(),remote),local).map_err(|_|Error::Protocol)
+        flow.connect(self.iface.context(),(target.ip(),remote),local).map_err(|_|Error::Protocol)
     }
     /// Makes flow `flow` listen on `port`, for either family. Another flow listening there
     /// already, or a port that is not a program's, is `Error::Busy`.
@@ -813,11 +816,44 @@ impl<'a> Engine<'a>{
             if connection.listen((IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),self.network.listen_port)).is_err(){self.stop(Error::Protocol);return;}
         }
         self.iface.poll_egress(time,&mut self.adapter,&mut self.flows);
+        if self.open.is_some(){self.loopback_tx();}
         self.forget_unsent_resets(now);
         self.open_poll_dhcp();
         self.open_poll_dhcp6();
         // Replies are taken each turn, so a stray datagram can't crowd out the answer.
         self.open_collect();
+    }
+    /// Loops open-side TX frames targeting `self.network.local` (or `127.0.0.0/8`)
+    /// directly back into `adapter.rx` instead of sending them out the NIC, and
+    /// answers self-ARP requests locally so loopback TCP connects without a NIC.
+    fn loopback_tx(&mut self){
+        #[allow(irrefutable_let_patterns)]
+        let HardwareAddress::Ethernet(mac)=self.iface.hardware_addr() else{return};
+        let local=self.network.local;
+        let n=self.adapter.tx_len();
+        for _ in 0..n{
+            let Some(mut frame)=self.adapter.pop_tx() else{break};
+            let b=&frame.bytes[..frame.length];
+            let is_self_arp=b.len()>=42&&b[12..14]==[8,6]&&b[20..22]==[0,1]&&(b[38..42]==local||b[38]==127);
+            let is_self_v4=b.len()>=34&&b[12..14]==[8,0]&&b[14]>>4==4&&(b[30..34]==local||b[30]==127);
+            if (is_self_arp||is_self_v4)&&!self.adapter.rx_is_full(){
+                if is_self_arp{
+                    let target_ip:[u8;4]=[b[38],b[39],b[40],b[41]];
+                    frame.bytes[0..6].copy_from_slice(&mac.0);
+                    frame.bytes[6..12].copy_from_slice(&mac.0);
+                    frame.bytes[20..22].copy_from_slice(&[0,2]);
+                    frame.bytes[22..28].copy_from_slice(&mac.0);
+                    frame.bytes[28..32].copy_from_slice(&target_ip);
+                    frame.bytes[32..38].copy_from_slice(&mac.0);
+                    frame.bytes[38..42].copy_from_slice(&local);
+                }else{
+                    frame.bytes[0..6].copy_from_slice(&mac.0);
+                }
+                let _=self.adapter.push_rx(frame);
+            }else{
+                self.adapter.tx.push_back(frame);
+            }
+        }
     }
     /// A flow that ended (aborted, or timed out) owes its peer a reset, and smoltcp
     /// retries it until it goes out. When the peer's link address never answers, that

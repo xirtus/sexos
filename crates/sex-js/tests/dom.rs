@@ -1994,3 +1994,49 @@ fn code_cache_saved_entries_come_back_after_a_restart_for_the_same_site_only() {
     let own = other.borrow_mut().take_fresh();
     assert!(!own.is_empty() && own.iter().all(|(k, _)| saved.iter().all(|(s, _)| s != k)), "its own entries, under its own keys");
 }
+
+#[test]
+fn youtube_playback_unblockers() {
+    let mut s = page("<video id=v></video>");
+    s.eval(r#"
+        console.log('ua', navigator.userAgent);
+        const pol = window.trustedTypes.createPolicy('default', {
+            createHTML: x => x,
+            createScript: x => x,
+            createScriptURL: x => x,
+        });
+        const h = pol.createHTML('<b>ok</b>');
+        const sc = pol.createScript('1+1');
+        const u = pol.createScriptURL('https://example.test/a.js');
+        console.log('tt', window.trustedTypes.defaultPolicy === pol,
+            window.trustedTypes.isHTML(h), window.trustedTypes.isScript(sc), window.trustedTypes.isScriptURL(u),
+            window.trustedTypes.isHTML('plain'), String(h), String(u));
+        const v = document.getElementById('v');
+        console.log('cpt',
+            v.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+            v.canPlayType('video/webm; codecs="vp9, opus"'),
+            v.canPlayType('video/mp4'),
+            v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"'));
+        const ms = new MediaSource();
+        v.srcObject = ms;
+        console.log('srcObj', v.srcObject === ms, v._ms === ms, v._id);
+        fetch('https://api.example.test/v1', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const x = new XMLHttpRequest();
+        x.withCredentials = true;
+        x.open('GET', 'https://cdn.example.test/seg');
+        x.send();
+    "#, "yt.js").unwrap();
+    let out = logs(&mut s);
+    assert_eq!(out[0], "0:ua Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+    assert_eq!(out[1], "0:tt true true true true false <b>ok</b> https://example.test/a.js");
+    assert_eq!(out[2], "0:cpt probably probably maybe ");
+    assert!(out[3].starts_with("0:srcObj true true "), "got {}", out[3]);
+    let id = out[3].split_whitespace().last().unwrap().to_string();
+    assert_eq!(s.page().fetches.len(), 2);
+    assert!(s.page().fetches[0].credentials);
+    assert!(s.page().fetches[1].credentials);
+    s.dispatch(&format!("media\t{id}\ttimeupdate\t1.5\t60\t0\t0\t1280\t720\t4\t45")).unwrap();
+    s.eval("console.log('q', document.getElementById('v').getVideoPlaybackQuality().totalVideoFrames);", "q.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:q 45"]);
+}
+

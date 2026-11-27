@@ -25,7 +25,7 @@ pub use date::parse_http_date;
 /// The largest reply head we read.
 pub const HEAD_MAX: usize = 64 * 1024;
 /// The user agent we send unless a request names its own.
-pub const USER_AGENT: &str = "Mozilla/5.0 (X11; SexOS x86_64) AppleWebKit/537.36 (KHTML, like Gecko) SexOSWeb/0.2";
+pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

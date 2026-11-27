@@ -367,6 +367,7 @@ pub fn server_pd_by_name(name: &str) -> Option<u32> {
         "cufflinks" => Some(52),
         "sexgpu-nv" | "sexgpu" | "gpu" => Some(53),
         "saddle" => Some(54),
+        "sexuvc" | "uvc" => Some(55),
         _ => None,
     }
 }

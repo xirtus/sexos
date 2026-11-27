@@ -68,9 +68,9 @@ fn first_page() -> &'static str {
 }
 const SOURCE_MAX: usize = 4 << 20;
 const MAX_SHEETS: usize = 8;
-const MAX_IMAGES: usize = 24;
+const MAX_IMAGES: usize = 128;
 const MAX_REDIRECTS: usize = 6;
-const MAX_SCRIPTS: usize = 64;
+const MAX_SCRIPTS: usize = 128;
 /// Most ES modules one page may load.
 const MAX_MODULES: usize = 256;
 /// Largest body a script's `fetch` may load (a game's data file, say).
@@ -83,6 +83,8 @@ const SCRIPT_MAX: usize = 32 << 20;
 const MEDIA_MAX: usize = 256 << 20;
 /// How long one tick may spend taking in media downloads.
 const MEDIA_LOAD_BUDGET_MS: u64 = 4;
+/// How long one tick may spend polling script `fetch`/XHR requests.
+const FETCH_BUDGET_MS: u64 = 4;
 /// How often a running CSS animation is drawn (about 30 a second).
 const ANIMATION_FRAME_MS: u64 = 33;
 
@@ -133,6 +135,12 @@ struct Pending {
     method: String, url: String, headers: Vec<(String, String)>, body: Vec<u8>, max: usize, script: Option<String>,
     /// What the request is for, for Shields; worked out at its first hop when `None`.
     kind: Option<sex_shields::Kind>,
+    /// Script requested cross-origin credentials (`credentials: 'include'` / `withCredentials`).
+    credentials: bool,
+    /// True while this hop is executing a CORS `OPTIONS` preflight.
+    preflight: bool,
+    /// True once a CORS `OPTIONS` preflight succeeded for this hop.
+    preflight_done: bool,
 }
 impl Pending {
     fn new(id: u32, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Pending {
@@ -140,9 +148,36 @@ impl Pending {
             id, asked: String::from(url), since: sex_pdx::get_ticks(), begun: 0, hops: 0, secure_only: false,
             method: String::from(if method.is_empty() { "GET" } else { method }), url: String::from(sex_html::url::fragment(url).0),
             headers: headers.iter().map(|(k, v)| (String::from(*k), String::from(*v))).collect(), body: Vec::from(body), max, script: script.map(String::from),
-            kind: None,
+            kind: None, credentials: false, preflight: false, preflight_done: false,
         }
     }
+}
+
+/// Whether `method` is a CORS-safelisted method (does not by itself trigger preflight).
+fn cors_simple_method(method: &str) -> bool {
+    method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD") || method.eq_ignore_ascii_case("POST")
+}
+
+/// Non-safelisted header names (lowercased, deduplicated, sorted) for a CORS preflight.
+/// Returns `Some(acrh)` when a cross-origin request requires an `OPTIONS` preflight
+/// (`acrh` may be empty when only the method is non-simple), or `None` for simple requests.
+fn cors_preflight_headers(method: &str, headers: &[(String, String)]) -> Option<Vec<String>> {
+    let mut non_simple: Vec<String> = Vec::new();
+    for (k, v) in headers {
+        if sex_fetch::forbidden_header(k) { continue; }
+        let kl = k.to_ascii_lowercase();
+        let safe = match kl.as_str() {
+            "accept" | "accept-language" | "content-language" => true,
+            "content-type" => {
+                let mime = v.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+                matches!(mime.as_str(), "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain")
+            }
+            _ => false,
+        };
+        if !safe && !non_simple.iter().any(|h| h == &kl) { non_simple.push(kl); }
+    }
+    non_simple.sort();
+    if !cors_simple_method(method) || !non_simple.is_empty() { Some(non_simple) } else { None }
 }
 
 /// The page's tree, with the script engine that owns it when the page has scripts.
@@ -195,6 +230,10 @@ struct Browser {
     media_asked: bool,
     /// Media sources downloading; each plays as soon as enough has come.
     media_loads: Vec<MediaLoad>,
+    /// Script `fetch`/XHR requests waiting for a free network flow.
+    fetch_waiting: Vec<Pending>,
+    /// Script `fetch`/XHR requests currently in flight, polled incrementally per tick.
+    fetch_going: Vec<(Pending, net::Exchange)>,
     url: String,
     history: Vec<String>,
     scroll: i32,
@@ -325,6 +364,8 @@ struct Frame {
     media: Vec<media::Media>,
     media_asked: bool,
     media_loads: Vec<MediaLoad>,
+    fetch_waiting: Vec<Pending>,
+    fetch_going: Vec<(Pending, net::Exchange)>,
     url: String,
     scroll: i32,
     focus: Option<usize>,
@@ -425,7 +466,8 @@ impl Browser {
         swap(&mut self.page, &mut f.page); swap(&mut self.doc, &mut f.doc); swap(&mut self.sheets, &mut f.sheets);
         swap(&mut self.timer, &mut f.timer); swap(&mut self.timeline, &mut f.timeline); swap(&mut self.animating, &mut f.animating);
         swap(&mut self.canvases, &mut f.canvases); swap(&mut self.media, &mut f.media); swap(&mut self.media_asked, &mut f.media_asked);
-        swap(&mut self.media_loads, &mut f.media_loads); swap(&mut self.url, &mut f.url); swap(&mut self.scroll, &mut f.scroll);
+        swap(&mut self.media_loads, &mut f.media_loads); swap(&mut self.fetch_waiting, &mut f.fetch_waiting); swap(&mut self.fetch_going, &mut f.fetch_going);
+        swap(&mut self.url, &mut f.url); swap(&mut self.scroll, &mut f.scroll);
         swap(&mut self.focus, &mut f.focus); swap(&mut self.hover_css, &mut f.hover_css); swap(&mut self.import_map, &mut f.import_map);
         swap(&mut self.script_scroll, &mut f.script_scroll); swap(&mut self.view, &mut f.view); swap(&mut self.parent, &mut f.parent);
         swap(&mut self.fonts.images, &mut f.images); swap(&mut self.fonts.svgs, &mut f.svgs); swap(&mut self.fonts.moving, &mut f.moving);
@@ -447,6 +489,8 @@ impl Browser {
 
     /// Stops a frame's downloads as it goes.
     fn close_frame(&mut self, mut f: Frame) {
+        self.cancel_all(core::mem::take(&mut f.fetch_going));
+        f.fetch_waiting.clear();
         for mut l in core::mem::take(&mut f.media_loads) { l.ex.cancel(&mut self.window); }
         sex_pdx::serial_record!("[web.frame.closed] node={}", f.node);
     }
@@ -504,7 +548,7 @@ impl Browser {
             self.frames.push(Frame {
                 node, src: src.clone(), rect: b, page, doc: Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", (b[2], b[3]), clock)),
                 sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(),
-                media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), scroll: 0, focus: None, hover_css: false,
+                media: Vec::new(), media_asked: false, media_loads: Vec::new(), fetch_waiting: Vec::new(), fetch_going: Vec::new(), url: String::new(), scroll: 0, focus: None, hover_css: false,
                 import_map: Vec::new(), script_scroll: 0, view: (b[2], b[3]), parent: Some(base.clone()),
                 images: Vec::new(), svgs: Vec::new(), moving: Vec::new(), frames_shown: 0,
             });
@@ -923,15 +967,31 @@ impl Browser {
         }
         if p.secure_only && !target.secure { return Err(b"An HTTPS page cannot load an insecure script."); }
         let cross = p.script.as_deref().filter(|o| *o != target.origin());
+        // The page's own address, or while a page loads the one it was opened from.
+        let from = match &self.nav_from { Some(loading) => loading.as_deref(), None => Some(self.url.as_str()) };
+        let referrer = from.and_then(|f| sex_fetch::referrer(f, &target));
+        if let Some(acrh_list) = cross.filter(|_| !p.preflight_done).and_then(|_| cors_preflight_headers(&p.method, &p.headers)) {
+            p.preflight = true;
+            let acrh = acrh_list.join(", ");
+            let req_method = p.method.to_ascii_uppercase();
+            let mut sent: Vec<(&str, &str)> = Vec::new();
+            sent.push(("Sec-GPC", "1"));
+            if let Some(o) = cross { sent.push(("Origin", o)); }
+            sent.push(("Access-Control-Request-Method", &req_method));
+            if !acrh.is_empty() { sent.push(("Access-Control-Request-Headers", &acrh)); }
+            let req = sex_fetch::Request { method: "OPTIONS", url: &p.url, headers: &sent, body: &[], trusted_origin: true, referrer: referrer.as_deref() };
+            p.begun = sex_pdx::get_ticks();
+            let started = if patient { net::Exchange::start_patiently(&mut self.window, &req, None, 64 * 1024) } else { net::Exchange::start(&mut self.window, &req, None, 64 * 1024) };
+            return started.map_err(|e| if e == net::Error::Busy { BUSY } else { net::message(e) });
+        }
+        p.preflight = false;
         let first = cookie_ok(&self.shields, &self.top_url(kind), &target, kind);
-        let cookie = if cross.is_some() || !first { None } else { self.jar.borrow().header(&target, wall()) };
+        let send_cookie = match cross { None => first, Some(_) => p.credentials && first };
+        let cookie = if send_cookie { self.jar.borrow().header(&target, wall()) } else { None };
         let mut sent: Vec<(&str, &str)> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !sex_fetch::forbidden_header(k)).collect();
         // Global Privacy Control, as Brave sends it: don't sell or share my data.
         sent.push(("Sec-GPC", "1"));
         if let Some(o) = cross { sent.push(("Origin", o)); }
-        // The page's own address, or while a page loads the one it was opened from.
-        let from = match &self.nav_from { Some(loading) => loading.as_deref(), None => Some(self.url.as_str()) };
-        let referrer = from.and_then(|f| sex_fetch::referrer(f, &target));
         let req = sex_fetch::Request { method: &p.method, url: &p.url, headers: &sent, body: &p.body, trusted_origin: cross.is_some(), referrer: referrer.as_deref() };
         p.begun = sex_pdx::get_ticks();
         let started = if patient { net::Exchange::start_patiently(&mut self.window, &req, cookie.as_deref(), p.max) } else { net::Exchange::start(&mut self.window, &req, cookie.as_deref(), p.max) };
@@ -939,11 +999,35 @@ impl Browser {
     }
 
     /// Takes the reply to `p`'s current hop: its cookies, then either the final answer
-    /// or, for a redirect, `None` with `p` aimed at the next address.
+    /// or, for a redirect or approved CORS preflight, `None` with `p` aimed at the next step.
     fn landed(&mut self, p: &mut Pending, r: net::Response) -> Option<Result<Loaded, &'static [u8]>> {
         let Ok(target) = sex_fetch::Url::parse(&p.url) else { return Some(Err(net::message(net::Error::Address))) };
         let cross = p.script.as_deref().filter(|o| *o != target.origin()).map(String::from);
         let kind = p.kind.unwrap_or(sex_shields::Kind::Other);
+        if p.preflight {
+            p.preflight = false;
+            sex_pdx::serial_record!("[web.http] method=OPTIONS status={} bytes={} encoding={} chunked={} cookies={} ticks={} url={}", r.head.status, r.body.len(),
+                r.head.get("content-encoding").unwrap_or("none"), r.head.get("transfer-encoding").is_some_and(|t| t.contains("chunked")) as u8, self.jar.borrow().len(), sex_pdx::get_ticks() - p.begun, p.url);
+            if let Some(o) = cross {
+                let status_ok = (200..300).contains(&r.head.status);
+                let acao = r.head.get("access-control-allow-origin").map(str::trim);
+                let acac = r.head.get("access-control-allow-credentials").map(str::trim) == Some("true");
+                let origin_ok = if p.credentials { acao == Some(o.as_str()) && acac } else { acao == Some("*") || acao == Some(o.as_str()) };
+                let method_ok = cors_simple_method(&p.method)
+                    || r.head.all("access-control-allow-methods").flat_map(|v| v.split(',')).map(str::trim)
+                        .any(|m| m.eq_ignore_ascii_case(&p.method) || (!p.credentials && m == "*"));
+                let needed = cors_preflight_headers(&p.method, &p.headers).unwrap_or_default();
+                let allowed_hdrs: Vec<String> = r.head.all("access-control-allow-headers").flat_map(|v| v.split(',')).map(|h| h.trim().to_ascii_lowercase()).collect();
+                let wildcard_hdr = !p.credentials && allowed_hdrs.iter().any(|h| h == "*");
+                let headers_ok = needed.iter().all(|h| wildcard_hdr || allowed_hdrs.iter().any(|a| a == h));
+                if !status_ok || !origin_ok || !method_ok || !headers_ok {
+                    sex_pdx::serial_record!("[web.cors] preflight blocked status={} origin={} creds={} url={}", r.head.status, o, p.credentials as u8, p.url);
+                    return Some(Err(b"The site doesn't let this page make that request."));
+                }
+            }
+            p.preflight_done = true;
+            return None;
+        }
         if cross.is_none() && cookie_ok(&self.shields, &self.top_url(kind), &target, kind) {
             let mut jar = self.jar.borrow_mut();
             for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
@@ -956,14 +1040,21 @@ impl Browser {
                 if r.head.status == 303 || (matches!(r.head.status, 301 | 302) && p.method == "POST") { p.method = String::from("GET"); p.body.clear(); }
                 p.url = String::from(sex_html::url::fragment(&next).0);
                 p.hops += 1;
+                p.preflight_done = false;
                 return None;
             }
         }
         if let Some(o) = cross {
             let allowed = r.head.get("access-control-allow-origin").map(str::trim);
-            if allowed != Some("*") && allowed != Some(o.as_str()) {
-                sex_pdx::serial_record!("[web.cors] blocked origin={} url={}", o, p.url);
+            let acac = r.head.get("access-control-allow-credentials").map(str::trim) == Some("true");
+            let ok = if p.credentials { allowed == Some(o.as_str()) && acac } else { allowed == Some("*") || allowed == Some(o.as_str()) };
+            if !ok {
+                sex_pdx::serial_record!("[web.cors] blocked origin={} creds={} url={}", o, p.credentials as u8, p.url);
                 return Some(Err(b"The site doesn't let this page read it."));
+            }
+            if p.credentials && cookie_ok(&self.shields, &self.top_url(kind), &target, kind) {
+                let mut jar = self.jar.borrow_mut();
+                for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
             }
         }
         let lines = r.head.lines(true);
@@ -1025,6 +1116,7 @@ impl Browser {
         let owner = self.doc.get().owner();
         self.ws_close_page(owner);
         self.drop_frames();
+        self.cancel_fetches();
         self.media.clear();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
         self.draw();
@@ -1449,6 +1541,7 @@ impl Browser {
         self.serve_fetches();
         self.serve_classic_scripts();
         self.sync_scroll();
+        self.media_requests();
         let media_next = self.media_tick();
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
         if moved && !self.animating { self.draw(); }
@@ -1472,8 +1565,9 @@ impl Browser {
         // tick's own script) is played from the next pass.
         let asked = core::mem::take(&mut self.media_asked);
         let waiting = self.media.iter().any(|m| m.state == media::State::Waiting);
-        // Downloads still coming are taken in every couple of milliseconds.
-        let loading = self.media_loads.iter().any(|l| !l.idle || l.body.borrow().want.is_some());
+        // Downloads still coming (media or script fetches) are polled every couple of milliseconds.
+        let loading = self.media_loads.iter().any(|l| !l.idle || l.body.borrow().want.is_some())
+            || !self.fetch_going.is_empty() || !self.fetch_waiting.is_empty();
         if let Some(ms) = if waiting || asked { Some(0) } else if loading { Some(media_next.map_or(2, |n| n.min(2))) } else { media_next } {
             let due = sex_pdx::get_ticks() + ms;
             self.timer = Some(self.timer.map_or(due, |t| t.min(due)));
@@ -1539,7 +1633,7 @@ impl Browser {
             if let Some(k) = self.media_loads.iter().position(|l| l.node == node) { let mut old = self.media_loads.remove(k); old.ex.cancel(&mut self.window); }
             let src = self.media[i].src.clone();
             let begun = sex_pdx::get_ticks();
-            let ask = sex_js::FetchAsk { id: 0, url: src.clone(), method: String::new(), headers: String::new(), body: Vec::new() };
+            let ask = sex_js::FetchAsk { url: src.clone(), ..Default::default() };
             match self.local(&ask) {
                 // Built-in pages and files are here at once.
                 Ok(r) => {
@@ -1701,55 +1795,64 @@ impl Browser {
     }
 
     /// Loads what the page's scripts asked `fetch` and XHR for, and tells each script.
-    /// Network requests run side by side, up to `PARALLEL` at once, each reported as it
-    /// lands; requests that a script makes on hearing of one join in.
+    /// Active requests stay on `Browser` (`fetch_waiting`/`fetch_going`) and are polled
+    /// incrementally per tick within `FETCH_BUDGET_MS`, so `media_tick()`, audio, and
+    /// MSE `updateend` never starve while network fetches are in flight.
     #[inline(never)]
     fn serve_fetches(&mut self) {
-        let mut waiting: Vec<Pending> = Vec::new();
-        let mut going: Vec<(Pending, net::Exchange)> = Vec::new();
+        let budget = sex_pdx::get_ticks() + FETCH_BUDGET_MS;
         loop {
-            let asked = match &mut self.doc { Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches), _ => { self.cancel_all(going); return } };
+            let asked = match &mut self.doc {
+                Doc::Scripted(s) => core::mem::take(&mut s.page_mut().fetches),
+                _ => { self.cancel_fetches(); return; }
+            };
             for ask in asked {
                 match self.local(&ask) {
-                    Ok(r) => { if !self.answer(&ask.id, &ask.method, &ask.url, sex_pdx::get_ticks(), r) { self.cancel_all(going); return; } }
-                    Err(p) => waiting.push(p),
+                    Ok(r) => { if !self.answer(&ask.id, &ask.method, &ask.url, sex_pdx::get_ticks(), r) { self.cancel_fetches(); return; } }
+                    Err(p) => self.fetch_waiting.push(p),
                 }
             }
-            // Start what fits; one the service has no flow for waits its turn.
-            while going.len() < PARALLEL && !waiting.is_empty() {
-                let mut p = waiting.remove(0);
-                match self.send(&mut p, going.is_empty()) {
-                    Ok(ex) => going.push((p, ex)),
-                    Err(BUSY) => { waiting.insert(0, p); break; }
-                    Err(_) => { let (id, m, u, t) = (p.id, p.method.clone(), p.asked.clone(), p.since); if !self.answer(&id, &m, &u, t, failed(&p.url)) { self.cancel_all(going); return; } }
+            // Start what fits; one the service has no flow for waits for a later tick.
+            while self.fetch_going.len() < PARALLEL && !self.fetch_waiting.is_empty() {
+                let mut p = self.fetch_waiting.remove(0);
+                match self.send(&mut p, false) {
+                    Ok(ex) => self.fetch_going.push((p, ex)),
+                    Err(BUSY) => { self.fetch_waiting.insert(0, p); break; }
+                    Err(_) => {
+                        let (id, m, u, t) = (p.id, p.method.clone(), p.asked.clone(), p.since);
+                        if !self.answer(&id, &m, &u, t, failed(&p.url)) { self.cancel_fetches(); return; }
+                    }
                 }
             }
-            if going.is_empty() && waiting.is_empty() { return; }
-            let mut quiet = u32::MAX;
-            // Media downloads keep moving too: one may hold the name resolver, which
-            // answers this program one question at a time.
-            for l in self.media_loads.iter_mut().filter(|l| !l.idle) { let _ = l.ex.poll(&mut self.window); }
+            if self.fetch_going.is_empty() { return; }
+            let mut progressed = false;
             let mut i = 0;
-            while i < going.len() {
-                let step = going[i].1.poll(&mut self.window);
-                quiet = quiet.min(going[i].1.idle());
+            while i < self.fetch_going.len() {
+                let step = self.fetch_going[i].1.poll(&mut self.window);
                 match step {
                     Ok(false) => { i += 1; continue; }
                     Ok(true) => {}
                     Err(_) => {}
                 }
-                let (mut p, ex) = going.remove(i);
-                let landed = match step { Ok(_) => match ex.finish() { Ok(r) => self.landed(&mut p, r), Err(_) => Some(Err(&b""[..])) }, Err(_) => Some(Err(&b""[..])) };
+                progressed = true;
+                let (mut p, ex) = self.fetch_going.remove(i);
+                let landed = match step {
+                    Ok(_) => match ex.finish() {
+                        Ok(r) => self.landed(&mut p, r),
+                        Err(_) => Some(Err(&b""[..])),
+                    },
+                    Err(_) => Some(Err(&b""[..])),
+                };
                 match landed {
-                    None => waiting.insert(0, p),
+                    None => self.fetch_waiting.insert(0, p),
                     Some(r) => {
                         let r = r.unwrap_or_else(|_| failed(&p.url));
-                        if !self.answer(&p.id, &p.method, &p.asked, p.since, r) { self.cancel_all(going); return; }
+                        if !self.answer(&p.id, &p.method, &p.asked, p.since, r) { self.cancel_fetches(); return; }
                     }
                 }
-                quiet = 0;
+                if sex_pdx::get_ticks() >= budget { return; }
             }
-            if quiet > 64 { pause(); } else if quiet > 0 { sex_pdx::sys_yield(); }
+            if !progressed || sex_pdx::get_ticks() >= budget { return; }
         }
     }
 
@@ -1907,7 +2010,7 @@ impl Browser {
     /// an element's load, it may come from another site without CORS, since the
     /// page's scripts never read the bytes.
     fn load_get(&mut self, url: &str) -> (u16, Vec<u8>) {
-        let ask = sex_js::FetchAsk { id: 0, url: String::from(url), method: String::new(), headers: String::new(), body: Vec::new() };
+        let ask = sex_js::FetchAsk { url: String::from(url), ..Default::default() };
         match self.local(&ask) {
             Ok(r) => (r.status, r.body),
             Err(p) => match self.http("GET", &p.url, &[], &[], FETCH_MAX, None) { Ok(r) => (r.status, r.body), Err(_) => (0, Vec::new()) },
@@ -1916,6 +2019,13 @@ impl Browser {
 
     /// Lets go of every request still going, when the page that asked is gone.
     fn cancel_all(&mut self, going: Vec<(Pending, net::Exchange)>) { for (_, mut ex) in going { ex.cancel(&mut self.window); } }
+
+    /// Cancels all queued and in-flight script fetches for the current page.
+    pub(crate) fn cancel_fetches(&mut self) {
+        self.fetch_waiting.clear();
+        let going = core::mem::take(&mut self.fetch_going);
+        self.cancel_all(going);
+    }
 
     /// Tells the page one request's answer. False when the page's script fell over.
     fn answer(&mut self, id: &u32, method: &str, url: &str, since: u64, r: Loaded) -> bool {
@@ -1961,6 +2071,7 @@ impl Browser {
         let origin = sex_fetch::Url::parse(&base).map(|u| u.origin()).unwrap_or_else(|_| String::from("null"));
         let mut p = Pending::new(ask.id, &ask.method, &abs, &ask.header_pairs(), &ask.body, FETCH_MAX, Some(&origin));
         p.asked = ask.url.clone();
+        p.credentials = ask.credentials;
         Err(p)
     }
 
@@ -2409,7 +2520,7 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), fetch_waiting: Vec::new(), fetch_going: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };

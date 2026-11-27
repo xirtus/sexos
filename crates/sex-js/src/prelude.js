@@ -1230,7 +1230,7 @@
   const MEDIA_TYPES = /^(video|audio)\/(mp4|webm|ogg|mpeg|mp3|aac|flac|wav|x-wav|x-m4a|quicktime|x-matroska)\b/i;
   class HTMLMediaElement extends HTMLElement {
     _s() {
-      return this._st || (this._st = { t: 0, d: NaN, paused: true, ended: false, w: 0, h: 0, ready: 0,
+      return this._st || (this._st = { t: 0, d: NaN, paused: true, ended: false, w: 0, h: 0, ready: 0, frames: 0,
         volume: 1, muted: this.hasAttribute('muted'), seeking: false, error: null });
     }
     _ask(verb, arg) { H(OP.MEDIA, this._id, verb, arg === undefined ? '' : String(arg)); }
@@ -1241,14 +1241,24 @@
     }
     pause() { const s = this._s(); if (!s.paused) { s.paused = true; this._ask('pause'); } }
     load() {
-      const s = this._s(); s.t = 0; s.ended = false; s.ready = 0;
+      const s = this._s(); s.t = 0; s.ended = false; s.ready = 0; s.frames = 0;
       if (this._ms) { this._ms._detach(); this._ms = null; }
-      // A MediaSource's object URL: the page feeds the bytes (Media Source Extensions).
+      // A MediaSource's object URL or srcObject: the page feeds the bytes (Media Source Extensions).
+      if (this._srcObject instanceof MediaSource) { this._ms = this._srcObject; this._ms._attach(this); return; }
       const ms = blobUrls.get(this.getAttribute('src') || '');
       if (ms instanceof MediaSource) { this._ms = ms; ms._attach(this); return; }
       this._ask('load');
     }
-    canPlayType(type) { return MEDIA_TYPES.test(String(type)) ? 'maybe' : ''; }
+    canPlayType(type) {
+      const s = String(type);
+      if (MSE_TYPE.test(s)) {
+        if (!mseSupported(s)) return '';
+        return /codecs\s*=/i.test(s) ? 'probably' : 'maybe';
+      }
+      return MEDIA_TYPES.test(s) ? 'maybe' : '';
+    }
+    get srcObject() { return this._srcObject || null; }
+    set srcObject(v) { this._srcObject = v === undefined ? null : v; this.load(); }
     get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
     set src(v) { this.setAttribute('src', v); this.load(); }
     get currentSrc() { return this.src; }
@@ -1287,7 +1297,7 @@
     get videoHeight() { return this._s().h; }
     get poster() { const h = this.getAttribute('poster'); return h === null ? '' : resolveUrl(h); }
     set poster(v) { this.setAttribute('poster', v); }
-    getVideoPlaybackQuality() { return { creationTime: performance.now(), totalVideoFrames: 0, droppedVideoFrames: 0, corruptedVideoFrames: 0, totalFrameDelay: 0 }; }
+    getVideoPlaybackQuality() { return { creationTime: performance.now(), totalVideoFrames: this._s().frames, droppedVideoFrames: 0, corruptedVideoFrames: 0, totalFrameDelay: 0 }; }
     requestPictureInPicture() { return Promise.reject(domError('Picture-in-Picture is not available.', 'NotSupportedError')); }
   }
   reflect(HTMLVideoElement, ['width', 'height']);
@@ -1446,13 +1456,14 @@
     const sb = el && el._ms && el._ms.sourceBuffers._l.find(b => b._i === +f[2]);
     if (sb) sb._done(f[3] === '1', f[4] || '');
   }
-  // 'media\tNODE\tEVENTS\tTIME\tDURATION\tPAUSED\tENDED\tWIDTH\tHEIGHT\tREADY'
+  // 'media\tNODE\tEVENTS\tTIME\tDURATION\tPAUSED\tENDED\tWIDTH\tHEIGHT\tREADY[\tFRAMES]'
   function mediaState(f) {
     const el = wrap(f[1]);
     if (!(el instanceof HTMLMediaElement)) return;
     const s = el._s();
     s.t = +f[3] || 0; s.d = f[4] === '' ? NaN : +f[4]; s.paused = f[5] === '1'; s.ended = f[6] === '1';
     s.w = +f[7] || 0; s.h = +f[8] || 0; s.ready = +f[9] || 0;
+    if (f[10] !== undefined) s.frames = +f[10] || 0;
     for (const name of f[2] ? f[2].split(',') : []) {
       if (name === 'error') s.error = { code: 4, message: 'The file could not be played' };
       if (name === 'seeked') {
@@ -3484,10 +3495,10 @@
     return String(body);
   }
   // One request to the browser; `done(status, length)` runs when it is loaded.
-  function ask(url, method, headers, body, done) {
+  function ask(url, method, headers, body, done, credentials) {
     // The body first: it may add a Content-Type the header lines must carry.
     const bytes = bodyBytes(body, headers) || '';
-    const id = H(OP.FETCH, url, method, headers._lines(), bytes);
+    const id = H(OP.FETCH, url, method, headers._lines(), bytes, credentials ? '1' : '');
     if (id === null) return null;
     fetches.set(+id, done);
     return +id;
@@ -3501,6 +3512,7 @@
     const headers = new Headers(init.headers || (like && input.headers) || undefined);
     const body = init.body !== undefined ? init.body : isReq ? input._src : like ? input.body : undefined;
     const signal = init.signal || (like ? input.signal : undefined);
+    const credentials = String(init.credentials || (like && input.credentials) || 'same-origin') === 'include';
     if (signal && signal.aborted) return Promise.reject(signal.reason);
     const send = body => new Promise((resolve, reject) => {
       let id = null;
@@ -3513,7 +3525,7 @@
         const r = new Response(FROM_BROWSER, [id, status, head.url, head.headers]);
         r.redirected = head.url !== url && !url.startsWith('/') && url.indexOf('://') > 0;
         resolve(r);
-      });
+      }, credentials);
       if (id === null) reject(new TypeError('Failed to fetch ' + url));
       else if (signal) signal.addEventListener('abort', stop);
     });
@@ -3591,7 +3603,7 @@
         this._fire('progress');
         this._state(4);
         this._fire('load'); this._fire('loadend');
-      });
+      }, !!this.withCredentials);
       if (this._id === null) { const x = this; Promise.resolve().then(() => { x.readyState = 4; x._fire('readystatechange'); x._fire('error'); x._fire('loadend'); }); }
     }
   }
@@ -4439,6 +4451,42 @@
     table(x) { log(0, [x]); }, group() {}, groupEnd() {}, time() {}, timeEnd() {}, trace() { log(0, arguments); },
   };
 
+  // Trusted Types: pass-through policy factory (YouTube and other Google apps use
+  // trustedTypes.createPolicy for innerHTML, script.src and eval).
+  class TrustedHTML { constructor(v) { this._v = String(v); } toString() { return this._v; } toJSON() { return this._v; } }
+  class TrustedScript { constructor(v) { this._v = String(v); } toString() { return this._v; } toJSON() { return this._v; } }
+  class TrustedScriptURL { constructor(v) { this._v = String(v); } toString() { return this._v; } toJSON() { return this._v; } }
+  const trustedTypes = {
+    defaultPolicy: null,
+    createPolicy(name, rules) {
+      rules = rules || {};
+      const policy = {
+        name: String(name),
+        createHTML(input, ...args) {
+          const v = typeof rules.createHTML === 'function' ? rules.createHTML(input, ...args) : input;
+          return new TrustedHTML(v);
+        },
+        createScript(input, ...args) {
+          const v = typeof rules.createScript === 'function' ? rules.createScript(input, ...args) : input;
+          return new TrustedScript(v);
+        },
+        createScriptURL(input, ...args) {
+          const v = typeof rules.createScriptURL === 'function' ? rules.createScriptURL(input, ...args) : input;
+          return new TrustedScriptURL(v);
+        },
+      };
+      if (policy.name === 'default' && !trustedTypes.defaultPolicy) trustedTypes.defaultPolicy = policy;
+      return policy;
+    },
+    isHTML(v) { return v instanceof TrustedHTML; },
+    isScript(v) { return v instanceof TrustedScript; },
+    isScriptURL(v) { return v instanceof TrustedScriptURL; },
+    get emptyHTML() { return new TrustedHTML(''); },
+    get emptyScript() { return new TrustedScript(''); },
+    getAttributeType() { return null; },
+    getPropertyType() { return null; },
+  };
+
   const window = globalThis;
   const view = () => H(OP.VIEWPORT).split(',').map(Number);
   // `window instanceof Window`, and Window.prototype for polyfills that patch it.
@@ -4446,7 +4494,8 @@
   Object.setPrototypeOf(window, Window.prototype);
   const globals = {
     window, self: window, Window, globalThis: window, document, location, console, performance,
-    navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', appName: 'Netscape', appCodeName: 'Mozilla', appVersion: '5.0 (SexOS) Web/0.2', product: 'Gecko', productSub: '20030107',
+    trustedTypes, TrustedHTML, TrustedScript, TrustedScriptURL,
+    navigator: { userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', appName: 'Netscape', appCodeName: 'Mozilla', appVersion: '5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', product: 'Gecko', productSub: '20030107',
       vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null, globalPrivacyControl: true,
       hardwareConcurrency: 4, maxTouchPoints: 0, pdfViewerEnabled: false, webdriver: false, plugins: [], mimeTypes: [], javaEnabled: () => false,
       mediaCapabilities, sendBeacon, gpu: new GPU(),

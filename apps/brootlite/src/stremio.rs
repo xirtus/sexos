@@ -127,12 +127,12 @@ pub struct StreamItem {
     pub title: String,
     pub url: String,
     pub info_hash: String,
-    #[allow(dead_code)]
     pub file_idx: Option<u32>,
     pub magnet_uri: String,
     pub resolution: String,
     pub seeders: Option<u32>,
     pub is_direct: bool,
+    pub is_external: bool,
 }
 
 impl StreamItem {
@@ -381,7 +381,9 @@ fn parse_streams_into(
         let title = json_str_field(obj, "title")
             .or_else(|| json_str_field(obj, "description"))
             .unwrap_or_default();
-        let url = json_str_field(obj, "url")
+        let direct_url = json_str_field(obj, "url");
+        let is_external = direct_url.is_none();
+        let url = direct_url
             .or_else(|| json_str_field(obj, "externalUrl"))
             .unwrap_or_default();
         let info_hash = json_str_field(obj, "infoHash").unwrap_or_default();
@@ -418,6 +420,7 @@ fn parse_streams_into(
             resolution,
             seeders,
             is_direct,
+            is_external,
         });
     }
 }

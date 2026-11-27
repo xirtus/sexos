@@ -84,29 +84,51 @@ struct HttpSource {
 impl HttpSource {
     fn open(window: &mut Window, url: &str) -> Result<Self, &'static str> {
         let local = url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:");
-        let attempts = if local { 60 } else { 3 };
+        let attempts = if local { 60 } else { 4 };
         let mut current = alloc::string::String::from(url);
-        for attempt in 0..attempts {
+        let mut use_range_get = false;
+        let mut redirects = 0usize;
+        let mut attempt = 0usize;
+        while attempt < attempts {
             if let Some(Event::Close) = window.poll() {
                 sex_pdx::task_finish(0);
             }
-            let head_req = sex_fetch::Request {
-                method: "HEAD",
+            let range_hdr = [("Range", "bytes=0-0")];
+            let req = sex_fetch::Request {
+                method: if use_range_get { "GET" } else { "HEAD" },
                 url: &current,
-                headers: &[],
+                headers: if use_range_get { &range_hdr } else { &[] },
                 body: &[],
                 trusted_origin: false,
                 referrer: None,
             };
-            match sex_app::net::request(window, &head_req, None, 4096) {
-                Ok(resp) if resp.head.is_redirect() => {
+            let max_bytes = if use_range_get { 16 * 1024 } else { 4096 };
+            match sex_app::net::request(window, &req, None, max_bytes) {
+                Ok(resp) if resp.head.is_redirect() && redirects < 6 => {
                     if let Some(loc) = resp.head.get("location") {
-                        current = alloc::string::String::from(loc);
-                        continue;
+                        if let Some(next) = sex_fetch::join(&current, loc) {
+                            current = next;
+                            redirects += 1;
+                            continue;
+                        }
                     }
                 }
+                Ok(resp) if !use_range_get && matches!(resp.head.status, 400 | 403 | 405) => {
+                    use_range_get = true;
+                    continue;
+                }
                 Ok(resp) if (200..300).contains(&resp.head.status) => {
-                    let len = resp.head.get("content-length").and_then(|v| v.trim().parse::<u64>().ok());
+                    let len = resp
+                        .head
+                        .get("content-range")
+                        .and_then(|cr| cr.rsplit_once('/').and_then(|(_, tot)| tot.trim().parse::<u64>().ok()))
+                        .or_else(|| {
+                            if resp.head.status == 200 {
+                                resp.head.get("content-length").and_then(|v| v.trim().parse::<u64>().ok())
+                            } else {
+                                None
+                            }
+                        });
                     return Ok(Self {
                         window,
                         url: current,
@@ -117,7 +139,8 @@ impl HttpSource {
                 }
                 _ => {}
             }
-            if attempt + 1 < attempts {
+            attempt += 1;
+            if attempt < attempts {
                 let _ = sex_pdx::sys_wait_self_ticks(50);
             }
         }
@@ -145,37 +168,87 @@ impl Source for HttpSource {
             let end = at + want - 1;
             let range_val = alloc::format!("bytes={at}-{end}");
             let headers = [("Range", range_val.as_str())];
-            let req = sex_fetch::Request {
-                method: "GET",
-                url: &self.url,
-                headers: &headers,
-                body: &[],
-                trusted_origin: false,
-                referrer: None,
-            };
+            let local = self.url.starts_with("http://127.0.0.1:") || self.url.starts_with("http://localhost:");
+            let max_attempts = if local { 60 } else { 4 };
             let window = unsafe { &mut *self.window };
-            let resp = sex_app::net::request(window, &req, None, CACHE + 64 * 1024).ok()?;
-            if resp.head.status != 206 && resp.head.status != 200 {
-                return None;
-            }
-            if self.len.is_none() {
-                if let Some(cr) = resp.head.get("content-range") {
-                    if let Some((_, tot)) = cr.rsplit_once('/') {
-                        if let Ok(n) = tot.trim().parse::<u64>() {
-                            self.len = Some(n);
+            let mut filled = false;
+            for attempt in 0..max_attempts {
+                if let Some(Event::Close) = window.poll() {
+                    sex_pdx::task_finish(0);
+                }
+                let mut redirects = 0usize;
+                let mut permanent_err = false;
+                loop {
+                    let req = sex_fetch::Request {
+                        method: "GET",
+                        url: &self.url,
+                        headers: &headers,
+                        body: &[],
+                        trusted_origin: false,
+                        referrer: None,
+                    };
+                    match sex_app::net::request(window, &req, None, CACHE + 64 * 1024) {
+                        Ok(resp) if resp.head.is_redirect() && redirects < 6 => {
+                            if let Some(loc) = resp.head.get("location") {
+                                if let Some(next) = sex_fetch::join(&self.url, loc) {
+                                    self.url = next;
+                                    redirects += 1;
+                                    continue;
+                                }
+                            }
+                            permanent_err = true;
+                            break;
                         }
-                    }
-                } else if resp.head.status == 200 {
-                    if let Some(cl) = resp.head.get("content-length").and_then(|v| v.trim().parse::<u64>().ok()) {
-                        self.len = Some(cl);
+                        Ok(resp) if resp.head.status == 206 || resp.head.status == 200 => {
+                            if self.len.is_none() {
+                                if let Some(cr) = resp.head.get("content-range") {
+                                    if let Some((_, tot)) = cr.rsplit_once('/') {
+                                        if let Ok(n) = tot.trim().parse::<u64>() {
+                                            self.len = Some(n);
+                                        }
+                                    }
+                                } else if resp.head.status == 200 {
+                                    if let Some(cl) = resp.head.get("content-length").and_then(|v| v.trim().parse::<u64>().ok()) {
+                                        self.len = Some(cl);
+                                    }
+                                }
+                            }
+                            if resp.body.is_empty() {
+                                return Some(0);
+                            }
+                            if resp.head.status == 200 && at > 0 {
+                                self.cache = resp.body;
+                                self.cache_at = 0;
+                            } else {
+                                self.cache = resp.body;
+                                self.cache_at = at;
+                            }
+                            filled = true;
+                            break;
+                        }
+                        Ok(resp) if resp.head.status == 416 => {
+                            return Some(0);
+                        }
+                        Ok(resp) if (400..500).contains(&resp.head.status) && resp.head.status != 408 && resp.head.status != 429 => {
+                            permanent_err = true;
+                            break;
+                        }
+                        _ => break,
                     }
                 }
+                if filled {
+                    break;
+                }
+                if permanent_err {
+                    return None;
+                }
+                if attempt + 1 < max_attempts {
+                    let _ = sex_pdx::sys_wait_self_ticks(100);
+                }
             }
-            if resp.body.is_empty() {
-                return Some(0);
+            if !filled {
+                return None;
             }
-            self.cache = resp.body;
-            self.cache_at = at;
         }
         let off = (at - self.cache_at) as usize;
         if off >= self.cache.len() {
@@ -911,6 +984,30 @@ pub extern "C" fn _start() -> ! {
         None
     } else if words.first() == Some(&&b"--listen"[..]) {
         listen(&mut window, number(words.get(1)).unwrap_or(2));
+        None
+    } else if words.first() == Some(&&b"--url-file"[..]) {
+        let path = words.get(1).copied().unwrap_or(b"");
+        let mut buf = alloc::vec![0u8; 4096];
+        let read_res = files::read(&mut window, path, &mut buf).or_else(|e| {
+            if let Some(stripped) = path.strip_prefix(b"@") {
+                files::read(&mut window, stripped, &mut buf)
+            } else {
+                Err(e)
+            }
+        });
+        match read_res {
+            Ok(n) if n > 0 => {
+                let raw = core::str::from_utf8(&buf[..n]).unwrap_or("").trim();
+                if !raw.is_empty() {
+                    let url_bytes = raw.as_bytes();
+                    playlist(&mut window, &[url_bytes]);
+                } else {
+                    fail(&mut window, b"URL file is empty.");
+                }
+            }
+            Ok(_) => fail(&mut window, b"URL file is empty."),
+            Err(e) => fail(&mut window, files::message(e)),
+        }
         None
     } else if words.first() == Some(&&b"--tone"[..]) {
         tone(&mut window, number(words.get(1)).unwrap_or(440), number(words.get(2)).unwrap_or(sex_app::sound::RATE),

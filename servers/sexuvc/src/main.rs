@@ -470,8 +470,10 @@ pub extern "C" fn _start() -> ! {
                             s.request_start(fmt.index, 1, 30, w, h);
                         }
                     }
-                    streaming = pump.drain(s, frame_bank, &mut chunk_buf)
-                        || s.stream_state() == sex_pdx::usb_uvc::STATE_STREAMING;
+                    let drained = pump.drain(s, frame_bank, &mut chunk_buf);
+                    streaming = drained
+                        || (attached_gen != 0
+                            && s.stream_state() != sex_pdx::usb_uvc::STATE_ERROR);
                 }
                 None if attached_gen != 0 => {
                     log!(

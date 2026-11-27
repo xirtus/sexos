@@ -149,9 +149,10 @@ impl BridgeState {
             let inbox = std::path::Path::new("sexwork/tether/logs/inbox.txt");
             if inbox.exists() {
                 if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(inbox) {
+                    let _ = writeln!(f, "rm /tether-shot.png");
                     let _ = writeln!(f, "capture /tether-shot.png");
                     let _ = f.flush();
-                    thread::sleep(Duration::from_millis(1600));
+                    thread::sleep(Duration::from_millis(2000));
                 }
             }
         }

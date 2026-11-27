@@ -12,10 +12,10 @@ use sex_pdx::serial_record as log;
 use sex_pdx::usb_uvc::{self, CameraInfo, FormatMeta, Shared};
 use super::{Usb, Failure, Ring, xhci, trb, page, isoch, uvc_scan, uvc_stream, CC_SHORT_PACKET, CC_SUCCESS};
 
-/// Transfer ring positions (31 data TRBs + 1 link TRB) and 4 KiB DMA buffer per position.
-const UVC_TRBS: u32 = 32;
+/// Transfer ring positions (63 data TRBs + 1 link TRB) and 4 KiB DMA buffer per position.
+const UVC_TRBS: u32 = 64;
 const UVC_BUF_SLOT: u64 = 4096;
-const UVC_IN_FLIGHT: u32 = 16;
+const UVC_IN_FLIGHT: u32 = 32;
 
 /// Completion codes an isochronous IN endpoint reports without being broken.
 const CC_RING_UNDERRUN: u32 = 14;
@@ -40,6 +40,7 @@ pub(super) struct Uvc {
     ep_params: isoch::Endpoint,
     td_len: u32,
     ring: Ring,
+    in_flight: u32,
     packets: u64,
     errors: u32,
     logged_hdr: bool,
@@ -109,6 +110,7 @@ impl Usb {
             ep_params: isoch::Endpoint::default(),
             td_len: 0,
             ring: Ring::empty(),
+            in_flight: 0,
             packets: 0,
             errors: 0,
             logged_hdr: false,
@@ -145,6 +147,7 @@ impl Usb {
                 match self.uvc_start(u, cmd) {
                     Ok((alt, ep, td_len)) => {
                         shared.ack_command(cmd.seq, usb_uvc::STATE_STREAMING, alt, ep, td_len.min(u16::MAX as u32) as u16);
+                        notify(true);
                     }
                     Err(e) => {
                         log!("[sexusb.uvc.start.fail] slot={} reason={:?}", self.dev[u.dev].slot, e);
@@ -285,6 +288,7 @@ impl Usb {
         u.ep_params = ep_params;
         u.td_len = td_len;
         u.running = true;
+        u.in_flight = 0;
         u.logged_hdr = false;
         u.logged_payload = false;
         for _ in 0..UVC_IN_FLIGHT {
@@ -304,6 +308,7 @@ impl Usb {
         self.select(self.dev[i].ctl);
         let slot = self.dev[i].slot;
         u.running = false;
+        u.in_flight = 0;
         if u.isoch {
             let _ = self.set(i, 0x01, 0x0B, 0, u.cam.stream_iface as u16);
         }
@@ -316,6 +321,9 @@ impl Usb {
     }
 
     fn uvc_queue(&mut self, u: &mut Uvc) {
+        if u.in_flight >= UVC_TRBS - 1 {
+            return;
+        }
         let pos = u.ring.idx as u64;
         let phys = self.uvc_buffers.0 + pos * UVC_BUF_SLOT;
         if u.isoch {
@@ -324,6 +332,7 @@ impl Usb {
         } else {
             u.ring.push(phys as u32, (phys >> 32) as u32, u.td_len, (trb::NORMAL << 10) | trb::IOC | trb::ISP);
         }
+        u.in_flight += 1;
     }
 
     /// Handle a transfer event on the UVC streaming endpoint. Returns false if not ours.
@@ -334,10 +343,12 @@ impl Usb {
         let slot = self.dev[i].slot;
         match e.code() {
             CC_STOPPED | CC_STOPPED_LENGTH => {
+                u.in_flight = u.in_flight.saturating_sub(1);
                 self.uvc = Some(u);
                 return true;
             }
             CC_SUCCESS | CC_SHORT_PACKET if u.running => {
+                u.in_flight = u.in_flight.saturating_sub(1);
                 let got = u.td_len.saturating_sub(e.residual()) as usize;
                 if let Some(pos) = u.ring.index_of(e.pointer()) {
                     let raw = unsafe {
@@ -376,12 +387,9 @@ impl Usb {
                     }
                 }
             }
-            CC_RING_UNDERRUN | CC_RING_OVERRUN if u.running => {
-                // An overrun/underrun event means the Isoch ring drained to 0 in-flight TRBs:
-                // refill a full burst (minus the 1 queued below) so the 125us schedule stays fed.
-                for _ in 0..UVC_IN_FLIGHT.saturating_sub(1) {
-                    self.uvc_queue(&mut u);
-                }
+            CC_RING_UNDERRUN | CC_RING_OVERRUN | CC_MISSED_SERVICE if u.running => {
+                // Bounded refill below tops up only to UVC_IN_FLIGHT (never wrapping the ring)
+                // and rings the doorbell to restart Isoch scheduling.
             }
             CC_MISSED_SERVICE | CC_RING_UNDERRUN | CC_RING_OVERRUN => {}
             _ if !u.running => {
@@ -394,13 +402,13 @@ impl Usb {
                     log!("[sexusb.uvc.error] slot={} dci={} code={} errors={}", slot, u.dci, code, u.errors);
                 }
                 self.x.recover(slot, u.dci, &mut u.ring);
-                for _ in 0..UVC_IN_FLIGHT - 1 {
-                    self.uvc_queue(&mut u);
-                }
+                u.in_flight = 0;
             }
         }
         if u.running {
-            self.uvc_queue(&mut u);
+            while u.in_flight < UVC_IN_FLIGHT {
+                self.uvc_queue(&mut u);
+            }
             self.x.doorbell(slot, u.dci);
         }
         self.uvc = Some(u);

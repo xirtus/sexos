@@ -36,6 +36,7 @@ struct StreamConn {
 pub struct HttpStreamServer {
     listener: TcpListener,
     pub target: TorrentKey,
+    preferred_file_idx: Option<usize>,
     configured: bool,
     file_idx: Option<usize>,
     file_len: u64,
@@ -46,13 +47,14 @@ pub struct HttpStreamServer {
 }
 
 impl HttpStreamServer {
-    pub fn new(port: u16, target: TorrentKey) -> Result<Self, String> {
+    pub fn new(port: u16, target: TorrentKey, preferred_file_idx: Option<usize>) -> Result<Self, String> {
         let listener = TcpListener::bind(("127.0.0.1", port))
             .map_err(|e| format!("cannot listen on 127.0.0.1:{port}: {e}"))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         Ok(Self {
             listener,
             target,
+            preferred_file_idx,
             configured: false,
             file_idx: None,
             file_len: 0,
@@ -162,7 +164,17 @@ fn configure_target(c: &mut Client, srv: &mut HttpStreamServer, now: Millis) {
         Some(l) => l,
         None => return,
     };
-    let Some((file_idx, name, file_len, content_type)) = pick_video_file(&layout) else {
+    let chosen = srv
+        .preferred_file_idx
+        .and_then(|idx| layout.files.get(idx).map(|f| (idx, f)))
+        .filter(|(_, f)| !f.pad && f.length > 0)
+        .map(|(idx, f)| {
+            let name = f.path.last().cloned().unwrap_or_default();
+            let ct = video_content_type(&name).unwrap_or("application/octet-stream");
+            (idx, name, f.length, ct)
+        })
+        .or_else(|| pick_video_file(&layout));
+    let Some((file_idx, name, file_len, content_type)) = chosen else {
         return;
     };
     let file_offset = layout.files[file_idx].offset;
