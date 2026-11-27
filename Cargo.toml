@@ -236,6 +236,9 @@ members = [
     "crates/tailor-core",
     "apps/tailor",
     "apps/brootlite",
+    "crates/tether-proto",
+    "tools/tether-bridge",
+    "apps/tether",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

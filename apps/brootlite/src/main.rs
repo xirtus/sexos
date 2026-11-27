@@ -241,6 +241,7 @@ struct App {
     hits: Vec<HitZone>,
     status_toast: String,
     launch_cookie: u32,
+    active_swingers_cookie: Option<u32>,
     dirty: bool,
 }
 
@@ -297,6 +298,7 @@ impl App {
             hits: Vec::new(),
             status_toast: toast,
             launch_cookie: 100,
+            active_swingers_cookie: None,
             dirty: true,
         }
     }
@@ -505,14 +507,16 @@ impl App {
     fn scan_library(&mut self, window: &mut Window) {
         self.library_files.clear();
         const ROOTS: [&[u8]; 4] = [
-            b"/media/Ventoy",
-            b"/data/media",
-            b"/data/music",
-            b"/Movies",
+            b"@/media/Ventoy",
+            b"@/data/media",
+            b"@/data/music",
+            b"@/Movies",
         ];
         for root in ROOTS {
             if let Ok(entries) = files::list(window, root) {
-                let root_str = core::str::from_utf8(root).unwrap_or("");
+                let root_str = core::str::from_utf8(root)
+                    .unwrap_or("")
+                    .trim_start_matches('@');
                 for entry in entries {
                     if entry.dir || self.library_files.len() >= 120 {
                         continue;
@@ -533,17 +537,40 @@ impl App {
         self.dirty = true;
     }
 
+    fn stop_active_swingers(&mut self) {
+        if let Some(prev) = self.active_swingers_cookie.take() {
+            launch::kill(prev);
+            let _ = sex_pdx::sys_wait_self_ticks(50);
+        }
+    }
+
+    fn launch_qupid_url(window: &mut Window, url: &str, cookie: u32) -> Result<(), launch::Error> {
+        if url.len() > 200 {
+            if files::write(window, b"stream_url.txt", url.as_bytes()).is_ok() {
+                return launch::run(
+                    b"qupid",
+                    b"--url-file @/data/brootlite/stream_url.txt",
+                    true,
+                    cookie,
+                );
+            }
+        }
+        launch::run(b"qupid", url.as_bytes(), true, cookie)
+    }
+
     fn launch_playback(&mut self, window: &mut Window, stream: &StreamItem) {
         self.launch_cookie = self.launch_cookie.wrapping_add(1);
         let cookie = self.launch_cookie;
         if stream.is_direct && !stream.url.is_empty() {
             let copied = clipboard::copy(window, &stream.url).is_ok();
-            let (prog, prog_label) = if is_media_stream_url(&stream.url) {
-                (b"qupid".as_slice(), "Qupid")
+            let use_qupid = !stream.is_external || is_media_stream_url(&stream.url);
+            let prog_label = if use_qupid { "Qupid" } else { "Kaleidoscope" };
+            let launched = if use_qupid {
+                Self::launch_qupid_url(window, &stream.url, cookie)
             } else {
-                (b"kaleidoscope".as_slice(), "Kaleidoscope")
+                launch::run(b"kaleidoscope", stream.url.as_bytes(), true, cookie)
             };
-            match launch::run(prog, stream.url.as_bytes(), true, cookie) {
+            match launched {
                 Ok(()) => {
                     self.status_toast = if copied {
                         format!(
@@ -573,9 +600,18 @@ impl App {
                 &stream.info_hash
             };
             let copied = clipboard::copy(window, copy_src).is_ok();
-            let args = swingers_stream_arg(&stream.info_hash, &stream.magnet_uri, 8990);
+            self.stop_active_swingers();
+            let tracker = self.pack.trackers.first().map(String::as_str);
+            let args = swingers_stream_arg(
+                &stream.info_hash,
+                &stream.magnet_uri,
+                8990,
+                stream.file_idx,
+                tracker,
+            );
             match launch::run(b"swingers", args.as_bytes(), true, cookie) {
                 Ok(()) => {
+                    self.active_swingers_cookie = Some(cookie);
                     self.launch_cookie = self.launch_cookie.wrapping_add(1);
                     let qupid_cookie = self.launch_cookie;
                     let qupid_ok = launch::run(
@@ -626,9 +662,12 @@ impl App {
                 &res.info_hash
             };
             let copied = clipboard::copy(window, copy_src).is_ok();
-            let args = swingers_stream_arg(&res.info_hash, &res.magnet_uri, 8990);
+            self.stop_active_swingers();
+            let tracker = self.pack.trackers.first().map(String::as_str);
+            let args = swingers_stream_arg(&res.info_hash, &res.magnet_uri, 8990, None, tracker);
             match launch::run(b"swingers", args.as_bytes(), true, cookie) {
                 Ok(()) => {
+                    self.active_swingers_cookie = Some(cookie);
                     self.launch_cookie = self.launch_cookie.wrapping_add(1);
                     let qupid_cookie = self.launch_cookie;
                     let qupid_ok = launch::run(
@@ -662,12 +701,14 @@ impl App {
             }
         } else if res.has_direct() {
             let copied = clipboard::copy(window, &res.direct_url).is_ok();
-            let (prog, prog_label) = if res.is_direct_media_stream() {
-                (b"qupid".as_slice(), "Qupid")
+            let use_qupid = res.is_direct_media_stream();
+            let prog_label = if use_qupid { "Qupid" } else { "Kaleidoscope" };
+            let launched = if use_qupid {
+                Self::launch_qupid_url(window, &res.direct_url, cookie)
             } else {
-                (b"kaleidoscope".as_slice(), "Kaleidoscope")
+                launch::run(b"kaleidoscope", res.direct_url.as_bytes(), true, cookie)
             };
-            match launch::run(prog, res.direct_url.as_bytes(), true, cookie) {
+            match launched {
                 Ok(()) => {
                     self.status_toast = if copied {
                         format!(

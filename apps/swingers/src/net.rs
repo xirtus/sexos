@@ -83,9 +83,20 @@ impl Client {
         Ok(())
     }
 
-    /// Serves the torrent's largest video file over HTTP `GET /stream` on `127.0.0.1:port`.
-    pub fn listen_stream(&mut self, port: u16, target: TorrentKey) -> Result<(), String> {
-        self.stream_http = Some(crate::stream_http::HttpStreamServer::new(port, target)?);
+    /// Appends additional tracker URLs to an existing torrent job.
+    pub fn add_trackers(&mut self, key: &TorrentKey, extra: Vec<String>) {
+        if let Some(j) = self.jobs.get_mut(key) {
+            for tr in extra {
+                if !tr.is_empty() && !j.trackers.contains(&tr) {
+                    j.trackers.push(tr);
+                }
+            }
+        }
+    }
+
+    /// Serves the torrent's chosen (or largest) video file over HTTP `GET /stream` on `127.0.0.1:port`.
+    pub fn listen_stream(&mut self, port: u16, target: TorrentKey, preferred_file_idx: Option<usize>) -> Result<(), String> {
+        self.stream_http = Some(crate::stream_http::HttpStreamServer::new(port, target, preferred_file_idx)?);
         Ok(())
     }
 

@@ -947,6 +947,7 @@ pub fn init_usb_uvc(usb: u32, uvc: u32) {
             let va = alias(pd, physical, u::FRAME_BYTES, false, false);
             grant(pd, u::FRAME_CLIENT_SLOT, RegionGrant { region_id: u::FRAME_REGION_ID, virtual_base: va, length: u::FRAME_BYTES,
                 rights: QUERY_VIEW | READ, dma_base: None, peer_pd: Some(uvc) });
+            pd.grant_capability(u::CLIENT_NOTIFY_SLOT, CapabilityData::Domain(uvc));
         }
     }
     crate::serial_println!("[boot.usb.uvc] usb={} sexuvc={} slot={} notify={} bytes={} frame_bytes={} runtime_mint=0", usb, uvc, u::SLOT, u::NOTIFY_SLOT, u::BYTES, u::FRAME_BYTES);

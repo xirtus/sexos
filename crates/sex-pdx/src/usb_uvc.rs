@@ -24,6 +24,12 @@ pub const SEXUVC_PD: u32 = 55;
 pub const SEXUVC_KEY: u8 = 4;
 /// SexUSB -> SexUVC: camera link changed (`arg0 = 1` attached, `0` detached). SexUVC replies `0`.
 pub const OP_LINK: u64 = 0x2CC;
+/// Program row (e.g. Flash) capability slot to notify SexUVC for on-demand streaming.
+pub const CLIENT_NOTIFY_SLOT: u64 = 1014;
+/// Program -> SexUVC: engage webcam stream (turns physical camera LED ON).
+pub const OP_CLIENT_START: u64 = 0x2CD;
+/// Program -> SexUVC: release webcam stream (turns physical camera LED OFF when last client exits).
+pub const OP_CLIENT_STOP: u64 = 0x2CE;
 
 /// Maximum advertised formats in the shared header.
 pub const MAX_FORMATS: usize = 6;

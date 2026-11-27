@@ -764,5 +764,51 @@ fn queries(e:&mut Engine<'static>,now:&mut u64)->Vec<(u16,Vec<u8>)>{let mut v=Ve
  }}}}
  assert_eq!(&got_reply,b"wifi: connected\n");
 }
+#[test]fn loopback_tcp_connect_and_data_round_trip(){
+ let(mut e,mut now,_)=resolving();
+ let server=e.open_add_flow().unwrap();
+ let client=e.open_add_flow().unwrap();
+ e.open_listen(server,8990).unwrap();
+ e.open_connect(client,Address::V4([127,0,0,1]),8990).unwrap();
+ for _ in 0..16{
+  now+=1;e.advance(now);
+  // Loopback traffic must stay internal and never leak to external NIC TX.
+  while let Some(f)=e.take_frame(){
+   let b=&f.bytes[..f.length];
+   if b.len()>=34&&b[12..14]==[8,0]&&b[14]>>4==4{
+    assert_ne!(&b[30..34],&e.network.local);
+    assert_ne!(b[30],127);
+   }
+  }
+  if e.open_state(server)==OpenState::Open&&e.open_state(client)==OpenState::Open{break;}
+ }
+ assert_eq!(e.open_state(server),OpenState::Open);
+ assert_eq!(e.open_state(client),OpenState::Open);
+ assert!(e.open_connected(server));
+
+ let req=b"GET /stream HTTP/1.1\r\nHost: 127.0.0.1:8990\r\n\r\n";
+ assert_eq!(e.open_send(client,req),Ok(req.len()));
+ let mut got_req=Vec::new();
+ for _ in 0..16{
+  now+=1;e.advance(now);
+  let mut buf=[0u8;128];
+  let n=e.open_receive(server,&mut buf).unwrap();
+  got_req.extend_from_slice(&buf[..n]);
+  if got_req.len()==req.len(){break;}
+ }
+ assert_eq!(&got_req,req);
+
+ let resp=b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\n\r\nMOOV";
+ assert_eq!(e.open_send(server,resp),Ok(resp.len()));
+ let mut got_resp=Vec::new();
+ for _ in 0..16{
+  now+=1;e.advance(now);
+  let mut buf=[0u8;128];
+  let n=e.open_receive(client,&mut buf).unwrap();
+  got_resp.extend_from_slice(&buf[..n]);
+  if got_resp.len()==resp.len(){break;}
+ }
+ assert_eq!(&got_resp,resp);
+}
 
 

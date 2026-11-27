@@ -602,18 +602,28 @@ extern "C" fn flash_main() -> ! {
     }
 
     let usb_bank = if socket_conn.is_none() && !force_synthetic && net_endpoint.is_none() {
-        sex_pdx::usb_uvc::FrameBank::open_reader().filter(|b| b.is_active())
+        sex_pdx::usb_uvc::FrameBank::open_reader()
     } else {
         None
     };
+    if usb_bank.is_some() {
+        let _ = sex_pdx::pdx_call_checked(
+            sex_pdx::usb_uvc::CLIENT_NOTIFY_SLOT,
+            sex_pdx::usb_uvc::OP_CLIENT_START,
+            0,
+            0,
+            0,
+        );
+    }
+    let mut usb_active = usb_bank.is_some_and(|b| b.is_active());
     let mut usb_raw_buf: Vec<u8> = Vec::new();
     let mut usb_last_seq: u32 = 0;
     let mut usb_decode_errors: u32 = 0;
     let mut usb_vendor: u16 = 0;
     let mut usb_product: u16 = 0;
 
-    if let Some(bank) = usb_bank {
-        if let Some(info) = bank.info() {
+    if usb_active {
+        if let Some(info) = usb_bank.and_then(|b| b.info()) {
             let w = (info.width as usize).clamp(16, MAX_FRAME_DIM);
             let h = (info.height as usize).clamp(16, MAX_FRAME_DIM);
             frame_w = w;
@@ -655,7 +665,7 @@ extern "C" fn flash_main() -> ! {
         synthetic_cam = Some(syn);
     }
 
-    if usb_bank.is_some() {
+    if usb_active {
         log!(
             "[flash.uvc.source] kind=usb vendor={:#06x} product={:#06x}",
             usb_vendor,
@@ -1110,11 +1120,70 @@ extern "C" fn flash_main() -> ! {
             break;
         }
 
+        // Dynamically poll FrameBank activation so Flash switches to live USB frames
+        // even if launched before sexuvc finishes starting the webcam stream.
+        if let Some(bank) = usb_bank {
+            let now_active = bank.is_active();
+            if now_active && !usb_active {
+                usb_active = true;
+                usb_last_seq = 0;
+                usb_decode_errors = 0;
+                if usb_raw_buf.len() < sex_pdx::usb_uvc::FRAME_SLOT_BYTES {
+                    usb_raw_buf.resize(sex_pdx::usb_uvc::FRAME_SLOT_BYTES, 0);
+                }
+                if let Some(info) = bank.info() {
+                    let w = (info.width as usize).clamp(16, MAX_FRAME_DIM);
+                    let h = (info.height as usize).clamp(16, MAX_FRAME_DIM);
+                    frame_w = w;
+                    frame_h = h;
+                    frame_fps = (info.fps as u32).clamp(1, 120);
+                    frame_format = match info.format {
+                        sex_pdx::usb_uvc::FMT_MJPEG => FormatKind::Mjpeg,
+                        sex_pdx::usb_uvc::FMT_YUY2 => FormatKind::Yuy2,
+                        sex_pdx::usb_uvc::FMT_NV12 => FormatKind::Nv12,
+                        _ => FormatKind::Mjpeg,
+                    };
+                    usb_vendor = info.vendor;
+                    usb_product = info.product;
+                    let needed = frame_w.saturating_mul(frame_h);
+                    if needed > 0 && argb_pixels.len() != needed {
+                        argb_pixels.resize(needed, 0);
+                        filtered_pixels.resize(needed, 0);
+                    }
+                }
+                log!(
+                    "[flash.uvc.source] kind=usb vendor={:#06x} product={:#06x}",
+                    usb_vendor,
+                    usb_product
+                );
+                log!(
+                    "[flash.uvc.negotiated] width={} height={} format={:?}",
+                    frame_w,
+                    frame_h,
+                    frame_format
+                );
+            } else if !now_active && usb_active {
+                usb_active = false;
+                if synthetic_cam.is_none() && socket_conn.is_none() {
+                    let syn = SyntheticUvcDevice::new(640, 480, 30);
+                    frame_w = 640;
+                    frame_h = 480;
+                    frame_fps = 30;
+                    frame_format = FormatKind::Yuy2;
+                    let needed = frame_w * frame_h;
+                    argb_pixels.resize(needed, 0);
+                    filtered_pixels.resize(needed, 0);
+                    synthetic_cam = Some(syn);
+                }
+                log!("[flash.uvc.source] kind=synthetic");
+            }
+        }
+
         // Receive UVC frame (USB FrameBank, TCP socket, or synthetic fallback)
         let mut completed_frame = None;
         let mut usb_frame_decoded = false;
 
-        if let Some(bank) = usb_bank {
+        if let Some(bank) = usb_bank.filter(|_| usb_active) {
             if let Some(meta) = bank.read_frame(usb_last_seq, &mut usb_raw_buf) {
                 usb_last_seq = meta.seq;
                 let fmt = match meta.format {
@@ -1209,7 +1278,7 @@ extern "C" fn flash_main() -> ! {
 
         if usb_frame_decoded || completed_frame.is_some() {
             frame_count += 1;
-            if usb_bank.is_none() || frame_count <= 8 || frame_count.is_power_of_two() {
+            if !usb_active || frame_count <= 8 || frame_count.is_power_of_two() {
                 log!("[flash.frame] n={}", frame_count);
             }
 
@@ -1501,8 +1570,8 @@ extern "C" fn flash_main() -> ! {
             // 5. Window UI Presentation
             let (win_w, win_h) = window.size();
             let (win_w, win_h) = (win_w.max(640), win_h.max(480));
-            let win_pixels = window.pixels();
             let total_pixels = win_w * win_h;
+            let win_pixels = window.frame(win_w, win_h);
 
             if win_pixels.len() >= total_pixels {
                 // Background dark matte
@@ -1530,10 +1599,10 @@ extern "C" fn flash_main() -> ! {
                 // Title
                 draw_text_8x8(win_pixels, win_w, win_h, 16, 14, b"FLASH PHOTO BOOTH", pal.text, None);
                 // Camera status dot & live telemetry overlay (source + resolution + FPS)
-                let is_live = usb_bank.is_some() || socket_conn.is_some();
+                let is_live = usb_active || socket_conn.is_some();
                 let dot_col = if is_live { pal.mint } else { pal.accent };
                 draw_circle(win_pixels, win_w, win_h, 172, 18, 4, dot_col);
-                let src_label = if usb_bank.is_some() {
+                let src_label = if usb_active {
                     "LIVE USB"
                 } else if socket_conn.is_some() {
                     "LIVE TCP"
@@ -1771,7 +1840,7 @@ extern "C" fn flash_main() -> ! {
                     }
                 }
 
-                window.show_pixels(win_w, win_h);
+                window.show_frame(win_w, win_h);
             }
 
             if let Some(max_f) = max_frames {
@@ -1787,7 +1856,7 @@ extern "C" fn flash_main() -> ! {
                     let win_pixels = window.frame(win_w, win_h);
                     win_pixels.fill(pal.bg);
                     let title = b"FLASH PHOTO BOOTH";
-                    let sub = if usb_bank.is_some() {
+                    let sub = if usb_active {
                         b"CONNECTING TO USB WEBCAM..." as &[u8]
                     } else {
                         b"INITIALIZING CAMERA..." as &[u8]
@@ -1797,7 +1866,7 @@ extern "C" fn flash_main() -> ! {
                     let cy = win_h / 2;
                     draw_text_8x8(win_pixels, win_w, win_h, tx, cy.saturating_sub(14), title, pal.accent, None);
                     draw_text_8x8(win_pixels, win_w, win_h, sx, cy + 8, sub, pal.text_dim, None);
-                    window.show_pixels(win_w, win_h);
+                    window.show_frame(win_w, win_h);
                     splash_drawn = true;
                 }
             }
@@ -1817,6 +1886,16 @@ extern "C" fn flash_main() -> ! {
             "[flash.video] path=/data/flash/video-0001.webm bytes={} frames={}",
             video_bytes.len(),
             record_frames_done
+        );
+    }
+
+    if usb_bank.is_some() {
+        let _ = sex_pdx::pdx_call_checked(
+            sex_pdx::usb_uvc::CLIENT_NOTIFY_SLOT,
+            sex_pdx::usb_uvc::OP_CLIENT_STOP,
+            0,
+            0,
+            0,
         );
     }
 

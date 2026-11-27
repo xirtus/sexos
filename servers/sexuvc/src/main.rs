@@ -383,13 +383,32 @@ fn pick_usb_format(cam: &sex_pdx::usb_uvc::CameraInfo) -> sex_pdx::usb_uvc::Form
         })
 }
 
-fn drain_inbox() {
-    while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
-        if m.type_id <= 1 {
-            continue;
+fn handle_msg(m: sex_pdx::PdxMessage, client_refs: &mut u32) {
+    if m.type_id <= 1 {
+        return;
+    }
+    let reply = match m.type_id {
+        sex_pdx::usb_uvc::OP_LINK => 0,
+        sex_pdx::usb_uvc::OP_CLIENT_START => {
+            *client_refs = client_refs.saturating_add(1);
+            log!("[sexuvc.client.start] refs={}", *client_refs);
+            0
         }
-        let reply = if m.type_id == sex_pdx::usb_uvc::OP_LINK { 0 } else { u64::MAX };
+        sex_pdx::usb_uvc::OP_CLIENT_STOP => {
+            *client_refs = client_refs.saturating_sub(1);
+            log!("[sexuvc.client.stop] refs={}", *client_refs);
+            0
+        }
+        _ => u64::MAX,
+    };
+    if m.caller_pd != 0 {
         let _ = sex_pdx::pdx_reply(m.caller_pd, reply);
+    }
+}
+
+fn drain_inbox(client_refs: &mut u32) {
+    while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+        handle_msg(m, client_refs);
     }
 }
 
@@ -421,6 +440,9 @@ pub extern "C" fn _start() -> ! {
     );
 
     let mut attached_gen: u32 = 0;
+    let mut attached_fmt: Option<(u8, u16, u16)> = None;
+    let mut client_refs: u32 = 0;
+    let mut stream_engaged: bool = false;
     let mut pump = UsbFramePump::new();
     let mut chunk_buf = [0u8; sex_pdx::usb_uvc::MAX_CHUNK];
 
@@ -443,13 +465,14 @@ pub extern "C" fn _start() -> ! {
     }
 
     loop {
-        drain_inbox();
+        drain_inbox(&mut client_refs);
         let mut streaming = false;
         if let Some(s) = shared {
             match s.camera() {
                 Some(cam) => {
                     if cam.generation != attached_gen {
                         attached_gen = cam.generation;
+                        stream_engaged = false;
                         let (max_w, max_h) = cam.max_dimensions();
                         log!(
                             "[sexuvc.usb.attached] vendor={:#06x} product={:#06x} max={}x{} formats={} max_payload={} control={} stream={}",
@@ -460,18 +483,38 @@ pub extern "C" fn _start() -> ! {
                         let h = if fmt.max_h > 0 { fmt.max_h } else { 720 };
                         pump.configure(cam.vendor, cam.product, w, h, fmt.kind, 30);
                         if server.grant_allows(0, w, h, 30) {
-                            log!(
-                                "[sexuvc.commit] source=usb format={} index={} width={} height={} fps=30",
-                                fmt.kind_name(), fmt.index, w, h
-                            );
+                            attached_fmt = Some((fmt.index, w, h));
                             if let Some(bank) = frame_bank {
                                 bank.set_active(cam.vendor, cam.product, w, h, fmt.kind, 30);
                             }
-                            s.request_start(fmt.index, 1, 30, w, h);
+                            log!(
+                                "[sexuvc.ready] source=usb format={} index={} width={} height={} fps=30 led=off",
+                                fmt.kind_name(), fmt.index, w, h
+                            );
+                        } else {
+                            attached_fmt = None;
                         }
                     }
-                    streaming = pump.drain(s, frame_bank, &mut chunk_buf)
-                        || s.stream_state() == sex_pdx::usb_uvc::STATE_STREAMING;
+
+                    // On-demand streaming: only turn on the physical UVC stream & camera LED
+                    // while at least one client (e.g. Flash) has engaged the camera.
+                    if client_refs > 0 && !stream_engaged {
+                        if let Some((fmt_index, w, h)) = attached_fmt {
+                            log!("[sexuvc.stream.engage] index={} {}x{}@30", fmt_index, w, h);
+                            s.request_start(fmt_index, 1, 30, w, h);
+                            stream_engaged = true;
+                        }
+                    } else if client_refs == 0 && stream_engaged {
+                        log!("[sexuvc.stream.release] stopping UVC stream (led=off)");
+                        s.request_stop();
+                        pump.reset();
+                        stream_engaged = false;
+                    }
+
+                    if stream_engaged {
+                        let drained = pump.drain(s, frame_bank, &mut chunk_buf);
+                        streaming = drained || s.stream_state() != sex_pdx::usb_uvc::STATE_ERROR;
+                    }
                 }
                 None if attached_gen != 0 => {
                     log!(
@@ -479,6 +522,8 @@ pub extern "C" fn _start() -> ! {
                         pump.frames_received, pump.frames_dropped
                     );
                     attached_gen = 0;
+                    attached_fmt = None;
+                    stream_engaged = false;
                     pump.reset();
                     if let Some(bank) = frame_bank {
                         bank.set_inactive();
@@ -491,9 +536,7 @@ pub extern "C" fn _start() -> ! {
             let _ = sex_pdx::sys_wait_self_ticks(1);
         } else {
             let msg = sex_pdx::pdx_listen_raw(0);
-            if msg.type_id == sex_pdx::usb_uvc::OP_LINK && msg.caller_pd != 0 {
-                sex_pdx::pdx_reply(msg.caller_pd, 0);
-            }
+            handle_msg(msg, &mut client_refs);
         }
     }
 }

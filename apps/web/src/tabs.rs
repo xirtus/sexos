@@ -25,6 +25,8 @@ pub struct Tab {
     canvases: sex_web::canvas::Canvases,
     media: Vec<super::media::Media>,
     media_loads: Vec<super::MediaLoad>,
+    fetch_waiting: Vec<super::Pending>,
+    fetch_going: Vec<(super::Pending, sex_app::net::Exchange)>,
     pub url: String,
     history: Vec<String>,
     forward: Vec<String>,
@@ -67,6 +69,7 @@ impl Tab {
             doc: Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock)),
             sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false,
             canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_loads: Vec::new(),
+            fetch_waiting: Vec::new(), fetch_going: Vec::new(),
             url: String::new(), history: Vec::new(), forward: Vec::new(), scroll: 0, focus: None, hover_css: false,
             import_map: Vec::new(), script_scroll: 0, view, frames: Vec::new(), images: Vec::new(), svgs: Vec::new(),
             moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(), blocked: 0,
@@ -83,6 +86,7 @@ impl Browser {
         swap(&mut self.page, &mut t.page); swap(&mut self.doc, &mut t.doc); swap(&mut self.sheets, &mut t.sheets);
         swap(&mut self.timer, &mut t.timer); swap(&mut self.timeline, &mut t.timeline); swap(&mut self.animating, &mut t.animating);
         swap(&mut self.canvases, &mut t.canvases); swap(&mut self.media, &mut t.media); swap(&mut self.media_loads, &mut t.media_loads);
+        swap(&mut self.fetch_waiting, &mut t.fetch_waiting); swap(&mut self.fetch_going, &mut t.fetch_going);
         swap(&mut self.url, &mut t.url); swap(&mut self.history, &mut t.history); swap(&mut self.forward, &mut t.forward);
         swap(&mut self.scroll, &mut t.scroll); swap(&mut self.focus, &mut t.focus); swap(&mut self.hover_css, &mut t.hover_css);
         swap(&mut self.import_map, &mut t.import_map); swap(&mut self.script_scroll, &mut t.script_scroll); swap(&mut self.view, &mut t.view);
@@ -248,6 +252,7 @@ impl Browser {
         let owner = self.doc.get().owner();
         self.ws_close_page(owner);
         self.drop_frames();
+        self.cancel_fetches();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
         self.media.clear();
     }

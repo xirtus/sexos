@@ -125,6 +125,8 @@ pub struct FetchAsk {
     /// `name: value` lines.
     pub headers: String,
     pub body: Vec<u8>,
+    /// True when the script requested cross-origin credentials (`credentials: 'include'` or `withCredentials`).
+    pub credentials: bool,
 }
 impl FetchAsk {
     /// The request headers as pairs, skipping malformed lines.
@@ -348,7 +350,7 @@ impl Page for Document {
                 if self.fetches.len() >= 64 { return None; }
                 self.next_fetch += 1;
                 let method = text(1).trim().to_ascii_uppercase();
-                self.fetches.push(FetchAsk { id: self.next_fetch, url: String::from(text(0)), method, headers: String::from(text(2)), body: a.get(3).map(|b| b.to_vec()).unwrap_or_default() });
+                self.fetches.push(FetchAsk { id: self.next_fetch, url: String::from(text(0)), method, headers: String::from(text(2)), body: a.get(3).map(|b| b.to_vec()).unwrap_or_default(), credentials: text(4) == "1" });
                 return Some(format!("{}", self.next_fetch).into_bytes());
             }
             op::MEDIA_APPEND => {

@@ -113,27 +113,48 @@ pub fn swingers_get_arg(info_hash: &str, magnet_uri: &str) -> String {
     format!("get {}", capped)
 }
 
-/// Builds a compact `stream <target> --port <port>` argument string for `swingers`
-/// strictly under `sex_pdx::fs::ARGS_MAX` (256 bytes). Prefers the bare 40-char hex
-/// `info_hash` (59 bytes total), falling back to a tracker-stripped magnet URI capped
-/// at 180 bytes.
-pub fn swingers_stream_arg(info_hash: &str, magnet_uri: &str, port: u16) -> String {
-    let hash = info_hash.trim();
-    if !hash.is_empty() {
-        return format!("stream {} --port {}", hash, port);
-    }
-    let mag = magnet_uri.trim();
-    let short = mag.split("&tr=").next().unwrap_or(mag);
-    let capped = if short.len() > 180 {
-        let mut end = 180;
-        while !short.is_char_boundary(end) && end > 0 {
-            end -= 1;
+/// Builds a compact `stream <target> --port <port> [--file-idx N] [--tracker URL]`
+/// argument string for `swingers` strictly under `sex_pdx::fs::ARGS_MAX` (256 bytes).
+/// Prefers the bare 40-char hex `info_hash`, falling back to a tracker-stripped magnet URI.
+pub fn swingers_stream_arg(
+    info_hash: &str,
+    magnet_uri: &str,
+    port: u16,
+    file_idx: Option<u32>,
+    tracker: Option<&str>,
+) -> String {
+    let mut out = {
+        let hash = info_hash.trim();
+        if !hash.is_empty() {
+            format!("stream {} --port {}", hash, port)
+        } else {
+            let mag = magnet_uri.trim();
+            let short = mag.split("&tr=").next().unwrap_or(mag);
+            let capped = if short.len() > 160 {
+                let mut end = 160;
+                while !short.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
+                &short[..end]
+            } else {
+                short
+            };
+            format!("stream {} --port {}", capped, port)
         }
-        &short[..end]
-    } else {
-        short
     };
-    format!("stream {} --port {}", capped, port)
+    if let Some(idx) = file_idx {
+        let frag = format!(" --file-idx {}", idx);
+        if out.len() + frag.len() < 248 {
+            out.push_str(&frag);
+        }
+    }
+    if let Some(tr) = tracker.map(str::trim).filter(|t| !t.is_empty()) {
+        let frag = format!(" --tracker {}", tr);
+        if out.len() + frag.len() < 248 {
+            out.push_str(&frag);
+        }
+    }
+    out
 }
 
 /// Formats a byte count into a concise human-readable string (e.g. `1.4 GB`).
