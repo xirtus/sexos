@@ -164,8 +164,26 @@ const RESUME_NONE: Resume = Resume { active: false, listening: false, host: [0; 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Call { Plain, Send, Receive, State, Close }
 
-const HOTSWAP_BUF_CAP: usize = 4 * 1024 * 1024;
-static mut HOTSWAP_BUF: [u8; HOTSWAP_BUF_CAP] = [0u8; HOTSWAP_BUF_CAP];
+/// The largest server image a hot swap takes.
+const HOTSWAP_BUF_CAP: usize = 16 * 1024 * 1024;
+/// Where a hot-swap image is gathered: pages this run asks for the first time one comes
+/// (Spindle has no heap, and a static would cost every Spindle its size at boot), kept
+/// for the next. (base, bytes held)
+static mut HOTSWAP_MEM: (u64, usize) = (0, 0);
+/// At least `need` bytes of hot-swap buffer, growing the run's pages as needed.
+fn hotswap_buf(need: usize) -> Option<*mut u8> {
+    use sex_pdx::program_memory as m;
+    let (mut base, mut held) = unsafe { HOTSWAP_MEM };
+    while held < need.max(1) {
+        let pages = ((need - held) as u64).div_ceil(m::PAGE).min(m::MAX_PAGES_PER_CALL);
+        let got = m::grow(pages).ok()?;
+        // Pages follow the run's first page without gaps: the buffer is base..end.
+        if base == 0 { base = got.base; }
+        held = (got.end() - base) as usize;
+    }
+    unsafe { HOTSWAP_MEM = (base, held); }
+    Some(base as *mut u8)
+}
 
 struct HotswapRx {
     active: bool,
@@ -1268,9 +1286,9 @@ impl Tether {
         if !self.hotswap.discard && take > 0 {
             let start = self.hotswap.received;
             let end = start + take;
-            if end <= HOTSWAP_BUF_CAP {
+            if end <= unsafe { HOTSWAP_MEM.1 } {
                 unsafe {
-                    let dst = core::ptr::addr_of_mut!(HOTSWAP_BUF) as *mut u8;
+                    let dst = HOTSWAP_MEM.0 as *mut u8;
                     core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.add(start), take);
                 }
             }
@@ -1284,7 +1302,7 @@ impl Tether {
             let pd = self.hotswap.pd;
             let len = self.hotswap.expected_len;
             let slice = unsafe {
-                core::slice::from_raw_parts(core::ptr::addr_of!(HOTSWAP_BUF) as *const u8, len)
+                core::slice::from_raw_parts(HOTSWAP_MEM.0 as *const u8, len)
             };
             let got = log::fnv64(slice);
             if got != self.hotswap.expected_fnv {
@@ -1353,6 +1371,9 @@ impl Tether {
                         if hdr.size > HOTSWAP_BUF_CAP {
                             self.hotswap.discard = true;
                             say!(sb, "hotswap: err {} too large ({} > {} bytes)", hdr.name, hdr.size, HOTSWAP_BUF_CAP);
+                        } else if hotswap_buf(hdr.size).is_none() {
+                            self.hotswap.discard = true;
+                            say!(sb, "hotswap: err {} out of memory ({} bytes)", hdr.name, hdr.size);
                         }
                     }
                     None => {
