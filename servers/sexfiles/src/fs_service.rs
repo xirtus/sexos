@@ -654,7 +654,11 @@ fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Opt
     if path.first() == Some(&b'@') {
         let root = &binding.root[..binding.len];
         let own = root.starts_with(b"/data/") && path[1..].starts_with(root) && path.get(1 + root.len()).is_some_and(|b| *b == b'/');
-        let granted = own || binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
+        // System-installed Tether enforces its own 6-digit PIN mutual auth, capability tier
+        // (Observe/Dev/FullControl), and F12 kill switch, and needs full `@/` access to
+        // deploy `/bin/*` binaries and configs unattended when launched from Spotlight.
+        let tether_sys = binding.system && root == b"/data/tether";
+        let granted = own || tether_sys || binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
             token == path || path.starts_with(token) && (token.ends_with(b"/") || path[token.len()] == b'/')
         });
         let abs = &path[1..];
