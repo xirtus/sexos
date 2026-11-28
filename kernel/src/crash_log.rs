@@ -243,6 +243,8 @@ pub fn probe_pending(pd: u32) -> bool {
     true
 }
 
+/// A hot swap being gathered: (caller, target, image so far).
+static HOTSWAP_STAGE: spin::Mutex<(u32, u32, alloc::vec::Vec<u8>)> = spin::Mutex::new((0, 0, alloc::vec::Vec::new()));
 pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     let caller = crate::core_local::CoreLocal::get().current_pd();
     let (op, arg, buf) = (regs.rdi, regs.rsi, regs.rdx);
@@ -337,14 +339,24 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             }
             wire::OK
         }
-        wire::OP_HOTSWAP => {
+        wire::OP_HOTSWAP | wire::OP_HOTSWAP_PART => {
             let (Ok(target), Ok(len)) = (u32::try_from(arg), usize::try_from(regs.r10)) else { return wire::INVALID };
             if !(is_spindle(caller) || caller == SHELL_PD) || target == 0 || caller == target { return wire::DENIED; }
-            if len == 0 || len > wire::HOTSWAP_MAX_BYTES || !crate::syscalls::validate_user_bytes(buf, len, false) { return wire::INVALID; }
-            let mut elf = alloc::vec::Vec::new();
-            if elf.try_reserve_exact(len).is_err() { return wire::FULL; }
-            elf.resize(len, 0);
-            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, elf.as_mut_ptr(), len) });
+            // The image is gathered here a part at a time (r8 = its offset; 0 starts over), so
+            // the caller needs no buffer of its own; OP_HOTSWAP with no bytes swaps it in.
+            let mut stage = HOTSWAP_STAGE.lock();
+            if len != 0 || op == wire::OP_HOTSWAP_PART {
+                let at = if op == wire::OP_HOTSWAP_PART { regs.r8 as usize } else { 0 };
+                if at == 0 { *stage = (caller, target, alloc::vec::Vec::new()); }
+                if len == 0 || (stage.0, stage.1, stage.2.len()) != (caller, target, at) || at + len > wire::HOTSWAP_MAX_BYTES || !crate::syscalls::validate_user_bytes(buf, len, false) { return wire::INVALID; }
+                if stage.2.try_reserve_exact(len).is_err() { return wire::FULL; }
+                stage.2.resize(at + len, 0);
+                crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, stage.2.as_mut_ptr().add(at), len) });
+                if op == wire::OP_HOTSWAP_PART { return wire::OK; }
+            }
+            if (stage.0, stage.1) != (caller, target) || stage.2.is_empty() { return wire::INVALID; }
+            let elf = core::mem::take(&mut stage.2);
+            drop(stage);
             match crate::service_restart::replace_image(target, &elf) { Ok(entry) => { regs.rsi = entry; wire::OK } Err(e) => e }
         }
         _ => wire::INVALID,
