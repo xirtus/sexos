@@ -114,7 +114,9 @@ def main():
   stop=wait(r'\[web.recorder.stop\] id=1 ms=(\d+) pictures=(\d+) skipped=(\d+) samples=(\d+) bytes=(\d+) encode_ms=(\d+)',s,120)
   report['cam_stop']=stop[0]
   assert int(stop[2])>=5 and int(stop[4])>=48000*2,('camera recording',stop[0])
-  pieces=len(re.findall(r'\[web.recorder.piece\] id=1 ',t()[s:]));assert pieces>=2,('pieces',pieces)
+  # A piece each timeslice (1 s) while recording, and the rest at stop (not logged as
+  # a piece). Recording starts once the camera opens, so it can run under 3 s here.
+  pieces=len(re.findall(r'\[web.recorder.piece\] id=1 ',t()[s:]));assert pieces>=max(1,int(stop[1])//1000-1),('pieces',pieces,stop[0])
   blob=wait(r'\[web.console\] level=0 recorder cam blob (\d+) (\S+)',s,60)
   assert int(blob[1])>2000 and blob[2]=='video/webm;codecs=vp8,opus',blob[0]
   assert wait(r'\[web.console\] level=0 recorder cam uploaded (\d+)',s,60)[1]=='200'
