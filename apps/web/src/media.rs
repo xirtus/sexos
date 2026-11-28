@@ -61,6 +61,10 @@ pub struct Media {
     resume: bool,
     /// Shows the camera (a `MediaStream` as `srcObject`), from when (ticks).
     pub live: Option<u64>,
+    /// Which live picture: `video` (the camera), `rtc:ID:N` (a remote track), or `-`.
+    pub live_src: String,
+    /// The remote sound it plays (`rtc:ID:N`), if any.
+    pub live_sound: String,
     /// The camera picture shown last (`capture::Capture::seq`).
     pub live_seq: u32,
     /// It showed the camera and no longer does: its picture goes.
@@ -74,7 +78,7 @@ impl Media {
         // A MediaSource's object URL is not loaded: the page attaches it ("mse").
         let waits = !src.is_empty() && !src.starts_with("blob:");
         Media {
-            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false, pending: None, resume: false, live: None, live_seq: 0, blank: false,
+            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false, pending: None, resume: false, live: None, live_src: String::new(), live_sound: String::new(), live_seq: 0, blank: false,
             want_play: dom.attr(node, "autoplay").is_some(), looped: dom.attr(node, "loop").is_some(),
             controls: dom.attr(node, "controls").is_some(), muted: dom.attr(node, "muted").is_some(), volume: 100,
             events: Vec::new(), last_report: 0, size: (0, 0), frames: 0,
@@ -145,8 +149,13 @@ impl Media {
                 self.pending = None;
                 self.frames = 0;
                 self.live_seq = 0;
-                self.blank |= self.live.is_some() && arg != "video";
-                self.live = (arg == "video").then(sex_pdx::get_ticks);
+                // "SOURCE [SOUND]": the picture to show and the remote sound to play.
+                let mut w = arg.split(' ');
+                let (pic, sound) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
+                self.blank |= self.live.is_some() && pic != self.live_src;
+                self.live = (!arg.is_empty()).then(sex_pdx::get_ticks);
+                self.live_src = pic.into();
+                self.live_sound = sound.into();
                 self.state = if self.live.is_some() { State::Ready } else { State::Empty };
                 self.events.push(if self.live.is_some() { "loadstart" } else { "emptied" });
             }

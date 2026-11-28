@@ -18,6 +18,7 @@ mod download;
 mod webfont;
 mod media;
 mod capture;
+mod rtc;
 mod mse;
 mod keys;
 mod profile;
@@ -330,6 +331,10 @@ struct Browser {
     extensions: extensions::Extensions,
     /// The camera and microphone pages asked for, and the question card.
     capture: capture::Capture,
+    /// Pages' WebRTC peer connections: their sockets and codecs.
+    rtc: rtc::Rtc,
+    /// The camera picture last given to the senders (`capture.seq`).
+    rtc_camera_seq: u32,
     /// Requests Shields blocked for the shown page (and its frames).
     blocked: u32,
     /// What the next request is for, when the code making it knows (see `send`).
@@ -1291,7 +1296,8 @@ impl Browser {
         doc.storage = Some(self.storage.clone());
         doc.capture = Some(self.capture.shared.clone());
         // The page before lets go of the camera and microphone.
-        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); }
+        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); self.rtc.page_left(old); }
+        doc.rtc = Some(self.rtc.hook());
         doc.wall = wall;
         doc.referrer = referrer;
         doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
@@ -1554,6 +1560,8 @@ impl Browser {
         self.sync_scroll();
         self.media_requests();
         let capture_next = self.capture_tick();
+        let rtc_next = self.rtc_tick();
+        let capture_next = match (rtc_next, capture_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
         let media_next = self.media_tick();
         let media_next = match (media_next, capture_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
@@ -1639,6 +1647,7 @@ impl Browser {
             if let Some(pic) = self.capture.picture.clone() {
                 let seq = self.capture.seq;
                 for m in self.media.iter_mut() {
+                    if m.live_src != "video" { continue; }
                     if m.live_step(&mut self.fonts, &pic, seq) { changed.push(m.picture_name()); }
                     relayout |= core::mem::take(&mut m.resized);
                 }
@@ -1658,6 +1667,57 @@ impl Browser {
             }
         }
         if !changed.is_empty() || !answers.is_empty() { self.media_asked |= !answers.is_empty(); }
+        next
+    }
+
+    /// Peer connections: sockets, the camera and microphone to the senders, and remote
+    /// pictures into the stream elements that show them. Returns how soon to come back.
+    #[inline(never)]
+    fn rtc_tick(&mut self) -> Option<u64> {
+        let idle = self.rtc.idle();
+        self.capture.keep_heard = !idle;
+        if idle { self.capture.heard.clear(); }
+        let camera = if self.capture.seq != self.rtc_camera_seq { self.rtc_camera_seq = self.capture.seq; self.capture.picture.clone() } else { None };
+        let mic = core::mem::take(&mut self.capture.heard);
+        self.rtc.audible = self.media.iter().filter(|m| !m.live_sound.is_empty() && !m.muted && m.want_play).map(|m| m.live_sound.clone()).collect();
+        let (events, next) = self.rtc.tick(&mut self.window, camera.as_ref(), &mic);
+        let owner = self.doc.get().owner();
+        let mine: Vec<String> = events.into_iter().filter(|(o, _)| *o == owner).map(|(_, t)| t).collect();
+        if !mine.is_empty() {
+            if let Some(script) = self.doc.script() {
+                for e in &mine {
+                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(e) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+                }
+                self.after_script(true);
+            }
+        }
+        // Remote pictures into the elements showing them.
+        let mut changed: Vec<String> = Vec::new();
+        let mut relayout = false;
+        for m in self.media.iter_mut() {
+            if m.live.is_none() || !m.live_src.starts_with("rtc:") { continue; }
+            if let Some((pic, seq)) = self.rtc.picture(&m.live_src) {
+                if m.live_step(&mut self.fonts, &pic, seq) { changed.push(m.picture_name()); }
+                relayout |= core::mem::take(&mut m.resized);
+            }
+        }
+        if !changed.is_empty() {
+            self.doc.get().pictures = self.fonts.images.clone();
+            if relayout {
+                self.relayout();
+                self.draw();
+            } else {
+                let (px, pw) = self.pane();
+                let pixels = &mut self.window.pixels()[..self.surface.pixels];
+                if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, px, pw, &changed) {
+                    self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
+                } else {
+                    self.draw();
+                }
+            }
+            self.media_asked = true;
+        }
+        if !mine.is_empty() { self.media_asked = true; }
         next
     }
 
@@ -2631,7 +2691,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), fetch_waiting: Vec::new(), fetch_going: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty(), rtc: rtc::Rtc::new(), rtc_camera_seq: 0 };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
