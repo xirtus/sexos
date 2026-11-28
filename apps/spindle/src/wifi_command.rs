@@ -233,7 +233,10 @@ fn passphrase(args: &[u8]) -> &[u8] {
 }
 
 const AUTO_POLL_MS: u64 = 1_500;
-const AUTO_MAX_POLLS: u8 = 20;
+/// Boot reconnect keeps trying this many polls (about two minutes): on the x17 the
+/// Wi-Fi firmware, the first scan and a join that the router answers slowly can take
+/// well over the 30 s the old budget gave.
+const AUTO_MAX_POLLS: u8 = 80;
 
 impl Wifi {
     fn ask(&mut self, action: u64, a: u64, b: u64) -> bool {
@@ -319,8 +322,9 @@ impl Wifi {
     }
 
     fn begin_auto_join_idx(&mut self, idx0: u64) {
+        // The poll budget covers every attempt: a join that fails is tried again from a
+        // fresh scan, never forever.
         self.auto_joined = true;
-        self.auto_polls = 0;
         if self.auto_pass_len >= ws::PASSWORD_MIN {
             self.password = [0; ws::PASSWORD_MAX];
             self.password[..self.auto_pass_len].copy_from_slice(&self.auto_pass[..self.auto_pass_len]);
@@ -374,6 +378,7 @@ impl Wifi {
         if self.waiting == Waiting::Nothing {
             if self.auto_active && now >= self.auto_next_at {
                 if self.auto_polls >= AUTO_MAX_POLLS {
+                    sex_pdx::serial_record!("[spindle.wifi.auto] gave_up polls={} joined={}", self.auto_polls, self.auto_joined as u8);
                     self.stop_auto();
                     return;
                 }
@@ -547,7 +552,15 @@ impl Wifi {
                     return true;
                 }
                 if s.phase == ws::NONE || s.phase == ws::FAILED {
-                    self.stop_auto();
+                    // NONE early in boot is the chip not started yet, and FAILED can be one
+                    // refused join or scan: keep trying within the budget, from a fresh scan.
+                    sex_pdx::serial_record!("[spindle.wifi.auto] phase={} polls={} joined={} retry=1", s.phase, self.auto_polls, self.auto_joined as u8);
+                    self.auto_joined = false;
+                    if !self.auto_scan_triggered || s.phase == ws::FAILED {
+                        self.auto_scan_triggered = true;
+                        let _ = send(ws::SCAN, 0, 0);
+                    }
+                    self.auto_next_at = sex_pdx::get_ticks() + AUTO_POLL_MS * 2;
                     return true;
                 }
                 if self.auto_joined {
