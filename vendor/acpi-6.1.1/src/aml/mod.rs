@@ -464,11 +464,14 @@ where
                         let source1 = source1.as_buffer()?;
                         let source2 = source2.as_buffer()?;
                         let result = {
-                            let mut buffer = Vec::from(source1);
-                            buffer.extend_from_slice(source2);
-                            // Add a new end-tag
-                            buffer.push(0x78);
-                            // Don't calculate the new real checksum - just use 0
+                            // Each template's end tag (0x79, checksum) goes; one new one
+                            // (checksum 0: "treat as valid") ends the result.
+                            let body = |b: &[u8]| -> usize {
+                                if b.len() >= 2 && b[b.len() - 2] == 0x79 { b.len() - 2 } else { b.len() }
+                            };
+                            let mut buffer = Vec::from(&source1[..body(source1)]);
+                            buffer.extend_from_slice(&source2[..body(source2)]);
+                            buffer.push(0x79);
                             buffer.push(0x00);
                             Object::Buffer(buffer).wrap()
                         };

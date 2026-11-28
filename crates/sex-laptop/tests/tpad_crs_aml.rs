@@ -71,10 +71,16 @@ fn x17_touchpad_crs_evaluates() {
     let crs = aml.evaluate(AmlName::from_str("\\_SB.I2C0.TPAD._CRS").unwrap(), Vec::new());
     let crs = crs.unwrap_or_else(|e| panic!("_CRS failed: {e:?}"));
     let Object::Buffer(bytes) = &*crs else { panic!("_CRS is not a buffer") };
-    // I2cSerialBus (0x8e) then GpioInt (0x8c), then the end tag.
-    assert_eq!(bytes[0], 0x8e);
-    assert!(bytes.windows(1).any(|b| b[0] == 0x8c));
-    assert_eq!(bytes[bytes.len() - 2] & 0xf8, 0x78, "ends with the end tag: {bytes:02x?}");
+    // I2cSerialBus then GpioInt, as a parser walking to the (single) end tag sees them.
+    let mut seen = (false, false);
+    sex_laptop::resources::parse(bytes, |r| match r {
+        sex_laptop::resources::Resource::I2c { address, .. } => { assert_eq!(address, 0x2c); seen.0 = true; }
+        sex_laptop::resources::Resource::GpioInt { .. } => seen.1 = true,
+        _ => {}
+    });
+    assert_eq!(seen, (true, true), "{bytes:02x?}");
+    assert_eq!(&bytes[bytes.len() - 2..], &[0x79, 0x00]);
+    assert_eq!(bytes.iter().filter(|b| **b == 0x79).count(), 1, "one end tag: {bytes:02x?}");
     let adr = aml.evaluate(AmlName::from_str("\\_SB.I2C0.TPAD.ADR0").unwrap(), Vec::new()).unwrap();
     assert!(matches!(*adr, Object::Integer(0)), "the table walk stops at the 0xFE row");
     drop(NOTIFIED.lock());

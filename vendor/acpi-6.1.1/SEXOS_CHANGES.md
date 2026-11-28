@@ -52,3 +52,8 @@
   `ObjectNotOfExpectedType { expected: Integer, got: Integer }` on lid (`_LID`) and local
   increment/decrement paths on the Alienware x17 R1.
 
+- `aml/mod.rs`: `ConcatenateResTemplate` drops each source's end tag and ends the result
+  with one end tag (`0x79 0x00`). Upstream kept the first template's end tag in the
+  middle and appended `0x78 0x00` (not an end tag), so a parser stopped after the first
+  template: the Alienware x17's touchpad `_CRS` (`SBFB` + `SBFG`) lost its GpioInt and
+  the pad had no interrupt line.

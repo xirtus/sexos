@@ -151,14 +151,31 @@ pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
                     Err(e) => serial_println!("[sexacpi.aml.name] name={} missing={:?}", n, e),
                 }
             }
-            // Power the pad and its controller anyway: Input's fallback scan finds the pad
-            // on the bus without `_CRS`, but only if firmware has switched it on.
-            if let Ok(parent) = dev.parent() { power_on(aml, &parent); }
-            power_on(aml, dev);
-            return Err("crs_failed");
+            // Intel reference firmware (the x17's Dell BIOS among it) builds `_CRS` from
+            // named templates: SBFB the I2C bus, SBFG the GPIO interrupt, SBFI the APIC
+            // one. Read those when the method itself fails.
+            let named = |n: &str| name(n).and_then(|nm| aml.namespace.lock().search(&nm, dev).ok())
+                .and_then(|(_, o)| match &*o { Object::Buffer(b) => Some(b.clone()), _ => None });
+            match (named("SBFB"), named("SBFG").or_else(|| named("SBFI"))) {
+                (Some(bus), Some(irq)) => {
+                    serial_println!("[sexacpi.touchpad.crs.templates] path={} bus_bytes={} irq_bytes={}", dev, bus.len(), irq.len());
+                    // Each template ends with an end tag (2 bytes); keep the last one only.
+                    let mut joined = bus[..bus.len().saturating_sub(2)].to_vec();
+                    joined.extend_from_slice(&irq);
+                    WrappedObject::new(Object::Buffer(joined))
+                }
+                _ => {
+                    // Power the pad and its controller anyway: Input's fallback scan finds
+                    // the pad on the bus without `_CRS`, but only if firmware switched it on.
+                    if let Ok(parent) = dev.parent() { power_on(aml, &parent); }
+                    power_on(aml, dev);
+                    return Err("crs_failed");
+                }
+            }
         }
     };
     let Object::Buffer(bytes) = &*crs else { return Err("crs_not_buffer") };
+
     let (mut bus, mut gpio, mut apic) = (None, None, None);
     resources::parse(bytes, |r| match r {
         Resource::I2c { address, ten_bit, hz, controller } if bus.is_none() => bus = Some((address, ten_bit, hz, controller.to_vec())),

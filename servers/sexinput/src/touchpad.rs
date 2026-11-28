@@ -242,7 +242,12 @@ pub fn take_interrupt() {
 /// The ACPI service's word: bring that touchpad up (once).
 pub fn found(words: [u64; 3]) {
     let Some(f) = Found::decode(words) else { serial_println!("[sexinput.touchpad.found] valid=0"); return };
-    if unsafe { (*core::ptr::addr_of!(PAD)).is_some() } { return; }
+    if let Some(p) = unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() } {
+        // The fallback scan found the pad first (polled); the ACPI service now names its
+        // line (it restarted, or its `_CRS` came later): switch it to the interrupt.
+        if let (None, Some(irq)) = (p.line_bit, f.irq) { arm(p, irq); }
+        return;
+    }
     serial_println!("[sexinput.touchpad.found] pci={:02x}:{:02x}.{} address={:#x} khz={} hid_register={:#x}", f.bus, f.device, f.function, f.address, f.khz, f.hid_register);
     match open(&f) {
         Ok(p) => unsafe { *core::ptr::addr_of_mut!(PAD) = Some(p) },
