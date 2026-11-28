@@ -17,16 +17,14 @@ pub const SEALS: [&str; 20] = [
     "Blue Monkey", "Yellow Human", "Red Skywalker", "White Wizard", "Blue Eagle",
     "Yellow Warrior", "Red Earth", "White Mirror", "Blue Storm", "Yellow Sun",
 ];
-/// Icon names (`assets/icons/icons.txt`, `line seal-*`), in seal order.
-pub const SEAL_ICONS: [&str; 20] = [
-    "seal-dragon", "seal-wind", "seal-night", "seal-seed", "seal-serpent",
-    "seal-worldbridger", "seal-hand", "seal-star", "seal-moon", "seal-dog",
-    "seal-monkey", "seal-human", "seal-skywalker", "seal-wizard", "seal-eagle",
-    "seal-warrior", "seal-earth", "seal-mirror", "seal-storm", "seal-sun",
-];
 pub const TONES: [&str; 13] = [
     "Magnetic", "Lunar", "Electric", "Self-Existing", "Overtone", "Rhythmic", "Resonant",
     "Galactic", "Solar", "Planetary", "Spectral", "Crystal", "Cosmic",
+];
+/// The five castles of 52 kin (four wave spells each).
+pub const CASTLES: [&str; 5] = [
+    "Red Eastern Castle of Turning", "White Northern Castle of Crossing", "Blue Western Castle of Burning",
+    "Yellow Southern Castle of Giving", "Green Central Castle of Enchantment",
 ];
 
 /// Seal colour: the four seal colours repeat red, white, blue, yellow.
@@ -50,7 +48,10 @@ impl Kin {
     pub const fn tone(self) -> u8 { ((self.0 - 1) % 13 + 1) as u8 }
     pub fn seal_name(self) -> &'static str { SEALS[self.seal() as usize - 1] }
     pub fn tone_name(self) -> &'static str { TONES[self.tone() as usize - 1] }
-    pub fn icon(self) -> &'static str { SEAL_ICONS[self.seal() as usize - 1] }
+    /// The seal's colour word and its animal: ("White", "Wizard").
+    pub fn seal_parts(self) -> (&'static str, &'static str) { self.seal_name().split_once(' ').unwrap_or(("", self.seal_name())) }
+    /// The castle (52 kin) this kin is in.
+    pub fn castle(self) -> &'static str { CASTLES[(self.0 as usize - 1) / 52] }
     pub const fn colour(self) -> Colour {
         match self.seal() % 4 { 1 => Colour::Red, 2 => Colour::White, 3 => Colour::Blue, _ => Colour::Yellow }
     }
@@ -119,6 +120,15 @@ mod tests {
         for y in 1990..2100 {
             assert_eq!(day(y + 1, 7, 26).number(), (day(y, 7, 26).number() - 1 + 105) % 260 + 1, "{y}");
         }
+    }
+    #[test]
+    fn names_of_kin_94() {
+        let k = Kin::new(94).unwrap();
+        assert_eq!((k.seal_parts(), k.tone_name()), (("White", "Wizard"), "Electric"));
+        assert_eq!(k.castle(), "White Northern Castle of Crossing");
+        assert_eq!(k.wave_spell().seal_name(), "Yellow Human");
+        assert_eq!((Kin::new(52).unwrap().castle(), Kin::new(53).unwrap().castle(), Kin::new(260).unwrap().castle()),
+            (CASTLES[0], CASTLES[1], CASTLES[4]));
     }
     #[test]
     fn oracle_of_kin_94() {

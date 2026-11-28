@@ -118,26 +118,3 @@ file video M7 9 H14 V16 H7 Z M14 11 L17.5 9.5 V15.5 L14 14
 file audio M10 16 V8.5 L16 7.5 V14.5 O8.6 16 1.5 O14.6 14.5 1.5
 file archive M12 6 V8 M12 9.5 V11.5 M10.5 13 H13.5 V17 H10.5 Z
 file file M9 12 H15
-
-# The twenty Dreamspell solar seals (crates/sex-time dreamspell), our own
-# drawings: Display paints each in ink on a tile of the seal's colour.
-line seal-dragon M4 9 Q12 2 20 9 M4 15 Q12 22 20 15 M4 9 V15 D13 12 2
-line seal-wind M5 6 H19 M12 6 V20 M8 20 H16 M8 11 Q12 15 16 11
-line seal-night M5 20 V11 Q12 3 19 11 V20 Z D9.5 15 1.3 D14.5 15 1.3
-line seal-seed M12 21 V11 M12 11 Q6 10 5 4 Q11 4 12 11 M12 11 Q18 10 19 4 Q13 4 12 11 M7 21 H17
-line seal-serpent M4 18 Q7 6 11 12 Q15 18 18 8 D18.5 6.5 1.6 M4 18 H8
-line seal-worldbridger M3 12 H21 M7 8 L12 3 L17 8 M7 16 L12 21 L17 16
-line seal-hand M7 21 V12 M10 21 V5 M13 21 V4 M16 21 V6 M19 21 V10 M4 15 L7 12
-line seal-star M12 3 L14.6 9.4 L21 10 L16.2 14.4 L17.6 21 L12 17.6 L6.4 21 L7.8 14.4 L3 10 L9.4 9.4 Z
-line seal-moon M15 3 Q5 5 5 12 Q5 19 15 21 Q9 12 15 3 Z D16 12 1.5
-line seal-dog M12 20 L5 12.5 Q2.5 6 8 5.5 Q11 5.5 12 9 Q13 5.5 16 5.5 Q21.5 6 19 12.5 Z
-line seal-monkey M12 12 Q12 9.5 14.5 10 Q17 11.5 15.5 15 Q12 18 8.5 15.5 Q5.5 12 8 8 Q12 4 18 6
-line seal-human O12 7.5 3.5 M5 21 Q5 13 12 13 Q19 13 19 21
-line seal-skywalker M7 21 V7 M17 21 V7 M4 7 H20 M12 3 V7 M10 14 H14
-line seal-wizard M3 12 Q12 3 21 12 Q12 21 3 12 Z D12 12 3
-line seal-eagle M3 9 Q12 17 21 9 M12 13 V21 M8 5 L12 9 L16 5
-line seal-warrior M6 4 H18 V12 Q18 18.5 12 21 Q6 18.5 6 12 Z M9 10 H15 M12 13 V16
-line seal-earth O12 12 8.5 M3.5 12 H20.5 M12 3.5 Q6 12 12 20.5 M12 3.5 Q18 12 12 20.5
-line seal-mirror M12 2.5 L20.5 12 L12 21.5 L3.5 12 Z M12 7.5 L16.5 12 L12 16.5 L7.5 12 Z
-line seal-storm M14 3 L7 13 H12 L10 21 L17 10 H12 Z
-line seal-sun O12 12 4 M12 2.5 V5.5 M12 18.5 V21.5 M2.5 12 H5.5 M18.5 12 H21.5 M5.3 5.3 L7.4 7.4 M16.6 16.6 L18.7 18.7 M5.3 18.7 L7.4 16.6 M16.6 7.4 L18.7 5.3

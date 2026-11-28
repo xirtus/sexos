@@ -3940,7 +3940,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             };
             // Above the month: today's Dreamspell kin, wave spell and oracle cross.
             if let Some(kin) = local.and_then(sex_time::dreamspell::Kin::from_unix) {
-                dreamspell_cross::draw(fb, w, h, total, c.oracle, s, scale, kin, bg, ring);
+                dreamspell_cross::draw(fb, w, h, total, c.oracle, s, scale, kin, bg);
             }
             let (year, month) = tray::shift_month(today.year, today.month, view.month_offset as i32);
             // Header: < Month Year >

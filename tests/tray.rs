@@ -86,3 +86,31 @@ fn text_lines() {
     assert_eq!(wifi_text(WIFI_UNKNOWN), "Network: unknown");
     assert_eq!(wifi_text(0), "Network: wired (no Wi-Fi)");
 }
+
+#[test]
+fn oracle_band_lays_out_the_cross_and_wave_spell_without_overlap() {
+    // The wave spell's U: 1-5 down the left, 6-9 along the bottom, 10-12 up the right, 13 beside 12.
+    let slots: Vec<_> = (1..=13).map(wave_slot).collect();
+    assert_eq!(slots, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (4, 3), (4, 2), (4, 1), (3, 1)]);
+    for scale in 1..=3 {
+        let c = Calendar::new(1920 * scale, 28 * scale, scale).unwrap();
+        let o = Oracle::new(c.oracle, scale);
+        let within = |r: Rect| r.0 >= c.oracle.0 && r.1 >= c.oracle.1 && r.0 + r.2 <= c.oracle.0 + c.oracle.2 && r.1 + r.3 <= c.oracle.1 + c.oracle.3;
+        let overlap = |a: Rect, b: Rect| a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3;
+        let mut all: Vec<Rect> = o.cross.to_vec();
+        all.extend(o.wave);
+        all.extend([o.wave_label, o.kin_label, o.words]);
+        for (i, &a) in all.iter().enumerate() {
+            assert!(within(a), "scale {scale}: part {i} {a:?} outside {:?}", c.oracle);
+            for &b in &all[i + 1..] { assert!(!overlap(a, b), "scale {scale}: {a:?} overlaps {b:?}"); }
+        }
+        // Guide above destiny above occult; antipode left of it, analog right.
+        let d = o.cross[Oracle::DESTINY];
+        assert_eq!((o.cross[Oracle::GUIDE].0, o.cross[Oracle::GUIDE].1 + d.3), (d.0, d.1));
+        assert_eq!((o.cross[Oracle::OCCULT].0, o.cross[Oracle::OCCULT].1), (d.0, d.1 + d.3));
+        assert_eq!(o.cross[Oracle::ANTIPODE].0 + d.2, d.0);
+        assert_eq!(o.cross[Oracle::ANALOG].0, d.0 + d.2);
+        // The words sit under the cross and the wave spell.
+        assert!(o.words.1 >= o.wave[4].1 + o.wave[4].3);
+    }
+}

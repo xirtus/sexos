@@ -15,6 +15,8 @@
 
 use sex_font::raster::{scratch_len, Raster, FX};
 
+pub mod maya;
+
 /// Every icon, as text: `KIND NAME PATH` per line.
 pub static SOURCE: &str = include_str!("../../../assets/icons/icons.txt");
 

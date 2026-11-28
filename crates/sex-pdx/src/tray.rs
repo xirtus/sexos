@@ -125,8 +125,60 @@ impl Quick {
 /// SexTime's Maya calendar (Long Count and Calendar Round).
 pub struct Calendar { pub panel: Rect, pub oracle: Rect, pub header: Rect, pub prev: Rect, pub next: Rect, pub grid: (usize, usize), pub cell: (usize, usize), pub maya: Rect }
 
-/// Height of the oracle band, logical pixels: a cross of three 36-pixel cells.
-pub const ORACLE_H: usize = 112;
+/// Height of the oracle band, logical pixels: the wave spell's five rows,
+/// a gap, and three lines of words.
+pub const ORACLE_H: usize = 5 * WAVE_CELL + 6 + 3 * ORACLE_LINE;
+/// One oracle cross cell and one wave spell cell, logical pixels.
+pub const CROSS_CELL: usize = 38;
+pub const WAVE_CELL: usize = 26;
+/// One line of words under the cross, logical pixels.
+pub const ORACLE_LINE: usize = 17;
+
+/// Where day `tone` 1..=13 of a wave spell sits on its 5 x 5 grid, (column,
+/// row), the way the 13 Moon oracle charts draw it: down the left side (1-5),
+/// along the bottom (6-9), up the right side (10-12), and 13 back in beside 12.
+pub const fn wave_slot(tone: u8) -> (usize, usize) {
+    match tone {
+        1..=5 => (0, tone as usize - 1),
+        6..=9 => (tone as usize - 5, 4),
+        10..=12 => (4, 13 - tone as usize),
+        _ => (3, 1),
+    }
+}
+
+/// The oracle band's parts: the cross (guide, antipode, destiny, analog,
+/// occult) on the left; the wave spell's 13 days (by tone) on the right, with
+/// two labels inside its U (`wave_label` on its top row, `kin_label` in its
+/// middle); and the lines of words under both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Oracle { pub cross: [Rect; 5], pub wave: [Rect; 13], pub wave_label: Rect, pub kin_label: Rect, pub words: Rect }
+
+impl Oracle {
+    pub const GUIDE: usize = 0;
+    pub const ANTIPODE: usize = 1;
+    pub const DESTINY: usize = 2;
+    pub const ANALOG: usize = 3;
+    pub const OCCULT: usize = 4;
+
+    /// The parts of `band` (a [`Calendar::oracle`]) at `scale`.
+    pub fn new(band: Rect, scale: usize) -> Self {
+        let s = scale.max(1);
+        let (c, t) = (CROSS_CELL * s, WAVE_CELL * s);
+        let wave_h = 5 * t;
+        let (cx, cy) = (band.0, band.1 + (wave_h - 3 * c) / 2);
+        let cross = [(cx + c, cy, c, c), (cx, cy + c, c, c), (cx + c, cy + c, c, c), (cx + 2 * c, cy + c, c, c), (cx + c, cy + 2 * c, c, c)];
+        let wx = band.0 + band.2 - 5 * t;
+        let mut wave = [(0, 0, 0, 0); 13];
+        for (i, r) in wave.iter_mut().enumerate() {
+            let (col, row) = wave_slot(i as u8 + 1);
+            *r = (wx + col * t, band.1 + row * t, t, t);
+        }
+        let wave_label = (wx + t, band.1, 4 * t, t);
+        let kin_label = (wx + t, band.1 + 2 * t, 3 * t, 2 * t);
+        let words = (band.0, band.1 + wave_h + 6 * s, band.2, 3 * ORACLE_LINE * s);
+        Self { cross, wave, wave_label, kin_label, words }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalendarHit { Prev, Next, Today, Inside, Outside }
