@@ -1,0 +1,8 @@
+[package]
+name = "sex-sof"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Intel cAVS audio DSP (Tiger Lake) with Sound Open Firmware: boot, IPC3 and the digital-microphone capture pipeline, for SexOS's Bell"
+
+[dependencies]
