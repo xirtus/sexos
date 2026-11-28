@@ -678,6 +678,8 @@ impl<'a, D: Device> Fs<'a, D> {
         if matches!(result, Err(Error::Io | Error::Corrupt)) { self.poisoned = true; }
         result
     }
+    /// A directory entry names `id` but no inode is stored for it.
+    fn dangling(&mut self, id: u64) -> Result<bool> { Ok(!self.get(Key { id, kind: K_INODE, off: 0 })?) }
     fn inode(&mut self, id: u64) -> Result<(Kind, u64, u64)> {
         if !self.get(Key { id, kind: K_INODE, off: 0 })? { return Err(Error::NotFound); }
         decode_inode(&self.value[..self.value_len])
@@ -745,7 +747,11 @@ impl<'a, D: Device> Fs<'a, D> {
     }
     fn create_at(&mut self, path: &[u8], kind: Kind, now: u64) -> Result<u64> {
         let (dir, name) = self.parent(path)?;
-        if self.lookup_in(dir, name)?.is_some() { return Err(Error::Exists); }
+        if let Some((old, off)) = self.lookup_in(dir, name)? {
+            // An entry whose object is gone (a cut-short write left it) is not in the way.
+            if !self.dangling(old)? { return Err(Error::Exists); }
+            self.drop_entry(dir, off)?;
+        }
         if self.free <= RESERVED { return Err(Error::NoSpace); }
         let id = self.next_id;
         self.next_id += 1;
@@ -944,6 +950,8 @@ impl<'a, D: Device> Fs<'a, D> {
         self.guarded(|f| {
             let (dir, name) = f.parent(path)?;
             let (id, off) = f.lookup_in(dir, name)?.ok_or(Error::NotFound)?;
+            // A name whose object is gone can still be removed: the name was all that was left.
+            if f.dangling(id)? { f.drop_blocks(id, 0)?; return f.drop_entry(dir, off); }
             let (kind, _, _) = f.inode(id)?;
             if kind == Kind::Dir && !f.dir_is_empty(id)? { return Err(Error::NotEmpty); }
             f.drop_entry(dir, off)?;
@@ -1145,4 +1153,36 @@ fn encode_inode(kind: Kind, size: u64, mtime: u64) -> [u8; 17] {
 fn decode_inode(v: &[u8]) -> Result<(Kind, u64, u64)> {
     if v.len() != 17 { return Err(Error::Corrupt); }
     Ok((if v[0] == 1 { Kind::Dir } else { Kind::File }, get_u64(v, 1), get_u64(v, 9)))
+}
+
+#[cfg(test)]
+mod dangling_tests {
+    use super::*;
+    extern crate std; struct Disk(std::vec::Vec<[u8; BLOCK]>);
+    impl Device for Disk {
+        fn blocks(&self) -> u64 { self.0.len() as u64 }
+        fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> core::result::Result<(), ()> { *out = self.0[block as usize]; Ok(()) }
+        fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> core::result::Result<(), ()> { self.0[block as usize] = *data; Ok(()) }
+        fn flush(&mut self) -> core::result::Result<(), ()> { Ok(()) }
+    }
+    #[test]
+    fn a_name_without_its_object_can_be_removed_or_created_again() {
+        let (mut cache, mut slots, mut used, mut pending, mut scratch) = ([[0; BLOCK]; 16], [Slot::EMPTY; 16], [0; 16], [0; 16], [0; BLOCK]);
+        let memory = Memory { cache: &mut cache, slots: &mut slots, used: &mut used, pending: &mut pending, scratch: &mut scratch };
+        let mut fs = Fs::format(Disk(std::vec![[0; BLOCK]; 1024]), memory).unwrap();
+        fs.mkdir(b"/data", 0).unwrap();
+        let id = fs.create(b"/data/wifi.conf", 0).unwrap();
+        fs.commit().unwrap();
+        // What the x17 had: the entry survived, its inode did not.
+        fs.guarded(|f| f.remove(Key { id, kind: K_INODE, off: 0 })).unwrap();
+        fs.commit().unwrap();
+        assert_eq!(fs.open(b"/data/wifi.conf").map(|s| s.id), Err(Error::NotFound));
+        let again = fs.create(b"/data/wifi.conf", 0).unwrap();
+        assert_ne!(again, id);
+        assert_eq!(fs.write(again, 0, b"ssid=x", 0), Ok(6));
+        assert_eq!(fs.open(b"/data/wifi.conf").unwrap().size, 6);
+        fs.guarded(|f| f.remove(Key { id: again, kind: K_INODE, off: 0 })).unwrap();
+        assert_eq!(fs.remove_path(b"/data/wifi.conf"), Ok(()));
+        assert_eq!(fs.open(b"/data/wifi.conf").map(|s| s.id), Err(Error::NotFound));
+    }
 }
