@@ -26,6 +26,10 @@ fn s(pd:u32,task:u32)->Subject{Subject{pd,task}}
  restarted.initialize(&journal,Some(2),false,&rows);assert!(!restarted.normal());assert!(!restarted.recovering());assert!(restarted.reserved(42));
  let bad=Journal::new();let mut l=Ledger::empty();l.quarantine(s(999,999),1);bad.persist(&l);let mut p=pool::Pool::new();p.initialize(&bad,Some(2),true,&rows);assert!(!p.normal());assert!(!p.recovering());assert!(p.reserved(42));p.recovered();assert!(!p.normal());
  let many=Journal::new();let mut l=Ledger::empty();for pd in [42,43,44]{l.quarantine(s(pd,pd),pd as u64);}many.persist(&l);p.initialize(&many,Some(2),true,&[42,43,44]);assert!(!p.normal());
+ // A lost journal (a hot-swapped Shell before kept pages were carried) is known as lost,
+ // so never-run rows can still take ordinary programs; a sound one is not.
+ assert!(!pool::Pool::new().lost());let mut p=pool::Pool::new();p.initialize(&Journal::new(),Some(2),true,&rows);assert!(p.lost());assert!(!p.normal());
+ let mut fine=pool::Pool::new();fine.initialize(&journal,Some(2),true,&rows);assert!(!fine.lost());
 }
 '''
             (folder/'pool.rs').write_text(source)

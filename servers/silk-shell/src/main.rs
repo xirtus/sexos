@@ -17887,7 +17887,7 @@ static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
-        .filter(|row|restricted_pool::normal()&&!restricted_routes::busy()&&!restricted_pool::reserved(row.target))
+        .filter(|row|restricted_pool::normal()&&!restricted_routes::busy()&&!restricted_pool::reserved(row.target)||!restricted_routes::busy()&&restricted_pool::fresh_when_lost(row.target))
         .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
         .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
 }
@@ -17920,6 +17920,17 @@ unsafe fn open_program_in_active_scene()->bool{
         return launcher_focus_existing(row.target,row.frame(),None).unwrap_or(true);
     }
     false
+}
+/// Why no row is free, row by row, for the log a refusal leaves.
+fn program_rows_record(){
+    use sex_pdx::app_lifecycle as a;
+    let mut states=[0u8;app_catalog::COUNT];let mut n=0;
+    for row in app_catalog::INCARNATIONS.iter().filter(|r|r.app==app_catalog::App::Program&&r.ordinal!=0){
+        let state=row.activation_slot.and_then(|slot|a::activation(slot,false).ok()).map_or(9,|i|i.state as u8);
+        if n<states.len(){states[n]=b'0'+state.min(9);n+=1;}
+    }
+    sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row rows={} pool_normal={} pool_lost={} routes_busy={}",
+        core::str::from_utf8(&states[..n]).unwrap_or("?"),restricted_pool::normal() as u8,restricted_pool::lost() as u8,restricted_routes::busy() as u8);
 }
 /// A row a disk program can start on, if any: one that ran before first, so fresh
 /// rows stay for when several programs are open at once.
@@ -18207,8 +18218,13 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if by_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){return true}
-        if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
-            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
+        // Another start under way is a wait, not a full machine: say which, so a person
+        // is never told every window is in use when none is.
+        if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some(){
+            sex_pdx::serial_record!("[shell.program.denied] reason=busy reading={} rebirth={}",PROGRAM_READING as u8,PROGRAM_REBIRTH.is_some() as u8);reader_glue::refuse_other(store::IMAGE_BUSY);return true;
+        }
+        if program_free_row().is_none(){
+            program_rows_record();reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;

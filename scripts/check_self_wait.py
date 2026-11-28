@@ -369,7 +369,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': 'aa4bb7fc95128105f7a7393a78dcf51f4417ac3293e1731b9fa005a28b43f4ad',  # active-view cache at gs:[56] (views::enter skips the CR3 read; no observer change), 2026-11-28
  'kernel/src/app_resources.rs': 'b1b1dfda0016755aa8d4c868e93daf13d5598d550082798a87998810a6c4eeed',  # program pages the file fills come unzeroed (no observer change; Gemini #696), 2026-11-26
- 'kernel/src/service_restart.rs': '5fc30a0dd996895eb851a2c8fddbc2c54d45efa2492050e73c1505176702b20d',  # desk watch: Files/Display/Shell end only when parked with no syscall for 60 s (no observer change), 2026-11-28
+ 'kernel/src/service_restart.rs': '9a9dadf92c1db404242b5aed6b4ccf1077e6e45181ae029f4adafcc17c01719e',  # desk watch + kept pages survive a hot swap (no observer change), 2026-11-28
  'kernel/src/crash_log.rs': '415518cac7ef63046bc083c68e3763c12105c8e227c69cf4316f255c10fe83f2',  # OP_HOTSWAP_PART: kernel gathers the hot-swap image (no observer change), 2026-11-27
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 

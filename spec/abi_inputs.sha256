@@ -76,7 +76,7 @@ eac0c2eb5f726f3cfac35fc4ce3f4d3d8eb64fedb7879de9d2f9620ab2a48994  crates/sex-pdx
 
 04d0affed34c207205ad2e350eb785e6fb52f9f0e35b8420277091c9b8cf773c  crates/sex-pdx/src/program_memory.rs
 
-091d76faddafebcd18011623a9115eae431678c2d8e4e39ed351d9caf5ed31aa  crates/sex-pdx/src/program_store.rs
+379a6bcdefa740dc362b2aaab38eadfc6d08433b146fd2f5c949a1963db1a93b  crates/sex-pdx/src/program_store.rs
 
 309bc618c344eb7186879bf7bde673ec120d4a2bc20bf4502e9a1dfc14b88696  crates/sex-pdx/src/recording_frame_bank.rs
 
@@ -178,7 +178,7 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 070d401419064d6d3d5f20332ddc6d2e99d7f8a836171e186227db07f79f1e94  kernel/src/pci_command.rs
 
-5fc30a0dd996895eb851a2c8fddbc2c54d45efa2492050e73c1505176702b20d  kernel/src/service_restart.rs
+9a9dadf92c1db404242b5aed6b4ccf1077e6e45181ae029f4adafcc17c01719e  kernel/src/service_restart.rs
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 

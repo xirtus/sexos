@@ -30,10 +30,14 @@ const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 
 #[derive(Clone, Copy)]
 struct Page { frame: u64, pristine: u64 }
-struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
+/// `kept`: frames of the pages the run asked to keep, in the order it asked. A hot swap
+/// moves them to `carried`, and the new image's own keep calls, in the same order, take
+/// their contents: a swap is a restart, so a session or ledger survives it as it would one.
+struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize, kept: [u64; KEPT], carried: [u64; KEPT] }
+const KEPT: usize = 32;
 // Net, Files, Input, Bell, Display, Shell, Denim, Saddle, Drive, USB, ACPI, Cufflinks, GPU.
 const SERVICES: usize = 13;
-static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
+static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0, kept: [0; KEPT], carried: [0; KEPT] }) }; SERVICES];
 // BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
 static SERVICE_IDS:[AtomicU32;SERVICES]=[const{AtomicU32::new(0)};SERVICES];
 static RESTARTS: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
@@ -179,7 +183,16 @@ pub fn keep(pd: u32, va: u64, pages: u64) -> bool {
         let Some(i) = s.pages[..count].iter().position(|p| p.frame == frame) else { return false };
         *slot = i;
     }
-    for i in found.into_iter().filter(|&i| i != usize::MAX) { s.pages[i].pristine = 0; }
+    for i in found.into_iter().filter(|&i| i != usize::MAX) {
+        s.pages[i].pristine = 0;
+        let frame = s.pages[i].frame;
+        if s.kept.contains(&frame) { continue; }
+        // Past KEPT pages the page is still kept for crash restarts, just not carried by a swap.
+        let Some(n) = s.kept.iter().position(|&f| f == 0) else { continue };
+        s.kept[n] = frame;
+        // The run before a hot swap kept a page here: its contents come with it.
+        if s.carried[n] != 0 { crate::boot_memory::copy_frame(s.carried[n], frame); s.carried[n] = 0; }
+    }
     true
 }
 
@@ -351,6 +364,8 @@ fn apply_swap(s: &mut Service, pd: &crate::capability::ProtectionDomain, swap: &
     }
     for &p in &stack[..n_stack] { if n < MAX_PAGES { s.pages[n] = p; n += 1; } }
     (s.count, s.entry) = (n, swap.entry);
+    // The old image's kept frames are unmapped now, but still hold what it kept.
+    (s.carried, s.kept) = (s.kept, [0; KEPT]);
     crate::smp::tlb::flush_pages(usize::MAX, core::iter::empty());
 }
 
