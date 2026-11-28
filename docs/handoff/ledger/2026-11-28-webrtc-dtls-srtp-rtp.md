@@ -15,7 +15,8 @@ Stacked on stage C1 (PR #863).
 
 ## crates/sex-srtp (RFC 3711, RFC 7714)
 - SRTP and SRTCP for AES-CM + HMAC-SHA1-80 and AEAD AES-128-GCM. Key derivation, ROC
-  tracking, 64-packet replay windows, constant-time tag compares. RFC known answers.
+  tracking, 64-packet replay windows, constant-time tag compares. Known answers from
+  libsrtp's srtp_validate and srtp_validate_gcm (RFC 3711 KDF), ROC rollover and reorder.
 
 ## crates/sex-rtp (RFC 3550 and friends)
 - RTP with CSRC, padding, one- and two-byte header extensions, abs-send-time.
