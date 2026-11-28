@@ -10624,7 +10624,7 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
         if program_pointer_wheel(scroll.vertical()){return}
         sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
     };
-    let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
+    let accepted=APP_INPUT.push_scroll(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
     sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
     app_input_poll();
 }
