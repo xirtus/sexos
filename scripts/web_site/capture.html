@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><title>Camera check</title>
+<style>
+body { margin: 12px; background: #fff; }
+h1 { font-size: 18px; margin: 120px 0 8px; }
+video { display: block; width: 320px; height: 240px; background: #000; transform: scaleX(-1); }
+</style></head>
+<body>
+<h1 id="h">Asking for the camera</h1>
+<video id="v" autoplay muted playsinline></video>
+<script>
+// getUserMedia end to end: the browser asks the person, the camera shows in a
+// <video>, the stream's tracks and permissions read back, and stopping lets go.
+const say = (...a) => console.log('capture', ...a);
+const v = document.getElementById('v');
+const next = new URL(location.href).searchParams.get('next');
+let stream;
+v.addEventListener('playing', () => say('playing', v.videoWidth, v.videoHeight));
+say('asked', typeof navigator.mediaDevices.getUserMedia);
+navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 640, height: 480 } }).then(async st => {
+  stream = st;
+  const [a] = st.getAudioTracks(), [c] = st.getVideoTracks();
+  say('ok', a.label + '|' + c.label, c.getSettings().width + 'x' + c.getSettings().height);
+  v.srcObject = st;
+  const perms = await Promise.all(['camera', 'microphone'].map(name => navigator.permissions.query({ name })));
+  say('perms', perms.map(p => p.state).join(' '));
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  say('devices', devices.filter(d => d.kind !== 'audiooutput').map(d => d.label).join('|'));
+  document.getElementById('h').textContent = 'Camera on';
+  setTimeout(() => {
+    const r = v.getBoundingClientRect();
+    say('rect', Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height));
+    say('frames', v.getVideoPlaybackQuality().totalVideoFrames);
+  }, 2500);
+}, e => say('failed', e.name));
+// The gate says when it has looked (a click on the heading).
+document.getElementById('h').addEventListener('click', () => {
+  stream.getVideoTracks()[0].stop();
+  stream.getAudioTracks()[0].stop();
+  say('stopped', stream.active);
+  // The site is remembered: asking again needs no answer.
+  navigator.mediaDevices.getUserMedia({ video: true }).then(st => {
+    say('again', st.getVideoTracks()[0].readyState);
+    st.getTracks().forEach(t => t.stop());
+    if (next) setTimeout(() => { location.href = next; }, 500);
+  }, e => say('again failed', e.name));
+});
+</script>
+</body></html>

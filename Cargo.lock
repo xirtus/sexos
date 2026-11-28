@@ -10908,10 +10908,12 @@ dependencies = [
  "sex-extensions",
  "sex-fetch",
  "sex-gl",
+ "sex-image",
  "sex-js",
  "sex-media",
  "sex-pdx",
  "sex-shields",
+ "sex-uvc",
  "sex-web",
 ]
 

@@ -28,7 +28,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, CAPTURE: 40, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -1213,6 +1213,10 @@
         name = 'canvas:' + src._id; w = src.width; h = src.height;
       } else if (src && src.tagName === 'IMG') {
         name = src.getAttribute('src') || ''; w = src.naturalWidth || 0; h = src.naturalHeight || 0;
+      } else if (src && src.tagName === 'VIDEO') {
+        // The picture the video shows now (a file, a stream or the camera).
+        name = 'video:' + src._id; w = src.videoWidth; h = src.videoHeight;
+        if (!(w > 0 && h > 0)) return;
       } else return;
       let sx = 0, sy = 0, sw = w, sh = h, dx, dy, dw, dh;
       if (a.length >= 8) [sx, sy, sw, sh, dx, dy, dw, dh] = a;
@@ -1245,6 +1249,9 @@
       if (this._ms) { this._ms._detach(); this._ms = null; }
       // A MediaSource's object URL or srcObject: the page feeds the bytes (Media Source Extensions).
       if (this._srcObject instanceof MediaSource) { this._ms = this._srcObject; this._ms._attach(this); return; }
+      // A camera or microphone stream: the browser shows the camera's pictures itself.
+      if (this._srcObject instanceof MediaStream) { liveElements.add(this); this._live(); return; }
+      liveElements.delete(this);
       const ms = blobUrls.get(this.getAttribute('src') || '');
       if (ms instanceof MediaSource) { this._ms = ms; ms._attach(this); return; }
       this._ask('load');
@@ -1257,8 +1264,18 @@
       }
       return MEDIA_TYPES.test(s) ? 'maybe' : '';
     }
+    // What a stream element shows now: 'video' while its stream has a live, enabled
+    // camera track, else nothing (a microphone alone is not played back: it would echo).
+    _live() {
+      const st = this._srcObject;
+      const v = st instanceof MediaStream && st.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
+      const key = v ? 'video' : '';
+      if (this._liveKey === key) return;
+      this._liveKey = key;
+      this._ask('live', key);
+    }
     get srcObject() { return this._srcObject || null; }
-    set srcObject(v) { this._srcObject = v === undefined ? null : v; this.load(); }
+    set srcObject(v) { this._srcObject = v === undefined ? null : v; this._liveKey = undefined; this.load(); }
     get src() { const h = this.getAttribute('src'); return h === null ? '' : resolveUrl(h); }
     set src(v) { this.setAttribute('src', v); this.load(); }
     get currentSrc() { return this.src; }
@@ -1306,6 +1323,175 @@
     const a = document.createElement('audio');
     if (src !== undefined) a.src = src;
     return a;
+  }
+  // ---- Camera and microphone (Media Capture and Streams) ----
+  // getUserMedia asks the browser, which asks the person in its own bar (pages cannot
+  // draw over it) and keeps the answer for the site. The browser runs the devices; a
+  // page holds tracks, and tells the browser which kinds it still uses.
+  const captureAsks = new Map();
+  let captureSeq = 0;
+  const liveTracks = new Set();
+  const liveElements = new Set();
+  const trackId = () => crypto.randomUUID();
+  const GROUP = 'sexos';
+  function captureUse() {
+    let a = false, v = false;
+    for (const t of liveTracks) if (t.enabled) { if (t.kind === 'audio') a = true; else v = true; }
+    H(OP.CAPTURE, 'use', a ? '1' : '0', v ? '1' : '0');
+    for (const el of liveElements) el._live();
+  }
+  class MediaStreamTrack extends EventTarget {
+    constructor(kind, label, deviceId, settings) {
+      super();
+      this.kind = kind; this.label = label || ''; this.id = trackId(); this.contentHint = '';
+      this._dev = deviceId || ''; this._settings = settings || {}; this._c = {};
+      this._enabled = true; this._muted = false; this.readyState = 'live';
+      this.onended = null; this.onmute = null; this.onunmute = null;
+      liveTracks.add(this);
+    }
+    get enabled() { return this._enabled; }
+    set enabled(v) { v = !!v; if (v === this._enabled) return; this._enabled = v; if (this.readyState === 'live') captureUse(); }
+    get muted() { return this._muted; }
+    stop() {
+      if (this.readyState === 'ended') return;
+      this.readyState = 'ended'; liveTracks.delete(this); captureUse();
+    }
+    clone() {
+      const t = new MediaStreamTrack(this.kind, this.label, this._dev, this._settings);
+      t._c = Object.assign({}, this._c); t._enabled = this._enabled; t._muted = this._muted;
+      if (this.readyState === 'ended') { t.readyState = 'ended'; liveTracks.delete(t); }
+      return t;
+    }
+    getSettings() {
+      const s = this._settings;
+      if (this.kind === 'video') {
+        const w = s.width || 0, h = s.height || 0;
+        return { deviceId: this._dev, groupId: GROUP, width: w, height: h, aspectRatio: h ? w / h : 0, frameRate: s.frameRate || 30, facingMode: 'user', resizeMode: 'none' };
+      }
+      return { deviceId: this._dev, groupId: GROUP, sampleRate: 48000, sampleSize: 16, channelCount: 2, latency: 0.01,
+        echoCancellation: this._c.echoCancellation === true, autoGainControl: this._c.autoGainControl === true, noiseSuppression: this._c.noiseSuppression === true };
+    }
+    getConstraints() { return Object.assign({}, this._c); }
+    getCapabilities() {
+      const s = this._settings;
+      if (this.kind === 'video') return { deviceId: this._dev, groupId: GROUP, width: { min: 1, max: s.width || 0 }, height: { min: 1, max: s.height || 0 },
+        aspectRatio: { min: 0.001, max: s.width || 1 }, frameRate: { min: 1, max: s.frameRate || 30 }, facingMode: ['user'], resizeMode: ['none'] };
+      return { deviceId: this._dev, groupId: GROUP, sampleRate: { min: 48000, max: 48000 }, sampleSize: { min: 16, max: 16 }, channelCount: { min: 1, max: 2 },
+        echoCancellation: [false], autoGainControl: [false], noiseSuppression: [false], latency: { min: 0.01, max: 0.01 } };
+    }
+    applyConstraints(c) { this._c = Object.assign({}, c && typeof c === 'object' ? c : {}); return Promise.resolve(); }
+    // The browser ended it (device gone, permission taken back, page hid it).
+    _end() {
+      if (this.readyState === 'ended') return;
+      this.readyState = 'ended'; liveTracks.delete(this);
+      this.dispatchEvent(new Event('ended'));
+      for (const el of liveElements) el._live();
+    }
+    _mute(on) {
+      if (this._muted === on || this.readyState === 'ended') return;
+      this._muted = on; this.dispatchEvent(new Event(on ? 'mute' : 'unmute'));
+    }
+  }
+  class MediaStreamTrackEvent extends Event {
+    constructor(type, init) { super(type, init); this.track = init && init.track || null; }
+  }
+  class MediaStream extends EventTarget {
+    constructor(arg) {
+      super();
+      this.id = trackId(); this._t = [];
+      this.onaddtrack = null; this.onremovetrack = null; this.onactive = null; this.oninactive = null;
+      const list = arg instanceof MediaStream ? arg.getTracks() : (arg && typeof arg[Symbol.iterator] === 'function') ? Array.from(arg) : [];
+      for (const t of list) if (t instanceof MediaStreamTrack && !this._t.includes(t)) this._t.push(t);
+    }
+    get active() { return this._t.some(t => t.readyState === 'live'); }
+    getTracks() { return this._t.slice(); }
+    getAudioTracks() { return this._t.filter(t => t.kind === 'audio'); }
+    getVideoTracks() { return this._t.filter(t => t.kind === 'video'); }
+    getTrackById(id) { return this._t.find(t => t.id === String(id)) || null; }
+    addTrack(t) {
+      if (!(t instanceof MediaStreamTrack)) throw new TypeError("Failed to execute 'addTrack' on 'MediaStream': parameter 1 is not of type 'MediaStreamTrack'.");
+      if (this._t.includes(t)) return;
+      this._t.push(t); for (const el of liveElements) if (el._srcObject === this) el._live();
+    }
+    removeTrack(t) {
+      const i = this._t.indexOf(t); if (i < 0) return;
+      this._t.splice(i, 1); for (const el of liveElements) if (el._srcObject === this) el._live();
+    }
+    clone() { return new MediaStream(this._t.map(t => t.clone())); }
+  }
+  class MediaDeviceInfo {
+    constructor(kind, label, deviceId, groupId) { this.kind = kind; this.label = label; this.deviceId = deviceId; this.groupId = groupId; }
+    toJSON() { return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; }
+  }
+  class InputDeviceInfo extends MediaDeviceInfo {
+    getCapabilities() { return { deviceId: this.deviceId, groupId: this.groupId }; }
+  }
+  // A constraint names a device exactly: { deviceId: { exact: id } } or 'id' or ['id'].
+  function wantedDevice(c) {
+    if (!c || typeof c !== 'object') return '';
+    let d = c.deviceId;
+    if (d && typeof d === 'object' && !Array.isArray(d)) d = d.exact !== undefined ? d.exact : d.ideal;
+    if (Array.isArray(d)) d = d[0];
+    return d === undefined || d === null ? '' : String(d).replace(/[\t\n]/g, ' ');
+  }
+  const CAPTURE_ERRORS = {
+    denied: ['Permission denied', 'NotAllowedError'],
+    none: ['Requested device not found', 'NotFoundError'],
+    busy: ['Could not start video source', 'NotReadableError'],
+  };
+  class MediaDevices extends EventTarget {
+    constructor() { super(); this.ondevicechange = null; }
+    enumerateDevices() {
+      const text = H(OP.CAPTURE, 'devices') || '';
+      const list = [];
+      for (const line of text.split('\n')) {
+        if (!line) continue;
+        const [kind, id, label, group] = line.split('\t');
+        list.push(kind === 'audiooutput' ? new MediaDeviceInfo(kind, label || '', id || '', group || '') : new InputDeviceInfo(kind, label || '', id || '', group || ''));
+      }
+      return Promise.resolve(list);
+    }
+    getSupportedConstraints() {
+      return { deviceId: true, groupId: true, width: true, height: true, aspectRatio: true, frameRate: true, facingMode: true, resizeMode: true,
+        sampleRate: true, sampleSize: true, channelCount: true, echoCancellation: true, autoGainControl: true, noiseSuppression: true, latency: true };
+    }
+    getUserMedia(c) {
+      if (c === undefined || c === null || typeof c !== 'object') c = {};
+      const want = k => c[k] !== undefined && c[k] !== false && c[k] !== null;
+      const a = want('audio'), v = want('video');
+      if (!a && !v) return Promise.reject(new TypeError("Failed to execute 'getUserMedia' on 'MediaDevices': At least one of audio and video must be requested"));
+      if (H(OP.CAPTURE, 'secure') !== '1') return Promise.reject(domError('Permission denied', 'NotAllowedError'));
+      const id = ++captureSeq;
+      return new Promise((resolve, reject) => {
+        captureAsks.set(id, { resolve, reject, a, v, c });
+        H(OP.CAPTURE, 'ask', String(id), a ? '1' : '0', v ? '1' : '0', wantedDevice(c.audio), wantedDevice(c.video));
+      });
+    }
+    getDisplayMedia() { return Promise.reject(domError('Screen sharing is not available yet', 'NotSupportedError')); }
+  }
+  const mediaDevices = new MediaDevices();
+  // 'capture\tID\tRESULT\tAUDIO_LABEL\tAUDIO_ID\tVIDEO_LABEL\tVIDEO_ID\tW\tH\tFPS'
+  function captureAnswer(f) {
+    const id = +f[1], ask = captureAsks.get(id);
+    if (!ask) return;
+    captureAsks.delete(id);
+    if (f[2] !== 'ok') { const [m, n] = CAPTURE_ERRORS[f[2]] || CAPTURE_ERRORS.denied; ask.reject(domError(m, n)); return; }
+    const tracks = [];
+    if (ask.a) { const t = new MediaStreamTrack('audio', f[3], f[4], {}); t._c = typeof ask.c.audio === 'object' ? Object.assign({}, ask.c.audio) : {}; tracks.push(t); }
+    if (ask.v) { const t = new MediaStreamTrack('video', f[5], f[6], { width: +f[7] || 0, height: +f[8] || 0, frameRate: +f[9] || 30 }); t._c = typeof ask.c.video === 'object' ? Object.assign({}, ask.c.video) : {}; tracks.push(t); }
+    captureUse();
+    ask.resolve(new MediaStream(tracks));
+  }
+  function captureGone(kind) { for (const t of Array.from(liveTracks)) if (t.kind === kind) t._end(); }
+  function captureMute(kind, on) { for (const t of liveTracks) if (t.kind === kind) t._mute(on); }
+  class PermissionStatus extends EventTarget {
+    constructor(name, state) { super(); this.name = name; this.state = state; this.onchange = null; }
+  }
+  function permissionQuery(d) {
+    const name = d && d.name;
+    if (name === undefined) return Promise.reject(new TypeError("Failed to execute 'query' on 'Permissions': required member name is undefined."));
+    const state = name === 'camera' || name === 'microphone' ? (H(OP.CAPTURE, 'state', name) || 'prompt') : 'prompt';
+    return Promise.resolve(new PermissionStatus(String(name), state));
   }
   function timeRanges(r) {
     const range = i => { if (!(i >= 0 && i < r.length)) throw domError('IndexSizeError'); return r[i]; };
@@ -4499,7 +4685,7 @@
       vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null, globalPrivacyControl: true,
       hardwareConcurrency: 4, maxTouchPoints: 0, pdfViewerEnabled: false, webdriver: false, plugins: [], mimeTypes: [], javaEnabled: () => false,
       mediaCapabilities, sendBeacon, gpu: new GPU(),
-      permissions: { query: d => Promise.resolve(Object.assign(new EventTarget(), { name: d && d.name, state: 'prompt', onchange: null })) } },
+      mediaDevices, permissions: { query: permissionQuery } },
     screen: { get width() { return view()[0]; }, get height() { return view()[1]; } },
     history: { length: 1, state: null, pushState() {}, replaceState() {}, back() {}, forward() {}, go() {} },
     localStorage: lastingStorage(), sessionStorage: storage(), Storage,
@@ -4518,6 +4704,7 @@
     Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, PromiseRejectionEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio, MediaSource, SourceBuffer, SourceBufferList,
+    MediaStream, MediaStreamTrack, MediaStreamTrackEvent, MediaDevices, MediaDeviceInfo, InputDeviceInfo, PermissionStatus,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
@@ -4690,6 +4877,10 @@
       case 'ws': wsEvent(f); return 0;
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;
+      case 'capture': captureAnswer(f); return 0;
+      case 'capturegone': captureGone(f[1]); return 0;
+      case 'capturemute': captureMute(f[1], f[2] === '1'); return 0;
+      case 'devicechange': mediaDevices.dispatchEvent(new Event('devicechange')); return 0;
       // An extension's message or event: `ext\tJSON` (extensions.js).
       case 'ext': return extEvent ? (extEvent(f.slice(1).join('\t')) || 0) : 0;
       // A change another world made to the document (see mutation()).

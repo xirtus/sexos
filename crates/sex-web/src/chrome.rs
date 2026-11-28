@@ -916,6 +916,62 @@ pub struct Chrome<'a> {
     pub bookmarks: &'a [BookmarkItem],
     /// Optional floating frosted lavender context menu.
     pub context_menu: Option<&'a ContextMenu>,
+    /// A card under the omnibox only the person can answer: a site asking for the
+    /// camera or microphone. Pages cannot draw over the browser's bar.
+    pub permission: Option<&'a PermissionPrompt>,
+    /// The shown page uses the (camera, microphone): a red dot in the omnibox.
+    pub capturing: (bool, bool),
+}
+
+/// The browser's question card (see [`Chrome::permission`]): a title, a line under
+/// it, and its buttons from right to left (the first is the default answer's).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PermissionPrompt {
+    pub title: String,
+    pub detail: String,
+    pub buttons: Vec<String>,
+}
+
+const PROMPT_H: i32 = 92;
+const PROMPT_BUTTON_W: i32 = 96;
+const PROMPT_BUTTON_H: i32 = 26;
+
+/// Where the question card sits: (card, each button), in window pixels.
+pub fn permission_rects(p: &PermissionPrompt, width: i32, show_bookmarks_bar: bool) -> ([i32; 4], Vec<[i32; 4]>) {
+    let w = (width - 24).clamp(160, 460);
+    let (x, y) = (12, chrome_height(show_bookmarks_bar) + 6);
+    let mut buttons = Vec::new();
+    let mut bx = x + w - 12 - PROMPT_BUTTON_W;
+    for _ in &p.buttons {
+        buttons.push([bx, y + PROMPT_H - 12 - PROMPT_BUTTON_H, PROMPT_BUTTON_W, PROMPT_BUTTON_H]);
+        bx -= PROMPT_BUTTON_W + 8;
+    }
+    ([x, y, w, PROMPT_H], buttons)
+}
+
+/// Which button of the card window point (`x`, `y`) is on, if any.
+pub fn permission_hit(p: &PermissionPrompt, width: i32, show_bookmarks_bar: bool, x: i32, y: i32) -> Option<usize> {
+    let (_, buttons) = permission_rects(p, width, show_bookmarks_bar);
+    buttons.iter().position(|r| x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3])
+}
+
+/// Whether window point (`x`, `y`) is on the card at all.
+pub fn permission_contains(p: &PermissionPrompt, width: i32, show_bookmarks_bar: bool, x: i32, y: i32) -> bool {
+    let (r, _) = permission_rects(p, width, show_bookmarks_bar);
+    x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3]
+}
+
+fn draw_camera_icon(t: &mut Target, x: i32, y: i32, color: u32) {
+    t.fill(x, y + 2, 10, 8, color, 2);
+    for i in 0..4 { t.fill(x + 10, y + 4 - i / 2, 1 + i, 4 + i, color, 0); }
+}
+
+fn draw_mic_icon(t: &mut Target, x: i32, y: i32, color: u32) {
+    t.fill(x + 2, y, 5, 8, color, 2);
+    t.fill(x, y + 6, 1, 3, color, 0);
+    t.fill(x + 8, y + 6, 1, 3, color, 0);
+    t.fill(x + 1, y + 9, 7, 1, color, 0);
+    t.fill(x + 4, y + 10, 1, 2, color, 0);
 }
 
 /// Cuts `text` with an ellipsis to fit within pixel width `w`.
@@ -1270,6 +1326,22 @@ pub fn frame_with(
             right_reserve += sw + 4;
         }
 
+        // The page is using the camera or microphone: a red dot and what it uses.
+        if !c.editing && (c.capturing.0 || c.capturing.1) {
+            let mut need = 14;
+            if c.capturing.0 { need += 16; }
+            if c.capturing.1 { need += 12; }
+            if ow - right_reserve - need > 64 {
+                let mut ix = ox + ow - right_reserve - need;
+                let iy = oy + (oh - 12) / 2;
+                bar.fill(ix, iy + 3, 7, 7, 0xFFEF_4444, 4);
+                ix += 12;
+                if c.capturing.0 { draw_camera_icon(&mut bar, ix, iy, 0xFFFF_8A80); ix += 16; }
+                if c.capturing.1 { draw_mic_icon(&mut bar, ix, iy, 0xFFFF_8A80); }
+                right_reserve += need + 4;
+            }
+        }
+
         // Compact zoom badge inside omnibox if != 100%
         let zoom = if c.zoom != 0 && c.zoom != 100 {
             format!("{}%", c.zoom)
@@ -1528,6 +1600,27 @@ pub fn frame_with(
             if count == 0 { 0xFFFF_8A80 } else { TEXT_PRIMARY },
             &status,
         );
+    }
+
+    // The browser's question card (camera / microphone), under the omnibox.
+    if let Some(p) = c.permission {
+        let ([x, y, w, h], buttons) = permission_rects(p, width, c.show_bookmarks_bar);
+        if y + h <= height {
+            over.fill(x + 3, y + 4, w, h, MENU_SHADOW, 12);
+            over.fill(x - 1, y - 1, w + 2, h + 2, MENU_BORDER, 12);
+            over.fill(x, y, w, h, 0xFF26_1F40, 11);
+            let bold = FontKey { bold: true, ..font };
+            let title = fit(fonts, &p.title, bold, w - 24);
+            text_run(&mut over, fonts, x + 12, y + 22, bold, TEXT_PRIMARY, &title);
+            let detail = fit(fonts, &p.detail, small, w - 24);
+            text_run(&mut over, fonts, x + 12, y + 42, small, TEXT_SECONDARY, &detail);
+            for (i, (label, r)) in p.buttons.iter().zip(buttons.iter()).enumerate() {
+                let first = i == 0;
+                over.fill(r[0], r[1], r[2], r[3], if first { ACCENT_VIOLET } else { BG_TAB_ACTIVE_BORDER }, 8);
+                let lw = fonts.text_width(label, font);
+                text_run(&mut over, fonts, r[0] + (r[2] - lw) / 2, r[1] + 18, font, 0xFFFF_FFFF, label);
+            }
+        }
     }
 
     // Floating Frosted Lavender Context Menu
