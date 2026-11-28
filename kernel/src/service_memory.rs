@@ -7,7 +7,7 @@
 use sex_pdx::program_memory as m;
 use x86_64::VirtAddr;
 
-const MAX: usize = 12;
+const MAX: usize = 8;
 #[derive(Clone, Copy)]
 struct Arena { pd: u32, base: u64, pages: usize, grown: usize, key: u8, holes: usize }
 static ARENAS: spin::Mutex<[Option<Arena>; MAX]> = spin::Mutex::new([None; MAX]);

@@ -16,6 +16,9 @@ broke the Qupid Kodi gate). Spindle has no heap (its allocator returns null, so 
 `program_memory::grow` the first time a hot swap arrives, up to 16 MiB, kept for the run.
 
 Follow-up (CI's new tether-gate hot-swap step caught it): Spindle is a BOOT app, not a
-program row, so `program_memory::grow` was refused ("out of memory"). BOOT now reserves
-a service arena (`service_memory::reserve`) for each Spindle incarnation; pages exist
-only once a hot swap asks for them.
+program row, so `program_memory::grow` was refused ("out of memory"); a BOOT service arena
+for Spindle then broke program launches (store DENIED) in the latency and packages gates.
+Final design: the kernel gathers the image itself. `OP_HOTSWAP_PART` (sex-pdx crash_log,
+ABI addition) appends a part at an offset (0 starts over); `OP_HOTSWAP` with no bytes swaps
+the gathered image in. Spindle forwards each received part and checks the FNV as it goes,
+so it holds nothing. Kernel line budget 24,500 -> 24,600 (docs/DESIGN_GUARDRAILS.md).

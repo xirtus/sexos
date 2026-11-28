@@ -1085,9 +1085,6 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(target).expect("BOOT_SPINDLE_NETWORK_SUBJECT");
         assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none()&&pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_SPINDLE_SLOT_COLLISION");
         pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id)); pd.grant_capability(sex_pdx::power::SLOT,crate::capability::CapabilityData::Power(sex_pdx::power::Grant{holder_pd:target,rights:sex_pdx::power::SENSE|sex_pdx::power::PROFILE}));
-        // An arena that grows on request (SYS_PROGRAM_MEMORY): Spindle has no heap, and
-        // a live hot swap gathers a server image of up to 8 MiB there, only when one comes.
-        crate::service_memory::reserve(target);
         let task=pd.main_task.load(core::sync::atomic::Ordering::Acquire);
         serial_println!("[boot.spindle.net.route] target={} task={} slot=18 service={} fixed_peer=1 nic_metadata=0 runtime_mint=0",target,unsafe{(*task).id},sexnet_id);
     }
