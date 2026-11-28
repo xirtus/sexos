@@ -17,6 +17,7 @@ extern crate alloc;
 mod download;
 mod webfont;
 mod media;
+mod capture;
 mod mse;
 mod keys;
 mod profile;
@@ -327,6 +328,8 @@ struct Browser {
     session_saved: String,
     /// Installed extensions.
     extensions: extensions::Extensions,
+    /// The camera and microphone pages asked for, and the question card.
+    capture: capture::Capture,
     /// Requests Shields blocked for the shown page (and its frames).
     blocked: u32,
     /// What the next request is for, when the code making it knows (see `send`).
@@ -865,6 +868,8 @@ impl Browser {
         // A private or container tab says so in the omnibox.
         let held = match self.jarbox.name() { Some(n) if self.editing.is_none() => alloc::format!("{n} · "), _ => String::new() };
         let bar = alloc::format!("{held}{bar}");
+        let prompt = self.capture.prompt();
+        let capturing = if self.capture.owner() == self.doc.get().owner() { self.capture.using } else { (false, false) };
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let chrome = sex_web::Chrome {
             text: &bar, editing: self.editing.is_some(), tabs: &labels, colours: &colours, active: self.active,
@@ -882,6 +887,8 @@ impl Browser {
             show_bookmarks_bar: self.show_bookmarks_bar,
             bookmarks: &bookmarks_bar,
             context_menu: self.context_menu.as_ref(),
+            permission: prompt.as_ref(),
+            capturing: capturing,
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -1282,6 +1289,9 @@ impl Browser {
         let frame_ok = self.in_frame.is_none() || sex_fetch::Url::parse(&base).is_ok_and(|t| cookie_ok(&self.shields, self.parent.as_deref().unwrap_or(""), &t, sex_shields::Kind::Subdocument));
         doc.cookies = frame_ok.then(|| self.jar.clone());
         doc.storage = Some(self.storage.clone());
+        doc.capture = Some(self.capture.shared.clone());
+        // The page before lets go of the camera and microphone.
+        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); }
         doc.wall = wall;
         doc.referrer = referrer;
         doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
@@ -1465,6 +1475,7 @@ impl Browser {
     #[inline(never)]
     fn after_script(&mut self, draw: bool) -> bool {
         self.media_requests();
+        self.capture_requests();
         let doc = self.doc.get();
         for (level, text) in doc.log.drain(..) {
             for line in text.lines().take(8) { sex_pdx::serial_record!("[web.console] level={} {}", level, line); }
@@ -1542,7 +1553,9 @@ impl Browser {
         self.serve_classic_scripts();
         self.sync_scroll();
         self.media_requests();
+        let capture_next = self.capture_tick();
         let media_next = self.media_tick();
+        let media_next = match (media_next, capture_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
         if moved && !self.animating { self.draw(); }
         if moved && self.fonts.frames_shown <= 8 { sex_pdx::serial_record!("[web.picture.frames] n={}", self.fonts.frames_shown); }
@@ -1574,6 +1587,89 @@ impl Browser {
         }
         // Animated GIF and WebP pictures.
         if let Some(due) = pictures_next { self.timer = Some(self.timer.map_or(due, |t| t.min(due))); }
+    }
+
+    /// Takes the page's `getUserMedia` calls and which devices its tracks still use.
+    fn capture_requests(&mut self) {
+        let framed = self.in_frame.is_some();
+        let doc = self.doc.get();
+        let owner = doc.owner();
+        let asks = core::mem::take(&mut doc.capture_asks);
+        let uses = doc.capture_use.take();
+        let screen = doc.screen_use.take();
+        if let Some((a, v)) = uses { self.capture.uses(owner, a, v); }
+        if let Some(on) = screen { self.capture.uses_screen(owner, on); }
+        if asks.is_empty() && uses.is_none() && screen.is_none() { return; }
+        let shown = self.capture.take(owner, asks, framed);
+        if let Some(card) = self.capture.prompt().filter(|_| shown) {
+            let (r, b) = sex_web::permission_rects(&card, self.surface.w, self.show_bookmarks_bar);
+            let at = |i: usize| b.get(i).map_or((0, 0), |r| (r[0] + r[2] / 2, r[1] + r[3] / 2));
+            sex_pdx::serial_record!("[web.capture.card] x={} y={} w={} h={} allow={},{} block={},{}", r[0], r[1], r[2], r[3], at(0).0, at(0).1, at(1).0, at(1).1);
+        }
+        self.timer = Some(sex_pdx::get_ticks());
+        if shown || uses.is_some() { self.full_redraw = true; self.frame_dirty = true; }
+    }
+
+    /// Answers the page, shows the camera in its stream elements, and keeps the
+    /// microphone flowing. Returns how soon to come back.
+    #[inline(never)]
+    fn capture_tick(&mut self) -> Option<u64> {
+        let ((fresh, fresh_screen), card, next) = self.capture.tick(sex_pdx::get_ticks());
+        if card { self.frame_dirty = true; }
+        let owner = self.doc.get().owner();
+        let answers: Vec<String> = self.capture.answers.drain(..).filter(|(o, _)| *o == owner).map(|(_, t)| t).collect();
+        if !answers.is_empty() {
+            if let Some(script) = self.doc.script() {
+                for a in &answers {
+                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(a) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+                }
+                self.after_script(true);
+            }
+        }
+        // Elements that stopped showing the camera drop its picture.
+        let mut relayout = false;
+        for m in self.media.iter_mut() {
+            if core::mem::take(&mut m.blank) && m.live.is_none() {
+                m.size = (0, 0);
+                let name = m.picture_name();
+                self.fonts.images.retain(|(s, _)| *s != name);
+                relayout = true;
+            }
+        }
+        let mut changed: Vec<String> = Vec::new();
+        // Each stream element shows its own source: the camera or the shared screen.
+        if (fresh || fresh_screen) && self.capture.owner() == owner {
+            let camera = self.capture.picture.clone().filter(|_| fresh).map(|p| (p, self.capture.seq));
+            let screen = self.capture.screen_picture.clone().filter(|_| fresh_screen).map(|p| (p, self.capture.screen_seq));
+            for m in self.media.iter_mut() {
+                let Some((pic, seq)) = (if m.live_screen { screen.as_ref() } else { camera.as_ref() }) else { continue };
+                if m.live_step(&mut self.fonts, pic, *seq) { changed.push(m.picture_name()); }
+                relayout |= core::mem::take(&mut m.resized);
+            }
+        }
+        if !changed.is_empty() { self.doc.get().pictures = self.fonts.images.clone(); }
+        if relayout {
+            self.relayout();
+            self.draw();
+        } else if !changed.is_empty() {
+            let (px, pw) = self.pane();
+            let pixels = &mut self.window.pixels()[..self.surface.pixels];
+            if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, px, pw, &changed) {
+                self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
+            } else {
+                self.draw();
+            }
+        }
+        if !changed.is_empty() || !answers.is_empty() { self.media_asked |= !answers.is_empty(); }
+        next
+    }
+
+    /// The person answered the browser's question card (None: Escape).
+    fn capture_answered(&mut self, button: Option<usize>) {
+        self.capture.answered(button);
+        self.capture.save(&mut self.window);
+        self.timer = Some(sex_pdx::get_ticks());
+        self.draw();
     }
 
     /// Finds the page's video and audio elements and shows their posters.
@@ -2156,6 +2252,19 @@ impl Browser {
         use sex_pdx::app_pointer::Kind;
         let (wx, wy) = (p.x as i32, p.y as i32);
 
+        // 0. The camera/microphone question: only its buttons answer it; the page
+        // under it still gets everything else.
+        if self.in_frame.is_none() {
+            if let Some(card) = self.capture.prompt() {
+                let (w, bb) = (self.surface.w, self.show_bookmarks_bar);
+                if sex_web::permission_contains(&card, w, bb, wx, wy) {
+                    if let Kind::Down { button: 0 } = p.kind {
+                        if let Some(b) = sex_web::permission_hit(&card, w, bb, wx, wy) { self.capture_answered(Some(b)); }
+                    }
+                    return;
+                }
+            }
+        }
         // 1. Floating context / browser menu intercepts pointer events while open.
         if self.in_frame.is_none() && self.context_menu.is_some() {
             match p.kind {
@@ -2415,6 +2524,8 @@ impl Browser {
             self.draw();
             return;
         }
+        // Escape answers the camera/microphone question "not now".
+        if key.code == 0x01 && self.in_frame.is_none() && self.capture.prompt().is_some() { return self.capture_answered(None); }
         // The browser's own shortcuts come before the page's.
         if key.control && self.in_frame.is_none() && self.shortcut(key) { return; }
         if self.finding { return self.find_key(key); }
@@ -2523,7 +2634,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), fetch_waiting: Vec::new(), fetch_going: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
@@ -2533,6 +2644,8 @@ pub extern "C" fn _start() -> ! {
     (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());
     b.shields = shields::Shields::load(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
+    let flag = |f: &str| given.split_ascii_whitespace().any(|a| a == f);
+    b.capture = capture::Capture::new(&mut b.window, flag("--fake-media"), flag("--fake-screen"), b.jarbox == profile::Jarbox::Private);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
     b.start_backgrounds();

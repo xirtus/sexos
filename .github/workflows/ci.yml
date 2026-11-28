@@ -207,6 +207,8 @@ jobs:
         cargo test --locked -p sex-speech
         cargo test --locked -p sex-pdx --test speech_voice
         cargo test --locked -p sex-pdx --test a11y
+    - name: Screen sharing wire, picker layout, bank and Shell custody on the host
+      run: cargo test --locked -p sex-pdx --test screen_share
     - name: Denim page compression (compressed RAM codec)
       run: cargo test --locked -p denim
     - name: SNTP client codec (network time)
@@ -579,6 +581,10 @@ jobs:
       run: python3 scripts/program_web_side_panel_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sidepanel"
     - name: Kaleidoscope session restore (tabs, groups, shown tab; private tabs not kept)
       run: python3 scripts/program_web_session_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-session"
+    - name: Kaleidoscope camera and microphone (getUserMedia, permission card, live video)
+      run: python3 scripts/program_web_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-capture"
+    - name: Kaleidoscope screen sharing (getDisplayMedia, the Shell's picker, Stop sharing)
+      run: python3 scripts/program_web_screenshare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-screenshare"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
     - name: Preserve browser evidence

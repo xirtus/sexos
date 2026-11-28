@@ -14,6 +14,7 @@ extern crate alloc;
 
 #[cfg(feature = "baseline-jit")]
 pub mod baseline;
+pub mod capture;
 pub mod code_cache;
 pub mod document;
 pub mod storage;
@@ -21,6 +22,7 @@ pub mod webgl;
 #[cfg(sexjs_native)]
 mod native;
 pub use document::{ClassicScript, Document, FetchAsk, WsAsk};
+pub use capture::{Capture, CaptureAsk, Decision};
 pub use code_cache::CodeCache;
 
 use alloc::{format, string::String, vec::Vec};
@@ -148,6 +150,20 @@ pub mod op {
     /// over the quota), `remove` or `keys` (the keys starting with `key`, that part cut,
     /// one per line).
     pub const EXTENSION: u32 = 39;
+    /// Camera and microphone (`navigator.mediaDevices`), by verb: (`secure`) `1` when
+    /// the page may ask at all; (`ask`, id, audio 0/1, video 0/1, audio device, video
+    /// device) a `getUserMedia` call, which the browser answers with
+    /// `capture\tID\tRESULT\tAUDIO_LABEL\tAUDIO_ID\tVIDEO_LABEL\tVIDEO_ID\tW\tH\tFPS`,
+    /// RESULT `ok`, `denied`, `none` or `busy`; (`display`, id) a `getDisplayMedia`
+    /// call, which the Shell asks the person about and the browser answers the same
+    /// way, with `\tSURFACE` (`monitor` or `window`) after FPS and `screen` as the
+    /// video id; (`use`, audio 0/1, video 0/1, screen 0/1) which kinds the page's live
+    /// tracks still use, so the browser can let the others go; (`devices`) the
+    /// `enumerateDevices` lines; (`state`, `camera` or `microphone`) the permission
+    /// state. The browser also dispatches `capturegone\tKIND` (KIND `audio`, `video` or
+    /// `screen`) when a device stops (unplugged, the person took it back, or stopped
+    /// sharing), `capturemute\tKIND\t0|1`, and `devicechange`.
+    pub const CAPTURE: u32 = 40;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
     /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code

@@ -28,10 +28,10 @@ pub mod session;
 pub use chrome::{
     bookmark_hit_at, bookmark_pills, build_context_menu, chrome_height, context_menu_contains,
     context_menu_hit_at, context_menu_rect, default_bookmarks, encode_query, frame_with,
-    group_name, merge_bookmarks, resolve_omnibox_input, shields_pill_width, side_row_at,
+    group_name, merge_bookmarks, permission_contains, permission_hit, permission_rects, resolve_omnibox_input, shields_pill_width, side_row_at,
     strip_slots, suggestion_at, tab_chips, tab_close_rect, tab_hit_at, tab_strip_layout,
     toolbar_hit_at, toolbar_layout, BookmarkItem, BookmarkStore, Chrome, ContextAction,
-    ContextMenu, ContextMenuItem, Slot, TabGroup, TabHit, TabStripState, ToolbarHit, ToolbarLayout,
+    ContextMenu, ContextMenuItem, PermissionPrompt, Slot, TabGroup, TabHit, TabStripState, ToolbarHit, ToolbarLayout,
     BAR, BOOKMARKS_H, CONTEXT_MENU_ROW, CONTEXT_MENU_SEP, CONTEXT_MENU_W, GROUP_COLOURS, SIDE,
     SIDE_ROW, SUGGESTION_ROW, TOP_BAR_H,
 };

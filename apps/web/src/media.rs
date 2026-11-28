@@ -59,6 +59,14 @@ pub struct Media {
     pub pending: Option<f64>,
     /// It was playing when that seek came: play on after it.
     resume: bool,
+    /// Shows the camera (a `MediaStream` as `srcObject`), from when (ticks).
+    pub live: Option<u64>,
+    /// What it shows live is the shared screen (or window), not the camera.
+    pub live_screen: bool,
+    /// The camera picture shown last (`capture::Capture::seq`).
+    pub live_seq: u32,
+    /// It showed the camera and no longer does: its picture goes.
+    pub blank: bool,
 }
 
 impl Media {
@@ -68,7 +76,7 @@ impl Media {
         // A MediaSource's object URL is not loaded: the page attaches it ("mse").
         let waits = !src.is_empty() && !src.starts_with("blob:");
         Media {
-            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false, pending: None, resume: false,
+            node, audio, state: if waits { State::Waiting } else { State::Empty }, src, player: None, mse: None, resized: false, pending: None, resume: false, live: None, live_screen: false, live_seq: 0, blank: false,
             want_play: dom.attr(node, "autoplay").is_some(), looped: dom.attr(node, "loop").is_some(),
             controls: dom.attr(node, "controls").is_some(), muted: dom.attr(node, "muted").is_some(), volume: 100,
             events: Vec::new(), last_report: 0, size: (0, 0), frames: 0,
@@ -133,6 +141,25 @@ impl Media {
     /// Carries out a script's request. True if the element must be loaded (again).
     pub fn request(&mut self, dom: &Dom, verb: &str, arg: &str) -> bool {
         match verb {
+            "live" => {
+                self.player = None;
+                self.mse = None;
+                self.pending = None;
+                self.frames = 0;
+                self.live_seq = 0;
+                let shows = arg == "video" || arg == "screen";
+                self.blank |= self.live.is_some() && !shows;
+                self.live = shows.then(sex_pdx::get_ticks);
+                self.live_screen = arg == "screen";
+                self.state = if self.live.is_some() { State::Ready } else { State::Empty };
+                self.events.push(if self.live.is_some() { "loadstart" } else { "emptied" });
+            }
+            "play" if self.live.is_some() => {
+                if !self.want_play { self.want_play = true; self.events.extend_from_slice(&["play", "playing"]); }
+            }
+            "pause" if self.live.is_some() => {
+                if self.want_play { self.want_play = false; self.events.push("pause"); }
+            }
             "play" => {
                 self.want_play = true;
                 if let Some(p) = self.player.as_mut() {
@@ -192,6 +219,7 @@ impl Media {
                 }
             }
             "load" => {
+                self.blank |= self.live.take().is_some();
                 self.player = None;
                 self.frames = 0;
                 self.src = source(dom, self.node);
@@ -289,11 +317,49 @@ impl Media {
         m.playhead(now);
     }
 
+    /// Shows the camera's newest picture (seq `seq`), when this element shows the
+    /// camera and that picture is new. True when it did.
+    pub fn live_step(&mut self, fonts: &mut Fonts, picture: &Rc<Image>, seq: u32) -> bool {
+        if self.live.is_none() || seq == self.live_seq { return false; }
+        // Paused, a stream element holds its first picture.
+        if !self.want_play && self.frames > 0 { return false; }
+        self.live_seq = seq;
+        let name = self.picture_name();
+        match fonts.images.iter().position(|(s, _)| *s == name) {
+            Some(i) => fonts.images[i].1 = picture.clone(),
+            None => fonts.images.push((name, picture.clone())),
+        }
+        let size = (picture.width, picture.height);
+        if self.size != size {
+            if self.size.0 > 0 { self.events.push("resize"); }
+            self.size = size;
+            self.resized = true;
+        }
+        if self.frames == 0 {
+            self.events.extend_from_slice(&["loadedmetadata", "loadeddata", "canplay", "canplaythrough"]);
+            if self.want_play { self.events.extend_from_slice(&["play", "playing"]); }
+        }
+        self.frames += 1;
+        // Like playback, a live element tells the page its time (and frame count) every
+        // REPORT_MS, or getVideoPlaybackQuality() would stop at the first picture.
+        let now = sex_pdx::get_ticks();
+        if now >= self.last_report + REPORT_MS {
+            self.last_report = now;
+            if !self.events.contains(&"timeupdate") { self.events.push("timeupdate"); }
+        }
+        true
+    }
+
     /// The `media` dispatch for the page: state, then the events since the last one.
     pub fn report(&mut self) -> Option<String> {
         if self.events.is_empty() { return None; }
         let events = self.events.join(",");
         self.events.clear();
+        if let Some(from) = self.live {
+            let t = sex_pdx::get_ticks().saturating_sub(from) as f64 / 1000.0;
+            let ready = if self.frames > 0 { 4 } else { 0 };
+            return Some(alloc::format!("media\t{}\t{}\t{}\tInfinity\t{}\t0\t{}\t{}\t{}\t{}", self.node, events, t, !self.want_play as u8, self.size.0, self.size.1, ready, self.frames));
+        }
         let (t, d, paused, ended, w, h, ready) = match self.player.as_mut() {
             Some(p) => {
                 let d = p.duration_ms();
