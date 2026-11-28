@@ -15,6 +15,7 @@ extern crate alloc;
 #[cfg(feature = "baseline-jit")]
 pub mod baseline;
 pub mod capture;
+pub mod recorder;
 pub mod code_cache;
 pub mod document;
 pub mod storage;
@@ -23,6 +24,7 @@ pub mod webgl;
 mod native;
 pub use document::{ClassicScript, Document, FetchAsk, WsAsk};
 pub use capture::{Capture, CaptureAsk, Decision};
+pub use recorder::Recorders;
 pub use code_cache::CodeCache;
 
 use alloc::{format, string::String, vec::Vec};
@@ -169,6 +171,14 @@ pub mod op {
     pub const CODE_GET: u32 = 75;
     /// (bytecode): the answer to the last CODE_GET that came back empty.
     pub const CODE_PUT: u32 = 76;
+    /// `MediaRecorder`, by verb (see [`crate::recorder`]): (`type`, mime) `1` when the
+    /// browser records it; (`start`, id, video source, sound source, mime, video bits/s,
+    /// sound bits/s, timeslice ms, fps) the type it writes, or nothing when it cannot;
+    /// (`sources`, id, video, sound) the tracks changed; (`pause` | `resume` | `data` |
+    /// `stop`, id); (`take`, id) the oldest recorded piece (bytes). The browser
+    /// dispatches `recorder\tID\tstart`, `recorder\tID\tdata\tBYTES` (a piece to take),
+    /// `recorder\tID\terror\tNAME` and `recorder\tID\tstop` (after the last piece).
+    pub const RECORDER: u32 = 80;
 }
 
 /// What scripts act on. A `None` result is JavaScript `null`.

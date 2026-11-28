@@ -7,6 +7,9 @@ static NEXT_RESOURCE_OWNER: AtomicU64 = AtomicU64::new(1);
 use alloc::{format, string::String, vec::Vec};
 use sex_html::dom::{Dom, Kind, NodeId};
 
+/// The `media_bytes` index of a whole file (a Blob played through an object URL).
+pub const MEDIA_FILE: u32 = u32::MAX;
+
 pub struct Document {
     #[cfg(feature = "jit-profile")]
     pub query_profile: Vec<(String, u64, u64)>,
@@ -70,7 +73,8 @@ pub struct Document {
     pub bodies: Vec<(u32, Vec<u8>)>,
     /// Video and audio requests not yet taken by the browser: (element, verb, argument).
     pub media: Vec<(NodeId, String, String)>,
-    /// Media Source appends not taken yet: (element, SourceBuffer, bytes).
+    /// Media Source appends not taken yet: (element, SourceBuffer, bytes); a Blob's whole
+    /// bytes to play as a file come as SourceBuffer [`MEDIA_FILE`].
     pub media_bytes: Vec<(NodeId, u32, Vec<u8>)>,
     /// Loaded replies' final address and headers, by request id.
     pub heads: Vec<(u32, String)>,
@@ -101,6 +105,8 @@ pub struct Document {
     pub capture_asks: Vec<crate::capture::CaptureAsk>,
     /// The kinds (audio, video) the page's live tracks use, when that changed.
     pub capture_use: Option<(bool, bool)>,
+    /// The page's `MediaRecorder`s: calls for the browser and pieces for the page.
+    pub recorders: crate::recorder::Recorders,
 }
 
 /// What a page asked of its WebSockets.
@@ -212,7 +218,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None, capture: None, capture_asks: Vec::new(), capture_use: None, ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new() }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None, capture: None, capture_asks: Vec::new(), capture_use: None, recorders: Default::default(), ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -367,8 +373,15 @@ impl Page for Document {
                 let queued: usize = self.media_bytes.iter().map(|(_, _, b)| b.len()).sum();
                 let bytes = a.get(2).copied().unwrap_or(&[]);
                 if queued + bytes.len() > 64 << 20 { return None; }
-                self.media_bytes.push((n, text(1).parse().ok()?, bytes.to_vec()));
+                // `file`: a Blob's whole bytes, played as a file (an object URL as `src`).
+                let index = if text(1) == "file" { MEDIA_FILE } else { text(1).parse().ok()? };
+                self.media_bytes.push((n, index, bytes.to_vec()));
                 return Some(Vec::new());
+            }
+            op::RECORDER => {
+                if text(0) == "take" { return self.recorders.take(text(1).trim().parse().ok()?); }
+                let args: Vec<&str> = a.iter().map(|b| core::str::from_utf8(b).unwrap_or("")).collect();
+                return self.recorders.call(&args).map(String::into_bytes);
             }
             op::WS => {
                 let id = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).and_then(|t| t.parse::<u32>().ok());

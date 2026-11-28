@@ -18,6 +18,7 @@ mod download;
 mod webfont;
 mod media;
 mod capture;
+mod recorder;
 mod mse;
 mod keys;
 mod profile;
@@ -330,6 +331,9 @@ struct Browser {
     extensions: extensions::Extensions,
     /// The camera and microphone pages asked for, and the question card.
     capture: capture::Capture,
+    /// Pages' MediaRecorders, and what this build can record (sex-js `Recorders::codecs`).
+    recorders: recorder::Recorders,
+    recorder_codecs: u8,
     /// Requests Shields blocked for the shown page (and its frames).
     blocked: u32,
     /// What the next request is for, when the code making it knows (see `send`).
@@ -1290,8 +1294,9 @@ impl Browser {
         doc.cookies = frame_ok.then(|| self.jar.clone());
         doc.storage = Some(self.storage.clone());
         doc.capture = Some(self.capture.shared.clone());
-        // The page before lets go of the camera and microphone.
-        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); }
+        doc.recorders.codecs = self.recorder_codecs;
+        // The page before lets go of the camera and microphone, and its recorders end.
+        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); self.recorders.page_left(old); }
         doc.wall = wall;
         doc.referrer = referrer;
         doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
@@ -1495,6 +1500,7 @@ impl Browser {
         self.canvases.run_queue(&mut self.fonts, &doc.dom, queue);
         let mut changed: Vec<usize> = core::mem::take(&mut self.canvases.drew);
         changed.extend(sex_web::canvas::present_gl_nodes(&mut self.fonts, &mut doc.gl));
+        if !changed.is_empty() { self.recorders.drawn(&changed); }
         if dirty { self.relayout(); }
         if !draw || (!dirty && changed.is_empty()) { return false; }
         // Only canvases drew: put just them over the last frame when that is enough.
@@ -1554,6 +1560,8 @@ impl Browser {
         self.sync_scroll();
         self.media_requests();
         let capture_next = self.capture_tick();
+        let recorder_next = self.recorder_tick();
+        let capture_next = match (recorder_next, capture_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
         let media_next = self.media_tick();
         let media_next = match (media_next, capture_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
@@ -1661,6 +1669,53 @@ impl Browser {
         next
     }
 
+    /// Takes the page's MediaRecorder calls, records what is due, and hands the page its
+    /// pieces. Returns how soon to come back.
+    #[inline(never)]
+    fn recorder_tick(&mut self) -> Option<u64> {
+        let owner = self.doc.get().owner();
+        let asks = core::mem::take(&mut self.doc.get().recorders.asks);
+        if asks.is_empty() && !self.recorders.active() { return None; }
+        let now = sex_pdx::get_ticks();
+        let mut out = Vec::new();
+        self.recorders.take(owner, asks, now, &mut out);
+        let held = self.capture.owner() == owner;
+        let src = recorder::Sources {
+            owner,
+            camera: self.capture.picture.as_deref().filter(|_| held).map(|p| (p, self.capture.seq)),
+            mic: held.then_some(self.capture.heard_now.as_slice()),
+            fonts: &self.fonts,
+        };
+        let next = self.recorders.tick(now, &src, &mut out);
+        if out.is_empty() { return next; }
+        let mut said: Vec<String> = Vec::new();
+        for o in out {
+            match o {
+                recorder::Out::Piece(o, id, bytes) if o == owner => {
+                    let n = bytes.len();
+                    let doc = self.doc.get();
+                    if doc.recorders.give(id, bytes) { said.push(alloc::format!("recorder\t{id}\tdata\t{n}")); } else {
+                        sex_pdx::serial_record!("[web.recorder.overflow] id={}", id);
+                        doc.recorders.ended(id);
+                        said.push(alloc::format!("recorder\t{id}\terror\tUnknownError"));
+                    }
+                }
+                recorder::Out::Event(o, text) if o == owner => {
+                    if text.ends_with("\tstop") { if let Some(id) = text.split('\t').nth(1).and_then(|i| i.parse().ok()) { self.doc.get().recorders.ended(id); } }
+                    said.push(text);
+                }
+                _ => {}
+            }
+        }
+        if let Some(script) = self.doc.script() {
+            for a in &said {
+                if let Err(sex_js::Error::Trapped(why)) = script.dispatch(a) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+            }
+            self.after_script(true);
+        }
+        Some(next.map_or(0, |n| n.min(10)))
+    }
+
     /// The person answered the browser's question card (None: Escape).
     fn capture_answered(&mut self, button: Option<usize>) {
         self.capture.answered(button);
@@ -1706,6 +1761,12 @@ impl Browser {
         }
         for (node, index, bytes) in appends {
             let Some(m) = self.media.iter_mut().find(|m| m.node == node) else { continue };
+            // A Blob's bytes ("blob" came first): played as a file.
+            if index == sex_js::document::MEDIA_FILE {
+                sex_pdx::serial_record!("[web.media.blob] node={} bytes={}", node, bytes.len());
+                if m.state == media::State::Loading && m.src == "blob" { m.resized |= m.open(bytes); }
+                continue;
+            }
             let Some(mse) = m.mse.as_mut() else { continue };
             mse.append(node, index as usize, &bytes);
         }
@@ -2631,7 +2692,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), fetch_waiting: Vec::new(), fetch_going: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty(), recorders: Default::default(), recorder_codecs: recorder::codecs() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();

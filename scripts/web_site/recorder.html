@@ -1,0 +1,72 @@
+<!doctype html>
+<html><head><title>Recorder check</title>
+<style>
+body { margin: 12px; background: #fff; }
+h1 { font-size: 18px; margin: 120px 0 8px; }
+video, canvas { display: block; width: 320px; height: 240px; background: #000; margin: 4px 0; }
+</style></head>
+<body>
+<h1 id="h">Recording</h1>
+<canvas id="c" width="320" height="240"></canvas>
+<video id="v" muted playsinline></video>
+<script>
+// MediaRecorder end to end: three seconds of the camera and microphone, then three
+// seconds of an animated canvas (canvas.captureStream) with the microphone; each
+// recording is sent to the gate (which checks it with FFmpeg) and played back from
+// its Blob in a <video>.
+const say = (...a) => console.log('recorder', ...a);
+const v = document.getElementById('v');
+const c = document.getElementById('c');
+const g = c.getContext('2d');
+let n = 0;
+function draw() {
+  n++;
+  g.fillStyle = '#204080'; g.fillRect(0, 0, 320, 240);
+  g.fillStyle = '#ffffff'; g.fillRect((n * 6) % 280, 100, 40, 40);
+  g.fillStyle = '#ff4040'; g.fillText('frame ' + n, 10, 20);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function record(stream, mimeType, name) {
+  return new Promise((resolve, reject) => {
+    const r = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 1000000 });
+    const parts = [];
+    r.onstart = () => say(name, 'started', r.state, r.mimeType);
+    r.ondataavailable = e => { if (e.data.size) parts.push(e.data); };
+    r.onerror = e => reject(e.error);
+    r.onstop = () => resolve(new Blob(parts, { type: r.mimeType }));
+    r.start(1000);
+    setTimeout(() => r.stop(), 3000);
+  }).then(b => { say(name, 'blob', b.size, b.type); return b; });
+}
+function play(blob, name) {
+  return new Promise(resolve => {
+    v.onplaying = () => say(name, 'playing', v.videoWidth, v.videoHeight);
+    v.onended = () => { say(name, 'played', v.getVideoPlaybackQuality().totalVideoFrames, v.currentTime.toFixed(2), String(v.duration), v.videoWidth, v.videoHeight); resolve(); };
+    v.onerror = () => { say(name, 'play failed'); resolve(); };
+    v.src = URL.createObjectURL(blob);
+    v.play();
+  });
+}
+async function upload(blob, name) {
+  const r = await fetch('/upload/' + name, { method: 'POST', body: await blob.arrayBuffer() });
+  say(name, 'uploaded', r.status);
+}
+say('types', ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'audio/webm;codecs=opus', 'video/mp4'].map(t => MediaRecorder.isTypeSupported(t) ? 1 : 0).join(''));
+navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 640, height: 480 } }).then(async st => {
+  say('stream', st.getTracks().map(t => t.kind).join(','));
+  const cam = await record(st, 'video/webm;codecs=vp8,opus', 'cam');
+  await upload(cam, 'cam');
+  await play(cam, 'cam');
+  const timer = setInterval(draw, 33); draw();
+  const cs = c.captureStream(30);
+  const mixed = new MediaStream([cs.getVideoTracks()[0], st.getAudioTracks()[0]]);
+  const canvas = await record(mixed, 'video/webm;codecs=vp9,opus', 'canvas');
+  clearInterval(timer);
+  await upload(canvas, 'canvas');
+  await play(canvas, 'canvas');
+  st.getTracks().forEach(t => t.stop());
+  cs.getTracks().forEach(t => t.stop());
+  say('done');
+}, e => say('failed', e.name));
+</script>
+</body></html>

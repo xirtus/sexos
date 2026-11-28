@@ -30,6 +30,7 @@ pub mod subtitles;
 pub use source::{Source, Growing, AHEAD, NEAR};
 pub mod recording;
 pub mod export;
+pub mod live;
 pub use sex_episodes::{episodes, segments};
 pub mod audio_dsp;
 pub mod bench;
