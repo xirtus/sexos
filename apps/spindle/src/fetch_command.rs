@@ -12,7 +12,7 @@ const TICK_POLL: u64 = 5;
 /// A download that drops part way (a Wi-Fi stall past the flow's timeout, a reset) is
 /// resumed from where it stopped this many times, with `Range` when the server honours it
 /// and from the start when it does not.
-const MAX_RESUMES: u8 = 6;
+const MAX_RESUMES: u8 = 10;
 /// Unknown length: the server sent no Content-Length.
 const NO_LENGTH: u64 = u64::MAX;
 pub struct Fetch {
@@ -102,7 +102,10 @@ impl Fetch {
     /// call, or received bytes waiting in `net()` for `Phase::Store` to copy to `files()`).
     pub fn region_in_use(&self) -> bool { (self.sent && !self.to_files) || self.phase == Phase::Store || self.chunk_pending }
     fn end(&mut self) { self.phase = Phase::Close; self.sent = false; self.to_files = false; }
-    fn fail(&mut self, sb: &mut Scrollback, why: &str) { say!(sb, "fetch: {}", why); self.written = 0; self.redirect_len = 0; self.resume_next = false; self.chunk_pending = false; self.result = Some(false); self.end(); }
+    fn fail(&mut self, sb: &mut Scrollback, why: &str) {
+        // While resuming, a failed reconnect (Wi-Fi still coming back) is one more try.
+        if self.resumes > 0 && self.resumes < MAX_RESUMES && self.written > 0 && !self.resume_next { self.cut_off(sb, why); return; }
+        say!(sb, "fetch: {}", why); self.written = 0; self.redirect_len = 0; self.resume_next = false; self.chunk_pending = false; self.result = Some(false); self.end(); }
     /// The body stopped before its end: resume it, or fail saying how much arrived.
     fn cut_off(&mut self, sb: &mut Scrollback, why: &str) {
         if self.resumes < MAX_RESUMES && self.again_len > 0 {
@@ -352,8 +355,8 @@ impl Fetch {
                 let n = self.again_len;
                 let from = self.written;
                 self.begin(&line[..n], sb, same, from);
-                // Give the link a moment before asking again.
-                self.next_at = now + 1_000;
+                // Give the link a moment before asking again, longer each time.
+                self.next_at = now + 1_000 * self.resumes as u64;
                 if self.phase == Phase::Idle && self.result.is_none() { self.result = Some(false); }
                 return true;
             }
