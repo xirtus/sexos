@@ -25,6 +25,12 @@ impl Probe {
     /// Public controlled-fixture success, consumed once; never a peer receipt.
     pub fn take_self_check(&mut self)->Option<u32>{self.self_check.take()}
     pub fn busy(&self)->bool {matches!(self.view,View::Preparing|View::HelloPending)&&!self.closed}
+    /// A local preparation that reached HelloPending waits on nothing (no client, no
+    /// peer): it holds its hello until Q, Y or close, and its start deadline no longer
+    /// applies. An exchange's HelloPending still waits for name resolution.
+    fn prepared_locally(&self)->bool {self.view==View::HelloPending&&!self.exchange&&!self.closed}
+    /// Work is outstanding that needs another turn without any new event.
+    pub fn polling(&self)->bool {self.busy()&&!self.prepared_locally()}
     pub fn start(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->bool {
         self.start_mode(policy,seed,time,now,false,None)
     }
@@ -68,7 +74,7 @@ impl Probe {
     /// Parent advances each existing held client at most once per event turn.
     /// This method issues no PDX calls and polls protocol state at most once.
     pub fn advance(&mut self,policy:&mut trust::Client,seed:&mut entropy::Client,time:&mut clock::Client,now:u64)->(Option<Stats>,usize) {
-        if !self.busy(){return(None,0);}
+        if !self.busy()||self.prepared_locally(){return(None,0);}
         self.work=None;
         let Some(turn)=self.turn.checked_add(1)else{let n=self.cancel(policy,seed,time);self.view=View::Unavailable;return(None,n);};self.turn=turn;
         if now<self.last||self.deadline.is_none_or(|end|now>=end) {
