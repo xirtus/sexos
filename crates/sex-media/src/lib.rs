@@ -33,6 +33,7 @@ pub mod export;
 pub use sex_episodes::{episodes, segments};
 pub mod audio_dsp;
 pub mod bench;
+pub mod frames;
 
 /// FFmpeg's error number, with its text through [`Error::text`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

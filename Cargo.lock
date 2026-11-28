@@ -7512,6 +7512,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-dtls"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "hmac 0.12.1",
+ "p256",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "sex-rtp",
+ "sex-srtp",
+ "sha2 0.10.9",
+ "subtle",
+]
+
+[[package]]
 name = "sex-ebook"
 version = "0.1.0"
 dependencies = [
@@ -7641,6 +7656,17 @@ name = "sex-i2c-dw"
 version = "0.1.0"
 
 [[package]]
+name = "sex-ice"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "hmac 0.12.1",
+ "md-5 0.10.6",
+ "sex-sdp",
+ "sha1 0.10.7",
+]
+
+[[package]]
 name = "sex-icons"
 version = "0.1.0"
 dependencies = [
@@ -7683,7 +7709,9 @@ dependencies = [
  "sex-fetch",
  "sex-gl",
  "sex-html",
+ "sex-ice",
  "sex-image",
+ "sex-rtc",
  "sha2 0.10.9",
  "wasmi",
 ]
@@ -7891,12 +7919,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-rtc"
+version = "0.1.0"
+dependencies = [
+ "image-webp 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "serde_json",
+ "sex-dtls",
+ "sex-ice",
+ "sex-rtp",
+ "sex-sdp",
+ "sex-srtp",
+]
+
+[[package]]
+name = "sex-rtp"
+version = "0.1.0"
+
+[[package]]
 name = "sex-sdl"
 version = "0.1.0"
 dependencies = [
  "sex-libc",
  "sex-std",
 ]
+
+[[package]]
+name = "sex-sdp"
+version = "0.1.0"
 
 [[package]]
 name = "sex-shape"
@@ -7929,6 +7980,17 @@ version = "0.1.0"
 [[package]]
 name = "sex-splice"
 version = "0.1.0"
+
+[[package]]
+name = "sex-srtp"
+version = "0.1.0"
+dependencies = [
+ "aes 0.8.4",
+ "aes-gcm",
+ "hmac 0.12.1",
+ "sha1 0.10.7",
+ "subtle",
+]
 
 [[package]]
 name = "sex-ssh"
@@ -10944,10 +11006,14 @@ dependencies = [
  "sex-extensions",
  "sex-fetch",
  "sex-gl",
+ "sex-ice",
+ "sex-image",
  "sex-js",
  "sex-media",
  "sex-pdx",
+ "sex-rtc",
  "sex-shields",
+ "sex-uvc",
  "sex-web",
 ]
 

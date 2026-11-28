@@ -1,0 +1,11 @@
+<!doctype html>
+<html><head><title>Microphone check</title></head>
+<body>
+<h1>Asking for the microphone</h1>
+<script>
+// Another site: the person blocks it, and the page hears NotAllowedError.
+navigator.mediaDevices.getUserMedia({ audio: true }).then(
+  () => console.log('capture block unexpected'),
+  e => navigator.permissions.query({ name: 'microphone' }).then(p => console.log('capture block', e.name, p.state)));
+</script>
+</body></html>

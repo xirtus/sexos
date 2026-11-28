@@ -145,6 +145,7 @@ impl Browser {
     /// Saves the profile and ends the program.
     pub(super) fn quit(&mut self) -> ! {
         self.profile.save(&mut self.window, super::wall(), true);
+        self.capture.stop();
         self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut());
         sex_pdx::serial_record!("[web.closed] target={} task={}", self.window.target, self.window.task);
         sex_pdx::task_finish(0)

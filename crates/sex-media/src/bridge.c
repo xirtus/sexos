@@ -334,3 +334,116 @@ int sx_chapter(struct sx *s, int n, char *out, int cap, int64_t *start_ms) {
 
 // FFmpeg's error text, for the window.
 void sx_error(int err, char *buf, int len) { av_strerror(err, buf, len); }
+
+// ---- Frames without a container (WebRTC) ----
+// One encoded frame in (a VP8/VP9/H.264 picture or an Opus packet), its picture as
+// 0x00RRGGBB or its sound as 48 kHz stereo i16 out.
+struct sx_frames {
+    AVCodecContext *codec;
+    AVPacket *packet;
+    AVFrame *frame;
+    struct SwsContext *scale;
+    SwrContext *resample;
+    int scale_w, scale_h, scale_from_w, scale_from_h, scale_fmt;
+};
+
+void sx_frames_close(struct sx_frames *f) {
+    if (!f) return;
+    sws_freeContext(f->scale);
+    swr_free(&f->resample);
+    av_frame_free(&f->frame);
+    av_packet_free(&f->packet);
+    avcodec_free_context(&f->codec);
+    av_free(f);
+}
+
+// which: 1 VP8, 2 VP9, 3 H.264, 4 Opus.
+struct sx_frames *sx_frames_open(int which, int *err) {
+    enum AVCodecID id = which == 1 ? AV_CODEC_ID_VP8 : which == 2 ? AV_CODEC_ID_VP9 : which == 3 ? AV_CODEC_ID_H264 : AV_CODEC_ID_OPUS;
+    const AVCodec *c = avcodec_find_decoder(id);
+    *err = 0;
+    if (!c) { *err = AVERROR_DECODER_NOT_FOUND; return NULL; }
+    struct sx_frames *f = av_mallocz(sizeof *f);
+    if (!f) { *err = AVERROR(ENOMEM); return NULL; }
+    f->codec = avcodec_alloc_context3(c);
+    f->packet = av_packet_alloc();
+    f->frame = av_frame_alloc();
+    if (!f->codec || !f->packet || !f->frame) { *err = AVERROR(ENOMEM); sx_frames_close(f); return NULL; }
+    f->codec->thread_count = 1;
+    if (id == AV_CODEC_ID_OPUS) {
+        f->codec->sample_rate = 48000;
+        av_channel_layout_default(&f->codec->ch_layout, 2);
+    }
+    int r = avcodec_open2(f->codec, c, NULL);
+    if (r < 0) { *err = r; sx_frames_close(f); return NULL; }
+    return f;
+}
+
+static int frames_send(struct sx_frames *f, const uint8_t *data, int len) {
+    av_packet_unref(f->packet);
+    int r = av_new_packet(f->packet, len);
+    if (r < 0) return r;
+    memcpy(f->packet->data, data, len);
+    r = avcodec_send_packet(f->codec, f->packet);
+    return r == AVERROR(EAGAIN) ? 0 : r;
+}
+
+// Decodes one picture. Its own size goes to *w, *h; it is scaled to fit max_w x max_h
+// (same shape) into out, whose size goes to *out_w, *out_h. Returns 1 with a picture,
+// 0 without one yet, or an FFmpeg error.
+int sx_frames_video(struct sx_frames *f, const uint8_t *data, int len, uint32_t *out, int max_w, int max_h, int *w, int *h, int *out_w, int *out_h) {
+    int r = frames_send(f, data, len);
+    if (r < 0) return r;
+    int got = 0;
+    for (;;) {
+        r = avcodec_receive_frame(f->codec, f->frame);
+        if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) break;
+        if (r < 0) return r;
+        AVFrame *p = f->frame;
+        if (p->width <= 0 || p->height <= 0) continue;
+        int ow = p->width, oh = p->height;
+        if (ow > max_w || oh > max_h) {
+            if ((int64_t)ow * max_h > (int64_t)oh * max_w) { oh = (int)((int64_t)oh * max_w / ow); ow = max_w; }
+            else { ow = (int)((int64_t)ow * max_h / oh); oh = max_h; }
+        }
+        if (ow < 1) ow = 1;
+        if (oh < 1) oh = 1;
+        if (!f->scale || f->scale_w != ow || f->scale_h != oh || f->scale_from_w != p->width || f->scale_from_h != p->height || f->scale_fmt != p->format) {
+            sws_freeContext(f->scale);
+            f->scale = sws_getContext(p->width, p->height, p->format, ow, oh, AV_PIX_FMT_BGRA, SWS_BILINEAR, NULL, NULL, NULL);
+            if (!f->scale) return AVERROR(EINVAL);
+            f->scale_w = ow; f->scale_h = oh; f->scale_from_w = p->width; f->scale_from_h = p->height; f->scale_fmt = p->format;
+        }
+        uint8_t *dst[4] = { (uint8_t *)out, NULL, NULL, NULL };
+        int stride[4] = { ow * 4, 0, 0, 0 };
+        sws_scale(f->scale, (const uint8_t *const *)p->data, p->linesize, 0, p->height, dst, stride);
+        *w = p->width; *h = p->height; *out_w = ow; *out_h = oh;
+        got = 1;
+        av_frame_unref(p);
+    }
+    return got;
+}
+
+// Decodes one sound packet into at most cap 48 kHz stereo frames. Returns how many.
+int sx_frames_audio(struct sx_frames *f, const uint8_t *data, int len, int16_t *pcm, int cap) {
+    int r = frames_send(f, data, len);
+    if (r < 0) return r;
+    int n = 0;
+    for (;;) {
+        r = avcodec_receive_frame(f->codec, f->frame);
+        if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) break;
+        if (r < 0) return r;
+        AVFrame *p = f->frame;
+        if (!f->resample) {
+            AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+            r = swr_alloc_set_opts2(&f->resample, &stereo, AV_SAMPLE_FMT_S16, 48000, &p->ch_layout, p->format, p->sample_rate, 0, NULL);
+            if (r < 0 || (r = swr_init(f->resample)) < 0) return r < 0 ? r : AVERROR(EINVAL);
+        }
+        uint8_t *dst[1] = { (uint8_t *)(pcm + 2 * n) };
+        int m = swr_convert(f->resample, dst, cap - n, (const uint8_t **)p->extended_data, p->nb_samples);
+        if (m > 0) n += m;
+        av_frame_unref(p);
+        if (n >= cap) break;
+    }
+    return n;
+}

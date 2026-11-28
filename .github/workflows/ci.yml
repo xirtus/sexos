@@ -105,6 +105,8 @@ jobs:
       run: bash scripts/driver_sdk_host_gate.sh
     - name: USB isochronous endpoints and UVC camera detection on the host
       run: bash scripts/usb_isoch_host_gate.sh
+    - name: WebRTC DTLS-SRTP, SRTP, RTP/RTCP, payload formats, jitter buffer and bandwidth estimate on the host
+      run: bash scripts/rtc_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
     - name: Deadline scheduling class (earliest first, share of each window) on the host
@@ -119,6 +121,8 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
         bash scripts/moan_export_host_gate.sh
+    - name: WebRTC peer connection engine (JSEP, two peers over loopback, VP8 matched against FFmpeg) on the host
+      run: SEX_RTC_REQUIRE_FFMPEG=1 cargo test --locked -p sex-rtc
     - name: Moan timeline, edits and mixer on the host
       run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
@@ -237,6 +241,8 @@ jobs:
       run: cargo test --locked -p corset --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
+    - name: WebRTC SDP (Chrome, Firefox, SFU round trips) and STUN/ICE/TURN (RFC 5769 vectors, agents over NAT and relays) on the host
+      run: cargo test --locked -p sex-sdp -p sex-ice
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
       run: |
         python3 -m pip install --quiet --user --break-system-packages h2==4.4.1
@@ -579,6 +585,10 @@ jobs:
       run: python3 scripts/program_web_side_panel_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sidepanel"
     - name: Kaleidoscope session restore (tabs, groups, shown tab; private tabs not kept)
       run: python3 scripts/program_web_session_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-session"
+    - name: Kaleidoscope camera and microphone (getUserMedia, permission card, live video)
+      run: python3 scripts/program_web_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-capture"
+    - name: Kaleidoscope WebRTC (two peer connections over loopback UDP, remote video)
+      run: python3 scripts/program_web_webrtc_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-webrtc"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
     - name: Preserve browser evidence

@@ -1,0 +1,21 @@
+[package]
+name = "sex-dtls"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "DTLS 1.2 (RFC 6347) for SexOS WebRTC: ECDHE-ECDSA AES-128-GCM, use_srtp, certificate fingerprints; no I/O"
+
+[dependencies]
+# RustCrypto, MIT/Apache-2.0, no_std, the versions sex-tls already uses.
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa", "ecdh"] }
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes"] }
+hmac = { version = "=0.12.1", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+rand_chacha = { version = "=0.3.1", default-features = false }
+rand_core = { version = "=0.6.4", default-features = false }
+subtle = { version = "=2.6.1", default-features = false }
+sex-srtp = { path = "../sex-srtp" }
+
+[dev-dependencies]
+rand_chacha = { version = "=0.3.1", default-features = false }
+sex-rtp = { path = "../sex-rtp" }

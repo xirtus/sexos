@@ -1,0 +1,8 @@
+[package]
+name = "sex-rtp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "RTP and RTCP (RFC 3550) for SexOS WebRTC: packets, feedback, payload formats, jitter buffer, bandwidth estimate; no I/O"
+
+[dependencies]
