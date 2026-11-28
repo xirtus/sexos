@@ -50,8 +50,17 @@ fn captured_openssl_client_hello() {
     assert_eq!(d[13], 3);
 }
 
+/// An OpenSSL 1.1.1 or newer binary (LibreSSL lacks the AEAD SRTP profile and keymatexport).
+/// SEX_DTLS_REQUIRE_OPENSSL=1 (the host gate on Linux) turns a missing one into a failure.
 fn have_openssl() -> bool {
-    Command::new("openssl").arg("version").output().map(|o| o.status.success()).unwrap_or(false)
+    let v = Command::new("openssl").arg("version").output().ok().filter(|o| o.status.success());
+    let v = v.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let ok = v.strip_prefix("OpenSSL ").map_or(false, |r| !r.starts_with("0.") && !r.starts_with("1.0") && !r.starts_with("1.1.0"));
+    if !ok {
+        assert!(std::env::var_os("SEX_DTLS_REQUIRE_OPENSSL").is_none(), "needs OpenSSL 1.1.1+, found {v:?}");
+        eprintln!("no OpenSSL 1.1.1+ binary ({}): skipped", v.trim());
+    }
+    ok
 }
 
 struct Tmp(std::path::PathBuf);
@@ -162,7 +171,6 @@ fn check_keys(d: &Dtls, peer: &Peer, len: usize) {
 #[test]
 fn live_openssl_server() {
     if !have_openssl() {
-        eprintln!("no openssl binary: skipped");
         return;
     }
     let (dir, fp) = openssl_cert("srv");
@@ -191,7 +199,6 @@ fn live_openssl_server() {
 #[test]
 fn live_openssl_client() {
     if !have_openssl() {
-        eprintln!("no openssl binary: skipped");
         return;
     }
     let (dir, fp) = openssl_cert("cli");
