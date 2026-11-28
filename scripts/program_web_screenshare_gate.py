@@ -9,8 +9,10 @@ overview with a hint pill and an "Entire screen" button, drawn by Display); noth
 shared before the gate clicks that button. The page then gets a stream whose video
 track says Screen/monitor, shows the shared screen in a <video> (the gate checks the
 video looks like the screen, shrunk), and Display rings the screen in red with a
-"Stop sharing" pill. The gate clicks the pill: the page's track ends and Display wipes
-the bank. A second ask the gate answers with Escape rejects NotAllowedError."""
+"Stop sharing" pill. The page then opens the (fake) camera too, which the gate allows
+on the browser's card: both videos get pictures at once. The gate clicks the pill:
+the page's track ends, the camera stays on, and Display wipes the bank. A second ask
+the gate answers with Escape rejects NotAllowedError."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 from PIL import Image
@@ -107,12 +109,27 @@ def main():
   colours=len({shown.getpixel(p) for p in pts})
   assert colours>=6,('video shows no screen',colours)
   assert diff<70,('video does not look like the screen',diff)
-  # The person stops sharing in the Shell: the page's track ends, the bank is wiped.
+  # The camera too, beside the shared screen: the browser's own card asks, and both
+  # videos keep getting pictures at once.
+  assert '[web.capture.card]' not in t()[s:],'the camera card came before the gate looked'
+  wait(r'\[web.capture.card\] x=(\d+) y=(\d+) w=(\d+) h=(\d+) allow=(\d+),(\d+) block=(\d+),(\d+)',s,60);time.sleep(1)
+  cards=re.findall(r'\[web.capture.card\] x=(\d+) y=(\d+) w=(\d+) h=(\d+) allow=(\d+),(\d+) block=(\d+),(\d+)',t()[s:])
+  ax,ay=map(int,cards[-1][4:6])
+  s=len(t());click(ox+ax,oy+ay)
+  wait(r'\[web.capture.answer\] origin=\S+ button=0',s,30)
+  wait(r'\[web.capture.camera\] on=1 source=fake',s,30)
+  assert wait(r'\[web.console\] level=0 share camera (.+)',s,60)[1].strip()=='SexOS test camera'
+  both=wait(r'\[web.console\] level=0 share both (\d+) (\d+) (\S+)',s,60)
+  assert int(both[1])>=2 and int(both[2])>=5 and both[3]=='live',('screen and camera both live',both[0])
+  assert '[display.share.stopped]' not in t()[s:],'the camera stopped the share'
+  shot('share-and-camera')
+  # The person stops sharing in the Shell: the page's track ends, the bank is wiped;
+  # the camera stays on.
   s=len(t());click(px,py)
   wait(r'\[shell.share.stop\] by=person',s,30)
   wait(rf'\[shell.share.answer\] pd={target} task={task} status=4 ',s,30)
   wait(r'\[display.share.stopped\] frames=\d+ scrubbed=1',s,30)
-  assert wait(r'\[web.console\] level=0 share ended (\S+) (\S+)',s,30)[1:3]==('ended','false')
+  assert wait(r'\[web.console\] level=0 share ended (\S+) (\S+) (\S+)',s,30)[1:4]==('ended','false','live')
   wait(r'\[web.share.stop\] ',s,30)
   time.sleep(1);img=shot('share-stopped')
   assert not near(img.getpixel((1,rh//2)),red,40),'red ring stayed after stopping'

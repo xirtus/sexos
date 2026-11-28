@@ -432,11 +432,6 @@ impl Window {
 /// What [`Window::next_any`] returns.
 pub enum Any { Window(Event), Tray(tray::Event) }
 
-/// Tray items and notification actions (slice S2): a program puts a small item
-/// in the panel, with a tooltip and a menu, and posts notifications with up to
-/// three buttons and an inline reply field. The Shell tells the program what
-/// was clicked, chosen or replied as [`tray::Event`]s ([`Window::next_any`], or
-/// [`tray::take`] after [`Window::next`]). See [`sex_pdx::program_tray`].
 /// Sharing the screen or one window ([`sex_pdx::screen_share`]). The program only
 /// asks, right after the person pressed a key or clicked in its window; Shell shows
 /// its own picker, and the answer comes later from [`take`]. Pictures are read from
@@ -459,16 +454,7 @@ pub mod screen_share {
 
     static mut EVENTS: [Option<Event>; 4] = [None; 4];
 
-    fn send(arg: u64) -> bool {
-        for _ in 0..1000 {
-            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, s::OP_SHARE, arg, 0, 0) {
-                Ok(_) => return true,
-                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
-                Err(_) => return false,
-            }
-        }
-        false
-    }
+    fn send(arg: u64) -> bool { s::send(sex_pdx::SLOT_SHELL, s::OP_SHARE, [arg, 0, 0]) }
     /// Asks Shell to let the person pick. False when Shell could not be told.
     pub fn ask() -> bool { send(s::ASK) }
     /// This program no longer shares.
@@ -501,6 +487,11 @@ pub mod screen_share {
     }
 }
 
+/// Tray items and notification actions (slice S2): a program puts a small item
+/// in the panel, with a tooltip and a menu, and posts notifications with up to
+/// three buttons and an inline reply field. The Shell tells the program what
+/// was clicked, chosen or replied as [`tray::Event`]s ([`Window::next_any`], or
+/// [`tray::take`] after [`Window::next`]). See [`sex_pdx::program_tray`].
 pub mod tray {
     use sex_pdx::program_tray as pt;
     pub use pt::{GONE_CLOSED, GONE_EXPIRED, GONE_REPLACED, MAX_ACTIONS, MAX_ROWS, REPLY_MAX};

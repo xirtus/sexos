@@ -45,6 +45,20 @@ pub const DENIED: u64 = 2;
 pub const BUSY: u64 = 3;
 pub const STOPPED: u64 = 4;
 
+/// Sends one screen sharing word (`op` [`OP_SHARE`], [`OP_SHARED`] or
+/// [`OP_SHARE_VIEW`]) on `route`, waiting a little while the other side is busy.
+/// False when it could not be told.
+pub fn send(route: u64, op: u64, w: [u64; 3]) -> bool {
+    for _ in 0..1024 {
+        match crate::pdx_call_checked(route, op, w[0], w[1], w[2]) {
+            Ok(_) => return true,
+            Err(crate::ERR_SERVICE_NOT_READY) => crate::sys_yield(),
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
 /// What is shared.
 pub const SCREEN: u64 = 1;
 pub const WINDOW: u64 = 2;

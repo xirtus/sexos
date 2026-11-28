@@ -11007,12 +11007,7 @@ unsafe fn overview_click(px: i32, py: i32) {
 // Display then copies what was picked into the read-only bank and rings it in red,
 // with a "Stop sharing" pill that only the Shell answers.
 static mut SHARE: sex_pdx::screen_share::Custody<sex_pdx::clipboard::Participant> = sex_pdx::screen_share::Custody::new();
-fn share_send(route: u64, w: [u64; 3]) -> bool {
-    for _ in 0..1024 {
-        match pdx_call_checked(route, sex_pdx::screen_share::OP_SHARED, w[0], w[1], w[2]) { Ok(_) => return true, Err(sex_pdx::ERR_SERVICE_NOT_READY) => sys_yield(), Err(_) => return false }
-    }
-    false
-}
+fn share_send(route: u64, w: [u64; 3]) -> bool { sex_pdx::screen_share::send(route, sex_pdx::screen_share::OP_SHARED, w) }
 unsafe fn share_view(v: sex_pdx::screen_share::View) {
     let [a, b, c] = v.wire();
     let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::screen_share::OP_SHARE_VIEW, a, b, c);

@@ -3,17 +3,21 @@
 <style>
 body { margin: 12px; background: #fff; }
 h1 { font-size: 18px; margin: 120px 0 8px; padding: 6px; background: #ddd; width: 200px; }
-video { display: block; width: 384px; height: 240px; background: #000; }
+video { display: inline-block; vertical-align: top; width: 384px; height: 240px; background: #000; }
+#c { width: 256px; height: 160px; margin-left: 8px; }
 </style></head>
 <body>
 <h1 id="h">Share screen</h1>
-<video id="v" autoplay muted playsinline></video>
+<div><video id="v" autoplay muted playsinline></video><video id="c" autoplay muted playsinline></video></div>
 <script>
 // getDisplayMedia end to end: a click asks; the Shell lets the person pick in its
 // own picker; the shared screen shows in a <video>; the person stops it in the Shell
-// and the track ends; a second ask the person says no to rejects.
+// and the track ends; a second ask the person says no to rejects. The camera shows
+// beside the shared screen, both live at once, and stays on when sharing stops.
 const say = (...a) => console.log('share', ...a);
 const v = document.getElementById('v');
+const c = document.getElementById('c');
+let cam = null;
 const h = document.getElementById('h');
 let asks = 0;
 v.addEventListener('playing', () => say('playing', v.videoWidth, v.videoHeight));
@@ -29,12 +33,23 @@ h.addEventListener('click', () => {
       const [t] = st.getVideoTracks();
       const g = t.getSettings();
       say('ok', t.label + '|' + g.displaySurface, g.width + 'x' + g.height, st.getAudioTracks().length);
-      t.addEventListener('ended', () => say('ended', t.readyState, st.active));
+      t.addEventListener('ended', () => say('ended', t.readyState, st.active, cam ? cam.getVideoTracks()[0].readyState : 'none'));
       v.srcObject = st;
       setTimeout(() => {
         const r = v.getBoundingClientRect();
         say('rect', Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height));
         say('frames', v.getVideoPlaybackQuality().totalVideoFrames);
+        // Then the camera too, once the gate has looked: the browser's own card asks.
+        setTimeout(() => navigator.mediaDevices.getUserMedia({ video: true }).then(s2 => {
+          cam = s2;
+          c.srcObject = s2;
+          say('camera', s2.getVideoTracks()[0].label);
+          const q = () => [v.getVideoPlaybackQuality().totalVideoFrames, c.getVideoPlaybackQuality().totalVideoFrames];
+          setTimeout(() => {
+            const a = q();
+            setTimeout(() => { const b = q(); say('both', b[0] - a[0], b[1] - a[1], t.readyState); }, 2000);
+          }, 1500);
+        }, e => say('camera', 'failed', e.name)), 5000);
       }, 2500);
     }, e => say('failed', e.name));
   } else {
