@@ -393,6 +393,8 @@ struct Player {
     heard: u64,
     /// The microphone is a USB one (headset or microphone, through SexUSB), not the card's.
     mic_usb: bool,
+    /// The microphone is the built-in one on the audio DSP (`crate::dsp`).
+    mic_dsp: bool,
 }
 /// The period being mixed, kept off the service's small stack.
 static mut MIX: [[i32; 2]; PERIOD_FRAMES] = [[0; 2]; PERIOD_FRAMES];
@@ -535,7 +537,14 @@ impl Player {
             sex_pdx::serial_record!("[bell.mic.source] usb={} vendor={:#06x} product={:#06x}", self.mic_usb as u8,
                 usb.and_then(|l| l.mic()).map_or(0, |m| m.0), usb.and_then(|l| l.mic()).map_or(0, |m| m.1));
         }
-        let input = self.mic_usb || self.card.has_input();
+        // Built-in microphones on the audio DSP, unless a headset mic is plugged in.
+        let dsp = !self.mic_usb && crate::dsp::get().is_some() && !self.jack_mic();
+        if dsp != self.mic_dsp {
+            if self.hearing { self.input_run(false); self.hearing = false; self.asked = 0; }
+            self.mic_dsp = dsp;
+            sex_pdx::serial_record!("[bell.mic.source] dsp={}", dsp as u8);
+        }
+        let input = self.mic_usb || self.mic_dsp || self.card.has_input();
         for (i, st) in self.streams.iter().enumerate() {
             let Some(st) = st else { continue };
             if crate::restricted::denied(st.pd){continue;}
@@ -572,11 +581,26 @@ impl Player {
             if self.heard == 0 { sex_pdx::serial_record!("[bell.mic.first] frames={}", n); }
             self.heard += n;
         }
-        while self.hearing && !self.mic_usb && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+        while self.hearing && !self.mic_usb && !self.mic_dsp && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+    }
+
+    /// A headset microphone plugged into the HD Audio card, looked at once a second
+    /// (each look is a codec verb per sensing jack).
+    fn jack_mic(&mut self) -> bool {
+        static mut LAST: (u64, bool) = (0, false);
+        let now = sex_pdx::get_ticks();
+        let (at, was) = unsafe { LAST };
+        if at != 0 && now.wrapping_sub(at) < 1000 { return was; }
+        let plugged = match &mut self.card { Card::Hda(h) => h.jack_mic_plugged(), _ => false };
+        unsafe { LAST = (now.max(1), plugged) };
+        plugged
     }
 
     /// Starts or stops whichever microphone is in use.
     fn input_run(&mut self, on: bool) -> bool {
+        if self.mic_dsp {
+            return crate::dsp::get().is_some_and(|d| if on { d.start() } else { d.stop() });
+        }
         match usb_link().filter(|_| self.mic_usb) {
             Some(l) => { l.set_listen(on); true }
             None => self.card.input_run(on),
@@ -584,6 +608,9 @@ impl Player {
     }
     /// What the microphone in use heard since last asked, as S16 stereo bytes in `out`.
     fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
+        if self.mic_dsp {
+            return crate::dsp::get().and_then(|d| d.take(out).then_some(crate::hda::PERIOD_BYTES.min(PERIOD_BYTES)));
+        }
         let Some(l) = usb_link().filter(|_| self.mic_usb) else { return self.card.input_take(out) };
         let frames = unsafe { core::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut [i16; 2], PERIOD_FRAMES) };
         let n = l.read_heard(frames);
@@ -688,7 +715,7 @@ pub fn init() {
 fn player_with(card: Card) -> Player {
     Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
         head: 0, len: 0, done: 0, phase: 0, pcm_head: 0, pcm_len: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false }
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false, mic_dsp: false }
 }
 
 fn open() -> Result<Player, &'static str> {
@@ -738,6 +765,10 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     // offers one; behind VMD or without either, Bell polls as it always did.
     let lease = sex_pdx::device::at_slot(v::SLOT_SOUND).filter(|l| l.vectors > 0);
     let mut h = crate::hda::Hda::open(view, dma, lease.is_some())?;
+    // Tiger Lake's built-in microphones sit on the audio DSP in the same function.
+    if let Some(l) = sex_pdx::device::at_slot(v::SLOT_SOUND) {
+        crate::dsp::set(crate::dsp::Dsp::open(view.virtual_address as usize, view.length as usize, l.vendor, l.device));
+    }
     match lease {
         Some(l) => match sex_pdx::device::irq_unmask(v::SLOT_SOUND, 0) {
             Ok(()) => sex_pdx::serial_record!("[bell.hda.irq] mode={} vectors={} bit={} polling=0", l.mode.name(), l.vectors, l.first_bit),
