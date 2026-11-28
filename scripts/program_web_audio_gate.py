@@ -80,9 +80,9 @@ def main():
   wait(r'\[web.audio.running\] contexts=\d+',s,30)
   wait(r'\[web.audio.ring\] held=1',s,30)
   peak=wait(r'\[web.console\] level=0 webaudio peak (\d+) (\d+) (\d+) (\w+) (\w+)',s,60)
-  b,hz,swing=map(int,peak[1:4])
+  b,hz,swing=map(int,peak.group(1,2,3))
   assert b in (18,19) and abs(hz-440)<=30,('analyser missed the 440 Hz tone',peak[0])
-  assert 20<=swing<=40 and peak[4:6]==('true','true'),('analyser level or clock',peak[0])
+  assert 20<=swing<=40 and peak.group(4,5)==('true','true'),('analyser level or clock',peak[0])
   shot('webaudio-heard')
   assert wait(r'\[web.console\] level=0 webaudio ended (\w+)',s,60)[1]=='true'
   outs=[tuple(map(int,o)) for o in re.findall(r'\[web.audio.out\] frames=(\d+) heard=(\d+) peak=(\d+) ring=(\d)',t()[s:])]
