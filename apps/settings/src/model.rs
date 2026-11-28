@@ -11,7 +11,7 @@ pub const ACCENTS: [(&str, i32); 9] = [
     ("Orange", 0xF97316), ("Red", 0xEF4444), ("Pink", 0xEC4899), ("Violet", 0x8B5CF6),
 ];
 pub const QUERY_MAX: usize = 24;
-pub const PAGE_MAX: usize = 16;
+pub const PAGE_MAX: usize = 20;
 /// The Privacy page's program rows as text, one line each (`grants.rs` writes them).
 pub const EXTRA_MAX: usize = 2048;
 /// The page that shows program rows after its settings.
@@ -33,7 +33,7 @@ pub fn page_title(section: &str) -> &str {
         "session" => "Lock & idle", "setup" => "About", "open" => "Default apps",
         "startup" => "Startup programs", "shortcuts" => "Shortcuts", "notifications" => "Notifications",
         "accessibility" => "Accessibility",
-        "privacy" => "Privacy and grants", "updates" => "Updates", "storage" => "Storage", other => other,
+        "privacy" => "Privacy and grants", "bluetooth" => "Bluetooth", "updates" => "Updates", "storage" => "Storage", other => other,
     }
 }
 
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "accessibility", "setup", "open", "startup", "shortcuts", "notifications", "privacy", "updates", "storage"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "accessibility", "setup", "open", "startup", "shortcuts", "notifications", "privacy", "bluetooth", "updates", "storage"]);
     }
 
     #[test]
