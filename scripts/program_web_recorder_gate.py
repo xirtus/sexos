@@ -143,7 +143,7 @@ def main():
   subprocess.run(['ffmpeg','-v','error','-y','-ss','1','-i',str(a.out/'canvas.webm'),'-frames:v','1',str(png)],check=True)
   px=Image.open(png).convert('RGB').getpixel((10,200));assert px[2]>100 and px[0]<80,('canvas picture',px)
   pl=wait(r'\[web.console\] level=0 recorder canvas played (\d+) (\S+) (\S+) (\d+) (\d+)',s,120)
-  assert int(pl[1])>=5 and 2.0<=float(pl[2])<=3.8 and pl[4:6]==('320','240'),('canvas playback',pl[0])
+  assert int(pl[1])>=5 and 2.0<=float(pl[2])<=3.8 and pl.group(4,5)==('320','240'),('canvas playback',pl[0])
   report['canvas_played']=pl[0]
   wait(r'\[web.console\] level=0 recorder done',s,60)
   wait(r'\[web.capture.camera\] on=0',s,30)
