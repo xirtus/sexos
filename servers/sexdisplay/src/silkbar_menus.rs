@@ -5,6 +5,7 @@
 //! Shell drives state via `sex_pdx::silkbar_menus::OP_SILKBAR_MENU`; Display
 //! renders using the shared `Layout` so pointer hits match drawn pixels.
 
+use sex_time::CivilDay as _;
 use sex_pdx::silkbar_menus::{Layout, MenuKind, MenuState};
 use sex_theme::{candy_lavender as cl, Mode};
 use crate::desk_theme::current as desk;

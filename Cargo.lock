@@ -2186,6 +2186,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreamroot-core"
+version = "0.1.0"
+source = "git+https://github.com/xirtus/dreamroot?rev=40ffa2d72cbcda868436c5ddbb9b07fd716802ea#40ffa2d72cbcda868436c5ddbb9b07fd716802ea"
+
+[[package]]
 name = "driftspark"
 version = "0.1.0"
 dependencies = [
@@ -7624,6 +7629,7 @@ version = "0.1.0"
 name = "sex-icons"
 version = "0.1.0"
 dependencies = [
+ "dreamroot-core",
  "libm",
  "sex-font",
 ]
@@ -7941,6 +7947,7 @@ version = "0.1.0"
 name = "sex-time"
 version = "0.1.0"
 dependencies = [
+ "dreamroot-core",
  "sex-config",
 ]
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The twenty Maya day signs (the Dreamspell's solar seals), drawn from
-//! `assets/maya/day-signs.txt`: vector traces of the classic day-sign drawings
-//! (CJLL Wright, Wikimedia Commons, CC BY 2.5; `assets/maya/ATTRIBUTION.md`),
-//! written by `scripts/brand/maya_glyphs.py`.
+//! `dreamroot_core::glyphs`, the Dreamroot calendar's shared copy
+//! (github.com/xirtus/dreamroot): vector traces of the classic day-sign
+//! drawings (CJLL Wright, Wikimedia Commons, CC BY 2.5; credit in
+//! `assets/maya/ATTRIBUTION.md`).
 //!
 //! Each sign has two filled layers on the 24-unit icon grid: `back`, the
 //! cartouche's silhouette in the seal's colour, and `ink`, the drawing, whose
@@ -12,19 +13,11 @@
 use super::{over, walk, Place, Sink};
 use sex_font::raster::{Raster, FX};
 
-pub static SOURCE: &str = include_str!("../../../assets/maya/day-signs.txt");
+pub static SOURCE: &str = dreamroot_core::glyphs::SOURCE;
 
 /// The `(back, ink)` path data of seal 1..=20 (1 = Imix, Red Dragon; 20 = Ajaw, Yellow Sun).
 pub fn sign(seal: u8) -> Option<(&'static str, &'static str)> {
-    let mut back = None;
-    for l in SOURCE.lines() {
-        if l.starts_with('#') { continue; }
-        let mut it = l.splitn(4, ' ');
-        let (Some(n), Some(_name), Some(layer), Some(data)) = (it.next(), it.next(), it.next(), it.next()) else { continue };
-        if n.parse::<u8>().ok() != Some(seal) { continue; }
-        match layer { "back" => back = Some(data), "ink" => return back.map(|b| (b, data)), _ => {} }
-    }
-    None
+    dreamroot_core::glyphs::sign(seal).map(|s| (s.back, s.ink))
 }
 
 /// Lines straight onto the raster: no point buffer, any path length.

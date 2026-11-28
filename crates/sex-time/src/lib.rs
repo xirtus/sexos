@@ -146,140 +146,43 @@ impl Gregorian {
     }
 }
 
-/// A Maya Long Count date for one UTC day.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LongCount {
-    pub baktun: u64,
-    pub katun: u8,
-    pub tun: u8,
-    pub winal: u8,
-    pub kin: u8,
+// The Maya counts are shared with the Dreamroot calendar app through the
+// `dreamroot-core` crate (github.com/xirtus/dreamroot), so the bar clock and
+// the app always agree; SexTime adds only the timestamp views below.
+pub use dreamroot_core::maya::{
+    Haab, LongCount, MayaDate, Tzolkin, BAKTUN_DAYS, HAAB_MONTHS, KATUN_DAYS, TUN_DAYS, TZOLKIN_NAMES, WINAL_DAYS,
+};
+
+/// Long Count days since 0.0.0.0.0 of the UTC day of `ts`; `None` before
+/// the Long Count origin.
+pub fn long_count_days(ts: SexTimestamp) -> Option<i64> {
+    let days = ts.utc_day().checked_add(EPOCH_LONG_COUNT_DAYS)?;
+    if days < 0 { None } else { Some(days) }
 }
 
-pub const BAKTUN_DAYS: i64 = 144_000;
-pub const KATUN_DAYS: i64 = 7_200;
-pub const TUN_DAYS: i64 = 360;
-pub const WINAL_DAYS: i64 = 20;
-
-impl LongCount {
-    /// Days since 0.0.0.0.0; None before the Long Count origin.
-    pub fn days_of(ts: SexTimestamp) -> Option<i64> {
-        let days = ts.utc_day().checked_add(EPOCH_LONG_COUNT_DAYS)?;
-        if days < 0 { None } else { Some(days) }
-    }
-
-    pub fn from_days(days: i64) -> Option<Self> {
-        if days < 0 { return None; }
-        Some(Self {
-            baktun: (days / BAKTUN_DAYS) as u64,
-            katun: (days % BAKTUN_DAYS / KATUN_DAYS) as u8,
-            tun: (days % KATUN_DAYS / TUN_DAYS) as u8,
-            winal: (days % TUN_DAYS / WINAL_DAYS) as u8,
-            kin: (days % WINAL_DAYS) as u8,
-        })
-    }
-
-    pub fn from_timestamp(ts: SexTimestamp) -> Option<Self> {
-        Self::from_days(Self::days_of(ts)?)
-    }
-
-    /// Days since the origin, rejecting out-of-range places.
-    pub fn days(self) -> Option<i64> {
-        if self.katun >= 20 || self.tun >= 20 || self.winal >= 18 || self.kin >= 20 { return None; }
-        (i64::try_from(self.baktun).ok()?).checked_mul(BAKTUN_DAYS)?
-            .checked_add(self.katun as i64 * KATUN_DAYS + self.tun as i64 * TUN_DAYS
-                + self.winal as i64 * WINAL_DAYS + self.kin as i64)
-    }
-
-    /// The first second (00:00:00 UTC) of this Long Count day.
-    pub fn to_timestamp(self) -> Option<SexTimestamp> {
-        let day = self.days()?.checked_sub(EPOCH_LONG_COUNT_DAYS)?;
-        SexTimestamp::new(day.checked_mul(SECONDS_PER_DAY)?, 0)
-    }
+/// The first second (00:00:00 UTC) of a Long Count day.
+pub fn long_count_timestamp(lc: LongCount) -> Option<SexTimestamp> {
+    let day = lc.days()?.checked_sub(EPOCH_LONG_COUNT_DAYS)?;
+    SexTimestamp::new(day.checked_mul(SECONDS_PER_DAY)?, 0)
 }
 
-/// The 260-day Tzolk'in: a number 1..=13 with one of twenty day names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Tzolkin { pub number: u8, pub name: u8 }
-
-/// The 365-day Haab': day 0..=19 of months 0..=17, or 0..=4 of Wayeb' (18).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Haab { pub day: u8, pub month: u8 }
-
-pub const TZOLKIN_NAMES: [&str; 20] = [
-    "Imix", "Ik'", "Ak'bal", "K'an", "Chikchan", "Kimi", "Manik'", "Lamat", "Muluk", "Ok",
-    "Chuwen", "Eb", "Ben", "Ix", "Men", "Kib", "Kaban", "Etz'nab", "Kawak", "Ajaw",
-];
-pub const HAAB_MONTHS: [&str; 19] = [
-    "Pop", "Wo'", "Sip", "Sotz'", "Sek", "Xul", "Yaxk'in", "Mol", "Ch'en", "Yax",
-    "Sak'", "Keh", "Mak", "K'ank'in", "Muwan", "Pax", "K'ayab", "Kumk'u", "Wayeb'",
-];
-
-impl Tzolkin {
-    /// 0.0.0.0.0 is 4 Ajaw.
-    pub fn from_days(days: i64) -> Self {
-        Self { number: ((days + 3).rem_euclid(13) + 1) as u8, name: (days + 19).rem_euclid(20) as u8 }
-    }
-    pub fn name(self) -> &'static str { TZOLKIN_NAMES[self.name as usize % 20] }
-}
-
-impl Haab {
-    /// 0.0.0.0.0 is 8 Kumk'u.
-    pub fn from_days(days: i64) -> Self {
-        let at = (days + 17 * 20 + 8).rem_euclid(365);
-        Self { day: (at % 20) as u8, month: (at / 20) as u8 }
-    }
-    pub fn month_name(self) -> &'static str { HAAB_MONTHS[self.month as usize % 19] }
-}
-
-/// A full Maya date for one day: Long Count plus Calendar Round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MayaDate { pub long_count: LongCount, pub tzolkin: Tzolkin, pub haab: Haab }
-
-impl MayaDate {
-    pub fn from_days(days: i64) -> Option<Self> {
-        Some(Self { long_count: LongCount::from_days(days)?, tzolkin: Tzolkin::from_days(days), haab: Haab::from_days(days) })
-    }
-    /// The day `ts` falls on; give it local civil seconds for a local calendar.
-    pub fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_days(LongCount::days_of(ts)?) }
+/// A count that names whole civil days: the Long Count, the full Maya date
+/// and the Dreamspell kin, read from a SexTime timestamp. Give it local
+/// civil seconds for a local calendar.
+pub trait CivilDay: Sized {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self>;
     /// Unix seconds (already shifted into the person's zone, if wanted).
-    pub fn from_unix(seconds: i64) -> Option<Self> { Self::from_timestamp(SexTimestamp::from_unix(seconds, 0)?) }
-
-    /// "13.0.14.2.10" into `out`; returns the length written (truncates).
-    pub fn write_long_count(&self, out: &mut [u8]) -> usize {
-        let lc = self.long_count;
-        let mut w = Writer { out, n: 0 };
-        w.num(lc.baktun);
-        for place in [lc.katun, lc.tun, lc.winal, lc.kin] { w.put(b"."); w.num(place as u64); }
-        w.n
-    }
-    /// "11 Ok 3 Mak" into `out`; returns the length written (truncates).
-    pub fn write_calendar_round(&self, out: &mut [u8]) -> usize {
-        let mut w = Writer { out, n: 0 };
-        w.num(self.tzolkin.number as u64); w.put(b" "); w.put(self.tzolkin.name().as_bytes());
-        w.put(b" ");
-        w.num(self.haab.day as u64); w.put(b" "); w.put(self.haab.month_name().as_bytes());
-        w.n
-    }
-    /// "13.0.14.2.10 11 Ok 3 Mak" into `out`; returns the length written.
-    pub fn write_full(&self, out: &mut [u8]) -> usize {
-        let mut n = self.write_long_count(out);
-        if n < out.len() { out[n] = b' '; n += 1; }
-        n + self.write_calendar_round(&mut out[n..])
-    }
+    fn from_unix(seconds: i64) -> Option<Self> { Self::from_timestamp(SexTimestamp::from_unix(seconds, 0)?) }
 }
 
-struct Writer<'a> { out: &'a mut [u8], n: usize }
-impl Writer<'_> {
-    fn put(&mut self, bytes: &[u8]) {
-        for &b in bytes { if self.n < self.out.len() { self.out[self.n] = b; self.n += 1; } }
-    }
-    fn num(&mut self, mut v: u64) {
-        let mut d = [0u8; 20];
-        let mut k = 0;
-        loop { d[k] = b'0' + (v % 10) as u8; k += 1; v /= 10; if v == 0 { break; } }
-        while k > 0 { k -= 1; self.put(&[d[k]]); }
-    }
+impl CivilDay for LongCount {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_days(long_count_days(ts)?) }
+}
+impl CivilDay for MayaDate {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_days(long_count_days(ts)?) }
+}
+impl CivilDay for dreamspell::Kin {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_unix_day(ts.utc_day().checked_add(EPOCH_UNIX_DAYS)?) }
 }
 
 #[cfg(test)]
@@ -377,7 +280,7 @@ mod tests {
         // B'ak'tun is not wrapped modulo 13.
         assert_eq!(LongCount::from_days(14 * 144_000), Some(lc(14, 0, 0, 0, 0)));
         // GMT 584283: 0.0.0.0.0 is 11 August 3114 BCE (astronomical -3113).
-        let origin = lc(0, 0, 0, 0, 0).to_timestamp().unwrap();
+        let origin = long_count_timestamp(lc(0, 0, 0, 0, 0)).unwrap();
         assert_eq!(Gregorian::from_timestamp(origin), Some(g(-3113, 8, 11, 0, 0, 0)));
         let before = SexTimestamp::new(origin.seconds() - 1, 0).unwrap();
         assert!(LongCount::from_timestamp(before).is_none());
@@ -391,7 +294,7 @@ mod tests {
         for days in (0..3_000_000).step_by(997) {
             let date = LongCount::from_days(days).unwrap();
             assert_eq!(date.days(), Some(days));
-            assert_eq!(LongCount::from_timestamp(date.to_timestamp().unwrap()), Some(date));
+            assert_eq!(LongCount::from_timestamp(long_count_timestamp(date).unwrap()), Some(date));
         }
     }
 

@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(static_mut_refs)]
 
+use sex_time::CivilDay as _;
 use sex_pdx::serial_println;
 static mut DISPLAY_LAST_OP: u64 = 0;
 static mut DISPLAY_LAST_CALLER: u32 = 0;

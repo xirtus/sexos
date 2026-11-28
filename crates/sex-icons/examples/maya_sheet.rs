@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The twenty Maya day signs drawn natively in their seal colours, to compare
-//! with assets/maya/svg. `cargo run -p sex-icons --example maya_sheet -- out.ppm [side]`
+//! with the SVGs in github.com/xirtus/dreamroot (assets/maya/svg). `cargo run -p sex-icons --example maya_sheet -- out.ppm [side]`
 use sex_icons::{maya, scratch};
 
 fn main() {

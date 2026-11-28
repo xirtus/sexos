@@ -10,6 +10,7 @@
 //! (`wallpaper_mark::pixel`) blends that cache over the gradient, so windows
 //! cover the cards like any wallpaper.
 
+use sex_time::CivilDay as _;
 use sex_pdx::desktop_widgets::{self as dw, Layout, Line, Report, Sample};
 /// The menu, popup and card colours of the desktop theme (`desk_theme`).
 use crate::desk_theme::current as desk;

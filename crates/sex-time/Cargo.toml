@@ -5,6 +5,8 @@ edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
+# Shared Maya calendar math (Long Count, Calendar Round, Dreamspell): github.com/xirtus/dreamroot
+dreamroot-core = { git = "https://github.com/xirtus/dreamroot", rev = "40ffa2d72cbcda868436c5ddbb9b07fd716802ea" }
 
 [dev-dependencies]
 sex-config = { path = "../sex-config" }

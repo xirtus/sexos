@@ -6,5 +6,6 @@ license = "GPL-3.0-only"
 description = "The SexOS icon set (lips brand style), drawn at run time from assets/icons/icons.txt"
 
 [dependencies]
+dreamroot-core = { git = "https://github.com/xirtus/dreamroot", rev = "40ffa2d72cbcda868436c5ddbb9b07fd716802ea" }
 sex-font = { path = "../sex-font" }
 libm = "0.2"
