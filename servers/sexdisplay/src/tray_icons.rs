@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! SilkBar's tray icons (network, volume, battery) from the SexOS icon set
+//! SilkBar's tray icons (network, volume, battery, Bluetooth) from the SexOS icon set
 //! (`sex_icons`, assets/icons/icons.txt): the same rounded line style as the
 //! launcher, Files and every Weft program, anti-aliased at any bar scale.
 //!
@@ -9,7 +9,9 @@ use sex_pdx::tray::Status;
 
 /// Largest icon side (16 logical pixels at scale 3).
 const CAP: usize = 48;
-const SLOTS: usize = 3;
+/// Network, volume, battery, Bluetooth.
+const SLOTS: usize = 4;
+pub const BLUETOOTH: usize = 3;
 
 /// Ink of the icons: the dark theme's text, its disabled text, and warning/charging.
 pub const FG: u32 = 0x00F1EEF4;
@@ -39,6 +41,11 @@ fn look(slot: usize, s: &Status, side: usize) -> Look {
         1 => {
             let icon = if s.muted { "volume-off" } else if s.volume == 0 { "speaker" } else if s.volume <= 50 { "volume-low" } else { "volume" };
             Look { icon, fill: 255, color: if s.muted { DIM } else { FG }, side }
+        }
+        BLUETOOTH => {
+            use sex_pdx::tray::{BT_IN_USE, BT_ON};
+            let color = match s.bluetooth { BT_IN_USE => GOOD, BT_ON => FG, _ => DIM };
+            Look { icon: "bluetooth", fill: 255, color, side }
         }
         _ => match s.battery {
             Some(p) => Look { icon: "battery", fill: p.min(100), color: if s.charging { GOOD } else if p <= 20 { WARN } else { FG }, side },

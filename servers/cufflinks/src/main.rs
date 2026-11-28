@@ -24,6 +24,11 @@
 //! mailbox as media keys, its absolute volume follows Bell's master volume both ways
 //! (`remote.rs`).
 //!
+//! On/off: the Shell keeps the person's choice (F9, the panel's switch, the
+//! `bluetooth.on` setting) as a level in the panel region. Off drops every link, stops
+//! scanning and resets the controller, which then sits idle with its firmware kept;
+//! on brings it up again with bonds reloaded (`[cufflinks.power] off=1|0`).
+//!
 //! BOOT starts it as domain `bt_hci::CUFFLINKS_PD` (Senses organ) with the HCI region
 //! shared with SexUSB, the firmware pack and a route to Files. With no controller it
 //! logs `[cufflinks.idle] controller=none` and sleeps in `sys_wait_self` until SexUSB
@@ -148,11 +153,37 @@ pub extern "C" fn _start() -> ! {
             desk.phase(if failed.is_some() { u::FAILED } else { u::NO_CONTROLLER });
             continue;
         }
-        run_host(&ring, generation, &mut packet, &mut desk);
+        loop {
+            // Off: the controller stays reset and idle until the person turns it on.
+            if desk.wants_off() {
+                desk.phase(u::OFF);
+                log!("[cufflinks.power] off=1 state=idle");
+                while still(&ring, generation) && desk.wants_off() {
+                    serve();
+                    // Nothing to command while off: a stale Pair must not run later.
+                    while desk.command().is_some() {}
+                    // The region has no route to us: look four times a second.
+                    let _ = sex_pdx::sys_wait_self_ticks(250);
+                }
+                if !still(&ring, generation) { break; }
+                log!("[cufflinks.power] off=0");
+                desk.phase(u::STARTING);
+            }
+            if run_host(&ring, generation, &mut packet, &mut desk) != End::Off { break; }
+        }
         failed = still(&ring, generation).then_some(generation);
         desk.phase(if failed.is_some() { u::FAILED } else { u::NO_CONTROLLER });
     }
 }
+
+/// Why a host session ended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum End { Gone, Off }
+
+/// HCI Reset: stops inquiry, scans and advertising; the controller keeps its firmware.
+const HCI_RESET: [u8; 4] = [hci::COMMAND, 0x03, 0x0C, 0x00];
+/// How long links get to go before the reset anyway (ticks, ms).
+const OFF_GRACE: u64 = 1_500;
 
 fn still(ring: &Shared, generation: u32) -> bool { ring.link().is_some_and(|l| l.1 == generation) }
 
@@ -278,7 +309,7 @@ fn sync_bonds(h: &Host, desk: &mut ui::Desk) {
     desk.changed(changed);
 }
 
-fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::Desk) {
+fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::Desk) -> End {
     let mut h = Host::new(Box::new(random));
     let mut policy = pairing::Policy::new(0, 1);
     let mut tried: alloc::vec::Vec<Addr> = alloc::vec::Vec::new();
@@ -297,11 +328,32 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
     // sets no stream up within two seconds, we do (handle, since).
     // (handle, since, signaling open): the 2 s setup window starts when AVDTP signaling opens.
     let mut quiet: alloc::vec::Vec<(u16, u64, bool)> = alloc::vec::Vec::new();
+    // Turning off: since when, once every link was asked to go.
+    let mut stopping: Option<u64> = None;
+    let mut end = End::Gone;
     while still(ring, generation) {
         let mut moved = false;
         let now = sex_pdx::get_ticks();
+        if stopping.is_none() && desk.wants_off() {
+            log!("[cufflinks.power] off=1 links={}", links.len());
+            for l in links.iter() { h.disconnect(l.0); }
+            h.stop_scan();
+            desk.scan_until = 0;
+            stopping = Some(now);
+            moved = true;
+        }
+        if let Some(since) = stopping {
+            if (links.is_empty() && h.commands_idle()) || now.saturating_sub(since) >= OFF_GRACE {
+                // The disconnects (queued in the host) go out before the reset.
+                while let Some(p) = h.poll() { send(ring, &p, false); }
+                send(ring, &HCI_RESET, false);
+                log!("[cufflinks.power] off=1 reset=1 waited_ms={} links_left={}", now.saturating_sub(since), links.len());
+                end = End::Off;
+                break;
+            }
+        }
         // What the user asked for in the panel (only once the controller is ready).
-        while let Some(c) = h.ready().then(|| desk.command()).flatten() {
+        while let Some(c) = (h.ready() && stopping.is_none()).then(|| desk.command()).flatten() {
             moved = true;
             match c {
                 Command::Scan(true) => {
@@ -476,7 +528,7 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
                 }
                 Note::Encrypted { handle } => log!("[cufflinks.encrypted] handle={:#06x}", handle),
                 Note::Refused { opcode, status } => log!("[cufflinks.refused] opcode={:#06x} status={:#04x}", opcode, status),
-                Note::Failed(e) => { log!("[cufflinks.failed] step=bringup reason={:?}", e); return; }
+                Note::Failed(e) => { log!("[cufflinks.failed] step=bringup reason={:?}", e); return End::Gone; }
                 Note::BondsChanged => { store::save(&h.bonds); sync_bonds(&h, desk); }
                 Note::HidReady { handle, addr, le, keyboard, pointer, boot } => {
                     let device = hid.add(handle).unwrap_or(0);
@@ -594,5 +646,6 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::De
     sound.headset_volume(false);
     for device in 1..=8 { if hid.slots[device as usize - 1].is_some() { push_input(ring, HidInput::Gone { device }); } }
     ring.set_hid_links(0);
-    log!("[cufflinks.gone] generation={}", generation);
+    if end == End::Gone { log!("[cufflinks.gone] generation={}", generation); }
+    end
 }

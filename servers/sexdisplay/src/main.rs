@@ -1316,10 +1316,11 @@ fn bar_pill_bg(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) 
     let clock = &bar.layout[ModuleSlot::Clock as usize];
     if chip0.w > 0 && bell.w > 0 {
         let (_, batt_n, batt_w) = unsafe { *core::ptr::addr_of!(PANEL_BATTERY) };
+        let left = status_left(bar);
         let bx = if batt_n > 0 {
-            chip0.x.saturating_sub(10 * scale).saturating_sub(batt_w).saturating_sub(6 * scale)
+            left.saturating_sub(10 * scale).saturating_sub(batt_w).saturating_sub(6 * scale)
         } else {
-            chip0.x.saturating_sub(4 * scale)
+            left.saturating_sub(4 * scale)
         };
         let raw_right = bell.x + bell.w + 3 * scale;
         let right = if clock.w > 0 {
@@ -1385,12 +1386,33 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
     }
     None
 }
+/// The Bluetooth icon's chip (left of the network chip), while the Shell says to show it.
+fn bluetooth_chip(bar:&SilkBar)->Option<(usize,usize,usize,usize)>{
+    if unsafe{TRAY_STATUS.bluetooth}==sex_pdx::tray::BT_NONE{return None;}
+    let c=&bar.layout[ModuleSlot::Chip0 as usize];
+    (c.w>0&&c.x>=c.w).then(||sex_pdx::tray::bluetooth_rect((c.x,c.y,c.w,c.h)))
+}
+/// Where the status pill's left part starts: the Bluetooth chip while it shows.
+fn status_left(bar:&SilkBar)->usize{
+    bluetooth_chip(bar).map_or(bar.layout[ModuleSlot::Chip0 as usize].x,|r|r.0)
+}
 /// The tray state the Shell last sent (`sex_pdx::tray`).
 static mut TRAY_STATUS: sex_pdx::tray::Status = sex_pdx::tray::Status::UNKNOWN;
 static mut TRAY_LABEL: u64 = 0;
 static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
 /// One tray icon on a 16-unit grid: 0 network, 1 volume, 2 battery.
 fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
+    // The Bluetooth icon, one chip left of the network chip, while a controller is there.
+    if let Some((bx,by,bw,bh))=bluetooth_chip(bar){
+        if in_rect(x,y,bx,by,bw,bh){
+            let bg=bar_pill_bg(x,y,bar,scene);
+            let size=scene.metrics.px(16)as usize;
+            let left=bx+bw.saturating_sub(size)/2;let top=by+bh.saturating_sub(size)/2;
+            if !in_rect(x,y,left,top,size,size){ return Some(bg); }
+            return Some(tray_icons::at(tray_icons::BLUETOOTH,x-left,y-top,size,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)})
+                .map_or(bg, |(c,a)|coverage_blend(desk_theme::tray_ink(c,desk_theme::current()),bg,a)));
+        }
+    }
     // Tray icons in the three status chips: network, volume, battery.
     for (idx,slot) in [ModuleSlot::Chip0,ModuleSlot::Chip1,ModuleSlot::Chip2].iter().enumerate(){
         let slot_idx = *slot as usize;
@@ -1507,8 +1529,7 @@ fn panel_battery_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnaps
     let (text, n, width) = unsafe { &*core::ptr::addr_of!(PANEL_BATTERY) };
     if *n == 0 { return None; }
     let scale = scene.metrics.scale() as usize;
-    let (cx, _, _, _) = module_rect(bar, ModuleSlot::Chip0);
-    let end = cx.saturating_sub(10 * scale);
+    let end = status_left(bar).saturating_sub(10 * scale);
     let left = end.saturating_sub(*width);
     let line_h = glyphs::UI_H * scale;
     let top = (scene.metrics.bar() as usize).saturating_sub(line_h) / 2;
@@ -5423,7 +5444,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             needs_top_strip_redraw = true;
                             needs_full_redraw = true;
-                            sex_pdx::serial_record!("[display.tray] menu={} offset={} volume={} muted={} battery={} wifi={}", msg.arg2 & 0xFF, view.month_offset, status.volume, status.muted as u8, status.battery.map_or(-1, |b| b as i32), status.wifi);
+                            sex_pdx::serial_record!("[display.tray] menu={} offset={} volume={} muted={} battery={} wifi={} bt={}", msg.arg2 & 0xFF, view.month_offset, status.volume, status.muted as u8, status.battery.map_or(-1, |b| b as i32), status.wifi, status.bluetooth);
                         }
                     }
                 }

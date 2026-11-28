@@ -56,6 +56,9 @@ pub const NO_CONTROLLER: u8 = 1;
 pub const STARTING: u8 = 2; // firmware load and bring-up
 pub const READY: u8 = 3;
 pub const FAILED: u8 = 4;
+/// The person turned Bluetooth off (F9, the panel or settings): no links, no scans,
+/// the controller reset and idle. Shown only while a controller is there.
+pub const OFF: u8 = 5;
 
 /// Device kinds.
 pub const OTHER: u8 = 0;
@@ -253,7 +256,7 @@ impl Snapshot {
     pub fn decode(b: &[u8; SNAPSHOT_BYTES]) -> Option<Snapshot> {
         let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         let addr_at = |i: usize| { let mut a = [0u8; 6]; a.copy_from_slice(&b[i..i + 6]); a };
-        if b[0] > FAILED || b[2] as usize > MAX_DEVICES || b[1] > 1 { return None; }
+        if b[0] > OFF || b[2] as usize > MAX_DEVICES || b[1] > 1 { return None; }
         let mut s = Snapshot { phase: b[0], scanning: b[1] == 1, count: b[2], ..Snapshot::EMPTY };
         if b[3] == 1 { s.compare = Some(Compare { ticket: u32_at(4), addr: addr_at(8), value: u32_at(14) % 1_000_000 }); }
         if b[18] & 1 == 1 { s.outcome = Some(Outcome { serial: u32_at(20), addr: addr_at(24), ok: b[18] & 2 != 0, reason: b[19] }); }
@@ -316,6 +319,7 @@ const W_TAKEN: usize = 8; // Cufflinks: commands taken
 const W_SHELL: usize = 16; // Shell: SHELL_MAGIC once attached
 const W_OPEN: usize = 20; // Shell: the panel shows
 const W_WRITTEN: usize = 24; // Shell: commands written
+const W_OFF: usize = 28; // Shell: 1 while the person wants Bluetooth off (a level, not a command)
 const SNAP_AT: usize = 64;
 const CMD_AT: usize = 1024;
 /// Commands the ring holds.
@@ -356,6 +360,9 @@ impl Shared {
     /// A Shell has attached (it may still be asleep; the wake reaches it).
     pub fn shell_attached(&self) -> bool { self.load(W_SHELL) == SHELL_MAGIC }
     pub fn shell_open(&self) -> bool { self.shell_attached() && self.load(W_OPEN) != 0 }
+    /// The person wants Bluetooth off. A level the Shell keeps (from settings), so it
+    /// holds across a Cufflinks restart and is set even before Cufflinks starts.
+    pub fn wants_off(&self) -> bool { self.load(W_OFF) == 1 }
     /// The next command, if any; a damaged one is skipped.
     pub fn take_command(&self) -> Option<Command> {
         loop {
@@ -378,6 +385,8 @@ impl Shared {
     pub fn available(&self) -> bool { self.load(W_MAGIC) == MAGIC }
     pub fn shell_attach(&self) { self.store(W_SHELL, SHELL_MAGIC); }
     pub fn set_open(&self, open: bool) { self.store(W_OPEN, open as u32); }
+    /// Bluetooth on (false) or off (true), as the person chose.
+    pub fn set_off(&self, off: bool) { self.store(W_OFF, off as u32); }
     /// The whole snapshot, or None if Cufflinks has not written one or kept writing
     /// while we read.
     pub fn read(&self) -> Option<Snapshot> {
@@ -544,6 +553,23 @@ impl Panel {
 
 // ── The Shell's panel model (what it says, what keys and clicks do) ──
 
+/// Rows above the devices while Bluetooth is on: the on/off switch and Scan.
+const FIXED: usize = 2;
+
+/// The bar's Bluetooth icon for a snapshot: `sex_pdx::tray::BT_NONE` (0, no icon),
+/// `BT_OFF` (1), `BT_ON` (2) or `BT_IN_USE` (3, a device is in use).
+pub fn tray_icon(s: Option<&Snapshot>) -> u8 {
+    match s.map(|s| (s.phase, s.devices().iter().any(|d| d.has(IN_USE)))) {
+        Some((READY, true)) => 3,
+        Some((READY | STARTING, _)) => 2,
+        Some((OFF | FAILED, _)) => 1,
+        _ => 0,
+    }
+}
+
+/// Phases with an on/off switch: a controller is there.
+pub const fn has_power(phase: u8) -> bool { matches!(phase, READY | OFF | STARTING | FAILED) }
+
 /// What the Shell should do after a key or click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -552,6 +578,9 @@ pub enum Action {
     Redraw,
     Close,
     Send(Command),
+    /// Turn Bluetooth on (true) or off (false): the Shell sets the region's level and
+    /// keeps the choice in settings.
+    Power(bool),
 }
 
 /// Key codes the panel reads (the Shell's scancodes; Up/Down also as USB delivers them).
@@ -570,11 +599,12 @@ pub mod key {
     pub const N: u8 = 0x31;
     pub const S: u8 = 0x1F;
     pub const F: u8 = 0x21;
+    pub const B: u8 = 0x30;
 }
 
 /// What a selectable row does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Item { Scan, Device([u8; 6]), Yes, No }
+enum Item { Power, Scan, Device([u8; 6]), Yes, No }
 
 /// The panel as the user sees it. `selected` counts selectable rows only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -611,16 +641,18 @@ impl Ui {
     pub const MAX_SHOWN: usize = LINES - 5;
 
     /// The first device shown (the list scrolls with the selection).
-    fn top(&self) -> usize { if self.dialog.is_some() { 0 } else { self.selected.saturating_sub(Self::MAX_SHOWN) } }
+    fn top(&self) -> usize { if self.dialog.is_some() { 0 } else { self.selected.saturating_sub(Self::MAX_SHOWN + FIXED - 1) } }
 
-    fn items(&self, s: Option<&Snapshot>, out: &mut [Item; MAX_DEVICES + 1]) -> usize {
+    fn items(&self, s: Option<&Snapshot>, out: &mut [Item; MAX_DEVICES + FIXED]) -> usize {
         if self.dialog.is_some() { out[0] = Item::Yes; out[1] = Item::No; return 2; }
-        let Some(s) = s.filter(|s| s.phase == READY) else { return 0 };
-        out[0] = Item::Scan;
+        let Some(s) = s.filter(|s| has_power(s.phase)) else { return 0 };
+        out[0] = Item::Power;
+        if s.phase != READY { return 1; }
+        out[1] = Item::Scan;
         let mut order = [0usize; MAX_DEVICES];
         let n = Self::order(s, &mut order);
-        for k in 0..n { out[1 + k] = Item::Device(s.devices[order[k]].addr); }
-        1 + n
+        for k in 0..n { out[FIXED + k] = Item::Device(s.devices[order[k]].addr); }
+        FIXED + n
     }
 
     /// Follows a new snapshot: a waiting comparison opens the dialog (and the panel);
@@ -647,7 +679,7 @@ impl Ui {
                 redraw = true;
             }
         }
-        let mut items = [Item::Scan; MAX_DEVICES + 1];
+        let mut items = [Item::Scan; MAX_DEVICES + FIXED];
         let n = self.items(s, &mut items);
         if self.selected >= n.max(1) { self.selected = n.saturating_sub(1); redraw = true; }
         redraw && self.open
@@ -672,6 +704,7 @@ impl Ui {
         match item {
             Item::Yes => self.answer(true),
             Item::No => self.answer(false),
+            Item::Power => Action::Power(s.is_some_and(|s| s.phase == OFF)),
             Item::Scan => Action::Send(Command::Scan(!s.is_some_and(|s| s.scanning))),
             Item::Device(a) => Action::Send(Command::Pair(a)),
         }
@@ -679,7 +712,7 @@ impl Ui {
 
     /// A key while the panel shows (presses and repeats only).
     pub fn key(&mut self, code: u8, s: Option<&Snapshot>) -> Action {
-        let mut items = [Item::Scan; MAX_DEVICES + 1];
+        let mut items = [Item::Scan; MAX_DEVICES + FIXED];
         let n = self.items(s, &mut items);
         if self.dialog.is_some() {
             match code {
@@ -693,7 +726,8 @@ impl Ui {
             key::UP | key::UP_USB => { if self.selected > 0 { self.selected -= 1; } Action::Redraw }
             key::DOWN | key::DOWN_USB => { if self.selected + 1 < n { self.selected += 1; } Action::Redraw }
             key::ENTER | key::ENTER_PAD | key::SPACE if self.selected < n => self.activate(items[self.selected], s),
-            key::S if self.dialog.is_none() && n > 0 => self.activate(Item::Scan, s),
+            key::S if self.dialog.is_none() && n > 1 => self.activate(Item::Scan, s),
+            key::B if self.dialog.is_none() && n > 0 => self.activate(Item::Power, s),
             key::DELETE | key::BACKSPACE | key::F if self.dialog.is_none() => match items.get(self.selected) {
                 Some(Item::Device(a)) if self.selected < n && s.and_then(|s| s.find(a)).is_some_and(|d| d.has(PAIRED)) => {
                     self.notice = None;
@@ -714,12 +748,12 @@ impl Ui {
             return Action::Close;
         };
         let (lines, _) = self.lines(s);
-        let mut items = [Item::Scan; MAX_DEVICES + 1];
+        let mut items = [Item::Scan; MAX_DEVICES + FIXED];
         let n = self.items(s, &mut items);
         let picked = (0..=line).filter(|&i| lines.style[i] == BUTTON).count();
         if line >= lines.count as usize || lines.style[line] != BUTTON || picked == 0 { return Action::None; }
-        // Buttons on screen: Scan (or Yes/No), then the devices from `top` on.
-        let index = if self.dialog.is_some() || picked == 1 { picked - 1 } else { picked - 1 + self.top() };
+        // Buttons on screen: the switch and Scan (or Yes/No), then the devices from `top` on.
+        let index = if self.dialog.is_some() || picked <= FIXED { picked - 1 } else { picked - 1 + self.top() };
         if index >= n { return Action::None; }
         self.selected = index;
         self.activate(items[index], s)
@@ -750,7 +784,8 @@ impl Ui {
         l.push(TITLE, &[b"Bluetooth\t", match phase {
             READY if s.is_some_and(|s| s.scanning) => b"On, scanning".as_slice(),
             READY => b"On",
-            NO_CONTROLLER => b"Off",
+            OFF => b"Off",
+            NO_CONTROLLER => b"None",
             STARTING => b"Starting",
             FAILED => b"Failed",
             _ => b"Unavailable",
@@ -764,14 +799,23 @@ impl Ui {
                 else { l.push(TEXT, &[b"Pairing with ", &status_name[..n], b" failed"]); }
             }
             (NO_CONTROLLER, _) => { l.push(TEXT, &[b"No Bluetooth controller"]); }
+            (OFF, _) => { l.push(TEXT, &[b"Bluetooth is off"]); }
             (STARTING, _) => { l.push(TEXT, &[b"Starting the controller"]); }
             (FAILED, _) => { l.push(TEXT, &[b"The controller did not start"]); }
             (UNAVAILABLE, _) => { l.push(TEXT, &[b"Bluetooth service is not running"]); }
             _ => {}
         }
         let mut selected_line = None;
-        if let Some(s) = s.filter(|s| s.phase == READY) {
+        if let Some(s) = s.filter(|s| has_power(s.phase)) {
             if self.selected == 0 { selected_line = Some(l.count as usize); }
+            l.push(BUTTON, &[if s.phase == OFF { b"Turn Bluetooth on".as_slice() } else { b"Turn Bluetooth off" }]);
+        }
+        if s.is_some_and(|s| s.phase != READY && has_power(s.phase)) {
+            l.push(DIM, &[b"B or F9: on/off  Esc: close"]);
+            return (l, selected_line);
+        }
+        if let Some(s) = s.filter(|s| s.phase == READY) {
+            if self.selected == 1 { selected_line = Some(l.count as usize); }
             l.push(BUTTON, &[if s.scanning { b"Stop scanning".as_slice() } else { b"Scan for devices" }]);
             let mut order = [0usize; MAX_DEVICES];
             let all = Self::order(s, &mut order);
@@ -789,7 +833,7 @@ impl Ui {
                 let kind = kind_name(d.kind).as_bytes();
                 // The name is cut so the right column always fits.
                 let room = LINE_BYTES.saturating_sub(kind.len() + state.len() + 2);
-                if self.selected == k + 1 { selected_line = Some(l.count as usize); }
+                if self.selected == k + FIXED { selected_line = Some(l.count as usize); }
                 l.push(BUTTON, &[&name[..name.len().min(room)], b"\t", kind, state]);
             }
             l.push(DIM, &[b"Enter: pair or connect  Del: forget  Esc: close"]);
@@ -881,11 +925,15 @@ mod tests {
         let mut mem = vec![0u32; BYTES as usize / 4];
         let r = unsafe { Shared::at(mem.as_mut_ptr() as *mut u8) };
         assert!(!r.available() && r.read().is_none() && !r.shell_attached());
-        // Shell commands before Cufflinks starts are dropped.
+        // Shell commands before Cufflinks starts are dropped; the on/off level is kept.
         assert!(r.push_command(Command::Pair(KB)));
+        assert!(!r.wants_off());
+        r.set_off(true);
         let s = ready();
         r.cufflinks_start(&s);
-        assert!(r.available());
+        assert!(r.available() && r.wants_off());
+        r.set_off(false);
+        assert!(!r.wants_off());
         assert_eq!(r.take_command(), None);
         assert_eq!(r.read(), Some(s));
         r.shell_attach();
@@ -936,7 +984,7 @@ mod tests {
         let ui = Ui { open: true, ..Ui::new() };
         let none = Snapshot { phase: NO_CONTROLLER, ..Snapshot::EMPTY };
         let t = text(&show(&ui, Some(&none)));
-        assert!(t.contains("No Bluetooth controller") && t.starts_with("Bluetooth\tOff"), "{t}");
+        assert!(t.contains("No Bluetooth controller") && t.starts_with("Bluetooth\tNone"), "{t}");
         assert!(text(&show(&ui, None)).contains("Bluetooth service is not running"));
         // Hiding is one chunk with no lines.
         let hide: Vec<_> = chunks(&Lines::EMPTY, None).collect();
@@ -956,23 +1004,27 @@ mod tests {
         let hp = t.find("Cuff H?adphones\theadphones, paired").unwrap();
         let kb = t.find("Silk Keyboard\tkeyboard").unwrap();
         assert!(hp < kb, "{t}");
+        assert!(t.contains("Turn Bluetooth off"), "{t}");
+        assert_eq!(ui.key(key::ENTER, Some(&s)), Action::Power(false), "the switch comes first");
+        assert_eq!(ui.key(key::DOWN, Some(&s)), Action::Redraw);
         assert_eq!(ui.key(key::ENTER, Some(&s)), Action::Send(Command::Scan(true)));
         assert_eq!(ui.key(key::DOWN, Some(&s)), Action::Redraw);
         assert_eq!(ui.key(key::DELETE, Some(&s)), Action::Send(Command::Forget(HP)));
         assert_eq!(ui.key(key::DOWN_USB, Some(&s)), Action::Redraw);
         assert_eq!(ui.key(key::DOWN, Some(&s)), Action::Redraw, "stays on the last row");
-        assert_eq!(ui.selected, 2);
+        assert_eq!(ui.selected, 3);
         assert_eq!(ui.key(key::DELETE, Some(&s)), Action::None, "an unpaired device has nothing to forget");
         assert_eq!(ui.key(key::ENTER, Some(&s)), Action::Send(Command::Pair(KB)));
         // Clicks land on the line drawn there.
         let (lines, _) = ui.lines(Some(&s));
         let p = Panel::new(1280, 28, 1, lines.count as usize).unwrap();
-        let (x, y, _, _) = p.row(1);
+        let (x, y, _, _) = p.row(2);
         let line = p.row_at(x + 3, y + 3);
-        assert_eq!(line, Some(1));
+        assert_eq!(line, Some(2));
         assert_eq!(ui.click(line, Some(&s)), Action::Send(Command::Scan(true)));
-        assert_eq!(ui.click(Some(2), Some(&s)), Action::Send(Command::Pair(HP)));
-        assert_eq!(ui.selected, 1);
+        assert_eq!(ui.click(Some(3), Some(&s)), Action::Send(Command::Pair(HP)));
+        assert_eq!(ui.selected, 2);
+        assert_eq!(ui.click(Some(1), Some(&s)), Action::Power(false));
         assert_eq!(ui.click(Some(0), Some(&s)), Action::None, "the title is not a button");
         assert!(p.row_at(p.panel.0, p.panel.1).is_none() && p.inside(p.panel.0, p.panel.1));
         assert_eq!(ui.click(None, Some(&s)), Action::Close);
@@ -1023,6 +1075,50 @@ mod tests {
     }
 
     #[test]
+    fn bluetooth_turns_off_and_on() {
+        let mut ui = Ui::new();
+        ui.toggle();
+        assert_eq!(ui.key(key::B, Some(&ready())), Action::Power(false));
+        let off = Snapshot { phase: OFF, ..Snapshot::EMPTY };
+        ui.update(Some(&off));
+        let t = text(&show(&ui, Some(&off)));
+        assert!(t.starts_with("Bluetooth\tOff\nBluetooth is off\nTurn Bluetooth on"), "{t}");
+        assert_eq!(ui.lines(Some(&off)).1, Some(2));
+        assert_eq!(ui.key(key::S, Some(&off)), Action::None, "no scanning while off");
+        assert_eq!(ui.key(key::DOWN, Some(&off)), Action::Redraw);
+        assert_eq!(ui.selected, 0);
+        assert_eq!(ui.key(key::ENTER, Some(&off)), Action::Power(true));
+        assert_eq!(ui.click(Some(2), Some(&off)), Action::Power(true));
+        assert_eq!(ui.key(key::B, Some(&off)), Action::Power(true));
+        // A starting controller can be turned off before it is ready; no controller has no switch.
+        let starting = Snapshot { phase: STARTING, ..Snapshot::EMPTY };
+        assert!(text(&show(&ui, Some(&starting))).contains("Turn Bluetooth off"));
+        let none = Snapshot { phase: NO_CONTROLLER, ..Snapshot::EMPTY };
+        assert!(!text(&show(&ui, Some(&none))).contains("Turn Bluetooth"));
+        assert_eq!(ui.key(key::B, Some(&none)), Action::None);
+        // OFF survives the region round trip.
+        let mut b = [0u8; SNAPSHOT_BYTES];
+        off.encode(&mut b);
+        assert_eq!(Snapshot::decode(&b).map(|s| s.phase), Some(OFF));
+        b[0] = OFF + 1;
+        assert!(Snapshot::decode(&b).is_none());
+    }
+
+    #[test]
+    fn bar_icon_follows_cufflinks() {
+        assert_eq!(tray_icon(None), 0);
+        let mut s = Snapshot { phase: NO_CONTROLLER, ..Snapshot::EMPTY };
+        assert_eq!(tray_icon(Some(&s)), 0);
+        s.phase = OFF;
+        assert_eq!(tray_icon(Some(&s)), 1);
+        s.phase = READY;
+        assert!(s.put(HP, HEADPHONES, Some(b"Cuffs"), None, false));
+        assert_eq!(tray_icon(Some(&s)), 2);
+        s.set(&HP, IN_USE, true);
+        assert_eq!(tray_icon(Some(&s)), 3);
+    }
+
+    #[test]
     fn chunks_are_checked() {
         let good = Chunk { line: 1, part: 2, style: BUTTON, count: 3, selected: Some(2), last: true };
         assert_eq!(Chunk::decode(good.word()), Some(good));
@@ -1048,7 +1144,7 @@ mod tests {
         let mut ui = Ui::new();
         ui.toggle();
         for _ in 0..MAX_DEVICES + 3 { ui.key(key::DOWN, Some(&s)); }
-        assert_eq!(ui.selected, MAX_DEVICES);
+        assert_eq!(ui.selected, MAX_DEVICES + 1);
         let (l, sel) = ui.lines(Some(&s));
         assert!(l.count as usize <= LINES && sel.is_some_and(|x| l.style[x] == BUTTON));
         let last = [MAX_DEVICES as u8, 0, 0, 0, 0, 0x50];

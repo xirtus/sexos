@@ -17,6 +17,8 @@ pub enum Action {
     DisplayScale(i8),
     /// Master volume by this many percent; 0 toggles mute.
     Volume(i8),
+    /// The Bluetooth key (F9 on the Alienware x17): Bluetooth on or off.
+    Bluetooth,
     /// Alt+F4: close the focused window (KDE / standard desktop).
     Close,
     /// Alt+F10: maximize or restore the focused window (KDE / standard desktop).
@@ -29,6 +31,9 @@ pub enum Action {
 pub const KEY_MUTE: u8 = 0x75;
 pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
+/// The Bluetooth key (F9 on the Alienware x17): Input gives it this code (a keyboard
+/// driver sends reserved usage 0xEF). Shell turns Bluetooth on or off; programs never see it.
+pub const KEY_BLUETOOTH: u8 = 0x79;
 /// Set-1 codes for Alt+F4, Alt+F10, and Alt+Space.
 pub const KEY_F4: u8 = 0x3E;
 pub const KEY_F10: u8 = 0x44;
@@ -63,6 +68,10 @@ impl Keys {
             KEY_MUTE => Some(0),
             _ => None,
         };
+        // The Bluetooth key toggles once per press; repeats and releases are Shell's.
+        if code == KEY_BLUETOOTH {
+            return if value == 1 { Action::Bluetooth } else { Action::Consume };
+        }
         if let Some(step) = volume {
             return match value {
                 1 => Action::Volume(step),
@@ -171,6 +180,9 @@ mod tests {
         assert_eq!(k.event(KEY_VOLUME_UP, 2), Action::Volume(VOLUME_STEP));
         assert_eq!(k.event(KEY_VOLUME_UP, 0), Action::Consume);
         assert_eq!(k.event(KEY_VOLUME_DOWN, 1), Action::Volume(-VOLUME_STEP));
+        assert_eq!(k.event(KEY_BLUETOOTH, 1), Action::Bluetooth);
+        assert_eq!(k.event(KEY_BLUETOOTH, 2), Action::Consume, "held: one toggle");
+        assert_eq!(k.event(KEY_BLUETOOTH, 0), Action::Consume);
         assert_eq!(k.event(KEY_MUTE, 1), Action::Volume(0));
         assert_eq!(k.event(KEY_MUTE, 2), Action::Consume);
         assert_eq!(k.event(0x0F, 1), Action::Switch(1));

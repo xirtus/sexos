@@ -12,11 +12,18 @@
 //! when there is something to show. What the panel says and what keys do is
 //! `bt_ui::Ui` (host-tested); Display draws the lines (`bt_ui::OP_PANEL`). While the
 //! panel shows it takes every key that is not a Super chord, like a dialog.
+//!
+//! On/off: F9 (`KEY_BLUETOOTH`), the panel's switch (or B) and the `bluetooth.on`
+//! setting all set one level in the region (`Shared::set_off`) that Cufflinks follows;
+//! the choice is kept in settings, so it lasts across boots. The bar's Bluetooth icon
+//! (`sex_pdx::tray::Status::bluetooth`) follows what Cufflinks publishes.
 use sex_pdx::bt_ui::{self as b, Action, Lines, Shared, Snapshot, Ui};
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 
 struct State {
     region: Option<Shared>,
+    /// The person wants Bluetooth off (kept here too, for a region that maps late).
+    off: bool,
     probed: bool,
     /// Cufflinks woke us: read the region on the next pass.
     woken: bool,
@@ -26,7 +33,7 @@ struct State {
     shown: (Lines, Option<usize>),
 }
 
-static mut STATE: State = State { region: None, probed: false, woken: true, ui: Ui::new(), snap: None, shown: (Lines::EMPTY, None) };
+static mut STATE: State = State { region: None, off: false, probed: false, woken: true, ui: Ui::new(), snap: None, shown: (Lines::EMPTY, None) };
 fn st() -> &'static mut State { unsafe { &mut *core::ptr::addr_of_mut!(STATE) } }
 
 /// Map the region once and tell Cufflinks a Shell is here to ask the user.
@@ -37,7 +44,7 @@ fn region() -> Option<Shared> {
         let view = sex_pdx::memory_region_full_view(b::SLOT, QUERY_VIEW | READ | WRITE).ok()
             .filter(|v| v.length >= b::BYTES && v.virtual_address != 0);
         s.region = view.map(|v| unsafe { Shared::at(v.virtual_address as *mut u8) });
-        if let Some(r) = s.region { r.shell_attach(); r.set_open(false); }
+        if let Some(r) = s.region { r.set_off(s.off); r.shell_attach(); r.set_open(false); }
         sex_pdx::serial_record!("[shell.bt.route] ok={} slot={}", s.region.is_some() as u8, b::SLOT);
     }
     s.region
@@ -72,10 +79,58 @@ fn act(action: Action) {
             let sent = s.region.is_some_and(|r| r.push_command(c));
             sex_pdx::serial_record!("[shell.bt.command] {:?} sent={}", c, sent as u8);
         }
+        Action::Power(on) => { choose_power(on); return; }
         Action::None => return,
         Action::Redraw | Action::Close => {}
     }
     publish();
+}
+
+/// The `bluetooth.on` setting (at start, or changed in Settings).
+pub fn set_power(on: bool) {
+    let s = st();
+    s.off = !on;
+    let mapped = region().map(|r| r.set_off(!on)).is_some();
+    sex_pdx::serial_record!("[shell.bt.power] on={} region={}", on as u8, mapped as u8);
+    s.woken = true;
+}
+
+/// The person turned Bluetooth on or off here (F9, the panel): follow it, keep it in
+/// settings, and say so in the bar for a moment.
+fn choose_power(on: bool) {
+    set_power(on);
+    crate::config_watch::changed_here(sex_config::id::BLUETOOTH, on as i32);
+    let text: &[u8] = if on { b"Bluetooth on" } else { b"Bluetooth off" };
+    let shown = unsafe { crate::notify_panel(text) };
+    if shown { unsafe { crate::NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + crate::media_keys::OSD_TICKS; } }
+    sex_pdx::serial_record!("[shell.bt.power.key] on={} osd={}", on as u8, shown as u8);
+    publish();
+}
+
+/// F9, the Bluetooth key: on if it was off, off if it was on.
+pub fn toggle_power() -> bool {
+    choose_power(st().off);
+    true
+}
+
+/// The bar's Bluetooth icon for what Cufflinks published last.
+fn tray_follow() {
+    let icon = sex_pdx::bt_ui::tray_icon(st().snap.as_ref());
+    unsafe {
+        if crate::TRAY.bluetooth == icon { return; }
+        let moved = (crate::TRAY.bluetooth == sex_pdx::tray::BT_NONE) != (icon == sex_pdx::tray::BT_NONE);
+        crate::TRAY.bluetooth = icon;
+        crate::tray_publish();
+        // The icon came or went: program tray icons move over by one chip.
+        if moved { crate::tray_items_glue::display_restarted(); }
+    }
+}
+
+/// The bar's Bluetooth icon is shown and (x, y) is on it: a click there opens the panel.
+pub fn icon_hit(chip0: sex_pdx::tray::Rect, x: usize, y: usize) -> bool {
+    if unsafe { crate::TRAY.bluetooth } == sex_pdx::tray::BT_NONE { return false; }
+    let (bx, by, bw, bh) = sex_pdx::tray::bluetooth_rect(chip0);
+    chip0.2 != 0 && x >= bx && y >= by && x < bx + bw && y < by + bh
 }
 
 /// Every pass of the Shell's loop: follow Cufflinks while the panel shows or after
@@ -89,6 +144,7 @@ pub fn poll() {
     if snap != s.snap {
         s.snap = snap;
         s.ui.update(s.snap.as_ref());
+        tray_follow();
     }
     publish();
 }
@@ -114,6 +170,8 @@ pub fn toggle() -> bool {
 pub fn key(code: u8, value: u64) -> bool {
     let s = st();
     if !s.ui.open || value == 0 { return false; }
+    // The Bluetooth key works with the panel open too.
+    if code == crate::desktop_keys::KEY_BLUETOOTH { if value == 1 { toggle_power(); } return true; }
     act(s.ui.key(code, s.snap.as_ref()));
     true
 }
