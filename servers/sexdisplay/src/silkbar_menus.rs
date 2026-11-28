@@ -5,7 +5,6 @@
 //! Shell drives state via `sex_pdx::silkbar_menus::OP_SILKBAR_MENU`; Display
 //! renders using the shared `Layout` so pointer hits match drawn pixels.
 
-use sex_time::CivilDay as _;
 use sex_pdx::silkbar_menus::{Layout, MenuKind, MenuState};
 use sex_theme::{candy_lavender as cl, Mode};
 use crate::desk_theme::current as desk;
@@ -319,7 +318,7 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
             // The same day in SexTime's Maya calendar: Long Count and Calendar Round.
             let mut n = 0usize;
             let maya = if scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0 {
-                sex_time::MayaDate::from_unix(local_seconds(scene.bar.civil_clock.seconds()))
+                sex_time::MayaDate::from_unix_seconds(local_seconds(scene.bar.civil_clock.seconds()))
             } else { None };
             match maya {
                 Some(d) => {

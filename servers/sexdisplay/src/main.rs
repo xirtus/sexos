@@ -2,7 +2,6 @@
 #![no_main]
 #![allow(static_mut_refs)]
 
-use sex_time::CivilDay as _;
 use sex_pdx::serial_println;
 static mut DISPLAY_LAST_OP: u64 = 0;
 static mut DISPLAY_LAST_CALLER: u32 = 0;
@@ -2445,7 +2444,7 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
 /// ("13.0.14.2.10"), space padded. Formatting is not a source query.
 fn civil_clock_maya(seconds:u32)->[u8;14]{
     let mut line=[b' ';14];
-    match sex_time::MayaDate::from_unix(seconds as i64){
+    match sex_time::MayaDate::from_unix_seconds(seconds as i64){
         Some(date)=>{date.write_long_count(&mut line);}
         None=>line[..12].copy_from_slice(b"Date unknown"),
     }
@@ -3940,7 +3939,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
                 return;
             };
             // Above the month: today's Dreamspell kin, wave spell and oracle cross.
-            if let Some(kin) = local.and_then(sex_time::dreamspell::Kin::from_unix) {
+            if let Some(kin) = local.and_then(sex_time::dreamspell::Kin::from_unix_seconds) {
                 dreamspell_cross::draw(fb, w, h, total, c.oracle, s, scale, kin, bg);
             }
             let (year, month) = tray::shift_month(today.year, today.month, view.month_offset as i32);
@@ -3982,7 +3981,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             let maya_day = if this_month { Some(today) } else {
                 Some(sex_time::Gregorian { year, month, day: 1, hour: 0, minute: 0, second: 0 })
             };
-            let maya = maya_day.and_then(|g| g.to_timestamp()).and_then(sex_time::MayaDate::from_timestamp);
+            let maya = maya_day.and_then(|g| g.to_timestamp()).and_then(sex_time::long_count_days).and_then(sex_time::MayaDate::from_days);
             let mut foot = [0u8; 48];
             let mut n = 0;
             let label: &[u8] = if this_month { b"Today " } else { &tray::MONTH_NAMES[month as usize - 1].as_bytes()[..3] };

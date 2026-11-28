@@ -53,23 +53,25 @@ fixture=(root/'tests/silkbar_civil_clock.rs').read_text().replace('../servers/se
 PY
 cargo build -q --manifest-path "$CIVIL_ROOT/Cargo.toml" -p sex-font
 FONT_LIBS=(--extern sex_font="$CIVIL_ROOT/target/debug/libsex_font.rlib" -L dependency="$CIVIL_ROOT/target/debug/deps")
-rustc --edition=2021 --crate-name sex_time --crate-type rlib "$CIVIL_ROOT/crates/sex-time/src/lib.rs" -o "$CIVIL_TEMP/libsex_time.rlib"
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/tests"
+source "$(dirname "${BASH_SOURCE[0]}")/dreamroot_core_rlib.sh"
+dreamroot_core_rlib "$CIVIL_TEMP"
+rustc --edition=2021 --crate-name sex_time --crate-type rlib --extern dreamroot_core="$CIVIL_TEMP/libdreamroot_core.rlib" "$CIVIL_ROOT/crates/sex-time/src/lib.rs" -o "$CIVIL_TEMP/libsex_time.rlib"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" -L dependency="$CIVIL_TEMP" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/tests"
 "$CIVIL_TEMP/tests" --test-threads=1
 rustc --edition=2021 --crate-name silkbar_model --crate-type rlib "$CIVIL_ROOT/crates/silkbar-model/src/lib.rs" -o "$CIVIL_TEMP/libsilkbar_model.rlib"
 rustc --edition=2021 --extern silkbar_model="$CIVIL_TEMP/libsilkbar_model.rlib" --test "$CIVIL_ROOT/tests/silkbar_clock_probe.rs" -o "$CIVIL_TEMP/probe-tests"
 "$CIVIL_TEMP/probe-tests"
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-redraw-mutant.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/redraw-mutant"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-redraw-mutant.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" -L dependency="$CIVIL_TEMP" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/redraw-mutant"
 if "$CIVIL_TEMP/redraw-mutant" repeated_visible_seconds_refresh_health_without_requesting_repaint; then
     echo '[silkbar.civil.host] FAIL redundant-redraw mutant survived' >&2
     exit 1
 fi
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-date-redraw-mutant.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/date-redraw-mutant"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display-date-redraw-mutant.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" -L dependency="$CIVIL_TEMP" --test "$CIVIL_ROOT/tests/silkbar_civil_clock.rs" -o "$CIVIL_TEMP/date-redraw-mutant"
 if "$CIVIL_TEMP/date-redraw-mutant" same_clock_time_on_later_utc_day_requests_a_date_repaint; then
     echo '[silkbar.civil.host] FAIL date-redraw mutant survived' >&2
     exit 1
 fi
-SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" --test "$CIVIL_TEMP/mutant.rs" -o "$CIVIL_TEMP/mutant"
+SILKBAR_CIVIL_DISPLAY="$CIVIL_TEMP/display.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$CIVIL_TEMP/libsex_time.rlib" -L dependency="$CIVIL_TEMP" --test "$CIVIL_TEMP/mutant.rs" -o "$CIVIL_TEMP/mutant"
 if "$CIVIL_TEMP/mutant" actual_display_boundary_authenticates_both_identity_words_before_effect; then
     echo '[silkbar.civil.host] FAIL authority mutant survived' >&2
     exit 1

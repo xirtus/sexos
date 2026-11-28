@@ -23,7 +23,9 @@ Path(sys.argv[2]).write_text('\n'.join(parts)+'\n')
 PY
 cargo build -q --manifest-path "$ROOT/Cargo.toml" -p sex-font
 FONT_LIBS=(--extern sex_font="$ROOT/target/debug/libsex_font.rlib" -L dependency="$ROOT/target/debug/deps")
-rustc --edition=2021 --crate-name sex_time --crate-type rlib "$ROOT/crates/sex-time/src/lib.rs" -o "$TMP/libsex_time.rlib"
-DISPLAY_CLOCK_PRODUCTION="$TMP/production.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$TMP/libsex_time.rlib" --test "$ROOT/tests/display_clock.rs" -o "$TMP/test"
+source "$(dirname "${BASH_SOURCE[0]}")/dreamroot_core_rlib.sh"
+dreamroot_core_rlib "$TMP"
+rustc --edition=2021 --crate-name sex_time --crate-type rlib --extern dreamroot_core="$TMP/libdreamroot_core.rlib" "$ROOT/crates/sex-time/src/lib.rs" -o "$TMP/libsex_time.rlib"
+DISPLAY_CLOCK_PRODUCTION="$TMP/production.rs" rustc "${FONT_LIBS[@]}" --edition=2021 --extern sex_time="$TMP/libsex_time.rlib" -L dependency="$TMP" --test "$ROOT/tests/display_clock.rs" -o "$TMP/test"
 "$TMP/test" --test-threads=1
 echo '[gate.display_clock_host.result] PASS scope=actual_clock_glyphs_responsive_geometry_and_hit_regions_not_native_pixels_or_wall_time'

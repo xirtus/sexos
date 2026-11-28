@@ -6,13 +6,18 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sexos-sex-time.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 SRC="$ROOT_DIR/crates/sex-time/src/lib.rs"
-rustc --edition=2021 --test "$SRC" -o "$TEST_DIR/tests"
+source "$(dirname "${BASH_SOURCE[0]}")/dreamroot_core_rlib.sh"
+dreamroot_core_rlib "$TEST_DIR/host"
+dreamroot_core_rlib "$TEST_DIR/none" --target x86_64-unknown-none -O
+DREAMROOT=(--extern dreamroot_core="$TEST_DIR/host/libdreamroot_core.rlib")
+rustc --edition=2021 "${DREAMROOT[@]}" --test "$SRC" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests"
-rustc --edition=2021 --crate-type rlib --crate-name sex_time --target x86_64-unknown-none -O "$SRC" -o "$TEST_DIR/libsex_time.rlib"
+rustc --edition=2021 --crate-type rlib --crate-name sex_time --target x86_64-unknown-none -O --extern dreamroot_core="$TEST_DIR/none/libdreamroot_core.rlib" "$SRC" -o "$TEST_DIR/libsex_time.rlib"
 echo '[sex_time.no_std] PASS target=x86_64-unknown-none'
-rustc --edition=2021 --crate-type rlib --crate-name sex_time "$SRC" -o "$TEST_DIR/libsex_time_host.rlib"
+rustc --edition=2021 --crate-type rlib --crate-name sex_time "${DREAMROOT[@]}" "$SRC" -o "$TEST_DIR/libsex_time_host.rlib"
 cat > "$TEST_DIR/probe.rs" <<'RS'
 use std::io::BufRead;
+use sex_time::CivilDay;
 fn main() {
     for line in std::io::stdin().lock().lines() {
         let unix: i64 = line.unwrap().trim().parse().unwrap();
@@ -24,7 +29,7 @@ fn main() {
     }
 }
 RS
-rustc --edition=2021 --extern sex_time="$TEST_DIR/libsex_time_host.rlib" "$TEST_DIR/probe.rs" -o "$TEST_DIR/probe"
+rustc --edition=2021 --extern sex_time="$TEST_DIR/libsex_time_host.rlib" -L dependency="$TEST_DIR/host" "$TEST_DIR/probe.rs" -o "$TEST_DIR/probe"
 python3 - "$TEST_DIR/probe" <<'PY'
 import datetime,random,subprocess,sys
 # Independent oracle: Python's proleptic Gregorian calendar, its ordinal day

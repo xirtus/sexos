@@ -10,7 +10,6 @@
 //! (`wallpaper_mark::pixel`) blends that cache over the gradient, so windows
 //! cover the cards like any wallpaper.
 
-use sex_time::CivilDay as _;
 use sex_pdx::desktop_widgets::{self as dw, Layout, Line, Report, Sample};
 /// The menu, popup and card colours of the desktop theme (`desk_theme`).
 use crate::desk_theme::current as desk;
@@ -113,7 +112,7 @@ pub fn tick(clock: &silkbar_model::civil_clock::CivilClock, w: usize, h: usize) 
         let (t, d) = dw::clock_lines(local, true);
         // The same local day in SexTime's Maya calendar.
         let mut m = Line::EMPTY;
-        if let Some(day) = sex_time::MayaDate::from_unix(local) { m.len = day.write_full(&mut m.bytes); }
+        if let Some(day) = sex_time::MayaDate::from_unix_seconds(local) { m.len = day.write_full(&mut m.bytes); }
         (t, d, m)
     } else {
         let mut t = Line::EMPTY; t.bytes[..5].copy_from_slice(b"--:--"); t.len = 5;
