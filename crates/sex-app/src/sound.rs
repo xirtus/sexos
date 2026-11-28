@@ -125,6 +125,53 @@ impl Sound {
     pub fn close(&mut self) { self.ring.store(ring::OPEN, 0); }
 }
 
+/// The microphone alone, beside whatever plays into the program's ring: it touches
+/// only the ring's listening words, so a player may own the ring meanwhile. A player
+/// opening the ring clears `LISTEN`; `keep` asks again when that happened.
+pub struct Listener { ring: Ring, heard: u64, lost: u64 }
+
+impl Listener {
+    /// Asks Bell for the microphone. `None` when this program row has no ring.
+    pub fn open() -> Option<Listener> {
+        let ring = sex_pdx::sound_ring_client().ok()?;
+        let mut l = Listener { ring, heard: 0, lost: 0 };
+        l.heard = l.ring.load(ring::HEARD);
+        l.ask(true);
+        Some(l)
+    }
+    fn ask(&mut self, on: bool) {
+        self.ring.store(ring::LISTEN, on as u64);
+        let _ = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, ring::OP_LISTEN, 0, 0, 0);
+    }
+    /// Asks again if someone cleared the request (a player opened the ring).
+    pub fn keep(&mut self) { if self.ring.load(ring::LISTEN) == 0 { self.ask(true); } }
+    /// `ring::MIC_OFF`, `MIC_WAITING` (the person has not let this program listen yet),
+    /// `MIC_ON` or `MIC_NONE` (no microphone).
+    pub fn state(&self) -> u64 { self.ring.load(ring::MIC) }
+    /// Microphone frames (48 kHz stereo) heard since the last call, up to `out.len()`;
+    /// what the ring no longer holds is skipped and counted in `lost`.
+    pub fn hear(&mut self, out: &mut [[i16; 2]]) -> usize {
+        let now = self.ring.load(ring::HEARD);
+        if now.wrapping_sub(self.heard) > ring::CAPTURE_FRAMES {
+            let from = now - ring::CAPTURE_FRAMES;
+            self.lost += from.wrapping_sub(self.heard);
+            self.heard = from;
+        }
+        let n = (now.wrapping_sub(self.heard) as usize).min(out.len());
+        let slots = self.ring.heard();
+        for (i, f) in out[..n].iter_mut().enumerate() {
+            *f = unsafe { core::ptr::read_volatile(slots.add(((self.heard + i as u64) % ring::CAPTURE_FRAMES) as usize)) };
+        }
+        self.heard += n as u64;
+        n
+    }
+    pub fn lost(&self) -> u64 { self.lost }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) { self.ask(false); }
+}
+
 impl Drop for Sound {
     fn drop(&mut self) {
         if self.listening { self.listen(false); }

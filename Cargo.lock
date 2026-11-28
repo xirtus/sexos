@@ -7641,6 +7641,17 @@ name = "sex-i2c-dw"
 version = "0.1.0"
 
 [[package]]
+name = "sex-ice"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "hmac 0.12.1",
+ "md-5 0.10.6",
+ "sex-sdp",
+ "sha1 0.10.7",
+]
+
+[[package]]
 name = "sex-icons"
 version = "0.1.0"
 dependencies = [
@@ -7897,6 +7908,10 @@ dependencies = [
  "sex-libc",
  "sex-std",
 ]
+
+[[package]]
+name = "sex-sdp"
+version = "0.1.0"
 
 [[package]]
 name = "sex-shape"
@@ -10944,10 +10959,12 @@ dependencies = [
  "sex-extensions",
  "sex-fetch",
  "sex-gl",
+ "sex-image",
  "sex-js",
  "sex-media",
  "sex-pdx",
  "sex-shields",
+ "sex-uvc",
  "sex-web",
 ]
 
