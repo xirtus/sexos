@@ -217,6 +217,10 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
         python3 scripts/splicy_export_host_gate.py "$RUNNER_TEMP/splicy-export"
+    - name: Kaleidoscope MediaRecorder encoder (WebM VP8/VP9 + Opus in pieces, decoded back) through system FFmpeg
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+        SEXOS_MEDIA_HOST_FFMPEG=1 cargo test --locked -p sex-media --test live
     - name: RFB (VNC) client and server codec, byte-exact goldens
       run: cargo test --locked -p sex-rfb
     - name: Serenade audio recorder engine (VOX, dBFS meters, waveform mipmaps, WAV/cue) on the host
@@ -1325,6 +1329,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/flash-source.img"
         python3 scripts/flash_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/flash-source.img" --require-video --out "$RUNNER_TEMP/recording/flash"
+    - name: Kaleidoscope MediaRecorder (3 s camera+mic VP8, 3 s canvas.captureStream VP9, Blob played back)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/web-recorder-source.img"
+        python3 scripts/program_web_recorder_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/web-recorder-source.img" --out "$RUNNER_TEMP/recording/web-recorder"
     - name: Splicy editor opens a clip, shows filmstrip and waveform, cuts a sentence and exports
       run: |
         bash scripts/build_splicy.sh
