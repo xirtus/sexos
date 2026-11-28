@@ -22,7 +22,7 @@ impl Sel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Motion { Left, Right, Up, Down, WordLeft, WordRight, Home, End, DocStart, DocEnd, PageUp(usize), PageDown(usize) }
+pub enum Motion { Left, Right, Up, Down, WordLeft, WordRight, Home, End, LineStart, DocStart, DocEnd, PageUp(usize), PageDown(usize) }
 
 /// Where a selection lands after its edit, relative to the inserted text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,6 +221,18 @@ impl Editor {
             (word_left(b, s.head)..s.head, vec![], After::Start)
         });
     }
+    pub fn delete_word_forward(&mut self) {
+        self.edit(|b, s| {
+            if !s.is_empty() { return (s.start()..s.end(), vec![], After::Start); }
+            (s.head..word_right(b, s.head), vec![], After::Start)
+        });
+    }
+    pub fn delete_to_line_start(&mut self) {
+        self.edit(|b, s| {
+            if !s.is_empty() { return (s.start()..s.end(), vec![], After::Start); }
+            (b.line_start(s.head)..s.head, vec![], After::Start)
+        });
+    }
 
     // ---- Moving ----
 
@@ -254,6 +266,7 @@ impl Editor {
                 (if h == first { ls } else { first }, None)
             }
             Motion::End => (b.line_end(h), None),
+            Motion::LineStart => (b.line_start(h), None),
             Motion::DocStart => (0, None),
             Motion::DocEnd => (b.len(), None),
         }
@@ -274,6 +287,35 @@ impl Editor {
         self.normalize();
     }
     pub fn select_all(&mut self) { self.sels = vec![Sel { anchor: 0, head: self.buf.len(), col: None }]; self.primary = 0; }
+    pub fn word_bounds_at(&self, at: usize) -> (usize, usize) {
+        let b = &self.buf;
+        let n = b.len();
+        if n == 0 { return (0, 0); }
+        let probe = at.min(b.prev_char(n));
+        if let Some((a, e)) = self.word_at(probe) {
+            return (a, e);
+        }
+        if b.char_at(probe).is_some_and(|c| c == ' ' || c == '\t') {
+            let mut a = probe;
+            while a > 0 && matches!(b.byte(a - 1), Some(b' ') | Some(b'\t')) { a -= 1; }
+            let mut e = probe + 1;
+            while e < n && matches!(b.byte(e), Some(b' ') | Some(b'\t')) { e += 1; }
+            return (a, e);
+        }
+        (probe, b.next_char(probe))
+    }
+    pub fn line_bounds_at(&self, at: usize) -> (usize, usize) {
+        let clamped = at.min(self.buf.len());
+        (self.buf.line_start(clamped), self.buf.line_end(clamped))
+    }
+    pub fn select_word_at(&mut self, at: usize) {
+        let (a, e) = self.word_bounds_at(at);
+        self.set_selection(a, e);
+    }
+    pub fn select_line_at(&mut self, at: usize) {
+        let (a, e) = self.line_bounds_at(at);
+        self.set_selection(a, e);
+    }
 
     // ---- Multiple cursors ----
 

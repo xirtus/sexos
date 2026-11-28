@@ -18,6 +18,7 @@ use crate::{builtins, parser, path};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompletionKind {
     Command,
+    Alias,
     External,
     Flag,
     Variable,
@@ -138,7 +139,7 @@ fn columns_before(src: &str, host: &dyn Host, vars: &BTreeMap<String, Value>) ->
     let [stmt] = block.stmts.as_slice() else { return Vec::new() };
     let p = match stmt { Statement::Pipeline(p) => p, Statement::Let { pipeline, .. } => pipeline };
     let mut ro = ReadOnly(host);
-    let mut ctx = Ctx { vars, host: &mut ro, cols: 0, color: false };
+    let mut ctx = Ctx { vars, host: &mut ro, cols: 0, color: false, theme: "noir", font: "geist-mono" };
     let mut v = Value::Nothing;
     for el in &p.elements {
         v = match el {

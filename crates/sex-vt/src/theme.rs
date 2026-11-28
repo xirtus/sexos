@@ -48,6 +48,12 @@ pub fn parse_color(s: &str) -> Option<u32> {
     u32::from_str_radix(hex, 16).ok()
 }
 
+/// SexOS Noir: obsidian background with vibrant rose, cyan, emerald, amber and lavender accents.
+pub const NOIR: Theme = Theme {
+    name: "noir", fg: 0xECEFF4, bg: 0x0A0B0F, cursor: 0xF43F5E, selection: 0x24283B,
+    ansi: [0x161821, 0xF43F5E, 0x10B981, 0xF59E0B, 0x60A5FA, 0xC084FC, 0x22D3EE, 0xCBD5E1,
+           0x64748B, 0xFB7185, 0x34D399, 0xFBBF24, 0x93C5FD, 0xD8B4FE, 0x67E8F9, 0xF8FAFC],
+};
 pub const MOCHA: Theme = Theme {
     name: "mocha", fg: 0xCDD6F4, bg: 0x11111B, cursor: 0xCDD6F4, selection: 0x45475A,
     ansi: [0x1E1E2E, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
@@ -94,4 +100,4 @@ pub const HIGH_CONTRAST: Theme = Theme {
            0x404040, 0xFF0000, 0x008800, 0x997700, 0x0000FF, 0xB000B0, 0x008888, 0x000000],
 };
 
-pub const THEMES: [Theme; 9] = [MOCHA, LATTE, GRUVBOX, NORD, SOLARIZED_DARK, SOLARIZED_LIGHT, TOKYO_NIGHT, DRACULA, HIGH_CONTRAST];
+pub const THEMES: [Theme; 10] = [NOIR, MOCHA, LATTE, GRUVBOX, NORD, SOLARIZED_DARK, SOLARIZED_LIGHT, TOKYO_NIGHT, DRACULA, HIGH_CONTRAST];

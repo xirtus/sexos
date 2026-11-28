@@ -22,6 +22,7 @@ fn wire_round_trip_and_reject_invalid() {
     s.battery = 88;
     s.wifi_phase = 10;
     s.uptime_mins = 145;
+    s.active_space = 3;
     let (w0, w1) = s.wire();
     assert_eq!(MenuState::decode(w0, w1), Some(s));
 
@@ -29,6 +30,7 @@ fn wire_round_trip_and_reject_invalid() {
     assert_eq!(MenuState::decode(0, 0), None);
     // Reserved upper bits rejected.
     assert_eq!(MenuState::decode(w0 | (1 << 55), w1), None);
+    assert_eq!(MenuState::decode(w0, w1 | (1 << 55)), None);
     // Out-of-bounds hover rejected.
     let bad_hover = (w0 & !(0x1F << 36)) | (25u64 << 36);
     assert_eq!(MenuState::decode(bad_hover, w1), None);
@@ -56,28 +58,43 @@ fn top_bar_menu_rects_preserve_virtio_gpu_gate_pixel_300_14() {
 #[test]
 fn system_and_app_menus_have_expected_items_and_shortcut_hints() {
     let sys = MenuState::new(MenuKind::System, 8, 32);
-    assert_eq!(sys.row_count(), 12);
+    assert_eq!(sys.row_count(), 9);
     assert_eq!(sys.row(0).unwrap().action, MenuAction::AboutSexOs);
-    assert_eq!(sys.row(1).unwrap().action, MenuAction::OpenSpotlight);
-    assert_eq!(sys.row(1).unwrap().shortcut, "Super+Spc");
-    assert_eq!(sys.row(2).unwrap().action, MenuAction::LaunchBrowser);
-    assert_eq!(sys.row(3).unwrap().action, MenuAction::LaunchTerminal);
-    assert_eq!(sys.row(3).unwrap().shortcut, "Super+Ret");
-    assert_eq!(sys.row(4).unwrap().action, MenuAction::LaunchTailor);
-    assert_eq!(sys.row(5).unwrap().action, MenuAction::LaunchFlash);
-    assert_eq!(sys.row(6).unwrap().action, MenuAction::LaunchPdGraph);
-    assert_eq!(sys.row(7).unwrap().action, MenuAction::LaunchFiles);
-    assert_eq!(sys.row(8).unwrap().action, MenuAction::LaunchSettings);
-    assert_eq!(sys.row(9).unwrap().action, MenuAction::RefreshDesktop);
-    assert_eq!(sys.row(10).unwrap().action, MenuAction::Reboot);
-    assert_eq!(sys.row(11).unwrap().action, MenuAction::Shutdown);
+    assert_eq!(sys.row(1).unwrap().action, MenuAction::LaunchSettings);
+    assert_eq!(sys.row(1).unwrap().shortcut, "Super+,");
+    assert_eq!(sys.row(2).unwrap().action, MenuAction::LaunchAppStore);
+    assert_eq!(sys.row(3).unwrap().action, MenuAction::OpenSpotlight);
+    assert_eq!(sys.row(3).unwrap().shortcut, "Super+Spc");
+    assert_eq!(sys.row(4).unwrap().action, MenuAction::OpenAppsSwitcher);
+    assert_eq!(sys.row(5).unwrap().action, MenuAction::ForceQuitApps);
+    assert_eq!(sys.row(5).unwrap().shortcut, "Super+Alt+Esc");
+    assert_eq!(sys.row(6).unwrap().action, MenuAction::LockScreen);
+    assert_eq!(sys.row(6).unwrap().shortcut, "Super+L");
+    assert_eq!(sys.row(7).unwrap().action, MenuAction::Reboot);
+    assert_eq!(sys.row(8).unwrap().action, MenuAction::Shutdown);
 
-    let win = MenuState::new(MenuKind::AppWindow, 220, 32);
+    let file = MenuState::new(MenuKind::AppFile, 114, 32);
+    assert_eq!(file.row_count(), 4);
+    assert_eq!(file.row(2).unwrap().action, MenuAction::CloseWindow);
+    assert_eq!(file.row(2).unwrap().shortcut, "Super+W");
+    assert_eq!(file.row(3).unwrap().action, MenuAction::QuitApp);
+    assert_eq!(file.row(3).unwrap().shortcut, "Super+Q");
+
+    let mut win = MenuState::new(MenuKind::AppWindow, 220, 32);
+    win.active_space = 2;
+    assert_eq!(win.row_count(), 16);
     assert_eq!(win.row(1).unwrap().shortcut, "Super+F");
-    assert_eq!(win.row(3).unwrap().action, MenuAction::GroupWindow);
-    assert_eq!(win.row(3).unwrap().shortcut, "Super+G");
-    assert_eq!(win.row(6).unwrap().action, MenuAction::CloseWindow);
-    assert_eq!(win.row(6).unwrap().shortcut, "Alt+F4");
+    assert_eq!(win.row(3).unwrap().action, MenuAction::TileLeft);
+    assert_eq!(win.row(4).unwrap().action, MenuAction::TileRight);
+    assert_eq!(win.row(5).unwrap().action, MenuAction::MoveToNextSpace);
+    assert_eq!(win.row(6).unwrap().action, MenuAction::MoveToPrevSpace);
+    assert_eq!(win.row(9).unwrap().action, MenuAction::MoveToSpace(2));
+    assert!(win.row(9).unwrap().active);
+    assert!(!win.row(7).unwrap().active);
+    assert_eq!(win.row(12).unwrap().action, MenuAction::GroupWindow);
+    assert_eq!(win.row(12).unwrap().shortcut, "Super+G");
+    assert_eq!(win.row(15).unwrap().action, MenuAction::CloseWindow);
+    assert_eq!(win.row(15).unwrap().shortcut, "Super+W");
 }
 
 #[test]
@@ -179,13 +196,26 @@ fn right_click_desktop_and_window_context_menus_dispatch_and_clamp() {
     );
     assert!(!ctrl.is_open());
 
-    // Window context menu: Minimize, Maximize/Restore, Bring to Front, Close.
-    let win = MenuState::new(MenuKind::WindowContext, 300, 100);
+    // Window context menu: Tile Left/Right, Maximize, Move to Next/Prev/Space 1..5, Minimize, Close.
+    let mut win = MenuState::new(MenuKind::WindowContext, 300, 100);
+    win.active_space = 1;
     let wl = Layout::new(&win, 1280, 800, 1).unwrap();
     ctrl.open(win);
-    let r3 = wl.row_rect(3);
+    let r0 = wl.row_rect(0);
     assert_eq!(
-        ctrl.press((r3.0 + 4) as i32, (r3.1 + 4) as i32, 1280, 800, 1),
+        ctrl.press((r0.0 + 4) as i32, (r0.1 + 4) as i32, 1280, 800, 1),
+        PressResult::Action { action: MenuAction::TileLeft, closed: true }
+    );
+    ctrl.open(win);
+    let r8 = wl.row_rect(8);
+    assert_eq!(
+        ctrl.press((r8.0 + 4) as i32, (r8.1 + 4) as i32, 1280, 800, 1),
+        PressResult::Action { action: MenuAction::MoveToSpace(2), closed: true }
+    );
+    ctrl.open(win);
+    let r12 = wl.row_rect(12);
+    assert_eq!(
+        ctrl.press((r12.0 + 4) as i32, (r12.1 + 4) as i32, 1280, 800, 1),
         PressResult::Action { action: MenuAction::CloseWindow, closed: true }
     );
 }

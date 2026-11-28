@@ -40,6 +40,10 @@ use sex_vt::render::{cell_for_height, Cache, Faces, Family, Glide, Painter};
 use sex_vt::{Parser, Screen};
 mod shell_host;
 use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
+use spindle_shell::ergonomics::SHELL_EXTRA_CMDS;
+use spindle_shell::shell_ui::{self, FuzzyMatch};
+use spindle_shell::tui::{ActiveTui, BarsApp, BarsMode, BtopApp, TuiExit, TuiKey, TuiOutput, YaziApp};
+use spindle_shell::{Completion, Host};
 
 /// `crates/sex-wasm/guests/greet`: Rust's std built for wasm32-wasip1.
 const GREET: &[u8] = include_bytes!("../../../crates/sex-wasm/tests/greet.wasm");
@@ -136,6 +140,21 @@ enum Mode {
     Copy(sex_vt::copy_mode::CopyMode),
 }
 
+/// Active Fish multi-column Tab completion drawer below the prompt.
+struct CompletionDrawer {
+    hits: Vec<Completion>,
+    selected: usize,
+}
+
+/// Active `Ctrl+R` fuzzy reverse history search drawer below the prompt.
+struct RevSearchDrawer {
+    query: String,
+    matches: Vec<FuzzyMatch>,
+    selected: usize,
+    saved_line: Vec<u8>,
+    saved_at: usize,
+}
+
 /// One pane: a screen, its own command line and the program running in it.
 struct Pane {
     screen: Screen,
@@ -153,6 +172,12 @@ struct Pane {
     at: usize,
     history: Vec<Vec<u8>>,
     recall: Option<usize>,
+    recall_prefix: Vec<u8>,
+    complete_menu: Option<CompletionDrawer>,
+    rev_search: Option<RevSearchDrawer>,
+    tui: Option<ActiveTui>,
+    last_cmd_ms: Option<u64>,
+    last_exit: i32,
     job: Option<Job>,
     /// Where a mouse drag started.
     drag: Option<sex_vt::Point>,
@@ -190,7 +215,8 @@ impl Pane {
         let (cols, rows) = painter.grid(width, height);
         Pane {
             screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![0; width * height], cell_h, closed: false,
-            cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None,
+            cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None, recall_prefix: Vec::new(),
+            complete_menu: None, rev_search: None, tui: None, last_cmd_ms: None, last_exit: 0,
             job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), slot: 0, engine: spindle_shell::Engine::new(), shell_wait: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false, glide: Glide::default(),
         }
     }
@@ -219,6 +245,12 @@ impl Pane {
         self.screen.resize(cols, rows);
         if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
         if let Some(Job { runner: Runner::Native(_), .. }) = &self.job { self.native_size(); }
+        if self.tui.is_some() {
+            let now = sex_pdx::get_ticks();
+            let host = shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot };
+            let out = self.tui.as_mut().unwrap().resize(&host, cols, rows, now);
+            self.apply_tui_output(out);
+        }
         self.screen.mark_all_dirty();
     }
     /// Draws with the font family now chosen, at the same size.
@@ -387,9 +419,10 @@ impl Pane {
         }
         self.screen.mark_all_dirty();
     }
-    /// The pane's title: what its program asked for, else the running program's name,
-    /// else its folder.
+    /// The pane's title: active TUI, what its program asked for, else the running program's
+    /// name, else its folder.
     fn title(&self) -> String {
+        if let Some(tui) = &self.tui { return String::from(tui.name()); }
         let p = self.progress.map(|p| format!(" [{}%]", p)).unwrap_or_default();
         if let Some(t) = &self.osc_title { return format!("{}{}", t, p); }
         if let Some(job) = &self.job { return format!("{}{}", job.name, p); }
@@ -399,52 +432,131 @@ impl Pane {
 
     // ---- The command line ----
 
+    /// Powerlevel10k-inspired header row emitted above the editable `╰─ ~/cwd > ` prompt.
+    fn say_prompt_header(&mut self) {
+        let cols = self.screen.cols();
+        if cols < 24 { return; }
+        let jobs_n = {
+            let mut cwd_copy = self.cwd.clone();
+            shell_host::TermHost { cwd: &mut cwd_copy, slot: self.slot }
+                .jobs()
+                .into_iter()
+                .filter(|j| matches!(j.state, spindle_shell::JobState::Running))
+                .count()
+        };
+        let cwd = core::str::from_utf8(&self.cwd).unwrap_or("?");
+        let status = if self.last_exit == 0 {
+            "\x1b[1;38;2;16;185;129m✓\x1b[0m"
+        } else {
+            "\x1b[1;38;2;244;63;94m✗\x1b[0m"
+        };
+        let dur = match self.last_cmd_ms {
+            Some(ms) if ms >= 5 => format!(" \x1b[38;2;245;158;11m{}ms\x1b[0m", ms),
+            _ => String::new(),
+        };
+        let job_badge = if jobs_n > 0 { format!(" \x1b[38;2;192;132;252m⚙{}\x1b[0m", jobs_n) } else { String::new() };
+        let hdr = format!(
+            "\x1b[38;2;100;116;139m╭─ \x1b[1;38;2;244;63;94m● sexos\x1b[38;2;100;116;139m │ \x1b[1;38;2;96;165;250m~/{}\x1b[38;2;100;116;139m │ {}{}{}\x1b[0m\r\n",
+            cwd, status, dur, job_badge
+        );
+        self.say(&hdr);
+    }
+
     fn prompt(&self) -> String {
         let cwd = core::str::from_utf8(&self.cwd).unwrap_or("?");
-        format!("\x1b[1;34m~/{}\x1b[0m \x1b[1;32m>\x1b[0m ", cwd)
+        format!("\x1b[38;2;100;116;139m╰─ \x1b[1;38;2;96;165;250m~/{}\x1b[0m \x1b[1;38;2;16;185;129m>\x1b[0m ", cwd)
     }
-    /// Redraws the line being typed, with the cursor at `self.at`.
-    /// The line being typed, coloured as the shell reads it (commands, strings, numbers,
-    /// variables, operators, errors).
+
+    fn prompt_cell_len(&self) -> usize {
+        let cwd = core::str::from_utf8(&self.cwd).unwrap_or("?");
+        // "╰─ ~/" (5) + cwd + " > " (3)
+        8 + spindle_shell::width::str_width(cwd)
+    }
+
+    fn history_strings(&self) -> Vec<String> {
+        self.history.iter().map(|l| String::from_utf8_lossy(l).into_owned()).collect()
+    }
+
+    fn current_ghost(&self) -> Option<String> {
+        if self.tui.is_some() || self.job.is_some() || self.rev_search.is_some() || self.at != self.line.len() || self.line.is_empty() {
+            return None;
+        }
+        let text = core::str::from_utf8(&self.line).ok()?;
+        let hist = self.history_strings();
+        let mut cwd_copy = self.cwd.clone();
+        let host = shell_host::TermHost { cwd: &mut cwd_copy, slot: self.slot };
+        shell_ui::ghost_suggestion(text, self.at, &hist, &host, &self.engine, SHELL_EXTRA_CMDS, &spindle_panes::config::THEME_NAMES)
+    }
+
+    /// The line being typed, coloured with Fish/Void TrueColor syntax highlighting.
     fn coloured_line(&self) -> String {
         let Ok(text) = core::str::from_utf8(&self.line) else { return String::from_utf8_lossy(&self.line).into_owned() };
-        let first = text.split(' ').next().unwrap_or("").as_bytes();
-        if OWN.contains(&first) { return String::from(text); }
+        let mut cwd_copy = self.cwd.clone();
+        let host = shell_host::TermHost { cwd: &mut cwd_copy, slot: self.slot };
         let mut out = String::new();
         let mut at = 0;
-        for (r, style) in self.engine.highlight(text) {
+        for (r, style) in self.engine.highlight_with(text, &host, SHELL_EXTRA_CMDS) {
             if r.start < at || r.end > text.len() || !text.is_char_boundary(r.start) || !text.is_char_boundary(r.end) { continue; }
             out.push_str(&text[at..r.start]);
-            out.push_str(style.ansi());
-            out.push_str(&text[r.start..r.end]);
-            out.push_str("\x1b[0m");
+            let sgr = style.ansi_truecolor();
+            if !sgr.is_empty() {
+                out.push_str(sgr);
+                out.push_str(&text[r.start..r.end]);
+                out.push_str("\x1b[0m");
+            } else {
+                out.push_str(&text[r.start..r.end]);
+            }
             at = r.end;
         }
         out.push_str(&text[at..]);
         out
     }
-    /// The line may wrap over several rows (narrow panes): it is drawn again from where
-    /// its prompt started, and the cursor is put back by position.
+
+    /// Redraws the command line, inline `fg=6` ghost suggestion, and active completion or
+    /// `Ctrl+R` reverse-search overlay below the prompt.
     fn redraw_line(&mut self) {
         let p = self.prompt();
         let line = self.coloured_line();
+        let ghost = self.current_ghost();
+        let ghost_ansi = ghost.as_deref().map(|g| format!("\x1b[38;2;45;180;196m{}\x1b[0m", g)).unwrap_or_default();
+        let cols = self.screen.cols();
+        let rows_left = self.screen.rows().saturating_sub(2).max(2);
+        let drawer = if let Some(menu) = &self.complete_menu {
+            shell_ui::format_completion_menu(&menu.hits, menu.selected, cols, rows_left.min(8), true).0
+        } else if let Some(rs) = &self.rev_search {
+            shell_ui::format_reverse_search(&rs.query, &rs.matches, rs.selected, cols, rows_left.min(8), true).0
+        } else {
+            String::new()
+        };
+
         let (abs, col) = self.prompt_at;
         let row = abs.saturating_sub(self.screen.history_len());
-        self.say(&format!("\x1b[{};{}H\x1b[J{}{}", row + 1, col + 1, p, line));
-        // Where the cursor goes: count cells from the prompt's start (rows may have scrolled).
-        let cols = self.screen.cols();
+        self.say(&format!("\x1b[{};{}H\x1b[J{}{}{}{}", row + 1, col + 1, p, line, ghost_ansi, drawer));
+
+        // Position cursor on `self.at`, re-reading `history_len()` in case a bottom drawer scrolled.
         let row = abs.saturating_sub(self.screen.history_len());
-        let plen = core::str::from_utf8(&self.cwd).map(|c| c.chars().count()).unwrap_or(1) + 5;
-        let off = col + plen + String::from_utf8_lossy(&self.line[..self.at]).chars().count();
-        let (r, c) = ((row + off / cols).min(self.screen.rows() - 1), off % cols);
+        let cursor_str = String::from_utf8_lossy(&self.line[..self.at.min(self.line.len())]);
+        let off = col + self.prompt_cell_len() + spindle_shell::width::str_width(&cursor_str);
+        let (r, c) = ((row + off / cols).min(self.screen.rows().saturating_sub(1)), off % cols);
         self.say(&format!("\x1b[{};{}H", r + 1, c + 1));
     }
+
     /// The prompt, marked for shell integration (OSC 133): jumping between prompts and
     /// selecting a command's output work for Spindle's own command line too.
     fn show_prompt(&mut self) {
-        self.line.clear(); self.at = 0; self.recall = None; let p = self.prompt();
+        self.line.clear();
+        self.at = 0;
+        self.recall = None;
+        self.recall_prefix.clear();
+        self.complete_menu = None;
+        self.rev_search = None;
+        self.say("\x1b]133;A\x07");
+        self.say_prompt_header();
+        let p = self.prompt();
         let (x, y) = self.screen.cursor();
-        self.prompt_at = (self.screen.history_len() + y, x); self.say("\x1b]133;A\x07"); self.say(&p); self.say("\x1b]133;B\x07");
+        self.prompt_at = (self.screen.history_len() + y, x);
+        self.say(&p);
+        self.say("\x1b]133;B\x07");
     }
 
     /// A path from the command line, as a path in Term's folder: relative to the current
@@ -457,26 +569,118 @@ impl Pane {
         parts.join(&b'/')
     }
 
+    /// Launches interactive Ratatui TUI commands when typed as standalone commands (not piped).
+    fn try_start_tui(&mut self, expanded: &str) -> bool {
+        if expanded.contains('|') || expanded.contains(';') || expanded.contains('>') || expanded.contains('&') {
+            return false;
+        }
+        let words: Vec<&str> = expanded.split_whitespace().collect();
+        let Some(&cmd) = words.first() else { return false };
+        if cmd.starts_with('^') {
+            return false;
+        }
+        let args: Vec<String> = words[1..].iter().map(|s| String::from(*s)).collect();
+        let now = sex_pdx::get_ticks();
+        let (cols, rows) = (self.screen.cols(), self.screen.rows());
+        let mut tui = match cmd {
+            "bars" | "spin" => ActiveTui::Bars(BarsApp::new(BarsMode::Demo, &args, now)),
+            "update" => ActiveTui::Bars(BarsApp::new(BarsMode::Update, &args, now)),
+            "install" => ActiveTui::Bars(BarsApp::new(BarsMode::Install, &args, now)),
+            "remove" => ActiveTui::Bars(BarsApp::new(BarsMode::Remove, &args, now)),
+            "btop" | "htop" | "top" => ActiveTui::Btop(BtopApp::new(now)),
+            "yazi" | "y" | "fm" | "ranger" => {
+                let host = shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot };
+                match YaziApp::new(&host, args.first().map(|s| s.as_str())) {
+                    Ok(app) => ActiveTui::Yazi(app),
+                    Err(e) => {
+                        self.last_exit = 1;
+                        self.say(&format!("\x1b[38;2;244;63;94myazi: {}\x1b[0m\n", e));
+                        return true;
+                    }
+                }
+            }
+            _ => return false,
+        };
+        sex_pdx::serial_record!("[term.tui.start] name={}", tui.name());
+        let host = shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot };
+        let out = tui.init(&host, cols, rows, now);
+        self.tui = Some(tui);
+        self.apply_tui_output(out);
+        true
+    }
+
+    fn apply_tui_output(&mut self, out: TuiOutput) {
+        if !out.bytes.is_empty() {
+            self.screen.feed(&mut self.parser, out.bytes.as_bytes());
+        }
+        if let Some(exit) = out.exit {
+            let was_alt = self.tui.as_ref().is_some_and(|t| t.is_alt_screen());
+            self.tui = None;
+            let code = match exit {
+                TuiExit::Done => 0,
+                TuiExit::Cd(path) => {
+                    let clean = path.trim_start_matches('/').as_bytes().to_vec();
+                    self.cwd = clean;
+                    0
+                }
+                TuiExit::Cancel => 0,
+            };
+            self.last_exit = code;
+            if !was_alt && !self.after_cr && self.screen.cursor().0 != 0 {
+                self.say("\n");
+            }
+            self.say(&format!("\x1b]133;D;{}\x07", code));
+            self.show_prompt();
+        }
+    }
+
     fn run_line(&mut self, window: &mut Window, line: &[u8]) {
         let line = line.trim_ascii();
         if line.is_empty() { return; }
         if self.history.last().map(|l| l.as_slice()) != Some(line) { self.history.push(line.to_vec()); }
         if self.history.len() > 500 { self.history.remove(0); }
-        let words: Vec<&[u8]> = line.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
+        let raw_text = String::from_utf8_lossy(line).into_owned();
+        let expanded = self.engine.expand_aliases(&raw_text);
+        let started_ms = sex_pdx::get_ticks();
+        let trimmed = expanded.trim();
+        let words: Vec<&[u8]> = trimmed.as_bytes().split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
+        if words.is_empty() { return; }
         let (cmd, args) = (words[0], &words[1..]);
+
+        if self.try_start_tui(trimmed) {
+            self.last_cmd_ms = Some(sex_pdx::get_ticks().saturating_sub(started_ms));
+            return;
+        }
+        // `cat -n FILE` or `bat FILE` renders syntax-highlighted numbered output via engine.
+        let cat_numbered = cmd == b"cat" && args.iter().any(|a| *a == b"-n" || *a == b"--number");
+        if cat_numbered {
+            let files: Vec<String> = args.iter().filter(|a| *a != b"-n" && *a != b"--number").map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+            if !files.is_empty() {
+                let host = shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot };
+                let cols = self.screen.cols();
+                match spindle_shell::ergonomics::render_bat(&files, &host, cols, true) {
+                    Ok(out) => { self.say(&out); self.last_exit = 0; }
+                    Err((_, e)) => { self.say(&format!("\x1b[38;2;244;63;94mcat: {}\x1b[0m\n", e)); self.last_exit = 1; }
+                }
+                self.last_cmd_ms = Some(sex_pdx::get_ticks().saturating_sub(started_ms));
+                return;
+            }
+        }
+
         // Everything but the terminal's own commands is the shell's: pipelines, tables,
         // files, and programs as stages.
         if !OWN.contains(&cmd) || (cmd == b"help" && !args.is_empty()) {
             let _ = window;
-            let text = String::from_utf8_lossy(line).into_owned();
-            let text = if cmd == b"help" && args == [b"commands"] { String::from("help") } else { text };
+            let text = if cmd == b"help" && args == [b"commands"] { String::from("help") } else { raw_text };
             sex_pdx::serial_record!("[term.shell] {}", text);
             let cols = self.screen.cols();
             let step = self.engine.run(&text, &mut shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot }, cols);
             self.shell_step(step, text);
+            self.last_cmd_ms = Some(sex_pdx::get_ticks().saturating_sub(started_ms));
             return;
         }
         sex_pdx::serial_record!("[term.command] {}", core::str::from_utf8(cmd).unwrap_or("?"));
+        self.last_exit = 0;
         match cmd {
             b"help" => self.say(HELP),
             b"clear" => self.say("\x1b[H\x1b[2J\x1b[3J"),
@@ -490,9 +694,9 @@ impl Pane {
                 let target = self.resolve(args.first().copied().unwrap_or(b"/"));
                 match files::stat(window, &target) {
                     Ok(st) if st.dir || target.is_empty() => self.cwd = target,
-                    Ok(_) => self.say("cd: not a folder\n"),
+                    Ok(_) => { self.say("cd: not a folder\n"); self.last_exit = 1; }
                     Err(e) if target.is_empty() => { let _ = e; self.cwd.clear(); }
-                    Err(e) => self.fail("cd", e),
+                    Err(e) => { self.fail("cd", e); self.last_exit = 1; }
                 }
             }
             b"ls" => {
@@ -509,22 +713,22 @@ impl Pane {
                         }
                         self.say(&text);
                     }
-                    Err(e) => self.fail("ls", e),
+                    Err(e) => { self.fail("ls", e); self.last_exit = 1; }
                 }
             }
             b"cat" => for a in args {
                 let path = self.resolve(a);
-                match read_all(window, &path, 4 << 20) { Ok(data) => self.out(&data), Err(e) => self.fail("cat", e) }
+                match read_all(window, &path, 4 << 20) { Ok(data) => self.out(&data), Err(e) => { self.fail("cat", e); self.last_exit = 1; } }
             },
-            b"mkdir" => for a in args { let p = self.resolve(a); if let Err(e) = files::mkdir(window, &p) { self.fail("mkdir", e); } },
-            b"rm" => for a in args { let p = self.resolve(a); if let Err(e) = files::remove(window, &p) { self.fail("rm", e); } },
-            b"touch" => for a in args { let p = self.resolve(a); if files::stat(window, &p).is_err() { if let Err(e) = files::create(window, &p) { self.fail("touch", e); } } },
-            b"mv" if args.len() == 2 => { let (a, b) = (self.resolve(args[0]), self.resolve(args[1])); if let Err(e) = files::rename(window, &a, &b) { self.fail("mv", e); } }
+            b"mkdir" => for a in args { let p = self.resolve(a); if let Err(e) = files::mkdir(window, &p) { self.fail("mkdir", e); self.last_exit = 1; } },
+            b"rm" => for a in args { let p = self.resolve(a); if let Err(e) = files::remove(window, &p) { self.fail("rm", e); self.last_exit = 1; } },
+            b"touch" => for a in args { let p = self.resolve(a); if files::stat(window, &p).is_err() { if let Err(e) = files::create(window, &p) { self.fail("touch", e); self.last_exit = 1; } } },
+            b"mv" if args.len() == 2 => { let (a, b) = (self.resolve(args[0]), self.resolve(args[1])); if let Err(e) = files::rename(window, &a, &b) { self.fail("mv", e); self.last_exit = 1; } }
             b"write" if !args.is_empty() => {
                 let path = self.resolve(args[0]);
                 let mut text = args[1..].join(&b' ');
                 text.push(b'\n');
-                if let Err(e) = files::write(window, &path, &text) { self.fail("write", e); }
+                if let Err(e) = files::write(window, &path, &text) { self.fail("write", e); self.last_exit = 1; }
             }
             b"colors" => self.say(&colors()),
             // `theme NAME` saves it in spindle.conf; the window sees the change and every
@@ -538,7 +742,7 @@ impl Pane {
                 Some(name) => {
                     let name = String::from_utf8_lossy(name).into_owned();
                     match sex_vt::theme::Theme::named(&name) {
-                        None => self.say(&format!("\x1b[31mtheme: no theme called {}\x1b[0m (type theme)\n", name)),
+                        None => { self.say(&format!("\x1b[31mtheme: no theme called {}\x1b[0m (type theme)\n", name)); self.last_exit = 1; }
                         Some(t) => {
                             let old = read_all_direct(CONFIG, 64 << 10).unwrap_or_default();
                             let text = spindle_panes::config::with_setting(&String::from_utf8_lossy(&old), "theme", t.name);
@@ -563,16 +767,22 @@ impl Pane {
             b"exit" => { sex_pdx::serial_record!("[term.pane.closed] how=exit"); self.closed = true; }
             // A program that went on without its window (or `cmd &`) comes back here.
             b"attach" => match args.first().map(|a| core::str::from_utf8(a).ok().and_then(|a| a.trim_start_matches('%').parse::<u32>().ok())) {
-                Some(None) => self.say("\x1b[31mattach: expected a number\x1b[0m (type jobs)\n"),
-                Some(Some(n)) => { self.attach(Some(n)); }
-                None => { self.attach(None); }
+                Some(None) => { self.say("\x1b[31mattach: expected a number\x1b[0m (type jobs)\n"); self.last_exit = 1; }
+                Some(Some(n)) => { if !self.attach(Some(n)) { self.last_exit = 1; } }
+                None => { if !self.attach(None) { self.last_exit = 1; } }
             },
             _ => { let _ = window; self.start_program(cmd, args) }
         }
+        self.last_cmd_ms = Some(sex_pdx::get_ticks().saturating_sub(started_ms));
     }
     /// The pane or its window is closing: a program of its own goes on as a yarn, which
     /// `attach` (or `fg`) brings back in any Spindle window; a Wasm guest stops.
     fn leave(&mut self) {
+        if let Some(tui) = self.tui.take() {
+            if tui.is_alt_screen() {
+                self.screen.feed(&mut self.parser, b"\x1b[?25h\x1b[?1049l");
+            }
+        }
         let slot = self.slot as usize;
         if let Some(Job { runner: Runner::Native(n), name, .. }) = &self.job {
             if !n.stopping {
@@ -646,6 +856,7 @@ impl Pane {
         use spindle_shell::Step;
         match step {
             Step::Done(out) => {
+                self.last_exit = out.exit_code;
                 sex_pdx::serial_record!("[term.shell.done] exit={} error={}", out.exit_code, out.error.is_some() as u8);
                 self.out(out.text.as_bytes());
                 self.shell_wait = None;
@@ -770,8 +981,20 @@ impl Pane {
             Err(_) => self.say("\x1b[31mrun: no worker is free to run it\x1b[0m\n"),
         }
     }
-    /// Takes what the guest wrote; ends the job when it has finished. True if the screen changed.
+    /// Takes what the guest wrote or ticks active Ratatui TUIs. True if the screen changed.
     fn pump(&mut self) -> bool {
+        if self.tui.is_some() {
+            let now = sex_pdx::get_ticks();
+            let (cols, rows) = (self.screen.cols(), self.screen.rows());
+            let mut cwd_copy = self.cwd.clone();
+            let host = shell_host::TermHost { cwd: &mut cwd_copy, slot: self.slot };
+            let out = self.tui.as_mut().unwrap().tick(&host, cols, rows, now);
+            let changed = !out.bytes.is_empty() || out.exit.is_some();
+            if changed {
+                self.apply_tui_output(out);
+            }
+            return changed;
+        }
         self.feed();
         let Some(job) = &self.job else { return false };
         let Runner::Guest(guest) = &job.runner else { return self.pump_native() };
@@ -798,6 +1021,7 @@ impl Pane {
         changed
     }
     fn job_ended(&mut self, name: &str, code: i64) {
+        self.last_exit = code as i32;
         sex_pdx::serial_record!("[term.job.exit] name={} code={}", name, code);
         // A program the shell started: the shell goes on with the rest of the line.
         if let Some(w) = self.shell_wait.take() {
@@ -884,16 +1108,19 @@ impl Pane {
     fn vtcheck(&mut self, window: &mut Window) {
         use sex_vt::check;
         self.say(check::FIXTURE);
-        let s = &self.screen;
-        let frame = (0..6).all(|r| s.row_text(r) == check::ROWS[r]);
-        let colors = check::COLORS.iter().all(|&(x, y, fg, bg)| sex_vt::colors(&s.visible(x, y)) == (fg, bg));
-        // Then the pixels: the middle-left of each checked cell after drawing is its background.
+        let frame = (0..6).all(|r| self.screen.row_text(r) == check::ROWS[r]);
+        let colors = check::COLORS.iter().all(|&(x, y, fg, bg)| sex_vt::colors(&self.screen.visible(x, y)) == (fg, bg));
+        // Then the pixels: the middle-left of each checked cell after drawing is its active-theme background
+        // (and 256-color palette slot 27 at (2, 2) is theme-independent 0x005FFF).
         self.screen.mark_all_dirty();
         self.draw(true);
         let _ = window;
         let (cw, ch, w) = (self.painter.cell_w, self.painter.cell_h, self.width);
         let pixels = &self.buf;
-        let drawn = check::COLORS.iter().all(|&(x, y, _, bg)| pixels[(y * ch + 1) * w + x * cw] == bg);
+        let drawn = check::COLORS.iter().all(|&(x, y, _, fixed_bg)| {
+            let want_bg = if x == 2 && y == 2 { fixed_bg } else { self.screen.colors(&self.screen.visible(x, y)).1 };
+            pixels[(y * ch + 1) * w + x * cw] == want_bg
+        });
         sex_pdx::serial_record!("[term.vtcheck] frame={} colors={} pixels={} cols={} rows={}", frame as u8, colors as u8, drawn as u8, self.screen.cols(), self.screen.rows());
         self.say(if frame && colors && drawn { "vtcheck: \x1b[32mok\x1b[0m\n" } else { "vtcheck: \x1b[31mFAILED\x1b[0m\n" });
     }
@@ -905,8 +1132,101 @@ impl Pane {
         self.key_normal(window, key);
         None
     }
+
+    fn redraw_line_clean(&mut self) {
+        self.complete_menu = None;
+        self.rev_search = None;
+        let p = self.prompt();
+        let line = self.coloured_line();
+        let (abs, col) = self.prompt_at;
+        let row = abs.saturating_sub(self.screen.history_len());
+        self.say(&format!("\x1b[{};{}H\x1b[J{}{}", row + 1, col + 1, p, line));
+    }
+
+    fn handle_tui_key(&mut self, key: sex_pdx::app_key::Key) {
+        let Some(tk) = map_tui_key(key) else { return };
+        let now = sex_pdx::get_ticks();
+        let (cols, rows) = (self.screen.cols(), self.screen.rows());
+        let mut cwd_copy = self.cwd.clone();
+        let host = shell_host::TermHost { cwd: &mut cwd_copy, slot: self.slot };
+        let out = self.tui.as_mut().unwrap().key(tk, &host, cols, rows, now);
+        self.apply_tui_output(out);
+    }
+
+    fn handle_rev_search_key(&mut self, key: sex_pdx::app_key::Key) -> bool {
+        let Some(rs) = self.rev_search.as_mut() else { return false };
+        match (key.control, key.code, sex_app::nav(key)) {
+            (_, 0x01, _) | (true, 0x2E, _) => {
+                let saved = core::mem::take(&mut rs.saved_line);
+                let saved_at = rs.saved_at;
+                self.rev_search = None;
+                self.line = saved;
+                self.at = saved_at;
+                self.redraw_line();
+                return true;
+            }
+            (_, 0x1C, _) | (_, 0x0F, _) | (_, _, Some(Nav::Right)) => {
+                if let Some(hit) = rs.matches.get(rs.selected) {
+                    self.line = hit.text.clone().into_bytes();
+                    self.at = self.line.len();
+                }
+                self.rev_search = None;
+                self.redraw_line();
+                return true;
+            }
+            (true, 0x13, _) | (_, _, Some(Nav::Down)) => {
+                if !rs.matches.is_empty() {
+                    rs.selected = (rs.selected + 1) % rs.matches.len();
+                }
+                self.redraw_line();
+                return true;
+            }
+            (_, _, Some(Nav::Up)) => {
+                if !rs.matches.is_empty() {
+                    rs.selected = rs.selected.checked_sub(1).unwrap_or(rs.matches.len() - 1);
+                }
+                self.redraw_line();
+                return true;
+            }
+            (_, 0x0E, _) => {
+                rs.query.pop();
+            }
+            (false, _, None) if !key.alt => {
+                if let Some(c) = sex_app::text(key) {
+                    rs.query.push(c);
+                } else {
+                    return true;
+                }
+            }
+            _ => return true,
+        }
+        let q = self.rev_search.as_ref().unwrap().query.clone();
+        let hist = self.history_strings();
+        let matches = shell_ui::fuzzy_search_history(&hist, &q, 16);
+        if let Some(rs) = self.rev_search.as_mut() {
+            rs.matches = matches;
+            rs.selected = 0;
+        }
+        self.redraw_line();
+        true
+    }
+
+    fn accept_menu_selection(&mut self) {
+        let Some(menu) = self.complete_menu.take() else { return };
+        let Some(hit) = menu.hits.get(menu.selected) else { return };
+        let Ok(text) = core::str::from_utf8(&self.line) else { return };
+        if hit.replace.end > text.len() { return; }
+        let mut next = String::from(&text[..hit.replace.start]);
+        next.push_str(&hit.text);
+        if !hit.text.ends_with('/') { next.push(' '); }
+        let at = next.len();
+        next.push_str(&text[hit.replace.end..]);
+        self.line = next.into_bytes();
+        self.at = at;
+    }
+
     fn key_normal(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
-        let (shift, control) = (key.shift, key.control);
+        let (shift, control, alt) = (key.shift, key.control, key.alt);
         // Terminal-wide keys first.
         match (control, shift, key.code) {
             (false, true, 0x49 | 0x68) => { let r = self.screen.rows() as isize - 1; self.screen.scroll_view(r); return; }
@@ -914,56 +1234,196 @@ impl Pane {
             _ => {}
         }
         self.screen.clear_selection();
+        if self.tui.is_some() { self.handle_tui_key(key); return; }
         if self.job.is_some() { self.job_key(key); return; }
-        let typed = if control { None } else { sex_app::typed(key) };
-        match (control, key.code, sex_app::nav(key), typed) {
+        if self.rev_search.is_some() { self.handle_rev_search_key(key); return; }
+
+        if self.complete_menu.is_some() {
+            match (key.code, sex_app::nav(key), key.shift) {
+                (0x01, _, _) => { self.complete_menu = None; self.redraw_line(); return; }
+                (0x0F, _, false) | (_, Some(Nav::Down | Nav::Right), _) => {
+                    let m = self.complete_menu.as_mut().unwrap();
+                    m.selected = (m.selected + 1) % m.hits.len().max(1);
+                    self.redraw_line();
+                    return;
+                }
+                (0x0F, _, true) | (_, Some(Nav::Up | Nav::Left), _) => {
+                    let m = self.complete_menu.as_mut().unwrap();
+                    m.selected = m.selected.checked_sub(1).unwrap_or(m.hits.len().saturating_sub(1));
+                    self.redraw_line();
+                    return;
+                }
+                (0x1C, _, _) => {
+                    self.accept_menu_selection();
+                    self.redraw_line();
+                    return;
+                }
+                _ => { self.complete_menu = None; }
+            }
+        }
+
+        // Alt+Right / Alt+F (`forward-word` + word-wise autosuggestion accept).
+        if alt && (sex_app::nav(key) == Some(Nav::Right) || key.code == 0x21) {
+            self.accept_word_or_move();
+            self.redraw_line();
+            return;
+        }
+        // Alt+Left / Alt+B (`backward-word`).
+        if alt && (sex_app::nav(key) == Some(Nav::Left) || key.code == 0x30) {
+            self.at = prev_word_boundary(&self.line, self.at);
+            self.redraw_line();
+            return;
+        }
+
+        let nav = sex_app::nav(key);
+        let text_ch = if control || alt { None } else { sex_app::text(key) };
+        match (control, key.code, nav, text_ch) {
             (_, 0x1C, ..) => {
+                self.redraw_line_clean();
                 let line = core::mem::take(&mut self.line);
                 self.say("\r\n\x1b]133;C\x07");
                 self.run_line(window, &line);
-                if self.job.is_none() { self.say("\x1b]133;D;0\x07"); }
-                if self.job.is_none() { self.show_prompt(); }
+                if self.job.is_none() && self.tui.is_none() {
+                    let code = self.last_exit;
+                    self.say(&format!("\x1b]133;D;{}\x07", code));
+                    self.show_prompt();
+                }
                 return;
             }
-            (true, 0x2E, ..) => { self.say("^C\r\n"); self.show_prompt(); return; }
-            (true, 0x26, ..) => { self.say("\x1b[H\x1b[2J"); self.prompt_at = (self.screen.history_len(), 0); self.redraw_line(); return; }
+            // Ctrl+C: clear overlays and start fresh prompt.
+            (true, 0x2E, ..) => { self.redraw_line_clean(); self.say("^C\r\n"); self.last_exit = 130; self.show_prompt(); return; }
+            // Ctrl+L: clear screen preserving line.
+            (true, 0x26, ..) => {
+                self.say("\x1b[H\x1b[2J");
+                self.say_prompt_header();
+                let (x, y) = self.screen.cursor();
+                self.prompt_at = (self.screen.history_len() + y, x);
+                self.redraw_line();
+                return;
+            }
             (true, 0x20, ..) if self.line.is_empty() => { sex_pdx::serial_record!("[term.pane.closed] how=ctrl-d"); self.closed = true; return; }
-            (true, 0x1E, ..) => self.at = 0,
-            (true, 0x12, ..) => self.at = self.line.len(),
-            (true, 0x16, ..) => { self.line.drain(..self.at); self.at = 0; }
-            (true, 0x25, ..) => self.line.truncate(self.at),
-            (_, 0x0E, ..) => if self.at > 0 { self.at -= 1; self.line.remove(self.at); },
-            (_, 0x0F, ..) => self.complete(window),
-            (_, _, Some(Nav::Left), _) => self.at = self.at.saturating_sub(1),
-            (_, _, Some(Nav::Right), _) => self.at = (self.at + 1).min(self.line.len()),
-            (_, _, Some(Nav::Home), _) => self.at = 0,
-            (_, _, Some(Nav::End), _) => self.at = self.line.len(),
-            (_, _, Some(Nav::Delete), _) => if self.at < self.line.len() { self.line.remove(self.at); },
-            (_, _, Some(dir @ (Nav::Up | Nav::Down)), _) => {
-                if self.history.is_empty() { return; }
-                let last = self.history.len();
-                let next = match (self.recall, dir) {
-                    (None, Nav::Up) => Some(last - 1),
-                    (Some(i), Nav::Up) => Some(i.saturating_sub(1)),
-                    (Some(i), _) if i + 1 < last => Some(i + 1),
-                    _ => None,
-                };
-                self.recall = next;
-                self.line = next.map(|i| self.history[i].clone()).unwrap_or_default();
+            // Ctrl+R: fuzzy reverse history search TUI.
+            (true, 0x13, ..) => {
+                let hist = self.history_strings();
+                let matches = shell_ui::fuzzy_search_history(&hist, "", 16);
+                self.rev_search = Some(RevSearchDrawer {
+                    query: String::new(),
+                    matches,
+                    selected: 0,
+                    saved_line: self.line.clone(),
+                    saved_at: self.at,
+                });
+                self.redraw_line();
+                return;
+            }
+            // Ctrl+F: accept next word of ghost autosuggestion, else forward one char.
+            (true, 0x21, ..) => self.accept_word_or_move(),
+            // Ctrl+B: backward one char.
+            (true, 0x30, ..) => self.at = prev_char_boundary(&self.line, self.at),
+            // Ctrl+A / Home.
+            (true, 0x1E, ..) | (_, _, Some(Nav::Home), _) => self.at = 0,
+            // Ctrl+E: accept full ghost at EOL, else move to EOL.
+            (true, 0x12, ..) => {
+                if self.at == self.line.len() {
+                    if let Some(g) = self.current_ghost() {
+                        self.line.extend_from_slice(g.as_bytes());
+                    }
+                }
                 self.at = self.line.len();
             }
-            (false, _, None, Some(c)) => { self.line.insert(self.at, c); self.at += 1; }
+            (_, _, Some(Nav::End), _) => self.at = self.line.len(),
+            (true, 0x16, ..) => { self.line.drain(..self.at); self.at = 0; self.recall = None; }
+            (true, 0x25, ..) => { self.line.truncate(self.at); self.recall = None; }
+            // Ctrl+W: backward kill word.
+            (true, 0x11, ..) => {
+                let start = prev_word_boundary(&self.line, self.at);
+                self.line.drain(start..self.at);
+                self.at = start;
+                self.recall = None;
+            }
+            (_, 0x0E, ..) => {
+                if self.at > 0 {
+                    let prev = prev_char_boundary(&self.line, self.at);
+                    self.line.drain(prev..self.at);
+                    self.at = prev;
+                    self.recall = None;
+                }
+            }
+            (_, 0x0F, ..) => self.complete(window),
+            (_, _, Some(Nav::Left), _) => self.at = prev_char_boundary(&self.line, self.at),
+            (_, _, Some(Nav::Right), _) => {
+                if self.at == self.line.len() {
+                    if let Some(g) = self.current_ghost() {
+                        self.line.extend_from_slice(g.as_bytes());
+                        self.at = self.line.len();
+                    }
+                } else {
+                    self.at = next_char_boundary(&self.line, self.at);
+                }
+            }
+            (_, _, Some(Nav::Delete), _) => {
+                if self.at < self.line.len() {
+                    let next = next_char_boundary(&self.line, self.at);
+                    self.line.drain(self.at..next);
+                    self.recall = None;
+                }
+            }
+            (_, _, Some(dir @ (Nav::Up | Nav::Down)), _) => {
+                if self.history.is_empty() { return; }
+                let up = dir == Nav::Up;
+                if self.recall.is_none() && up {
+                    self.recall_prefix = self.line.clone();
+                }
+                let prefix = String::from_utf8_lossy(&self.recall_prefix).into_owned();
+                let hist = self.history_strings();
+                if let Some(next) = shell_ui::history_search_prefix(&hist, &prefix, self.recall, up) {
+                    self.recall = next;
+                    self.line = match next {
+                        Some(idx) => self.history[idx].clone(),
+                        None => self.recall_prefix.clone(),
+                    };
+                    self.at = self.line.len();
+                } else {
+                    return;
+                }
+            }
+            (false, _, None, Some(c)) => {
+                let mut utf8 = [0u8; 4];
+                let bytes = c.encode_utf8(&mut utf8).as_bytes();
+                for (i, &b) in bytes.iter().enumerate() {
+                    self.line.insert(self.at + i, b);
+                }
+                self.at += bytes.len();
+                self.recall = None;
+            }
             _ => return,
         }
         self.redraw_line();
     }
-    /// Tab through the shell: commands, flags, `$variables`, columns and paths. False
-    /// when it has nothing to offer.
+
+    fn accept_word_or_move(&mut self) {
+        if self.at == self.line.len() {
+            if let Some(g) = self.current_ghost() {
+                let mut s = String::from_utf8_lossy(&self.line).into_owned();
+                let mut cur = s.len();
+                if shell_ui::accept_ghost_word(&mut s, &mut cur, &g) {
+                    self.line = s.into_bytes();
+                    self.at = self.line.len();
+                    return;
+                }
+            }
+        }
+        self.at = next_word_boundary(&self.line, self.at);
+    }
+
+    /// Tab through the shell: commands, aliases, themes, flags, `$variables`, columns and
+    /// paths — opens Fish-style multi-column completion drawer when ambiguous.
     fn complete_shell(&mut self) -> bool {
         let Ok(text) = core::str::from_utf8(&self.line) else { return false };
         let text = String::from(text);
-        let host = shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot };
-        let hits = self.engine.complete(&text, self.at, &host);
+        let mut cwd_copy = self.cwd.clone();
+        let host = shell_host::TermHost { cwd: &mut cwd_copy, slot: self.slot };
+        let hits = self.engine.complete_with(&text, self.at, &host, SHELL_EXTRA_CMDS, &spindle_panes::config::THEME_NAMES);
         let Some(first) = hits.first() else { return false };
         let range = first.replace.clone();
         if hits.iter().any(|h| h.replace != range) || range.end > text.len() { return false; }
@@ -976,10 +1436,7 @@ impl Pane {
         }
         let current = &text[range.clone()];
         if common.len() <= current.len() && hits.len() > 1 {
-            let list: Vec<&str> = hits.iter().take(40).map(|h| h.text.as_str()).collect();
-            self.say(&format!("\r\n{}\r\n", list.join("  ")));
-            let (_, y) = self.screen.cursor();
-            self.prompt_at = (self.screen.history_len() + y, 0);
+            self.complete_menu = Some(CompletionDrawer { hits, selected: 0 });
             return true;
         }
         let mut new = String::from(&text[..range.start]);
@@ -1273,6 +1730,64 @@ fn refusal(e: files::Error) -> sex_wasm::Refusal {
     }
 }
 
+fn map_tui_key(key: sex_pdx::app_key::Key) -> Option<TuiKey> {
+    if key.control && key.code == 0x2E {
+        return Some(TuiKey::CtrlC);
+    }
+    match (sex_app::nav(key), key.code, key.shift) {
+        (Some(Nav::Up), _, _) => return Some(TuiKey::Up),
+        (Some(Nav::Down), _, _) => return Some(TuiKey::Down),
+        (Some(Nav::Left), _, _) => return Some(TuiKey::Left),
+        (Some(Nav::Right), _, _) => return Some(TuiKey::Right),
+        (Some(Nav::Home), _, _) => return Some(TuiKey::Home),
+        (Some(Nav::End), _, _) => return Some(TuiKey::End),
+        (_, 0x49 | 0x68, _) => return Some(TuiKey::PageUp),
+        (_, 0x51 | 0x6D, _) => return Some(TuiKey::PageDown),
+        (_, 0x1C, _) => return Some(TuiKey::Enter),
+        (_, 0x0E, _) => return Some(TuiKey::Backspace),
+        (_, 0x01, _) => return Some(TuiKey::Escape),
+        (_, 0x0F, true) => return Some(TuiKey::BackTab),
+        (_, 0x0F, false) => return Some(TuiKey::Tab),
+        _ => {}
+    }
+    if !key.control && !key.alt {
+        if let Some(c) = sex_app::text(key) {
+            return Some(TuiKey::Char(c));
+        }
+    }
+    None
+}
+
+fn prev_char_boundary(bytes: &[u8], at: usize) -> usize {
+    let mut i = at.min(bytes.len());
+    if i == 0 { return 0; }
+    i -= 1;
+    while i > 0 && (bytes[i] & 0xC0) == 0x80 { i -= 1; }
+    i
+}
+
+fn next_char_boundary(bytes: &[u8], at: usize) -> usize {
+    let mut i = at.min(bytes.len());
+    if i >= bytes.len() { return bytes.len(); }
+    i += 1;
+    while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 { i += 1; }
+    i
+}
+
+fn prev_word_boundary(bytes: &[u8], at: usize) -> usize {
+    let mut i = at.min(bytes.len());
+    while i > 0 && bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+    while i > 0 && !bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+    i
+}
+
+fn next_word_boundary(bytes: &[u8], at: usize) -> usize {
+    let mut i = at.min(bytes.len());
+    while i < bytes.len() && !bytes[i].is_ascii_whitespace() { i += 1; }
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
+    i
+}
+
 fn nav_key(key: sex_pdx::app_key::Key) -> Option<Key> {
     Some(match (sex_app::nav(key), key.code) {
         (Some(Nav::Up), _) => Key::Up, (Some(Nav::Down), _) => Key::Down,
@@ -1329,25 +1844,18 @@ fn colors() -> String {
     s
 }
 
-const BUILTINS: &[&[u8]] = &[b"attach", b"cat", b"cd", b"clear", b"colors", b"echo", b"exit", b"greet", b"help", b"history", b"ls", b"mkdir", b"mv", b"pwd", b"rm", b"snapshot", b"touch", b"vtcheck", b"write"];
-const HELP: &str = "\x1b[1mSpindle\x1b[0m: the SexOS terminal. Each pane has its own command line.\n\
-  ls cd pwd cat mkdir rm mv touch write FILE TEXT   files in this folder\n\
-  echo history clear colors vtcheck snapshot exit\n\
-  NAME [ARGS]    runs NAME.wasm from this folder (a WASI command-line program), else\n\
-                 the program NAME (python, lua, rg, fd...) with this pane as its console\n\
-  greet [NAME]   a built-in Rust program, compiled to Wasm\n\
-  NAME ARGS &    runs the program in the background; jobs lists, fg N brings one here,\n\
-                 kill N stops one. Closing a pane or the window leaves its program running:\n\
-  attach [N]     shows job N (the newest when no N) here again, with the screen it left\n\
-  ssh USER@HOST  logs in to another machine in this pane (ssh NAME for an ssh.NAME =\n\
-                 user@host:port line in spindle.conf); its shell gets the pane's size\n\
-Keys: Tab completes, Up/Down recall, Ctrl+Shift+C/V copy/paste, Shift+PgUp/PgDn scroll,\n\
-  Ctrl+=/- text size, Ctrl+C stop, Ctrl+D end input (closes an idle pane), Ctrl+L clear.\n\
-Tabs: Ctrl+Shift+T new, Ctrl+PgUp/PgDn switch, Ctrl+Shift+PgUp/PgDn move, Ctrl+Shift+1..9 pick,\n\
-  click a tab to pick it, middle-click to close it.\n\
-Panes: Ctrl+Shift+E split side by side, Ctrl+Shift+O split below, Ctrl+Shift+arrows move,\n\
-  Ctrl+Shift+Z zoom, Ctrl+Shift+R then arrows resize (any other key ends), Ctrl+Shift+[ even out,\n\
-  Ctrl+Shift+W close; drag a divider with the mouse. F11 closes the window.\n";
+const BUILTINS: &[&[u8]] = &[b"attach", b"bars", b"bat", b"btop", b"cat", b"cd", b"clear", b"colors", b"echo", b"exit", b"fastfetch", b"fetch", b"greet", b"help", b"history", b"ll", b"ls", b"mkdir", b"mv", b"pwd", b"rm", b"snapshot", b"touch", b"tree", b"update", b"vtcheck", b"which", b"write", b"y", b"yazi"];
+const HELP: &str = "\x1b[1;38;2;244;63;94m● Spindle\x1b[0m: SexOS Noir Terminal (Fish + P10k + Ratatui).\n\
+  \x1b[38;2;34;211;238mShell & Files\x1b[0m  ls ll la tree bat cat mkdir rm mv touch cd .. ... pwd which alias\n\
+  \x1b[38;2;34;211;238mRatatui TUIs\x1b[0m   \x1b[1mbtop\x1b[0m system monitor · \x1b[1my\x1b[0m/\x1b[1myazi\x1b[0m 3-pane file manager (q cd+quit) · \x1b[1mbars\x1b[0m/\x1b[1mupdate\x1b[0m · \x1b[1mfetch\x1b[0m\n\
+  \x1b[38;2;34;211;238mPipelines\x1b[0m      ls | where size > 1mb | sort-by name · help [CMD] · theme [NAME]\n\
+  \x1b[38;2;34;211;238mPrograms\x1b[0m       NAME [ARGS] runs NAME.wasm or /bin/NAME · greet [NAME] · NAME &\n\
+                 jobs · fg N · attach [N] · kill N · ssh USER@HOST · clear colors vtcheck exit\n\
+\x1b[38;2;192;132;252mFish/Zsh Keys\x1b[0m  Tab menu · → / Ctrl+E accept ghost · Ctrl+F / Alt+→ accept word\n\
+               Up/Down prefix history · Ctrl+R fuzzy reverse history · Ctrl+W delete word\n\
+               Ctrl+Shift+C/V copy/paste · Ctrl+=/- font size · Ctrl+C stop · Ctrl+L clear\n\
+\x1b[38;2;192;132;252mTabs & Panes\x1b[0m   Ctrl+Shift+T tab · Ctrl+PgUp/Dn switch · Ctrl+Shift+E/O split · Ctrl+Shift+Z zoom\n\
+               Ctrl+Shift+arrows focus · Ctrl+Shift+F find · Ctrl+Shift+Space hints · Ctrl+Shift+X copy · F11 close\n";
 
 /// Spindle's terminal window: tabs of split panes, a clipboard they share, and the text
 /// size they all use.
@@ -1366,6 +1874,7 @@ struct Spindle {
     /// Resize mode (Ctrl+Shift+R): arrows move the focused pane's dividers.
     resizing: bool,
     title: String,
+    status_sig: String,
     painter: Painter,
     /// `spindle.conf`: what it says, the theme it makes, and when it was last read.
     config: spindle_panes::config::Config,
@@ -1374,14 +1883,19 @@ struct Spindle {
     config_checked: u64,
 }
 
-/// Pixels between panes, and the colours of the window's own parts.
+/// Pixels between panes, and the SexOS Noir palette of the window's chrome.
 const GAP: usize = 2;
-const DIVIDER: u32 = 0x313244;
-const DIVIDER_FOCUS: u32 = 0x89B4FA;
-const TAB_BG: u32 = 0x181825;
-const TAB_ACTIVE: u32 = 0x313244;
-const TAB_TEXT: u32 = 0xA6ADC8;
-const TAB_TEXT_ACTIVE: u32 = 0xCDD6F4;
+const DIVIDER: u32 = 0x24283B;
+const DIVIDER_FOCUS: u32 = 0xF43F5E;
+const TAB_BG: u32 = 0x0D0F16;
+const TAB_ACTIVE: u32 = 0x1A1E2B;
+const TAB_TEXT: u32 = 0x64748B;
+const TAB_TEXT_ACTIVE: u32 = 0xECEFF4;
+const STATUS_BG: u32 = 0x0D0F16;
+const STATUS_PILL: u32 = 0x181C28;
+const STATUS_ROSE: u32 = 0xF43F5E;
+const STATUS_CYAN: u32 = 0x22D3EE;
+const STATUS_MUTED: u32 = 0x64748B;
 
 impl Spindle {
     fn new(width: usize, height: usize) -> Spindle {
@@ -1389,11 +1903,13 @@ impl Spindle {
         let (cw, ch) = cell_for_height(14);
         let mut s = Spindle {
             panes: BTreeMap::new(), tabs: Tabs::new(1), next_id: 2, width: width.max(64), height: height.max(64), cell_h,
-            clipboard: Vec::new(), relayout: true, dragging: None, resizing: false, title: String::new(), painter: painter(cw, ch),
-            config: Default::default(), theme: sex_vt::theme::MOCHA, config_stamp: None, config_checked: 0,
+            clipboard: Vec::new(), relayout: true, dragging: None, resizing: false, title: String::new(), status_sig: String::new(), painter: painter(cw, ch),
+            config: Default::default(), theme: sex_vt::theme::NOIR, config_stamp: None, config_checked: 0,
         };
         let area = s.area();
-        s.panes.insert(1, Pane::new(area.w, area.h, cell_h));
+        let mut pane = Pane::new(area.w, area.h, cell_h);
+        pane.screen.set_theme(sex_vt::theme::NOIR);
+        s.panes.insert(1, pane);
         s.check_config(true);
         s
     }
@@ -1408,7 +1924,7 @@ impl Spindle {
         self.config_stamp = stamp;
         let text = stamp.and_then(|_| read_all_direct(CONFIG, 64 << 10).ok()).unwrap_or_default();
         let config = spindle_panes::config::parse(&String::from_utf8_lossy(&text));
-        let mut theme = sex_vt::theme::Theme::named(&config.theme).unwrap_or(sex_vt::theme::MOCHA);
+        let mut theme = sex_vt::theme::Theme::named(&config.theme).unwrap_or(sex_vt::theme::NOIR);
         for (key, c) in &config.colors {
             match key.as_str() {
                 "foreground" => theme.fg = *c, "background" => theme.bg = *c,
@@ -1428,7 +1944,12 @@ impl Spindle {
         // SAFETY: one thread; panes read DOMAINS when they start `ssh`.
         unsafe { *core::ptr::addr_of_mut!(DOMAINS) = config.ssh.clone(); }
         self.theme = theme;
-        for pane in self.panes.values_mut() { pane.screen.set_theme(theme); pane.screen.set_history_max(config.scrollback); }
+        for pane in self.panes.values_mut() {
+            pane.screen.set_theme(theme);
+            pane.screen.set_history_max(config.scrollback);
+            pane.engine.theme_name = String::from(theme.name);
+            pane.engine.font_name = config.font.clone();
+        }
         let step = config.font_size as isize - self.cell_h as isize;
         self.config = config;
         self.set_text_size(step);
@@ -1441,8 +1962,14 @@ impl Spindle {
     }
     /// The height of the tab bar: shown once there are two tabs.
     fn bar_h(&self) -> usize { if self.tabs.len() > 1 { self.painter.cell_h + 8 } else { 0 } }
-    /// Where the panes go.
-    fn area(&self) -> Rect { let b = self.bar_h(); Rect::new(0, b, self.width, self.height.saturating_sub(b)) }
+    /// Compact Kitty-style Noir status bar at the bottom of the window.
+    fn status_h(&self) -> usize { self.painter.cell_h + 6 }
+    /// Where the panes go (`y == 0` for single tab so split coords preserve `+0+0`).
+    fn area(&self) -> Rect {
+        let top = self.bar_h();
+        let bot = self.status_h().min(self.height.saturating_sub(top + 32));
+        Rect::new(0, top, self.width, self.height.saturating_sub(top + bot))
+    }
     fn focused(&mut self) -> &mut Pane { let id = self.tabs.focus(); self.panes.get_mut(&id).expect("the focused pane exists") }
     fn new_pane(&mut self, cwd: Vec<u8>) -> PaneId {
         let id = self.next_id;
@@ -1452,6 +1979,8 @@ impl Spindle {
         pane.cwd = cwd;
         pane.screen.set_theme(self.theme);
         pane.screen.set_history_max(self.config.scrollback);
+        pane.engine.theme_name = String::from(self.theme.name);
+        pane.engine.font_name = self.config.font.clone();
         // The lowest relay slot no other pane holds; past the last, the pane runs only
         // Wasm programs.
         let used: Vec<u8> = self.panes.values().map(|p| p.slot).collect();
@@ -1592,8 +2121,15 @@ impl Spindle {
         }
         for id in gone { self.close_pane(id); }
     }
-    /// A program runs or a pane is gliding: the loop wakes every frame.
-    fn running(&self) -> bool { self.panes.values().any(|p| p.job.is_some() || p.glide.left != 0 || !p.glide.shown.is_empty()) }
+    /// A program or animated TUI runs or a pane is gliding: the loop wakes at ~60fps/30fps.
+    fn running(&self) -> bool {
+        self.panes.values().any(|p| {
+            p.job.is_some()
+                || p.tui.as_ref().is_some_and(|t| matches!(t, ActiveTui::Bars(_) | ActiveTui::Btop(_)))
+                || p.glide.left != 0
+                || !p.glide.shown.is_empty()
+        })
+    }
 
     fn draw(&mut self, window: &mut Window) {
         let area = self.area();
@@ -1627,7 +2163,9 @@ impl Spindle {
                 pixels[at..at + pw].copy_from_slice(&pane.shown()[row * pane.width..row * pane.width + pw]);
             }
         }
-        if changed {
+        let status_sig = self.current_status_sig();
+        let status_dirty = relayout || changed || status_sig != self.status_sig;
+        if changed || status_dirty {
             // The dividers, the one beside the focused pane highlighted.
             let focus_rect = tab.rect_of(tab.focus, area, GAP);
             for d in tab.dividers(area, GAP) {
@@ -1635,12 +2173,35 @@ impl Spindle {
                 for row in d.y..(d.y + d.h).min(h) { let at = row * w; pixels[at + d.x..at + (d.x + d.w).min(w)].fill(if near && layout.len() > 1 { DIVIDER_FOCUS } else { DIVIDER }); }
             }
             if relayout { self.draw_tab_bar(pixels); }
+            if status_dirty {
+                self.status_sig = status_sig;
+                self.draw_status_bar(pixels);
+            }
             window.show_pixels(w, h);
         }
         // The window's title: the focused pane's, and how many tabs there are.
         let focused = self.panes.get(&tab.focus).map(|p| p.title()).unwrap_or_default();
         let title = if self.tabs.len() > 1 { format!("Spindle [{}/{}]: {}", self.tabs.active + 1, self.tabs.len(), focused) } else { format!("Spindle: {}", focused) };
         if title != self.title { window.title(title.as_bytes()); self.title = title; }
+    }
+    fn current_status_sig(&self) -> String {
+        let id = self.tabs.focus();
+        let Some(p) = self.panes.get(&id) else { return String::new() };
+        let mode_lbl = if let Some(t) = &p.tui {
+            format!("tui:{}", t.name())
+        } else {
+            match &p.mode {
+                Mode::Normal => String::from("shell"),
+                Mode::Search { .. } => String::from("find"),
+                Mode::Hints { .. } => String::from("hints"),
+                Mode::Copy(_) => String::from("copy"),
+            }
+        };
+        let cwd = core::str::from_utf8(&p.cwd).unwrap_or("?");
+        format!(
+            "{}:{}:{}:{}x{}:{}:{}:{}",
+            id, mode_lbl, cwd, p.screen.cols(), p.screen.rows(), self.theme.name, self.config.font, self.tabs.len()
+        )
     }
     fn draw_tab_bar(&mut self, pixels: &mut [u32]) {
         let bar = self.bar_h();
@@ -1665,6 +2226,56 @@ impl Spindle {
             if active { pixels[(bar - 2) * w + x0..(bar - 2) * w + (x0 + tw - 2).min(w)].fill(DIVIDER_FOCUS); }
         }
     }
+    fn draw_status_bar(&mut self, pixels: &mut [u32]) {
+        let sh = self.status_h();
+        let (w, h) = (self.width, self.height);
+        let area_bot = self.bar_h() + self.area().h;
+        if area_bot >= h || sh < 8 { return; }
+        let y0 = area_bot;
+        let row_h = (h - y0).min(sh);
+        for row in y0..y0 + row_h {
+            pixels[row * w..(row + 1) * w].fill(STATUS_BG);
+        }
+        pixels[y0 * w..(y0 + 1) * w].fill(DIVIDER);
+
+        let id = self.tabs.focus();
+        let Some(p) = self.panes.get(&id) else { return };
+        let (mode_lbl, mode_col) = if let Some(t) = &p.tui {
+            (format!(" TUI:{} ", t.name().to_uppercase()), STATUS_ROSE)
+        } else {
+            match &p.mode {
+                Mode::Normal => (String::from(" SHELL "), 0x10B981),
+                Mode::Search { .. } => (String::from(" FIND "), 0xF59E0B),
+                Mode::Hints { .. } => (String::from(" HINTS "), STATUS_CYAN),
+                Mode::Copy(_) => (String::from(" COPY "), 0xC084FC),
+            }
+        };
+        let cwd = core::str::from_utf8(&p.cwd).unwrap_or("?");
+        let right = if self.config.opacity < 100 {
+            format!("{}x{} · {} · {}% ", p.screen.cols(), p.screen.rows(), self.theme.name, self.config.opacity)
+        } else {
+            format!("{}x{} · {} · {} ", p.screen.cols(), p.screen.rows(), self.theme.name, self.config.font)
+        };
+
+        let ty = y0 + row_h.saturating_sub(self.painter.cell_h) / 2;
+        let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
+        let mut x = 6usize;
+        x = self.painter.text(cache, pixels, w, x, ty, "● SPINDLE ", STATUS_ROSE, STATUS_BG);
+        let pill_end = (x + mode_lbl.chars().count() * self.painter.cell_w).min(w);
+        for row in y0 + 2..y0 + row_h.saturating_sub(1) {
+            if x < pill_end { pixels[row * w + x..row * w + pill_end].fill(STATUS_PILL); }
+        }
+        x = self.painter.text(cache, pixels, w, x, ty, &mode_lbl, mode_col, STATUS_PILL);
+        x += self.painter.cell_w;
+        let cwd_text = format!("~/{}  [Ctrl+R find · btop · y]", cwd);
+        let right_w = right.chars().count() * self.painter.cell_w;
+        let avail_cols = w.saturating_sub(x + right_w + 12) / self.painter.cell_w.max(1);
+        let mid: String = cwd_text.chars().take(avail_cols).collect();
+        self.painter.text(cache, pixels, w, x, ty, &mid, TAB_TEXT_ACTIVE, STATUS_BG);
+        if w > right_w + 8 {
+            self.painter.text(cache, pixels, w, w - right_w - 6, ty, &right, STATUS_MUTED, STATUS_BG);
+        }
+    }
 }
 
 #[no_mangle]
@@ -1672,11 +2283,13 @@ pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
 
 extern "C" fn main() -> ! {
     let mut window = Window::open();
+    let _ = window.want_keys(sex_pdx::app_key::DESKTOP_KEYS);
     window.title(b"Spindle");
     let (w, h) = window.size();
     let mut spindle = Spindle::new(w, h);
     let term = spindle.focused();
-    term.say("\x1b[1mSpindle\x1b[0m. Type \x1b[1mhelp\x1b[0m for commands and keys. Ctrl+Shift+T opens a tab, Ctrl+Shift+E splits.\n");
+    term.say("\x1b[1;38;2;244;63;94m● Spindle\x1b[0m \x1b[38;2;100;116;139m· SexOS Noir Terminal (Fish + P10k + Ratatui)\x1b[0m\n");
+    term.say("Type \x1b[1;38;2;34;211;238mhelp\x1b[0m for commands · \x1b[38;2;16;185;129mTab\x1b[0m menu · \x1b[38;2;45;180;196m→/Ctrl+F\x1b[0m ghost · \x1b[38;2;192;132;252mbtop\x1b[0m · \x1b[38;2;245;158;11my\x1b[0m files · \x1b[38;2;244;63;94mfetch/bars\x1b[0m\n");
     // `run term CMD...` runs that command first.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     // Spindle's grant (`spindle` adds `+launch`) is not a command.
@@ -1696,7 +2309,7 @@ extern "C" fn main() -> ! {
         let line = core::mem::take(&mut term.line);
         term.say("\r\n");
         term.run_line(&mut window, &line);
-        if term.job.is_none() { term.show_prompt(); }
+        if term.job.is_none() && term.tui.is_none() { term.show_prompt(); }
     }
     spindle.draw(&mut window);
     let (cols, rows) = (spindle.focused().screen.cols(), spindle.focused().screen.rows());

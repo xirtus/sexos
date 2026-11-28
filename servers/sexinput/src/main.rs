@@ -310,11 +310,12 @@ impl KeyboardOutbox {
         // Numpad: 7 8 9 - 4 5 6 + 1 2 3 0 . and * plain; / and Enter after E0.
         edge.keypad=if extended {matches!(edge.code,0x35|0x1C)} else {matches!(edge.code,0x37|0x47..=0x53)};
         // Media keys share their byte with D, C and B: give them their own codes
-        // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), and the player
-        // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
+        // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), the player
+        // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS),
+        // and unused extended E0 6B / E0 7B carry KEY_MIC_MUTE (`0x79`).
         // Right Ctrl and right Alt (AltGr) get the codes USB keyboards give them, so
         // layouts can tell AltGr from Alt whichever keyboard it is.
-        if extended {edge.code=match edge.code {0x37=>0x54,0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,0x1D=>0x61,0x38=>0x64,c=>c};}
+        if extended {edge.code=match edge.code {0x37=>0x54,0x20=>0x75,0x2E=>0x76,0x30=>0x77,0x22=>0x78,0x6B|0x7B=>0x79,0x24=>0x7A,0x19=>0x7C,0x10=>0x7F,0x1D=>0x61,0x38=>0x64,c=>c};}
         self.push(&[edge])
     }
     /// One USB keyboard snapshot: modifiers plus up to six pressed usages packed one per
@@ -459,6 +460,101 @@ fn send_shell_hid_event(arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u64> {
     }
 }
 
+fn send_shell_gesture(msg: sex_pdx::space_slide::GestureMsg) -> bool {
+    let w = msg.wire();
+    match pdx_call_checked(
+        SLOT_SHELL,
+        sex_pdx::space_slide::OP_TOUCHPAD_GESTURE,
+        w[0],
+        w[1],
+        w[2],
+    ) {
+        Ok(_) => {
+            CAP_READY_SHELL.store(true, Ordering::Relaxed);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+struct GestureOutbox {
+    has_move: bool,
+    move_dx_q12: i32,
+    move_dt_ms: u16,
+    queue: [sex_pdx::space_slide::GestureMsg; 8],
+    head: usize,
+    len: usize,
+}
+
+impl GestureOutbox {
+    const fn new() -> Self {
+        Self {
+            has_move: false,
+            move_dx_q12: 0,
+            move_dt_ms: 0,
+            queue: [sex_pdx::space_slide::GestureMsg::SwipeUp; 8],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn pending(&self) -> bool {
+        self.has_move || self.len > 0
+    }
+
+    fn push(&mut self, msg: sex_pdx::space_slide::GestureMsg) {
+        use sex_pdx::space_slide::GestureMsg;
+        match msg {
+            GestureMsg::SwipeMove { dx_q12, dt_ms } if self.len == 0 => {
+                self.has_move = true;
+                self.move_dx_q12 = self.move_dx_q12.saturating_add(dx_q12);
+                self.move_dt_ms = self.move_dt_ms.saturating_add(dt_ms);
+            }
+            other => {
+                // Flush pending continuous delta into the FIFO ahead of SwipeEnd / discrete events
+                // so liftoff velocity never overtakes final delta position.
+                if self.has_move && self.len < self.queue.len() {
+                    let tail = (self.head + self.len) % self.queue.len();
+                    self.queue[tail] = GestureMsg::SwipeMove {
+                        dx_q12: core::mem::take(&mut self.move_dx_q12),
+                        dt_ms: core::mem::take(&mut self.move_dt_ms),
+                    };
+                    self.len += 1;
+                    self.has_move = false;
+                }
+                if self.len < self.queue.len() {
+                    let tail = (self.head + self.len) % self.queue.len();
+                    self.queue[tail] = other;
+                    self.len += 1;
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self) {
+        use sex_pdx::space_slide::GestureMsg;
+        while self.len > 0 {
+            let msg = self.queue[self.head];
+            if !send_shell_gesture(msg) {
+                return;
+            }
+            self.head = (self.head + 1) % self.queue.len();
+            self.len -= 1;
+        }
+        if self.has_move {
+            let msg = GestureMsg::SwipeMove {
+                dx_q12: self.move_dx_q12,
+                dt_ms: self.move_dt_ms,
+            };
+            if send_shell_gesture(msg) {
+                self.has_move = false;
+                self.move_dx_q12 = 0;
+                self.move_dt_ms = 0;
+            }
+        }
+    }
+}
+
 /// Translate USB HID keyboard usage to the shell key code.
 /// Ordinary keys use set1 values; navigation uses the existing normalized codes.
 /// Returns None for unmapped keys.
@@ -518,13 +614,14 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         0x64 => 0x56, // non-US \ |
         0x65 => 0x5D, // Menu (E0 5D)
         0x67 => 0x0D, // keypad =
+        0x6F => 0x79, // F20 / XF86AudioMicMute: sex_pdx::app_key::KEY_MIC_MUTE
         0x7F => 0x75, // Mute: sex_pdx::app_key::KEY_MUTE
         0x80 => 0x77, // Volume Up: KEY_VOLUME_UP
         0x81 => 0x76, // Volume Down: KEY_VOLUME_DOWN
-        // The player keys, as the reserved usages keyboards (and Cufflinks, for a
-        // Bluetooth headset's AVRCP buttons) send them: KEY_PLAY_PAUSE, KEY_STOP,
-        // KEY_PREVIOUS, KEY_NEXT.
-        0xE8 => 0x78, 0xE9 => 0x7A, 0xEA => 0x7F, 0xEB => 0x7C,
+        // The player keys and mic mute, as the reserved usages keyboards (and
+        // Cufflinks / SexUSB media endpoints) send them: KEY_PLAY_PAUSE, KEY_STOP,
+        // KEY_PREVIOUS, KEY_NEXT, KEY_MIC_MUTE.
+        0xE8 => 0x78, 0xE9 => 0x7A, 0xEA => 0x7F, 0xEB => 0x7C, 0xEC => 0x79,
         // Brightness down / up, as SexUSB sends a keyboard's Consumer brightness keys:
         // KEY_BRIGHTNESS_DOWN, KEY_BRIGHTNESS_UP.
         0xED => 0x7B, 0xEE => 0x7D,
@@ -587,6 +684,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut pointer_outbox = PointerOutbox::new();
     let mut keyboard_outbox = KeyboardOutbox::new();
+    let mut gesture_outbox = GestureOutbox::new();
     let mut input_arrival = InputArrival::new();
     let mut tick: u64 = 0;
     let mut drag_proof_stage: u8 = 0;
@@ -1325,14 +1423,18 @@ pub extern "C" fn _start() -> ! {
                     let _ = input_arrival.usb(&mut keyboard_outbox, usage as u64, modifiers, keys, mods)
                         && input_arrival.usb(&mut keyboard_outbox, 0, 0, keys, mods);
                 },
+                touchpad::Out::Gesture(g) => {
+                    gesture_outbox.push(g);
+                }
             });
         }
+        gesture_outbox.flush();
 
         // Every source wakes this task: messages (USB reports from the USB service)
         // and PS/2 scancodes (the kernel wakes the input ring's listener). So once
         // boot's timed proofs are over and nothing waits to go to Shell, sleep long;
         // the deadline only bounds a lost wake.
-        let idle=tick>IDLE_AFTER_TICKS&&keyboard_outbox.len==0&&pointer_outbox.len==0;
+        let idle=tick>IDLE_AFTER_TICKS&&keyboard_outbox.len==0&&pointer_outbox.len==0&&!gesture_outbox.pending();
         // Never sleep past the touchpad's next timed read; its line wakes this task itself.
         let _=sex_pdx::sys_wait_self_ticks(if idle {touchpad::wait_bound(sex_pdx::get_ticks(),IDLE_WAIT_TICKS)} else {1});
     }

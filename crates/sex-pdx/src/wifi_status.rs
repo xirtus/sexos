@@ -44,6 +44,16 @@ pub const WHY_PARTS: u64 = 9;
 /// Field tests (Spindle `wifi ba off`, `wifi replay off`): knob `a` to `b` (0 off,
 /// 1 on) for this boot. Spindle only. Replies with the state word.
 pub const TUNE: u64 = 8;
+/// Turns Wi-Fi on (`a != 0`) or off (`a == 0`). Shell and Spindle only. Replies
+/// with the state word (phase `OFF` when the hardware was turned off).
+pub const RADIO: u64 = 9;
+/// Queries the active network / local IPv4: `a = ACTIVE_INFO` (returns `Info` of
+/// the active/connecting AP or `MISSING`), `a = ACTIVE_IP4` (returns local IPv4),
+/// or `a = ACTIVE_SSID + k` (returns active SSID bytes `7k..7k+7`).
+pub const ACTIVE: u64 = 10;
+pub const ACTIVE_INFO: u64 = 0;
+pub const ACTIVE_IP4: u64 = 1;
+pub const ACTIVE_SSID: u64 = 2;
 /// Receive block-ack reordering: off hands frames up as they arrive.
 pub const TUNE_BA: u64 = 1;
 /// The CCMP replay check on frames received.
@@ -79,6 +89,7 @@ pub const ASSOCIATING: u8 = 7; // authentication and association frames
 pub const ASSOCIATED: u8 = 8; // associated with an open network; sexnet's traffic goes over it
 pub const HANDSHAKE: u8 = 9; // WPA2 4-way handshake and key install
 pub const CONNECTED: u8 = 10; // keys installed; sexnet's traffic goes over it
+pub const OFF: u8 = 11; // Wi-Fi turned off by user via RADIO toggle
 
 /// The state word: phase (bits 0..8), networks heard (8..16), scans started (16..32),
 /// channels in a scan (32..40).
@@ -129,6 +140,19 @@ pub fn word_bytes(word: u64, out: &mut [u8]) {
     for (i, b) in out.iter_mut().take(7).enumerate() { *b = (word >> (8 * i)) as u8; }
 }
 
+/// Encodes a local IPv4 address + active-link flag into a `TAG` reply word (`ACTIVE_IP4`).
+pub const fn ip4_word(ip: [u8; 4], link_up: bool) -> u64 {
+    TAG | (u32::from_be_bytes(ip) as u64) | ((link_up as u64) << 32)
+}
+
+/// Decodes a `TAG` reply word from `ACTIVE_IP4` into `(ipv4, link_up)`.
+pub const fn word_ip4(word: u64) -> Option<([u8; 4], bool)> {
+    if word >> 56 != TAG >> 56 {
+        return None;
+    }
+    Some(((word as u32).to_be_bytes(), (word >> 32) & 1 != 0))
+}
+
 /// The answer for `NETWORK` part `part` of a network with these facts.
 pub fn network_part(info: Info, bssid: &[u8; 6], ssid: &[u8], part: u64) -> u64 {
     match part {
@@ -150,7 +174,12 @@ mod tests {
     fn words_round_trip() {
         let s = State { phase: READY, networks: 12, scans: 3, channels: 67 };
         assert_eq!(State::of(s.word()), s);
+        let off = State { phase: OFF, networks: 0, scans: 4, channels: 0 };
+        assert_eq!(State::of(off.word()), off);
         assert!(is_reply(s.word()) && is_reply(REFUSED) && is_reply(MISSING) && is_reply(NEEDS_PASSWORD));
+        assert_eq!(word_ip4(ip4_word([192, 168, 1, 42], true)), Some(([192, 168, 1, 42], true)));
+        assert_eq!(word_ip4(ip4_word([10, 0, 2, 15], false)), Some(([10, 0, 2, 15], false)));
+        assert_eq!(word_ip4(MISSING), None);
         // 9 parts carry the longest passphrase.
         assert!(PASSWORD_PARTS as usize * 7 >= PASSWORD_MAX);
         let i = Info { channel: 149, rssi: -71, security: WPA2_WPA3, ssid_len: 32, beacons: 40 };

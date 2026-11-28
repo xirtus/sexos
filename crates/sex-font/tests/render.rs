@@ -55,3 +55,22 @@ fn ui_render_darkens_only_dark_ink() {
     assert!(Render::ui_for(0x1f1b1c).darken);
     assert!(!Render::ui_for(0xf2ebe7).darken);
 }
+
+#[test]
+fn humanized_ui_adds_subtle_stem_weight_at_small_sizes_without_smearing() {
+    let font = Font::new(GEIST_SANS).unwrap();
+    let g = font.glyph('H' as u32).unwrap();
+    for px in [12u32, 14, 17] {
+        let (w, h) = (px as usize * 2, px as usize * 2);
+        let mut acc = vec![0; scratch_len(w, h)];
+        let mut plain = vec![0u8; w * h];
+        let mut human = vec![0u8; w * h];
+        let base = (px as i32 * 3 / 2) * 256;
+        assert!(font.draw(g, px * 64, 4 * 256, base, w, h, &mut acc, &mut plain));
+        assert!(font.draw_humanized(g, px * 64, 4 * 256, base, w, h, &mut acc, &mut human, Synthetic::NONE, 32 * 64));
+        let p_sum: u32 = plain.iter().map(|&v| v as u32).sum();
+        let h_sum: u32 = human.iter().map(|&v| v as u32).sum();
+        assert!(h_sum > p_sum, "{px}px humanized ({h_sum}) > plain ({p_sum})");
+        assert!(h_sum < p_sum * 125 / 100, "{px}px humanized ({h_sum}) stays subtle (<+25% of {p_sum})");
+    }
+}

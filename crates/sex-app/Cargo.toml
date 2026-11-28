@@ -13,6 +13,10 @@ zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 sex-pdx = { path = "../sex-pdx" }
 sex-theme = { path = "../sex-theme" }
 sex-fetch = { path = "../sex-fetch" }
+sex-spell = { path = "../sex-spell" }
+sex-textedit = { path = "../sex-textedit" }
+sex-font = { path = "../sex-font" }
+sex-config = { path = "../sex-config" }
 # The program's heap allocator (MIT, no_std). Its memory comes from the kernel's
 # per-run program window: see sex_app::heap.
 talc = { version = "5.1.1", default-features = false }

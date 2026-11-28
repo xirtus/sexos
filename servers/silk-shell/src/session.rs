@@ -17,7 +17,7 @@ const SAVED: u64 = 1;
 const APPLYING: u64 = 2;
 /// Window states a session keeps (minimized is applied with its lifecycle; scratchpad
 /// windows keep their mark so Super+S still finds them).
-const KEPT_FLAGS: u32 = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_FLOATING | FRAME_FLAG_SCRATCH;
+const KEPT_FLAGS: u32 = FRAME_FLAG_MINIMIZED | FRAME_FLAG_PARKED | FRAME_FLAG_ZOOMED | FRAME_FLAG_FLOATING | FRAME_FLAG_SCRATCH;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -153,7 +153,7 @@ unsafe fn apply(snap: &Snapshot) {
         update_local_geometry(w.surface, x, y, w.w.max(1), w.h.max(1));
         apply_window_geometry(w.surface, x, y, w.w.max(1), w.h.max(1));
         order.insert(fid);
-        if w.flags & FRAME_FLAG_MINIMIZED != 0 { minimized[hidden] = fid; hidden += 1; }
+        if w.flags & FRAME_HIDDEN_FLAGS != 0 { minimized[hidden] = fid; hidden += 1; }
         restored += 1;
     }
     for frame in FRAMES.iter().flatten() { order.insert(frame.frame_id); }
@@ -161,7 +161,8 @@ unsafe fn apply(snap: &Snapshot) {
     for (t, saved) in (*core::ptr::addr_of_mut!(WM_TILING)).iter_mut().zip(snap.tiling.iter()) { *t = saved.tiling(); }
     ACTIVE_SCENE_IDX = (snap.scene.min(last_scene as u32)) as u8;
     for &fid in &minimized[..hidden] {
-        set_frame_minimized(fid, true);
+        let parked = FRAMES.iter().flatten().find(|f| f.frame_id == fid).is_some_and(|f| f.flags & FRAME_FLAG_PARKED != 0);
+        if !parked { set_frame_minimized(fid, true); }
         if let Some(sid) = active_surface_for_frame(fid) { set_lifecycle_state(sid, LifecycleState::Minimized); }
     }
     sync_scene_visibility();
@@ -172,7 +173,7 @@ unsafe fn apply(snap: &Snapshot) {
     let focus = snap.focus;
     let focusable = focus != 0 && surface_is_alive(focus) && frame_for_surface(focus)
         .and_then(|fid| FRAMES.iter().flatten().find(|f| f.frame_id == fid))
-        .is_some_and(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_FLAG_MINIMIZED == 0);
+        .is_some_and(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_HIDDEN_FLAGS == 0);
     if focusable { try_set_focus(focus); } else { clear_focus_if_wrong_scene(); }
     sex_pdx::serial_record!("[shell.session.restored] windows={} minimized={} shown={} scene={} focus={}",
         restored, hidden, shown, ACTIVE_SCENE_IDX, FOCUSED_SURFACE_ID);

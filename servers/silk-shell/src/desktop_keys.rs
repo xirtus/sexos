@@ -19,6 +19,8 @@ pub enum Action {
     Volume(i8),
     /// Panel backlight one step: true brighter, false darker.
     Brightness(bool),
+    /// Master microphone gain by this many percent; 0 toggles microphone mute.
+    MicVolume(i8),
     /// Alt+F4: close the focused window (KDE / standard desktop).
     Close,
     /// Alt+F10: maximize or restore the focused window (KDE / standard desktop).
@@ -33,6 +35,7 @@ pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
 pub const KEY_BRIGHTNESS_DOWN: u8 = 0x7B;
 pub const KEY_BRIGHTNESS_UP: u8 = 0x7D;
+pub const KEY_MIC_MUTE: u8 = 0x79;
 /// Set-1 codes for Alt+F4, Alt+F10, and Alt+Space.
 pub const KEY_F4: u8 = 0x3E;
 pub const KEY_F10: u8 = 0x44;
@@ -60,7 +63,10 @@ impl Keys {
         }
     }
     pub fn event(&mut self, code: u8, value: u64) -> Action {
-        // Volume keys: presses and repeats step, mute toggles once, releases are Shell's.
+        // Volume & mic mute keys: presses and repeats step, mutes toggle once, releases are Shell's.
+        if code == KEY_MIC_MUTE {
+            return if value == 1 { Action::MicVolume(0) } else { Action::Consume };
+        }
         let volume = match code {
             KEY_VOLUME_UP => Some(VOLUME_STEP),
             KEY_VOLUME_DOWN => Some(-VOLUME_STEP),
@@ -73,8 +79,8 @@ impl Keys {
         }
         if let Some(step) = volume {
             return match value {
-                1 => Action::Volume(step),
-                2 if step != 0 => Action::Volume(step),
+                1 => if self.ctrl && step != 0 { Action::MicVolume(step) } else { Action::Volume(step) },
+                2 if step != 0 => if self.ctrl { Action::MicVolume(step) } else { Action::Volume(step) },
                 _ => Action::Consume,
             };
         }
@@ -237,5 +243,21 @@ mod tests {
         assert_eq!(k.event(0x0B, 0), Action::Consume);
         assert_eq!(k.event(0x1D, 0), Action::Pass);
         assert_eq!(k.event(0x0D, 1), Action::TextZoom(1));
+    }
+    #[test]
+    fn mic_mute_and_ctrl_volume_keys_control_microphone() {
+        let mut k = Keys::new();
+        assert_eq!(k.event(KEY_MIC_MUTE, 1), Action::MicVolume(0));
+        assert_eq!(k.event(KEY_MIC_MUTE, 2), Action::Consume);
+        assert_eq!(k.event(KEY_MIC_MUTE, 0), Action::Consume);
+        // Ctrl+VolumeUp/Down steps mic gain; plain VolumeUp/Down still steps speaker.
+        assert_eq!(k.event(0x1D, 1), Action::Pass);
+        assert_eq!(k.event(KEY_VOLUME_UP, 1), Action::MicVolume(VOLUME_STEP));
+        assert_eq!(k.event(KEY_VOLUME_UP, 2), Action::MicVolume(VOLUME_STEP));
+        assert_eq!(k.event(KEY_VOLUME_UP, 0), Action::Consume);
+        assert_eq!(k.event(KEY_VOLUME_DOWN, 1), Action::MicVolume(-VOLUME_STEP));
+        assert_eq!(k.event(KEY_MUTE, 1), Action::Volume(0));
+        assert_eq!(k.event(0x1D, 0), Action::Pass);
+        assert_eq!(k.event(KEY_VOLUME_UP, 1), Action::Volume(VOLUME_STEP));
     }
 }

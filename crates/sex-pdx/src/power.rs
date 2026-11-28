@@ -197,6 +197,8 @@ pub struct Sensors {
     pub button_pressed: bool,
     /// The desktop is asleep (suspend to idle, `CTL_SLEEP`), filled in by the kernel.
     pub sleeping: bool,
+    /// Wrapping edge counter of hardware/WMI microphone-mute key presses (`dell_wmi::Key::MicMute`).
+    pub mic_mute_events: u8,
 }
 impl Sensors {
     pub fn encode(&self) -> [u64; 5] {
@@ -214,7 +216,7 @@ impl Sensors {
         let hot = self.hottest_decikelvin.map_or(0, |v| v as u64 | 1 << 32)
             | self.critical_decikelvin.map_or(0, |c| (c as u64) << 33 | 1 << 49)
             | (self.thermal_critical as u64) << 50;
-        [OK, battery, ac | lid << 2 | light | profile | (self.button_pressed as u64) << 24 | (self.sleeping as u64) << 25, hot, 0]
+        [OK, battery, ac | lid << 2 | light | profile | (self.button_pressed as u64) << 24 | (self.sleeping as u64) << 25 | (self.mic_mute_events as u64) << 26, hot, 0]
     }
     pub fn decode(raw: [u64; 5]) -> Result<Self, u64> {
         if raw[0] != OK { return Err(raw[0]); }
@@ -235,6 +237,7 @@ impl Sensors {
             profile: match (m >> 20) & 7 { 0 => None, p => Some((p - 1) as u8) },
             button_pressed: m & 1 << 24 != 0,
             sleeping: m & 1 << 25 != 0,
+            mic_mute_events: (m >> 26) as u8,
         })
     }
 }
@@ -423,12 +426,12 @@ mod tests {
         assert_eq!(Sensors::decode(s.encode()), Ok(s));
         let s = Sensors { battery_percent: Some(41), on_ac: Some(false), battery_minutes: Some(125), battery_health: Some(93), battery_critical: true,
             brightness: Some(60), critical_decikelvin: Some(3782), thermal_critical: true, hottest_decikelvin: Some(3800), profile: Some(PROFILE_SAVER),
-            button_pressed: true, sleeping: true, ..Default::default() };
+            button_pressed: true, sleeping: true, mic_mute_events: 7, ..Default::default() };
         assert_eq!(Sensors::decode(s.encode()), Ok(s));
         // The old layout (words written before these fields existed) still decodes.
         let old = [OK, 87 | 1 << 8 | 1 << 9, 1 | 2 | 4, 3132 | 1 << 32, 0];
         let d = Sensors::decode(old).unwrap();
-        assert_eq!((d.battery_percent, d.battery_minutes, d.brightness, d.profile, d.button_pressed), (Some(87), None, None, None, false));
+        assert_eq!((d.battery_percent, d.battery_minutes, d.brightness, d.profile, d.button_pressed, d.mic_mute_events), (Some(87), None, None, None, false, 0));
         assert_eq!(control_word(CTL_BRIGHTNESS_STEP, 0xFF), 0xFF01);
         assert_eq!(Sensors::decode(Sensors::default().encode()), Ok(Sensors::default()));
         let i = Info { flags: CAN_OFF | CAN_RESTART, idle_state: 3, idle_latency_us: 80, batteries: 1, lids: 1, thermal_zones: 2, i2c_hid: 1 };

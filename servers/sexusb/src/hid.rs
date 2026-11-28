@@ -162,11 +162,12 @@ pub fn parse_pointer(desc: &[u8]) -> Option<PointerLayout> {
 // A headset's volume, mute and call buttons, a remote's player keys, and a keyboard's
 // media keys come on the Consumer (0x0C) and Telephony (0x0B) pages. Each becomes the
 // keyboard usage sexinput already gives a key code: Mute 0x7F, Volume Up 0x80,
-// Volume Down 0x81, and the player keys 0xE8-0xEB (Play/Pause, Stop, Previous, Next).
+// Volume Down 0x81, the player keys 0xE8-0xEB (Play/Pause, Stop, Previous, Next),
+// and Microphone Mute 0xEC (Telephony Phone Mute 0x0B/0x2F, Consumer 0x0C/0x02F0, 0x0C/0x0109).
 
 /// The keys, one bit each in a held mask: Mute, Volume Up, Volume Down, Play/Pause,
-/// Stop, Previous, Next.
-pub const MEDIA_USAGES: [u8; 7] = [0x7F, 0x80, 0x81, 0xE8, 0xE9, 0xEA, 0xEB];
+/// Stop, Previous, Next, Microphone Mute.
+pub const MEDIA_USAGES: [u8; 8] = [0x7F, 0x80, 0x81, 0xE8, 0xE9, 0xEA, 0xEB, 0xEC];
 
 /// The key bit (into [`MEDIA_USAGES`]) of a full usage (page << 16 | id), if it has one.
 /// A headset's hook switch answers and hangs up, which is Play/Pause everywhere else.
@@ -179,6 +180,7 @@ pub fn media_key(usage: u32) -> Option<u8> {
         0x000C_00B7 => 4,
         0x000C_00B6 => 5,
         0x000C_00B5 => 6,
+        0x000B_002F | 0x000C_02F0 | 0x000C_0109 => 7,
         _ => return None,
     })
 }
@@ -198,7 +200,7 @@ pub struct MediaField {
     pub lmin: i32,
 }
 
-pub const MEDIA_FIELDS: usize = 8;
+pub const MEDIA_FIELDS: usize = 12;
 
 /// Where the media buttons sit in a device's reports.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -466,7 +468,7 @@ mod tests {
     #[test] fn headset_buttons() {
         let l = parse_media(HEADSET).unwrap();
         assert!(l.ids);
-        assert_eq!(l.n, 5);
+        assert_eq!(l.n, 6);
         // Volume Up down, then up; Mute held while the hook switch is pressed and let go.
         let h = l.decode(&[1, 0b0001], 0).unwrap();
         assert_eq!(MediaLayout::usages(h), 0x80);
@@ -478,9 +480,37 @@ mod tests {
         assert_eq!(h, 1);
         let h = l.decode(&[1, 0], h).unwrap();
         assert_eq!(h, 0);
-        // Report 9 is not a button report; Phone Mute alone presses nothing.
+        // Report 9 is not a button report; Phone Mute presses bit 7 (0xEC -> KEY_MIC_MUTE).
         assert_eq!(l.decode(&[9, 0xff], 0), None);
-        assert_eq!(l.decode(&[2, 0b10], 0), Some(0));
+        let h = l.decode(&[2, 0b10], 0).unwrap();
+        assert_eq!(h, 1 << 7);
+        assert_eq!(MediaLayout::usages(h), 0xEC);
+        assert_eq!(l.decode(&[2, 0], h), Some(0));
+    }
+    #[test] fn composite_pointer_and_media_usages() {
+        // Composite HID interface: Report ID 1 mouse, Report ID 2 Consumer array (Volume Up / Mic Mute).
+        let composite: &[u8] = &[
+            0x05,0x01,0x09,0x02,0xa1,0x01,0x85,0x01,0x09,0x01,0xa1,0x00,0x05,0x09,0x19,0x01,
+            0x29,0x03,0x15,0x00,0x25,0x01,0x95,0x03,0x75,0x01,0x81,0x02,0x95,0x01,0x75,0x05,
+            0x81,0x01,0x05,0x01,0x09,0x30,0x09,0x31,0x09,0x38,0x15,0x81,0x25,0x7f,0x75,0x08,
+            0x95,0x03,0x81,0x06,0xc0,0xc0,
+            0x05,0x0c,0x09,0x01,0xa1,0x01,0x85,0x02,0x15,0x00,0x26,0x9c,0x03,0x19,0x00,0x2a,
+            0x9c,0x03,0x75,0x10,0x95,0x01,0x81,0x00,0xc0,
+        ];
+        let ptr = parse_pointer(composite).unwrap();
+        let med = parse_media(composite).unwrap();
+        assert_eq!(ptr.report_id, 1);
+        assert!(med.ids);
+        // Mouse report decodes as pointer, ignored by media.
+        assert_eq!(med.decode(&[1, 0x01, 2, 3, 0], 0), None);
+        let p = ptr.decode(&[1, 0x01, 2, 3, 0]).unwrap();
+        assert_eq!((p.buttons, p.x, p.y), (1, 2, 3));
+        // Consumer 0x02F0 & 0x0109 Mic Mute array values decode to bit 7 (0xEC), ignored by pointer.
+        assert!(ptr.decode(&[2, 0xf0, 0x02]).is_none());
+        let h = med.decode(&[2, 0xf0, 0x02], 0).unwrap();
+        assert_eq!(MediaLayout::usages(h), 0xEC);
+        let h = med.decode(&[2, 0x09, 0x01], 0).unwrap();
+        assert_eq!(MediaLayout::usages(h), 0xEC);
     }
     #[test] fn consumer_array_keys() {
         let l = parse_media(CONSUMER_ARRAY).unwrap();

@@ -136,12 +136,20 @@ pub mod id {
     pub const BOUNCE_KEYS: u16 = 45;
     pub const SCREEN_READER: u16 = 46;
     pub const REDUCE_TRANSPARENCY: u16 = 47;
+    pub const CLOSE_KEEP: u16 = 48;
+    pub const CLOSE_QUIT: u16 = 49;
+    pub const AUTOCORRECT: u16 = 50;
+    pub const SPELLCHECK: u16 = 51;
+    pub const INLINE_PREDICT: u16 = 52;
 }
 
 /// Programs (program store names) the Shell may start at login and whose
 /// notifications the person may hide: one bit each in `startup.programs` and
 /// `notifications.hidden`. Append-only, at most 31.
-pub const PROGRAMS: &[&str] = &["jot", "loom", "mesh", "abacus", "gaze", "qupid", "vellum", "date", "quil", "gossip", "chastity"];
+pub const PROGRAMS: &[&str] = &[
+    "jot", "loom", "mesh", "abacus", "gaze", "qupid", "vellum", "date", "quil", "gossip", "chastity",
+    "tether", "tailor", "swingers", "tatami", "sexshop", "kaleidoscope", "flash", "aftercare",
+];
 /// The place of a program store name in [`PROGRAMS`].
 pub fn program_index(name: &[u8]) -> Option<usize> { PROGRAMS.iter().position(|p| p.as_bytes() == name) }
 
@@ -220,6 +228,9 @@ pub const KEYS: &[Key] = &[
     Key { id: id::REPEAT_DELAY, name: "keyboard.repeat_delay_ms", label: "Repeat delay (ms)", kind: int(150, 1000), default: 400 },
     Key { id: id::REPEAT_RATE, name: "keyboard.repeat_rate", label: "Repeat rate (per second)", kind: int(2, 60), default: 25 },
     Key { id: id::CAPS_AS_CTRL, name: "keyboard.caps_as_ctrl", label: "Caps Lock is Ctrl", kind: Kind::Bool, default: 0 },
+    Key { id: id::AUTOCORRECT, name: "keyboard.autocorrect", label: "Auto-correct spelling on Space", kind: Kind::Bool, default: 1 },
+    Key { id: id::SPELLCHECK, name: "keyboard.spellcheck", label: "Check spelling as you type", kind: Kind::Bool, default: 1 },
+    Key { id: id::INLINE_PREDICT, name: "keyboard.inline_predict", label: "Inline text prediction", kind: Kind::Bool, default: 1 },
     Key { id: id::VOLUME, name: "sound.volume", label: "Volume (%)", kind: int(0, 100), default: 100 },
     Key { id: id::ZONE, name: "time.zone", label: "Time zone", kind: Kind::Choice(ZONES), default: 0 },
     Key { id: id::NTP, name: "time.network_time", label: "Set time from the network", kind: Kind::Bool, default: 1 },
@@ -228,6 +239,8 @@ pub const KEYS: &[Key] = &[
     Key { id: id::LOCK_AFTER, name: "session.lock_after_min", label: "Lock after (minutes, 0 never)", kind: int(0, 240), default: 0 },
     Key { id: id::BLANK_AFTER, name: "session.blank_after_min", label: "Screen off after (minutes, 0 never)", kind: int(0, 240), default: 0 },
     Key { id: id::LOCK_ON_IDLE, name: "session.lock_on_idle", label: "Lock when idle", kind: Kind::Bool, default: 1 },
+    Key { id: id::CLOSE_KEEP, name: "session.close_keep", label: "Keep running in SilkBar mask", kind: int(0, i32::MAX), default: 0 },
+    Key { id: id::CLOSE_QUIT, name: "session.close_quit", label: "Quit app on close mask", kind: int(0, i32::MAX), default: 0 },
     Key { id: id::MAGNIFIER_ZOOM, name: "accessibility.magnifier_zoom", label: "Magnifier zoom in quarters (4 off, 8 is 2x)", kind: int(4, 32), default: 4 },
     Key { id: id::COLOUR_FILTER, name: "accessibility.colour_filter", label: "Colour filter", kind: Kind::Choice(COLOUR_FILTERS), default: 0 },
     Key { id: id::STICKY_KEYS, name: "accessibility.sticky_keys", label: "Sticky keys", kind: Kind::Bool, default: 0 },

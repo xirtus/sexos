@@ -6,7 +6,8 @@
 //! one carries the touchpad, at which address and HID descriptor register
 //! (`sex_pdx::touchpad::Found`). Bring-up and frames come from `sex-hid-touch`, the bus
 //! from `sex-i2c-dw`. Frames become ordinary pointer events (motion, buttons, wheel),
-//! three-finger swipes become Alt+Tab and pinches Ctrl+= / Ctrl+-.
+//! three-finger horizontal swipes drive continuous Space sliding, three-finger vertical
+//! swipes open/close Overview, and pinches send Ctrl+= / Ctrl+-.
 //!
 //! When the ACPI service names the pad's I/O APIC line (`Found::irq`), the pad is read
 //! when that line fires and not otherwise; a level line comes back masked by the kernel
@@ -71,6 +72,8 @@ struct Pad {
     mouse_buttons: u8,
     /// Whether `[touchpad.first_report]` has been logged.
     first_report_logged: bool,
+    /// True while a 3-finger horizontal swipe is emitting continuous `SwipeDelta` frames.
+    in_continuous_swipe: bool,
 }
 
 static mut PAD: Option<Pad> = None;
@@ -147,6 +150,7 @@ fn finish_pad(ctrl: Controller<Mmio>, lease: sex_pdx::device::Lease, address: u1
     let mut pad = Pad {
         ctrl, address, tp, rec, pace: Pace::polling(), line_bit: None, fired: false, again: false,
         next_poll: 0, failures: 0, last_error: None, asleep: false, mouse_buttons: 0, first_report_logged: false,
+        in_continuous_swipe: false,
     };
     if let Some(irq) = irq { arm(&mut pad, irq); } else {
         serial_println!("[sexinput.touchpad.mode] mode=poll reason=no_line");
@@ -261,20 +265,48 @@ pub enum Out {
     Pointer([(u64, u64, u64); 1]),
     /// A USB HID keyboard snapshot (usages, modifiers): a chord, then its release.
     Chord(u8, u8),
+    /// Multitouch 3-finger Space / Mission Control gesture for Shell (`OP_TOUCHPAD_GESTURE`).
+    Gesture(sex_pdx::space_slide::GestureMsg),
 }
 
-fn translate(e: Event) -> Option<Out> {
+fn translate(in_continuous: &mut bool, e: Event) -> Option<Out> {
+    use sex_pdx::space_slide::GestureMsg;
     use sex_pdx::{EV_BTN, EV_REL, EV_WHEEL};
     Some(match e {
         Event::Move(dx, dy) => Out::Pointer([(dx as i64 as u64, dy as i64 as u64, EV_REL)]),
         Event::Button(n, down) => Out::Pointer([(n as u64, down as u64, EV_BTN)]),
         Event::Scroll(steps) => Out::Pointer([(sex_pdx::app_scroll::Scroll::new(steps)?.wire(), 0, EV_WHEEL)]),
-        // Window switching: Alt+Tab.
-        Event::SwipeLeft | Event::SwipeRight => Out::Chord(0x2B, 0x04),
+        Event::SwipeDelta(dx_q12, dt_ms) => {
+            *in_continuous = true;
+            Out::Gesture(GestureMsg::SwipeMove { dx_q12, dt_ms })
+        }
+        Event::SwipeEnd(vel_q12_per_s) => {
+            *in_continuous = false;
+            Out::Gesture(GestureMsg::SwipeEnd { vel_q12_per_s })
+        }
+        Event::SwipeLeft => {
+            if *in_continuous {
+                return None;
+            }
+            Out::Gesture(GestureMsg::SwipeLeft)
+        }
+        Event::SwipeRight => {
+            if *in_continuous {
+                return None;
+            }
+            Out::Gesture(GestureMsg::SwipeRight)
+        }
+        Event::SwipeUp => {
+            *in_continuous = false;
+            Out::Gesture(GestureMsg::SwipeUp)
+        }
+        Event::SwipeDown => {
+            *in_continuous = false;
+            Out::Gesture(GestureMsg::SwipeDown)
+        }
         // Zoom the focused app: Ctrl+= and Ctrl+-.
         Event::ZoomIn => Out::Chord(0x2E, 0x01),
         Event::ZoomOut => Out::Chord(0x2D, 0x01),
-        Event::SwipeUp | Event::SwipeDown => return None,
     })
 }
 
@@ -312,10 +344,12 @@ pub fn poll(now: u64, mut out: impl FnMut(Out)) {
                     p.first_report_logged = true;
                     serial_println!("[touchpad.first_report] kind=ptp fingers={} button={}", frame.fingers(), frame.button as u8);
                 }
+                let mut in_cont = p.in_continuous_swipe;
                 p.rec.feed(&frame, now, |e| {
                     if !matches!(e, Event::Move(..)) { sex_pdx::serial_record!("[sexinput.touchpad.event] {:?}", e); }
-                    if let Some(o) = translate(e) { out(o); }
+                    if let Some(o) = translate(&mut in_cont, e) { out(o); }
                 });
+                p.in_continuous_swipe = in_cont;
                 Read::Report { touch: frame.fingers() > 0 || frame.button }
             }
             Ok(Some(Report::Mouse(m))) => {

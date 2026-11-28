@@ -26,13 +26,26 @@ unsafe fn send_menu() {
 }
 
 pub unsafe fn is_open() -> bool {
-    (*core::ptr::addr_of!(CTRL)).is_open()
+    (*core::ptr::addr_of!(CTRL)).is_open() || crate::wifi_popover_glue::is_open()
 }
 
 pub unsafe fn close(reason: &str) {
     if (*core::ptr::addr_of_mut!(CTRL)).close() {
         send_menu();
         sex_pdx::serial_record!("[shell.silkbar_menu] open=0 reason={}", reason);
+    }
+    crate::wifi_popover_glue::close(reason);
+}
+
+pub unsafe fn display_restarted() {
+    if (*core::ptr::addr_of!(CTRL)).is_open() {
+        send_menu();
+    }
+}
+
+pub unsafe fn launch_settings_view() {
+    if !launch_named_program("tatami", true) {
+        crate::toggle_scene_settings_panel();
     }
 }
 
@@ -67,11 +80,44 @@ unsafe fn build_state(kind: MenuKind, anchor_x: i32, anchor_y: i32) -> MenuState
     st.battery = tray.battery.unwrap_or(0xFF);
     st.wifi_phase = tray.wifi;
     st.uptime_mins = (sex_pdx::get_ticks() / 60_000) as u32;
+    st.active_space = crate::ACTIVE_SCENE_IDX.min(7);
     st
+}
+
+/// Opens the Noir WindowContext menu at `(x, y)` (from Ctrl+Click / Ctrl+RightClick on titlebar).
+pub unsafe fn open_window_context(x: i32, y: i32) {
+    if crate::TRAY_VIEW.menu != sex_pdx::tray::Menu::None {
+        crate::tray_close();
+    }
+    let st = build_state(MenuKind::WindowContext, x, y);
+    (*core::ptr::addr_of_mut!(CTRL)).open(st);
+    send_menu();
+    sex_pdx::serial_record!(
+        "[shell.silkbar_menu] open=1 kind=window_context x={} y={}",
+        st.x,
+        st.y
+    );
 }
 
 /// Opens (or toggles closed if already open) a top-bar dropdown or status popover.
 pub unsafe fn open_or_toggle_top(kind: MenuKind, anchor_x: i32) {
+    crate::bg_apps_glue::close("menu");
+    let y = crate::desktop_bar_height() + 4 * scale() as i32;
+    if kind == MenuKind::WifiPopover {
+        if crate::wifi_popover_glue::is_open() {
+            close("toggle");
+            return;
+        }
+        if (*core::ptr::addr_of_mut!(CTRL)).close() {
+            send_menu();
+        }
+        if crate::TRAY_VIEW.menu != sex_pdx::tray::Menu::None {
+            crate::tray_close();
+        }
+        crate::wifi_popover_glue::open(anchor_x, y);
+        return;
+    }
+    crate::wifi_popover_glue::close("switch");
     let cur = (*core::ptr::addr_of!(CTRL)).state();
     if cur.is_some_and(|s| s.kind == kind) {
         close("toggle");
@@ -80,7 +126,6 @@ pub unsafe fn open_or_toggle_top(kind: MenuKind, anchor_x: i32) {
     if crate::TRAY_VIEW.menu != sex_pdx::tray::Menu::None {
         crate::tray_close();
     }
-    let y = crate::desktop_bar_height() + 4 * scale() as i32;
     let st = build_state(kind, anchor_x, y);
     (*core::ptr::addr_of_mut!(CTRL)).open(st);
     send_menu();
@@ -169,13 +214,20 @@ unsafe fn launch_named_program(name: &str, network: bool) -> bool {
     ok
 }
 
+pub unsafe fn open_settings_from_ui() -> bool {
+    if !launch_named_program("tatami", true) {
+        crate::toggle_scene_settings_panel();
+    }
+    true
+}
+
 unsafe fn dispatch_action(action: MenuAction) {
     use sex_pdx::sound_mixer as mixer;
     match action {
         MenuAction::None => {}
         MenuAction::AboutSexOs => {
             sex_pdx::serial_record!("[shell.silkbar_menu.action] action=about_sexos");
-            let _ = crate::open_mesh_in_active_scene();
+            crate::bg_apps_glue::open_about();
         }
         MenuAction::LaunchBrowser => {
             if !launch_named_program("kaleidoscope", true) {
@@ -183,7 +235,9 @@ unsafe fn dispatch_action(action: MenuAction) {
             }
         }
         MenuAction::LaunchTerminal | MenuAction::NewWindow => {
-            let _ = crate::open_spindle_in_active_scene();
+            if !launch_named_program("spindle", true) {
+                let _ = crate::open_spindle_in_active_scene();
+            }
         }
         MenuAction::LaunchTailor => {
             let _ = launch_named_program("tailor", true);
@@ -200,9 +254,23 @@ unsafe fn dispatch_action(action: MenuAction) {
             }
         }
         MenuAction::LaunchSettings | MenuAction::DisplaySettings | MenuAction::NetworkSettings => {
-            if !launch_named_program("tatami", false) {
-                crate::toggle_scene_settings_panel();
-            }
+            let _ = open_settings_from_ui();
+        }
+        MenuAction::LaunchAppStore => {
+            sex_pdx::serial_record!("[shell.silkbar_menu.action] action=app_store");
+            let _ = launch_named_program("sexshop", true);
+        }
+        MenuAction::OpenAppsSwitcher => {
+            sex_pdx::serial_record!("[shell.silkbar_menu.action] action=apps_switcher");
+            crate::bg_apps_glue::open_switcher();
+        }
+        MenuAction::ForceQuitApps => {
+            sex_pdx::serial_record!("[shell.silkbar_menu.action] action=force_quit");
+            crate::bg_apps_glue::open_force_quit();
+        }
+        MenuAction::LockScreen => {
+            sex_pdx::serial_record!("[shell.silkbar_menu.action] action=lock_screen");
+            let _ = crate::lock::lock();
         }
         MenuAction::RefreshDesktop => {
             crate::sync_scene_visibility();
@@ -217,7 +285,13 @@ unsafe fn dispatch_action(action: MenuAction) {
         MenuAction::CloseWindow => {
             let sid = crate::FOCUSED_SURFACE_ID;
             if sid != 0 && crate::is_closeable_surface(sid) {
-                let _ = crate::close_surface_from_frame_light(sid);
+                let _ = crate::bg_apps_glue::close_window(sid);
+            }
+        }
+        MenuAction::QuitApp => {
+            let sid = crate::FOCUSED_SURFACE_ID;
+            if sid != 0 {
+                let _ = crate::bg_apps_glue::quit_surface(sid);
             }
         }
         MenuAction::MinimizeWindow => {
@@ -242,6 +316,21 @@ unsafe fn dispatch_action(action: MenuAction) {
                 }
                 crate::tile_active_scene_frames();
             }
+        }
+        MenuAction::TileLeft => {
+            let _ = crate::space_slide_glue::snap_focused(sex_pdx::space_slide::SnapZone::Left);
+        }
+        MenuAction::TileRight => {
+            let _ = crate::space_slide_glue::snap_focused(sex_pdx::space_slide::SnapZone::Right);
+        }
+        MenuAction::MoveToNextSpace => {
+            let _ = crate::space_slide_glue::move_focused_step(1, true);
+        }
+        MenuAction::MoveToPrevSpace => {
+            let _ = crate::space_slide_glue::move_focused_step(-1, true);
+        }
+        MenuAction::MoveToSpace(n) => {
+            let _ = crate::space_slide_glue::move_focused_to_space(n, true);
         }
         MenuAction::BringToFront => {
             if let Some(fid) = crate::selected_frame_id() {
@@ -342,6 +431,9 @@ unsafe fn dispatch_action(action: MenuAction) {
 
 /// Handles a left press below the bar while a SilkBar menu/popover/context menu is open.
 pub unsafe fn press(px: i32, py: i32) -> bool {
+    if crate::wifi_popover_glue::is_open() {
+        return crate::wifi_popover_glue::press(px, py);
+    }
     let ctrl = &mut *core::ptr::addr_of_mut!(CTRL);
     if !ctrl.is_open() {
         return false;
@@ -381,11 +473,13 @@ pub unsafe fn button(button: u8, pressed: bool) -> bool {
         {
             return open;
         }
-        // Right-clicking the desktop background opens the frosted Candy Lavender Desktop Context Menu.
+        // Right-clicking the desktop background opens the frosted Noir Desktop Context Menu.
         if y >= crate::desktop_bar_height() && matches!(crate::hit_test_at(x, y), crate::HitTarget::None) {
+            crate::bg_apps_glue::close("desktop_context");
             if crate::TRAY_VIEW.menu != sex_pdx::tray::Menu::None {
                 crate::tray_close();
             }
+            crate::wifi_popover_glue::close("right_click");
             let st = build_state(MenuKind::DesktopContext, x, y);
             (*core::ptr::addr_of_mut!(CTRL)).open(st);
             send_menu();
@@ -400,8 +494,14 @@ pub unsafe fn button(button: u8, pressed: bool) -> bool {
     open
 }
 
-/// Escape dismisses an open SilkBar dropdown, popover, or context menu.
+/// Keyboard input while a SilkBar dropdown, Wi-Fi popover, Noir sheet, or context menu is open.
 pub unsafe fn key(code: u8, value: u64) -> bool {
+    if crate::bg_apps_glue::key(code, value) {
+        return true;
+    }
+    if crate::wifi_popover_glue::key(code, value) {
+        return true;
+    }
     if !is_open() || code != 0x01 {
         return false;
     }
@@ -413,15 +513,38 @@ pub unsafe fn key(code: u8, value: u64) -> bool {
 
 /// Main loop poll: updates row hover highlight and performs macOS-style top-bar hover switching.
 pub unsafe fn poll() {
+    crate::wifi_popover_glue::poll();
+    let (px, py) = (crate::POINTER_X, crate::POINTER_Y);
+    let bar_h = crate::desktop_bar_height();
+    if crate::wifi_popover_glue::is_open() {
+        if py >= 0 && py < bar_h && px >= 0 && !crate::wifi_popover_glue::is_password_focused() {
+            if let Some((trig, anchor_x)) = top_bar_trigger_at(px as usize, py as usize) {
+                if trig != TopBarTrigger::Wifi {
+                    crate::wifi_popover_glue::close("hover");
+                    let y = bar_h + 4 * scale() as i32;
+                    let st = build_state(trig.menu_kind(), anchor_x, y);
+                    (*core::ptr::addr_of_mut!(CTRL)).open(st);
+                    send_menu();
+                }
+            }
+        }
+        return;
+    }
     let ctrl = &mut *core::ptr::addr_of_mut!(CTRL);
     if !ctrl.is_open() {
         return;
     }
-    let (px, py) = (crate::POINTER_X, crate::POINTER_Y);
-    let bar_h = crate::desktop_bar_height();
     // macOS-style hover-switching across top-bar menu items while a top-bar menu is open.
     if py >= 0 && py < bar_h && px >= 0 {
         if let Some((trig, anchor_x)) = top_bar_trigger_at(px as usize, py as usize) {
+            if trig == TopBarTrigger::Wifi {
+                if ctrl.close() {
+                    send_menu();
+                }
+                let y = bar_h + 4 * scale() as i32;
+                crate::wifi_popover_glue::open(anchor_x, y);
+                return;
+            }
             if ctrl.hover_top_bar(trig, anchor_x, bar_h, scale()) {
                 send_menu();
                 return;

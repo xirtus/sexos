@@ -19,6 +19,11 @@ pub enum Event {
     SwipeRight,
     SwipeUp,
     SwipeDown,
+    /// Continuous 3-finger horizontal swipe delta: `(dx_q12, dt_ms)` where
+    /// `4096` equals one full screen-width slide (negative = fingers moved left).
+    SwipeDelta(i32, u16),
+    /// End of a continuous 3-finger horizontal swipe with release velocity (`q12/s`).
+    SwipeEnd(i32),
     ZoomIn,
     ZoomOut,
 }
@@ -53,6 +58,9 @@ impl Config {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode { Undecided, Pointer, Scroll, Pinch, Swipe }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SwipeAxis { None, Horizontal, Vertical }
+
 pub struct Recognizer {
     pub config: Config,
     last: Option<Frame>,
@@ -65,6 +73,11 @@ pub struct Recognizer {
     acc: (i32, i32),
     spread_base: i32,
     swipe_done: bool,
+    swipe_axis: SwipeAxis,
+    swipe_active: bool,
+    swipe_last_ms: Option<u64>,
+    swipe_rem: i64,
+    swipe_vel_q12: i32,
     /// Sub-pixel pointer remainder (q8).
     rem: (i32, i32),
     button: Option<u8>,
@@ -106,7 +119,38 @@ fn down(f: &Frame, out: &mut [Contact; 5]) -> usize {
 
 impl Recognizer {
     pub fn new(config: Config) -> Self {
-        Self { config, last: None, mode: Mode::Undecided, started_ms: None, most_fingers: 0, travel: 0, acc: (0, 0), spread_base: 0, swipe_done: false, rem: (0, 0), button: None }
+        Self {
+            config,
+            last: None,
+            mode: Mode::Undecided,
+            started_ms: None,
+            most_fingers: 0,
+            travel: 0,
+            acc: (0, 0),
+            spread_base: 0,
+            swipe_done: false,
+            swipe_axis: SwipeAxis::None,
+            swipe_active: false,
+            swipe_last_ms: None,
+            swipe_rem: 0,
+            swipe_vel_q12: 0,
+            rem: (0, 0),
+            button: None,
+        }
+    }
+
+    fn finish_swipe(&mut self, now_ms: u64, emit: &mut impl FnMut(Event)) {
+        if self.swipe_active {
+            let stale = self
+                .swipe_last_ms
+                .is_some_and(|t| now_ms.saturating_sub(t) >= 50);
+            let vel = if stale { 0 } else { self.swipe_vel_q12 };
+            self.swipe_active = false;
+            self.swipe_last_ms = None;
+            self.swipe_rem = 0;
+            self.swipe_vel_q12 = 0;
+            emit(Event::SwipeEnd(vel));
+        }
     }
 
     pub fn feed(&mut self, frame: &Frame, now_ms: u64, mut emit: impl FnMut(Event)) {
@@ -122,9 +166,18 @@ impl Recognizer {
         }
 
         if n == 0 {
+            self.finish_swipe(now_ms, &mut emit);
             if let Some(start) = self.started_ms.take() {
-                let tap = now_ms.saturating_sub(start) <= self.config.tap_ms && self.travel <= self.config.tap_slop
-                    && matches!(self.mode, Mode::Undecided | Mode::Pointer) && !frame.button;
+                let slop = if self.most_fingers >= 2 {
+                    self.config.tap_slop.saturating_mul(2)
+                } else {
+                    self.config.tap_slop
+                };
+                let tap = now_ms.saturating_sub(start) <= self.config.tap_ms
+                    && self.travel <= slop
+                    && matches!(self.mode, Mode::Undecided | Mode::Pointer)
+                    && !self.swipe_done
+                    && !frame.button;
                 if tap {
                     let b = match self.most_fingers { 1 => 1, 2 => 2, _ => 3 };
                     emit(Event::Button(b, true));
@@ -140,31 +193,51 @@ impl Recognizer {
         let mut prev = [Contact::default(); 5];
         let pn = self.last.as_ref().map_or(0, |l| down(l, &mut prev));
         let prev = &prev[..pn];
+        if pn >= 3 && n < 3 {
+            self.finish_swipe(now_ms, &mut emit);
+        }
         let same = pn == n && prev.iter().zip(cur).all(|(a, b)| a.id == b.id);
         if n > self.most_fingers {
             self.most_fingers = n;
             // More fingers landed: the gesture starts over with them.
-            if self.mode != Mode::Swipe { self.mode = Mode::Undecided; self.acc = (0, 0); }
+            if self.mode == Mode::Undecided {
+                self.travel = 0;
+            }
+            if self.mode != Mode::Swipe {
+                self.mode = Mode::Undecided;
+                self.acc = (0, 0);
+                self.swipe_axis = SwipeAxis::None;
+                self.swipe_rem = 0;
+                self.swipe_vel_q12 = 0;
+            }
             self.spread_base = spread(cur);
         }
         if same {
             let (c0, c1) = (centroid(prev), centroid(cur));
             let (dx, dy) = (c1.0 - c0.0, c1.1 - c0.1);
-            self.travel = self.travel.saturating_add(dx.abs() + dy.abs());
             match n {
                 1 => {
-                    if self.mode == Mode::Undecided && self.travel > self.config.tap_slop { self.mode = Mode::Pointer; }
-                    if self.mode == Mode::Pointer || self.mode == Mode::Undecided { self.pointer(dx, dy, &mut emit); }
-                }
-                2 => self.two_fingers(cur, dx, dy, &mut emit),
-                _ => {
-                    self.acc.0 = self.acc.0.saturating_add(dx); self.acc.1 = self.acc.1.saturating_add(dy);
-                    if !self.swipe_done {
-                        let d = self.config.swipe_distance;
-                        let ev = if self.acc.0 <= -d { Some(Event::SwipeLeft) } else if self.acc.0 >= d { Some(Event::SwipeRight) }
-                            else if self.acc.1 <= -d { Some(Event::SwipeUp) } else if self.acc.1 >= d { Some(Event::SwipeDown) } else { None };
-                        if let Some(ev) = ev { self.swipe_done = true; self.mode = Mode::Swipe; emit(ev); }
+                    // During staggered multi-finger liftoff, ignore the last residual finger so
+                    // it neither drifts the pointer nor spoils a 2/3-finger tap.
+                    if self.most_fingers <= 1 {
+                        self.travel = self.travel.saturating_add(dx.abs() + dy.abs());
+                        if self.mode == Mode::Undecided && self.travel > self.config.tap_slop {
+                            self.mode = Mode::Pointer;
+                        }
+                        if self.mode == Mode::Pointer || self.mode == Mode::Undecided {
+                            self.pointer(dx, dy, &mut emit);
+                        }
                     }
+                }
+                2 => {
+                    if self.most_fingers <= 2 {
+                        self.travel = self.travel.saturating_add(dx.abs() + dy.abs());
+                        self.two_fingers(cur, dx, dy, &mut emit);
+                    }
+                }
+                _ => {
+                    self.travel = self.travel.saturating_add(dx.abs() + dy.abs());
+                    self.three_fingers(dx, dy, now_ms, &mut emit);
                 }
             }
         }
@@ -186,13 +259,25 @@ impl Recognizer {
 
     fn two_fingers(&mut self, cur: &[Contact], _dx: i32, dy: i32, emit: &mut impl FnMut(Event)) {
         let s = spread(cur);
+        let ds = (s - self.spread_base).abs();
         if self.mode == Mode::Undecided || self.mode == Mode::Pointer {
             let change = ((s as i64 - self.spread_base as i64).abs() * 100 / self.spread_base.max(1) as i64).min(i32::MAX as i64) as i32;
-            if change >= self.config.pinch_percent / 2 && self.spread_base > self.config.tap_slop * 2 { self.mode = Mode::Pinch; }
-            else if self.travel > self.config.tap_slop { self.mode = Mode::Scroll; }
+            if change >= self.config.pinch_percent / 2
+                && self.spread_base > self.config.tap_slop * 2
+                && ds >= self.config.tap_slop / 2
+                && ds >= dy.abs()
+            {
+                self.mode = Mode::Pinch;
+            } else if self.travel > self.config.tap_slop {
+                self.mode = Mode::Scroll;
+            }
         }
         match self.mode {
             Mode::Scroll => {
+                // Clear opposite-sign remainder immediately on direction reversal.
+                if (self.acc.1 > 0 && dy < 0) || (self.acc.1 < 0 && dy > 0) {
+                    self.acc.1 = 0;
+                }
                 self.acc.1 = self.acc.1.saturating_add(dy);
                 let step = self.config.scroll_step;
                 let steps = (self.acc.1 / step).clamp(-127, 127);
@@ -212,6 +297,75 @@ impl Recognizer {
         }
     }
 
+    fn three_fingers(&mut self, dx: i32, dy: i32, now_ms: u64, emit: &mut impl FnMut(Event)) {
+        self.acc.0 = self.acc.0.saturating_add(dx);
+        self.acc.1 = self.acc.1.saturating_add(dy);
+        let first_horizontal = if self.swipe_axis == SwipeAxis::None {
+            if self.acc.0.abs() >= self.config.tap_slop || self.acc.1.abs() >= self.config.tap_slop {
+                if self.acc.0.abs() >= self.acc.1.abs() {
+                    self.swipe_axis = SwipeAxis::Horizontal;
+                    true
+                } else {
+                    self.swipe_axis = SwipeAxis::Vertical;
+                    false
+                }
+            } else {
+                return;
+            }
+        } else {
+            false
+        };
+
+        let d = self.config.swipe_distance;
+        match self.swipe_axis {
+            SwipeAxis::None => {}
+            SwipeAxis::Vertical => {
+                if !self.swipe_done {
+                    if self.acc.1 <= -d {
+                        self.swipe_done = true;
+                        self.mode = Mode::Swipe;
+                        emit(Event::SwipeUp);
+                    } else if self.acc.1 >= d {
+                        self.swipe_done = true;
+                        self.mode = Mode::Swipe;
+                        emit(Event::SwipeDown);
+                    }
+                }
+            }
+            SwipeAxis::Horizontal => {
+                self.mode = Mode::Swipe;
+                let step_dx = if first_horizontal { self.acc.0 } else { dx };
+                let dt = self.swipe_last_ms.map_or(8, |t| now_ms.saturating_sub(t).clamp(1, 250)) as u16;
+                let span = ((d.max(1) as i64 * 8) / 5).max(1);
+                let total = (step_dx as i64) * 4096 + self.swipe_rem;
+                let dx_q12 = (total / span) as i32;
+                self.swipe_rem = total - (dx_q12 as i64) * span;
+                if dx_q12 != 0 {
+                    let inst_vel = ((dx_q12 as i64 * 1000) / (dt as i64).max(1)).clamp(-65536, 65536) as i32;
+                    self.swipe_vel_q12 = if self.swipe_active {
+                        (self.swipe_vel_q12 * 3 + inst_vel) / 4
+                    } else {
+                        inst_vel
+                    };
+                    self.swipe_active = true;
+                    self.swipe_last_ms = Some(now_ms);
+                    emit(Event::SwipeDelta(dx_q12, dt));
+                } else if self.swipe_last_ms.is_some_and(|t| now_ms.saturating_sub(t) >= 35) {
+                    self.swipe_vel_q12 = 0;
+                }
+                if !self.swipe_done {
+                    if self.acc.0 <= -d {
+                        self.swipe_done = true;
+                        emit(Event::SwipeLeft);
+                    } else if self.acc.0 >= d {
+                        self.swipe_done = true;
+                        emit(Event::SwipeRight);
+                    }
+                }
+            }
+        }
+    }
+
     fn reset_touch(&mut self) {
         self.mode = Mode::Undecided;
         self.most_fingers = 0;
@@ -219,6 +373,11 @@ impl Recognizer {
         self.acc = (0, 0);
         self.spread_base = 0;
         self.swipe_done = false;
+        self.swipe_axis = SwipeAxis::None;
+        self.swipe_active = false;
+        self.swipe_last_ms = None;
+        self.swipe_rem = 0;
+        self.swipe_vel_q12 = 0;
         self.rem = (0, 0);
     }
 }
@@ -308,11 +467,78 @@ mod tests {
         for k in 0..20 { let x = -(k as i32) * 60; frames.push((k as u64 * 10, frame(&[(1, 2000 + x, 1000), (2, 2300 + x, 1000), (3, 2600 + x, 1000)], false))); }
         frames.push((400, frame(&[], false)));
         let ev = run(&mut r, &frames);
-        assert_eq!(ev, vec![Event::SwipeLeft]);
+        let discrete: Vec<Event> = ev.iter().copied().filter(|e| !matches!(e, Event::SwipeDelta(..) | Event::SwipeEnd(_))).collect();
+        assert_eq!(discrete, vec![Event::SwipeLeft]);
+        assert!(ev.iter().any(|e| matches!(e, Event::SwipeDelta(dx, _) if *dx < 0)));
+        assert!(matches!(ev.last(), Some(Event::SwipeEnd(_))));
+
         let mut frames = vec![];
         for k in 0..20 { let y = -(k as i32) * 60; frames.push((1000 + k as u64 * 10, frame(&[(1, 1000, 1800 + y), (2, 1300, 1800 + y), (3, 1600, 1800 + y)], false))); }
+        frames.push((1400, frame(&[], false)));
         let ev = run(&mut r, &frames);
         assert_eq!(ev, vec![Event::SwipeUp]);
+
+        let mut frames = vec![];
+        for k in 0..20 { let y = k as i32 * 60; frames.push((2000 + k as u64 * 10, frame(&[(1, 1000, 500 + y), (2, 1300, 500 + y), (3, 1600, 500 + y)], false))); }
+        frames.push((2400, frame(&[], false)));
+        let ev = run(&mut r, &frames);
+        assert_eq!(ev, vec![Event::SwipeDown]);
+    }
+
+    #[test]
+    fn continuous_horizontal_swipe_emits_deltas_and_velocity_on_liftoff() {
+        let mut r = rec();
+        let mut frames = vec![];
+        // Rapid 3-finger flick right: total dx = +480 units in 80ms -> ~0.5 * Q12 with high +vel.
+        for k in 0..9 {
+            let x = k as i32 * 60;
+            frames.push((k as u64 * 10, frame(&[(1, 800 + x, 1000), (2, 1100 + x, 1000), (3, 1400 + x, 1000)], false)));
+        }
+        // Staggered liftoff: drops to 2 fingers at 90ms (SwipeEnd must fire immediately!).
+        frames.push((90, frame(&[(1, 1280, 1000), (2, 1580, 1000)], false)));
+        frames.push((100, frame(&[], false)));
+        let ev = run(&mut r, &frames);
+        let sum_q12: i32 = ev.iter().map(|e| if let Event::SwipeDelta(dx, _) = e { *dx } else { 0 }).sum();
+        // span = 600 * 8 / 5 = 960; 480 / 960 * 4096 == 2048.
+        assert!((2040..=2056).contains(&sum_q12), "sum_q12={sum_q12}, ev={ev:?}");
+        let end_vel = ev.iter().find_map(|e| if let Event::SwipeEnd(v) = e { Some(*v) } else { None });
+        assert!(end_vel.is_some_and(|v| v > 2400), "end_vel={end_vel:?}");
+        assert!(!ev.iter().any(|e| matches!(e, Event::Scroll(_) | Event::Move(..))));
+    }
+
+    #[test]
+    fn staggered_two_finger_tap_emits_right_click_without_pointer_drift() {
+        let mut r = rec();
+        let ev = run(&mut r, &[
+            (0, frame(&[(1, 1000, 1000)], false)),
+            (8, frame(&[(1, 1015, 1005)], false)),
+            (16, frame(&[(1, 1015, 1005), (2, 1400, 1005)], false)),
+            (40, frame(&[(1, 1020, 1008), (2, 1408, 1012)], false)),
+            // Finger 2 lifts early; remaining finger wobbles slightly before lifting completely.
+            (50, frame(&[(1, 1025, 1012)], false)),
+            (60, frame(&[(1, 1045, 1020)], false)),
+            (70, frame(&[], false)),
+        ]);
+        let buttons: Vec<Event> = ev.iter().copied().filter(|e| matches!(e, Event::Button(..))).collect();
+        assert_eq!(buttons, vec![Event::Button(2, true), Event::Button(2, false)], "{ev:?}");
+    }
+
+    #[test]
+    fn two_finger_scroll_resists_false_pinch_and_reverses_cleanly() {
+        let mut r = rec();
+        let mut frames = vec![];
+        // Fingers move vertically down while spreading by ~13% (typical finger roll) -> must still scroll!
+        for k in 0..8 {
+            frames.push((k * 10, frame(&[(1, 1000, 400 + k as i32 * 50), (2, 1400 + k as i32 * 6, 400 + k as i32 * 50)], false)));
+        }
+        // Sudden reversal back up should emit negative Scroll immediately.
+        frames.push((90, frame(&[(1, 1000, 700), (2, 1442, 700)], false)));
+        frames.push((100, frame(&[(1, 1000, 620), (2, 1442, 620)], false)));
+        frames.push((120, frame(&[], false)));
+        let ev = run(&mut r, &frames);
+        assert!(ev.iter().any(|e| matches!(e, Event::Scroll(s) if *s > 0)), "{ev:?}");
+        assert!(ev.iter().any(|e| matches!(e, Event::Scroll(s) if *s < 0)), "{ev:?}");
+        assert!(!ev.iter().any(|e| matches!(e, Event::ZoomIn | Event::ZoomOut)), "{ev:?}");
     }
 
     #[test]
