@@ -24,16 +24,16 @@ def sectors_for(sizes,pack_bytes):
  if sectors>SLOT_SECTORS:raise SystemExit(f'boot image needs {need} bytes, more than the {SLOT_SECTORS*512}-byte system slot')
  return sectors
 NVIDIA_ENTRY=':SexOS with NVIDIA GPU'
-def installed_cfg(text,wifi):
- """The ISO's limine.cfg as an installed system boots it: no install image, no Wi-Fi line
- without the pack, and no NVIDIA entry (its firmware lives only on the ISO)."""
+def installed_cfg(text,wifi,sof=True):
+ """The ISO's limine.cfg as an installed system boots it: no install image, no Wi-Fi or
+ SOF line without its pack, and no NVIDIA entry (its firmware lives only on the ISO)."""
  out=[];skip=False
  for l in text.splitlines(True):
   if l.startswith(':'):
    skip=l.strip()==NVIDIA_ENTRY
    # The comment block introducing the NVIDIA entry goes with it.
    while skip and out and out[-1].startswith('#'):out.pop()
-  if skip or 'boot:///boot.img' in l or (not wifi and 'boot:///firmware/wifi.pack' in l):continue
+  if skip or 'boot:///boot.img' in l or (not wifi and 'boot:///firmware/wifi.pack' in l) or (not sof and 'boot:///firmware/sof.pack' in l):continue
   out.append(l)
  return ''.join(out)
 
@@ -58,11 +58,13 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=ROOT/'iso_root');p.add_argument('--out',type=Path,required=True);a=p.parse_args()
  img=a.out;img.parent.mkdir(parents=True,exist_ok=True)
  pack=a.root/'firmware'/'wifi.pack'
- installed=installed_cfg((a.root/'limine.cfg').read_text(),pack.is_file())
+ # Tiger Lake's audio DSP firmware (about 1 MB), for Bell on a cAVS controller.
+ sof=a.root/'firmware'/'sof.pack'
+ installed=installed_cfg((a.root/'limine.cfg').read_text(),pack.is_file(),sof.is_file())
  record=recorder_module(a.root,installed)
  # Everything copied in, plus room for FAT tables and the loader.
- files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+([pack] if pack.is_file() else [])+([record] if record is not None else [])
- firmware_bytes=pack.stat().st_size if pack.is_file() else 0
+ files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+[x for x in (pack,sof) if x.is_file()]+([record] if record is not None else [])
+ firmware_bytes=sum(x.stat().st_size for x in (pack,sof) if x.is_file())
  sectors=sectors_for([f.stat().st_size for f in files],firmware_bytes)
  with img.open('wb') as f:f.truncate(sectors*512)
  def run(*c):
@@ -85,5 +87,6 @@ def main():
   run('mmd','-i',str(img),'::/programs')
   run('mcopy','-i',str(img),str(record),'::/programs/record')
  if pack.is_file():run('mcopy','-i',str(img),str(pack),'::/firmware/wifi.pack')
+ if sof.is_file():run('mcopy','-i',str(img),str(sof),'::/firmware/sof.pack')
  print(img,img.stat().st_size)
 if __name__=='__main__':main()

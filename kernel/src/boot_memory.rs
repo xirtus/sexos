@@ -883,6 +883,26 @@ pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
     }
 }
 
+/// Intel cAVS audio (Tiger Lake, `sex_pdx::audio_dsp`): beside its HD Audio lease Bell
+/// gets the DSP's BAR4, a DMA pool for the firmware copy and capture, and the SOF pack
+/// read only. Any other HD Audio controller gets nothing more.
+pub fn hda_dsp(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,bar0_bytes:u64){
+    use sex_pdx::audio_dsp as d;
+    require_boot();
+    let absent=|why:&str|{crate::serial_println!("[boot.hda.dsp.absent] pd={} reason={}",pd.id,why);};
+    if !d::cavs(dev.vendor_id,dev.device_id){return absent("not_cavs")}
+    if bar0_bytes<d::HDA_BYTES{return absent("bar0_short")}
+    if pd.find_capability(d::SLOT_REGISTERS as u32).is_some(){return absent("slot_held")}
+    let Some((physical,actual))=dev.probe_boot_bar(d::BAR) else{return absent("bar4")};
+    if actual<d::REGISTER_BYTES{return absent("bar4_short")}
+    let virtual_base=alias(pd,physical,d::REGISTER_BYTES,true,true);
+    grant(pd,d::SLOT_REGISTERS,RegionGrant{region_id:d::REGISTERS_REGION_ID,virtual_base,length:d::REGISTER_BYTES,
+        rights:QUERY_VIEW|READ|WRITE,dma_base:None,peer_pd:None});
+    dma_at(pd.id,d::SLOT_DMA,d::DMA_REGION_ID,d::DMA_BYTES);
+    module_region(pd.id,d::SLOT_FIRMWARE,d::FIRMWARE_REGION_ID,d::FIRMWARE_MODULE);
+    crate::serial_println!("[boot.hda.dsp] pd={} bar4={:#x} bytes={} slot={} region={:#x}",pd.id,physical,d::REGISTER_BYTES,d::SLOT_REGISTERS,d::REGISTERS_REGION_ID);
+}
+
 /// The firmware pack (a boot module) as a read-only region of a driver: the Wi-Fi
 /// service that holds the chip, and Cufflinks for the Bluetooth half. The kernel never
 /// looks inside; the driver checks each file.

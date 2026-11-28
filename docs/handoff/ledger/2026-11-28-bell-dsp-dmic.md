@@ -1,0 +1,8 @@
+# 2026-11-28: Bell records from Tiger Lake's built-in microphones (SOF stage 4)
+
+- New `servers/sexbell/src/dsp.rs`: on Intel cAVS controllers (`sex_pdx::audio_dsp::firmware`: `8086:43c8` -> `sof-tgl-h.ri`, `8086:a0c8` -> `sof-tgl.ri`) Bell maps BAR4 (slot 1015), the DSP DMA pool (1016) and `sof.pack` (1017), checks the image's SHA-256, and boots the DSP with `sex_sof::boot` right after the codec bring-up. The codec's coupled streams are untouched.
+- While someone listens and no headset mic is plugged in (`hda::jack_mic_plugged`, looked at once a second), Bell's microphone is the DSP: it programs input stream 1 decoupled (PPCTL PROCEN, 48 kHz S32 stereo, 8 x 16 KiB ring at pool offset 0x82000, BDL 0x80000, page table 0x81000), runs it, then sends the `sex_sof::topology` DMIC graph (pipeline, DMIC DAI + config, buffer, host, connects, complete, PCM params, trigger start). Periods are read by DPIB (`0x1084 + 0x20 * stream`) and handed to listeners as S16 (top 16 bits). Stop: trigger stop, host DMA stop, free the graph, recouple.
+- Source order: USB mic > plugged headset jack mic > built-in DSP mics > codec input.
+- Logs: `[bell.dsp] fw_ready version= build= abi= ms= file= bytes=`, `[bell.dsp] ready inputs= outputs= capture_stream= tag= host_box= dsp_box=`, `[bell.dsp.boot] failed step= cause= rom_status= rom_error=`, `[bell.dsp.absent] reason=`, `[bell.mic.source] dsp=`, `[bell.dsp] dmic on|off|first_period`, `[bell.dsp] dmic step=<name> failed=`, `[bell.dsp.ipc] step= error=|firmware_error=`.
+- QEMU (ICH9 HDA) has no DSP: `audio_dsp::firmware` is `None`, so nothing changes there.
+- Not yet: NHLT mic geometry, 4-mic arrays, DSP power gating when idle, the tplg's high-pass/volume stages.

@@ -930,8 +930,20 @@ pub enum Workspace {
     EuropaRack,
     Muse,
 }
+/// Microphone kinds Record can ask Bell for (the values of
+/// `sex_pdx::sound_mixer::INPUT_*`, kept here so the host build needs no sex-pdx).
+pub mod input {
+    pub const AUTO: u8 = 0;
+    pub const HEADSET: u8 = 1;
+    pub const BUILT_IN: u8 = 2;
+    pub const USB: u8 = 3;
+}
+
 pub struct Studio {
     pub export_format: u8,
+    /// The microphone Record listens to (an [`input`] kind; `input::AUTO` is the
+    /// person's system choice).
+    pub record_input: u8,
     pub waveform: Id,
     pub piano: Id,
     arrange: Id,
@@ -1070,6 +1082,10 @@ impl Studio {
             ("moan.muse.disable", "Disable Muse", "Ctrl+Alt+U"),
             ("moan.voice.cleanup", "1-Click Voice Cleanup", "Ctrl+Alt+V"),
             ("moan.voice.preset", "Cycle Voice Preset", "Ctrl+Alt+B"),
+            ("moan.input.auto", "Record From: System Default", ""),
+            ("moan.input.builtin", "Record From: Built-in Mic", ""),
+            ("moan.input.headset", "Record From: Headset Mic", ""),
+            ("moan.input.usb", "Record From: USB Mic", ""),
             ("moan.voice.podcast", "Voice: Podcast Clean", ""),
             ("moan.voice.broadcast", "Voice: Broadcast", ""),
             ("moan.voice.noisy", "Voice: Noisy Room", ""),
@@ -1110,7 +1126,12 @@ impl Studio {
                     .command("moan.velocity-half"),
                 Menu::new("Transport")
                     .command("moan.play")
-                    .command("moan.stop"),
+                    .command("moan.stop")
+                    .separator()
+                    .command("moan.input.auto")
+                    .command("moan.input.builtin")
+                    .command("moan.input.headset")
+                    .command("moan.input.usb"),
                 Menu::new("Tools")
                     .command("moan.voice.cleanup")
                     .command("moan.voice.preset")
@@ -1555,6 +1576,7 @@ impl Studio {
 
         let mut studio = Self {
             export_format: 0,
+            record_input: 0,
             waveform,
             piano,
             arrange,
@@ -3188,6 +3210,10 @@ impl Studio {
                 "moan.velocity-half" => "Half velocity",
                 "moan.play" => "Play",
                 "moan.stop" => "Stop",
+                "moan.input.auto" => "Input: auto",
+                "moan.input.builtin" => "Input: built-in",
+                "moan.input.headset" => "Input: headset",
+                "moan.input.usb" => "Input: usb",
                 "moan.undo" => "Undo",
                 "moan.redo" => "Redo",
                 "moan.import" => "Import WAV",
@@ -3993,6 +4019,21 @@ impl Studio {
             "Pause" => Some(Action::Pause),
             "Stop" => Some(Action::Stop),
             "Record" => Some(Action::Record),
+            "Input: auto" | "Input: built-in" | "Input: headset" | "Input: usb" => {
+                self.record_input = match command {
+                    "Input: built-in" => input::BUILT_IN,
+                    "Input: headset" => input::HEADSET,
+                    "Input: usb" => input::USB,
+                    _ => input::AUTO,
+                };
+                self.message(ui, match self.record_input {
+                    input::BUILT_IN => "Record will use the built-in microphones",
+                    input::HEADSET => "Record will use the headset microphone",
+                    input::USB => "Record will use the USB microphone",
+                    _ => "Record will use the system's microphone choice",
+                });
+                None
+            }
             "Import WAV" => Some(Action::Import),
             "Generate Voice" => Some(Action::GenerateVoice),
             "Retry Voice" => Some(Action::RetryVoice),

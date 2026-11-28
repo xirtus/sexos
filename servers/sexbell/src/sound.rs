@@ -192,8 +192,9 @@ use sex_pdx::sound_mixer as mixer;
 
 /// The person's settings: master volume and mute, and each row's volume and mute.
 /// `mic`: rows whose program the person let hear the microphone, until it ends.
-struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS], mic: [bool; STREAMS] }
-static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS], mic: [false; STREAMS] };
+/// `input`: the microphone the person chose (`mixer::INPUT_*`, `INPUT_AUTO` for Bell's pick).
+struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS], mic: [bool; STREAMS], input: u8 }
+static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS], mic: [false; STREAMS], input: mixer::INPUT_AUTO };
 fn settings() -> &'static mut Mixer { unsafe { &mut *core::ptr::addr_of_mut!(MIXER) } }
 
 /// For media keys: which PD each row's program is while it has played since it
@@ -393,6 +394,10 @@ struct Player {
     heard: u64,
     /// The microphone is a USB one (headset or microphone, through SexUSB), not the card's.
     mic_usb: bool,
+    /// The microphone is the built-in one on the audio DSP (`crate::dsp`).
+    mic_dsp: bool,
+    /// The `mixer::inputs` word: which microphones there are and which records.
+    inputs: u64,
 }
 /// The period being mixed, kept off the service's small stack.
 static mut MIX: [[i32; 2]; PERIOD_FRAMES] = [[0; 2]; PERIOD_FRAMES];
@@ -527,15 +532,42 @@ impl Player {
     /// The microphone: tell each asking program where it stands, run the input stream
     /// while anyone may listen, and copy what it hears into each listener's ring.
     fn listen_pump(&mut self) {
-        // A USB microphone, when one is plugged in, wins over the card's own.
+        // Which microphones there are, and which records: a program's own pick while
+        // it listens, else the person's, else a USB mic, a plugged-in headset, then the
+        // built-in mics (on the audio DSP when there is one, else the card's own input).
         let usb = usb_link().filter(|l| l.mic().is_some());
-        if usb.is_some() != self.mic_usb {
+        let dsp = crate::dsp::get().is_some();
+        let card = self.card.has_input();
+        let jack = card && self.jack_mic();
+        let mut present = 0u8;
+        if usb.is_some() { present |= 1 << mixer::INPUT_USB; }
+        if jack { present |= 1 << mixer::INPUT_HEADSET; }
+        if dsp || (card && !jack) { present |= 1 << mixer::INPUT_BUILT_IN; }
+        let has = |k: u8| k != mixer::INPUT_AUTO && k < mixer::INPUT_KINDS && present & 1 << k != 0;
+        let asked = (0..STREAMS).filter(|&i| self.listener(i))
+            .map(|i| self.streams[i].map_or(0, |st| st.ring.load(ring::INPUT)) as u8).find(|&k| has(k));
+        let chosen = settings().input;
+        let kind = asked.or(Some(chosen).filter(|&k| has(k))).unwrap_or_else(|| {
+            [mixer::INPUT_USB, mixer::INPUT_HEADSET, mixer::INPUT_BUILT_IN].into_iter().find(|&k| has(k)).unwrap_or(mixer::INPUT_AUTO)
+        });
+        let (use_usb, use_dsp) = (kind == mixer::INPUT_USB, kind == mixer::INPUT_BUILT_IN && dsp);
+        if use_usb != self.mic_usb || use_dsp != self.mic_dsp {
             if self.hearing { self.input_run(false); self.hearing = false; self.asked = 0; }
-            self.mic_usb = usb.is_some();
-            sex_pdx::serial_record!("[bell.mic.source] usb={} vendor={:#06x} product={:#06x}", self.mic_usb as u8,
-                usb.and_then(|l| l.mic()).map_or(0, |m| m.0), usb.and_then(|l| l.mic()).map_or(0, |m| m.1));
+            self.mic_usb = use_usb;
+            self.mic_dsp = use_dsp;
+            sex_pdx::serial_record!("[bell.mic.source] input={} usb={} dsp={} vendor={:#06x} product={:#06x}", mixer::input_name(kind),
+                use_usb as u8, use_dsp as u8, usb.and_then(|l| l.mic()).map_or(0, |m| m.0), usb.and_then(|l| l.mic()).map_or(0, |m| m.1));
         }
-        let input = self.mic_usb || self.card.has_input();
+        let input = present != 0;
+        let used = if input && self.listening() { kind } else { mixer::INPUT_AUTO };
+        let word = mixer::inputs(present, used, chosen);
+        if word != self.inputs {
+            self.inputs = word;
+            sex_pdx::serial_record!("[bell.mic.inputs] present={:#x} used={} chosen={}", present, mixer::input_name(used), mixer::input_name(chosen));
+        }
+        for st in self.streams.iter().flatten() {
+            if !crate::restricted::denied(st.pd) && st.ring.load(ring::INPUTS) != word { st.ring.store(ring::INPUTS, word); }
+        }
         for (i, st) in self.streams.iter().enumerate() {
             let Some(st) = st else { continue };
             if crate::restricted::denied(st.pd){continue;}
@@ -572,11 +604,26 @@ impl Player {
             if self.heard == 0 { sex_pdx::serial_record!("[bell.mic.first] frames={}", n); }
             self.heard += n;
         }
-        while self.hearing && !self.mic_usb && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+        while self.hearing && !self.mic_usb && !self.mic_dsp && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+    }
+
+    /// A headset microphone plugged into the HD Audio card, looked at once a second
+    /// (each look is a codec verb per sensing jack).
+    fn jack_mic(&mut self) -> bool {
+        static mut LAST: (u64, bool) = (0, false);
+        let now = sex_pdx::get_ticks();
+        let (at, was) = unsafe { LAST };
+        if at != 0 && now.wrapping_sub(at) < 1000 { return was; }
+        let plugged = match &mut self.card { Card::Hda(h) => h.jack_mic_plugged(), _ => false };
+        unsafe { LAST = (now.max(1), plugged) };
+        plugged
     }
 
     /// Starts or stops whichever microphone is in use.
     fn input_run(&mut self, on: bool) -> bool {
+        if self.mic_dsp {
+            return crate::dsp::get().is_some_and(|d| if on { d.start() } else { d.stop() });
+        }
         match usb_link().filter(|_| self.mic_usb) {
             Some(l) => { l.set_listen(on); true }
             None => self.card.input_run(on),
@@ -584,6 +631,9 @@ impl Player {
     }
     /// What the microphone in use heard since last asked, as S16 stereo bytes in `out`.
     fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
+        if self.mic_dsp {
+            return crate::dsp::get().and_then(|d| d.take(out).then_some(crate::hda::PERIOD_BYTES.min(PERIOD_BYTES)));
+        }
         let Some(l) = usb_link().filter(|_| self.mic_usb) else { return self.card.input_take(out) };
         let frames = unsafe { core::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut [i16; 2], PERIOD_FRAMES) };
         let n = l.read_heard(frames);
@@ -688,7 +738,7 @@ pub fn init() {
 fn player_with(card: Card) -> Player {
     Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
         head: 0, len: 0, done: 0, phase: 0, pcm_head: 0, pcm_len: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false }
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false, mic_dsp: false, inputs: mixer::inputs(0, 0, 0) }
 }
 
 fn open() -> Result<Player, &'static str> {
@@ -738,6 +788,10 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     // offers one; behind VMD or without either, Bell polls as it always did.
     let lease = sex_pdx::device::at_slot(v::SLOT_SOUND).filter(|l| l.vectors > 0);
     let mut h = crate::hda::Hda::open(view, dma, lease.is_some())?;
+    // Tiger Lake's built-in microphones sit on the audio DSP in the same function.
+    if let Some(l) = sex_pdx::device::at_slot(v::SLOT_SOUND) {
+        crate::dsp::set(crate::dsp::Dsp::open(view.virtual_address as usize, view.length as usize, l.vendor, l.device));
+    }
     match lease {
         Some(l) => match sex_pdx::device::irq_unmask(v::SLOT_SOUND, 0) {
             Ok(()) => sex_pdx::serial_record!("[bell.hda.irq] mode={} vectors={} bit={} polling=0", l.mode.name(), l.vectors, l.first_bit),
@@ -1025,6 +1079,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             sex_pdx::serial_record!("[bell.mixer.player] focused={} row={} pd={}", a, k, played()[k]);
             return row(m, k);
         }
+        mixer::INPUTS => player().map_or(mixer::inputs(0, 0, m.input), |p| p.inputs),
         mixer::STREAMING => mixer::STREAMING_TAG | player().is_some_and(|p| p.streaming()) as u64,
         _ if !write => return mixer::REFUSED,
         mixer::SET_MASTER if a <= 100 => { m.master = a as u8; state(m) }
@@ -1044,6 +1099,14 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             if !p.card.select(a) { return mixer::REFUSED; }
             sex_pdx::serial_record!("[bell.outputs] on={:#x}", a);
             p.card.outputs()
+        }
+        mixer::SET_INPUT if a < mixer::INPUT_KINDS as u64 => {
+            m.input = a as u8;
+            sex_pdx::serial_record!("[bell.mic.choose] input={}", mixer::input_name(m.input));
+            match player() {
+                Some(p) => { p.pump(); p.inputs }
+                None => mixer::inputs(0, 0, m.input),
+            }
         }
         mixer::MICROPHONE if (a as usize) < STREAMS && b <= 1 => {
             if crate::restricted::row_denied(a as usize){return mixer::REFUSED;}

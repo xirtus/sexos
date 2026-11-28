@@ -8,7 +8,10 @@
 //! stops it at once. `volume outputs` lists the sound card's outputs (speaker,
 //! headphones, line out) and which play; `volume output N` plays to output N alone,
 //! `volume output all` to every one, and `volume output auto` back to the default,
-//! which quiets the speakers while headphones are plugged in.
+//! which quiets the speakers while headphones are plugged in. `volume inputs` lists the
+//! microphones (headset, built-in, USB) and which records; `volume input built-in`,
+//! `volume input headset` or `volume input usb` records from that one by default, and
+//! `volume input auto` lets Bell pick (USB, then a plugged-in headset, then built-in).
 //! Bell answers each request with a reply message, which `receive` turns into a line.
 use sex_pdx::sound_mixer as mixer;
 
@@ -17,7 +20,7 @@ pub const BELL_PD: u32 = 10;
 const ROWS: u64 = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Waiting { Nothing, Master, Row(u64), List { next: u64, shown: u8 }, Outputs }
+enum Waiting { Nothing, Master, Row(u64), List { next: u64, shown: u8 }, Outputs, Inputs }
 
 pub struct Volume { waiting: Waiting }
 pub static mut VOLUME: Volume = Volume { waiting: Waiting::Nothing };
@@ -35,6 +38,15 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
         (Some(b"unmute"), None) => (mixer::MUTE_MASTER, 0, 0, Waiting::Master),
         (Some(b"list"), None) => (mixer::STREAM, 0, 0, Waiting::List { next: 0, shown: 0 }),
         (Some(b"outputs"), None) => (mixer::OUTPUTS, 0, 0, Waiting::Outputs),
+        (Some(b"inputs"), None) => (mixer::INPUTS, 0, 0, Waiting::Inputs),
+        (Some(b"input"), Some(w)) => {
+            let kind = match w {
+                b"auto" => mixer::INPUT_AUTO, b"headset" => mixer::INPUT_HEADSET,
+                b"built-in" | b"builtin" | b"internal" => mixer::INPUT_BUILT_IN, b"usb" => mixer::INPUT_USB,
+                _ => return Err(USAGE),
+            };
+            (mixer::SET_INPUT, kind as u64, 0, Waiting::Inputs)
+        }
         (Some(b"output"), Some(b"all")) => (mixer::SET_OUTPUTS, 0xFF, 0, Waiting::Outputs),
         (Some(b"output"), Some(b"auto")) => (mixer::SET_OUTPUTS, mixer::AUTO, 0, Waiting::Outputs),
         (Some(b"output"), Some(w)) => {
@@ -66,7 +78,7 @@ fn request(args: &[u8]) -> Result<(u64, u64, u64, Waiting), &'static [u8]> {
     })
 }
 
-const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off | outputs | output N|all|auto]";
+const USAGE: &[u8] = b"Use: volume [0-100 | +N | -N | mute | unmute | list | ROW 0-100 | ROW mute | ROW unmute | ROW mic on|off | outputs | output N|all|auto | inputs | input auto|headset|built-in|usb]";
 
 fn ask(action: u64, a: u64, b: u64) -> bool {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, mixer::OP_MIXER, action, a, b);
@@ -132,6 +144,22 @@ impl Volume {
                     sb.push(&line[..at]);
                 }
                 sex_pdx::serial_record!("[spindle.volume.outputs] reply={:#x}", value);
+                return true;
+            }
+            Waiting::Inputs => {
+                let (present, used, chosen) = (mixer::inputs_present(value), mixer::inputs_used(value), mixer::inputs_chosen(value));
+                put(&mut line, &mut at, b"Microphones:");
+                if present == 0 { put(&mut line, &mut at, b" none"); }
+                for k in 1..mixer::INPUT_KINDS {
+                    if present & 1 << k == 0 { continue; }
+                    put(&mut line, &mut at, b" ");
+                    put(&mut line, &mut at, mixer::input_name(k).as_bytes());
+                    if used == k { put(&mut line, &mut at, b" (recording)"); }
+                }
+                put(&mut line, &mut at, b"; default ");
+                put(&mut line, &mut at, mixer::input_name(chosen).as_bytes());
+                sb.push(&line[..at]);
+                sex_pdx::serial_record!("[spindle.volume.inputs] reply={:#x}", value);
                 return true;
             }
             Waiting::Row(row) | Waiting::List { next: row, .. } => {

@@ -52,6 +52,36 @@ pub const LAST_PLAYER: u64 = 11;
 pub const STREAMING: u64 = 12;
 pub const STREAMING_TAG: u64 = 0x4E << 56;
 pub const fn is_streaming_reply(word: u64) -> bool { word >> 8 == STREAMING_TAG >> 8 }
+/// Replies with the `inputs` word: which microphones there are, which one records,
+/// and the person's choice (`INPUT_AUTO` when Bell picks).
+pub const INPUTS: u64 = 13;
+/// Record from input kind `a` (`INPUT_HEADSET`, `INPUT_BUILT_IN`, `INPUT_USB`) or back
+/// to `INPUT_AUTO`: a USB mic, else a plugged-in headset, else the built-in mics.
+/// A program may still ask for another input for itself (`sound_ring::INPUT`) while it
+/// listens. Replies with the `inputs` word, or `REFUSED` for an unknown kind.
+pub const SET_INPUT: u64 = 14;
+/// Input kinds.
+pub const INPUT_AUTO: u8 = 0;
+/// A microphone in a headset jack the card senses.
+pub const INPUT_HEADSET: u8 = 1;
+/// The laptop's own microphones (on Tiger Lake: the digital mics on the audio DSP).
+pub const INPUT_BUILT_IN: u8 = 2;
+/// A USB microphone or headset.
+pub const INPUT_USB: u8 = 3;
+pub const INPUT_KINDS: u8 = 4;
+/// The inputs word: kinds present (bit k for kind k, bits 0..8), the kind recording
+/// now (bits 8..12, `INPUT_AUTO` while nothing records) and the person's choice
+/// (bits 12..16).
+pub const fn inputs(present: u8, used: u8, chosen: u8) -> u64 {
+    TAG | present as u64 | ((used & 0xF) as u64) << 8 | ((chosen & 0xF) as u64) << 12
+}
+pub const fn inputs_present(word: u64) -> u8 { word as u8 }
+pub const fn inputs_used(word: u64) -> u8 { (word >> 8 & 0xF) as u8 }
+pub const fn inputs_chosen(word: u64) -> u8 { (word >> 12 & 0xF) as u8 }
+/// A short name for an input kind, for menus and command lines.
+pub const fn input_name(kind: u8) -> &'static str {
+    match kind { INPUT_HEADSET => "headset", INPUT_BUILT_IN => "built-in", INPUT_USB => "usb", _ => "auto" }
+}
 /// Set in the outputs word while Bell follows the headphone jack.
 pub const OUTPUTS_AUTO: u64 = 1 << 12;
 

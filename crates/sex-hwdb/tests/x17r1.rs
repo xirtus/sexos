@@ -21,6 +21,10 @@ fn alienware_x17_r1_parts_are_named_and_owned() {
     assert_eq!((describe(cavs).service, describe(cavs).support), (Service::Bell, Support::Driven));
     let (m, e) = manifest::claim(cavs).expect("Intel cAVS 8086:43c8 (class 040100) must be claimed");
     assert_eq!((m.service, e.lease, e.slot), (Service::Bell, manifest::Lease::Hda, 20));
+    // Tiger Lake-LP's cAVS takes the same lease; BOOT adds the DSP view and SOF pack
+    // beside it for both (sex_pdx::audio_dsp), so the manifest row stays the plain HDA one.
+    let lp = manifest::claim(id(0x8086, 0xa0c8, 0x04, 0x01, 0)).map(|(m, e)| (m.service, e.lease, e.slot));
+    assert_eq!(lp, Some((Service::Bell, manifest::Lease::Hda, 20)));
     // Non-Intel 04:01 multimedia audio devices are not Intel HDA/cAVS.
     assert!(manifest::claim(id(0x1234, 0x5678, 0x04, 0x01, 0)).is_none());
     assert_eq!(describe(id(0x8086, 0x43ed, 0x0c, 0x03, 0x30)).support, Support::Driven);

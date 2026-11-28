@@ -26,6 +26,7 @@ impl Sound {
         r.store(ring::RATE_HZ, 0);
         r.store(ring::OPEN, 1);
         r.store(ring::LISTEN, 0);
+        r.store(ring::INPUT, 0);
         r.store(ring::WAKE, 0);
         r.store(ring::DOORBELL, 1);
         Some(Sound { ring: r, written: taken, start: taken, told: false, heard: 0, lost: 0, listening: false })
@@ -101,6 +102,15 @@ impl Sound {
     /// Where listening stands: `ring::MIC_OFF`, `MIC_WAITING` (the person has not
     /// allowed it), `MIC_ON` or `MIC_NONE` (no microphone).
     pub fn mic(&self) -> u64 { self.ring.load(ring::MIC) }
+    /// Which microphone this program wants while it listens: a
+    /// `sex_pdx::sound_mixer::INPUT_*` kind, or `INPUT_AUTO` for the person's choice.
+    pub fn set_input(&mut self, kind: u8) {
+        self.ring.store(ring::INPUT, kind as u64);
+        let _ = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, ring::OP_LISTEN, 0, 0, 0);
+    }
+    /// The inputs there are, the one recording and the person's choice
+    /// (`sex_pdx::sound_mixer::inputs_present`, `inputs_used`, `inputs_chosen`).
+    pub fn inputs(&self) -> u64 { self.ring.load(ring::INPUTS) }
     /// Microphone frames (48 kHz stereo) heard since the last call, up to `out.len()`.
     /// Frames the ring no longer holds because the program fell behind are skipped and
     /// counted in `lost`.

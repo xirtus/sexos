@@ -304,6 +304,7 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
         bar0_view: Some(view), command: Some(command), virtio: None, class: kind.class(dev), window,
     }));
     if first { crate::boot_memory::class_dma(pd.id, kind); }
+    if first && kind == crate::device_lease::Kind::Hda { crate::boot_memory::hda_dsp(pd, dev, view.length); }
     serial_println!("[kernel.cap.class.grant] pd={} slot={} kind={:?} bytes={}", pd.id, slot, kind, view.length);
     true
 }
