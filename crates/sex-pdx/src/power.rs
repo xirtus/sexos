@@ -108,6 +108,10 @@ pub const OP_EVENT: u64 = 0x50F1;
 /// into its lowest power state (USB ports suspended, codec in D3, disk flushed) and
 /// brings it back on 0. (0x50F2 is `touchpad::OP_FOUND`.)
 pub const OP_DEVICE_SLEEP: u64 = 0x50F3;
+/// Shell to Display: one panel brightness step through the GPU's own backlight PWM
+/// (arg0 = 1 brighter, 0 darker), no reply. On Intel laptops ACPI `_BCM` only asks a
+/// graphics driver to do this; Display holds the display engine, so it is that driver.
+pub const OP_DISPLAY_BACKLIGHT: u64 = 0x50F4;
 /// How long the kernel waits for Files, in timer ticks (about a millisecond each).
 pub const FLUSH_TICKS: u64 = 5000;
 
