@@ -80,12 +80,12 @@ def main():
   s=len(t());click(ox+ax,oy+ay)
   wait(r'\[web.capture.answer\] origin=\S+ button=0',s,30)
   ok=wait(r'\[web.console\] level=0 capture ok (.+)\|(.+) (\d+)x(\d+)',s,60)
-  assert ok[1]=='SexOS test microphone' and ok[2]=='SexOS test camera' and ok[3:5]==('640','480'),ok[0]
+  assert ok[1]=='SexOS test microphone' and ok[2]=='SexOS test camera' and ok.group(3,4)==('640','480'),ok[0]
   wait(r'\[web.capture.camera\] on=1 source=fake',s,30);wait(r'\[web.capture.mic\] on=1 source=fake',s,30)
   wait(r'\[web.console\] level=0 capture playing 640 480',s,60)
   assert wait(r'\[web.console\] level=0 capture perms (\S+ \S+)',s,30)[1]=='granted granted'
   assert wait(r'\[web.console\] level=0 capture devices (.+)',s,30)[1].strip()=='SexOS test microphone|SexOS test camera'
-  rect=wait(r'\[web.console\] level=0 capture rect (-?\d+) (-?\d+) (\d+) (\d+)',s,60);vx,vy,vw,vh=map(int,rect[1:5])
+  rect=wait(r'\[web.console\] level=0 capture rect (-?\d+) (-?\d+) (\d+) (\d+)',s,60);vx,vy,vw,vh=map(int,rect.groups())
   frames=int(wait(r'\[web.console\] level=0 capture frames (\d+)',s,30)[1]);assert frames>=10,('camera frames',frames)
   heard=int(wait(r'\[web.capture.mic.heard\] frames=(\d+)',s,30)[1]);assert heard>0
   # The camera's picture shows in the video, and moves.
@@ -106,7 +106,7 @@ def main():
   cards=re.findall(r'\[web.capture.card\] x=(\d+) y=(\d+) w=(\d+) h=(\d+) allow=(\d+),(\d+) block=(\d+),(\d+)',t()[s:])
   cx,cy,cw,ch,ax,ay,bx,by=map(int,cards[-1])
   s2=len(t());click(ox+bx,oy+by)
-  m=wait(r'\[web.console\] level=0 capture block (\S+) (\S+)',s2,60);assert m[1:3]==('NotAllowedError','denied'),m[0]
+  m=wait(r'\[web.console\] level=0 capture block (\S+) (\S+)',s2,60);assert m.groups()==('NotAllowedError','denied'),m[0]
   assert '[web.capture.mic] on=1' not in t()[s2:],'blocked site got the microphone'
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11');wait(rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
