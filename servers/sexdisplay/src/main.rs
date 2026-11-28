@@ -189,6 +189,7 @@ static mut RECORDING_CAPTURE:recording_capture::Server=recording_capture::Server
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod screen_share;
 static mut SCREEN_SHARE:screen_share::Server=screen_share::Server::new();
+fn draw_screen_share(fb:*mut u32,w:usize,h:usize,total:usize,scene:&scene::SceneSnapshot){unsafe{(*core::ptr::addr_of!(SCREEN_SHARE)).draw(fb,w,h,total,scene);}}
 mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
 // One Display-owned scratch scene. Intake cannot run concurrently with a
@@ -2853,7 +2854,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         silkbar_menus::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize,scene);
         spotlight::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
-        unsafe{(*core::ptr::addr_of!(SCREEN_SHARE)).draw(fb,w,h,total,scene);}
+        draw_screen_share(fb,w,h,total,scene);
         draw_frame_meter_hud(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
