@@ -91,6 +91,8 @@ struct Interrupt {
     /// report is in `Usb::media`; `buttons` holds the media keys held, `typed` the keys.
     report_kbd: u8,
     typed: u64,
+    /// Brightness keys held (keyboard usages 0xED/0xEE, one per byte).
+    bright: u64,
 }
 impl Interrupt {
     const fn empty() -> Self {
@@ -99,7 +101,7 @@ impl Interrupt {
                 x: crate::hid::Field { bit: 0, size: 0, signed: false, min: 0, max: 0 },
                 y: crate::hid::Field { bit: 0, size: 0, signed: false, min: 0, max: 0 },
                 wheel: crate::hid::Field { bit: 0, size: 0, signed: false, min: 0, max: 0 }, absolute: false },
-            errors: 0, keys: 0, modifiers: 0, buttons: 0, report_kbd: 0, typed: 0 }
+            errors: 0, keys: 0, modifiers: 0, buttons: 0, report_kbd: 0, typed: 0, bright: 0 }
     }
 }
 
@@ -917,14 +919,16 @@ impl Usb {
             modifiers = body[0];
         } else {
             let Some(m) = self.media.iter().find(|s| s.0 == i as u8 + 1 && s.1 == k as u8).map(|s| s.2) else { return };
-            let Some(held) = m.decode(r, media) else { return };
-            if held != media { log!("[sexusb.hid.media.keys] slot={} held={:#04x}", self.dev[i].slot, held); }
-            media = held;
+            if let Some(b) = m.brightness(r) { self.dev[i].intr[k].bright = b; }
+            if let Some(held) = m.decode(r, media) {
+                if held != media { log!("[sexusb.hid.media.keys] slot={} held={:#04x}", self.dev[i].slot, held); }
+                media = held;
+            }
         }
-        // Typed keys first, then media usages, six at most.
+        // Typed keys first, then brightness and media usages, six at most.
         let mut keys = typed;
         let mut n = (0..6).filter(|b| (typed >> (8 * b)) as u8 != 0).count();
-        let extra = crate::hid::MediaLayout::usages(media);
+        let extra = crate::hid::MediaLayout::usages(media) << 16 | self.dev[i].intr[k].bright & 0xffff;
         for b in 0..6 { let u = (extra >> (8 * b)) as u8; if u != 0 && n < 6 { keys |= (u as u64) << (8 * n); n += 1; } }
         let e = &mut self.dev[i].intr[k];
         e.typed = typed;

@@ -10881,6 +10881,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
         desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
+        desktop_keys::Action::Brightness(up)=>{let _=laptop_command(if up{Command::BrightnessUp}else{Command::BrightnessDown});true}
         desktop_keys::Action::Close=>{
             let sid=FOCUSED_SURFACE_ID;
             if sid!=0 && is_closeable_surface(sid){let _=close_surface_from_frame_light(sid);}

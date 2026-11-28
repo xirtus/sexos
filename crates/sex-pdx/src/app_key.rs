@@ -121,3 +121,9 @@ pub const KEY_PLAY_PAUSE: u8 = 0x78;
 pub const KEY_STOP: u8 = 0x7A;
 pub const KEY_NEXT: u8 = 0x7C;
 pub const KEY_PREVIOUS: u8 = 0x7F;
+
+/// Panel brightness keys (a USB keyboard's Consumer Brightness Decrement / Increment,
+/// as the Alienware x17's built-in keyboard sends from F10 / F11). Input gives them
+/// these codes; Shell steps the ACPI backlight, programs never see them.
+pub const KEY_BRIGHTNESS_DOWN: u8 = 0x7B;
+pub const KEY_BRIGHTNESS_UP: u8 = 0x7D;
