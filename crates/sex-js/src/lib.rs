@@ -161,6 +161,14 @@ pub mod op {
     /// stops (unplugged, or the person took it back), `capturemute\tKIND\t0|1`, and
     /// `devicechange`.
     pub const CAPTURE: u32 = 40;
+    /// Web Audio (`AudioContext` and its nodes): a text verb of
+    /// `sex_webaudio::Hub::call` (new, node, connect, connectparam, disconnect, param,
+    /// get, set, start, stop, state, time, reduction). The graph runs in the browser;
+    /// it dispatches `audio\tended\tCTX\tNODE` when a source node finishes.
+    pub const AUDIO: u32 = 41;
+    /// Web Audio's bytes (`sex_webaudio::Hub::call_bytes`): analyser data, buffers,
+    /// periodic waves, filter responses, offline renders and `decodeAudioData`.
+    pub const AUDIO_DATA: u32 = 77;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
     /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code
