@@ -21,7 +21,7 @@ mod updates;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use candy_gui::{Glyphs, GuiState, SidebarView, UiAction, UpdatesField};
+use candy_gui::{Glyphs, GuiState, SidebarView, UiAction, UpdatesField, SIDEBAR_ITEMS};
 use model::{Change, Model};
 use sex_app::settings;
 use sex_app::{Event, Nav, Window};
@@ -41,10 +41,13 @@ const TAB: u8 = 0x0F;
 const ESC: u8 = 0x01;
 const ENTER: u8 = 0x1C;
 const BACKSPACE: u8 = 0x0E;
+const KEY_A: u8 = 0x1E;
+const KEY_P: u8 = 0x19;
+const KEY_V: u8 = 0x2F;
+const PAGE_UP: u8 = 0x49;
+const PAGE_DOWN: u8 = 0x51;
 
 /// Every value as Files holds it now (defaults for any it cannot answer).
-/// Every value Files holds now. A key Files does not answer keeps its default, and
-/// the others still load.
 fn load() -> (Config, u64) {
     let mut values = Config::new();
     let generation = settings::generation().unwrap_or(0);
@@ -58,22 +61,43 @@ fn load() -> (Config, u64) {
 
 /// The Privacy page's program rows, from Files. Files lets this program, and no other,
 /// list grants and change the person's answers (`sex_pdx::package`).
-fn load_grants(window: &mut Window, m: &mut Model, rows: &mut [grants::Row; grants::ROWS_MAX]) -> usize {
+fn load_grants(window: &mut Window, m: &mut Model, gui: &mut GuiState, rows: &mut [grants::Row; grants::ROWS_MAX]) -> usize {
     let (status, report) = sex_app::files::package(window, pkg::GRANTS, b"", 0);
     let n = if status == sex_pdx::fs::OK { grants::parse(&report, rows) } else { 0 };
     let defaults = [m.values.value(sex_config::id::FIRST_RUN_NETWORK), m.values.value(sex_config::id::FIRST_RUN_MICROPHONE)];
     let mut text = [0u8; model::EXTRA_MAX];
     let k = grants::render(&rows[..n], defaults, &mut text);
     m.set_extra(&text[..k], n);
+    gui.set_grants(&rows[..n]);
     sex_pdx::serial_record!("[settings.grants] status={} rows={}", status, n);
     n
 }
+
 /// Left (take away) or Right (give) on a program row: the person's answer, to Files.
 fn change_grant(window: &mut Window, m: &mut Model, row: &grants::Row, allow: bool) {
     let (status, _) = sex_app::files::package(window, pkg::CONSENT, row.program(), grants::consent(row, allow));
     let program = core::str::from_utf8(row.program()).unwrap_or("?");
     sex_pdx::serial_record!("[settings.grant] program={} grant={} allow={} status={}", program, row.word(), allow as u8, status);
     m.say(if status != sex_pdx::fs::OK { "Files did not take the change." } else if allow { "Allowed from its next run." } else { "Taken away from its next run." });
+}
+
+fn collect_kernel_facts() -> about::Facts {
+    use sex_pdx::{mesh_stats as ms, system_stats as ss};
+    let overview = ss::overview();
+    let memory = ms::memory();
+    let kernel = ss::kernel();
+    let mut domains = 0;
+    let mut at = 0;
+    while let Some(pd) = ss::next(at) { if pd <= at || domains >= 4096 { break; } domains += 1; at = pd; }
+    about::Facts {
+        cores: overview.map(|o| o.cores),
+        program_limit: memory.map(|x| x.limit_pages),
+        program_lent: memory.map(|x| x.lent_pages),
+        free_frames: kernel.map(|k| k.free_frames),
+        kernel_heap: kernel.map(|k| k.heap_used),
+        domains,
+        uptime_s: sex_pdx::get_ticks() / 1000,
+    }
 }
 
 /// The Updates, Storage or About page's lines: Files' facts (`sex_pdx::facts`, answered
@@ -96,7 +120,24 @@ fn load_info(window: &mut Window, m: &mut Model, gui: &mut GuiState, page: &str)
         }
     }
     let mut text = [0u8; model::INFO_MAX];
-    let mut n = if topic == f::ABOUT { about_lines(&mut text) } else { 0 };
+    let mut n = if topic == f::ABOUT {
+        let k = collect_kernel_facts();
+        gui.about.update_about(k, data);
+        if gui.about.fs_health_len == 0 {
+            let mut sbuf = [0u8; 1024];
+            if let Ok(sn) = sex_app::files::facts(window, f::STORAGE, &mut sbuf) {
+                gui.about.update_storage(&sbuf[..sn]);
+            }
+        }
+        about_lines(&k, &mut text)
+    } else {
+        0
+    };
+    if topic == f::UPDATES {
+        gui.about.update_about(gui.about.kernel, data);
+    } else if topic == f::STORAGE {
+        gui.about.update_storage(data);
+    }
     n += render(data, &mut text[n..]);
     m.set_info(&text[..n]);
     let word = |k| facts::field(data, k).and_then(|v| core::str::from_utf8(v).ok()).unwrap_or("-");
@@ -392,20 +433,9 @@ fn sync_dotfiles_now(window: &mut Window, gui: &mut GuiState, m: &mut Model) {
 }
 
 /// The About page's lines from the kernel's numbers (syscall 87); returns their length.
-fn about_lines(text: &mut [u8]) -> usize {
-    use sex_pdx::{mesh_stats as ms, system_stats as ss};
-    let overview = ss::overview();
-    let memory = ms::memory();
-    let kernel = ss::kernel();
-    let mut domains = 0;
-    let mut at = 0;
-    while let Some(pd) = ss::next(at) { if pd <= at || domains >= 4096 { break; } domains += 1; at = pd; }
-    let k = about::Facts {
-        cores: overview.map(|o| o.cores), program_limit: memory.map(|x| x.limit_pages), program_lent: memory.map(|x| x.lent_pages),
-        free_frames: kernel.map(|k| k.free_frames), kernel_heap: kernel.map(|k| k.heap_used), domains, uptime_s: sex_pdx::get_ticks() / 1000,
-    };
-    sex_pdx::serial_record!("[settings.about] cores={} domains={} limit_pages={}", k.cores.unwrap_or(0), domains, k.program_limit.unwrap_or(0));
-    about::render(&k, env!("CARGO_PKG_VERSION"), text)
+fn about_lines(k: &about::Facts, text: &mut [u8]) -> usize {
+    sex_pdx::serial_record!("[settings.about] cores={} domains={} limit_pages={}", k.cores.unwrap_or(0), k.domains, k.program_limit.unwrap_or(0));
+    about::render(k, env!("CARGO_PKG_VERSION"), text)
 }
 
 /// Queries `sexfiles` for the raw GPT partition table (`INSTALL_LIST | INSTALL_LIST_RAW`).
@@ -630,6 +660,16 @@ fn show(window: &mut Window, m: &Model, gui: &mut GuiState) {
     window.show_pixels(w, h);
 }
 
+fn show_setup(window: &mut Window, s: &setup::Setup, status: &[u8]) {
+    let (w, h) = window.size();
+    let px = window.pixels();
+    let w = w.clamp(64, 4096);
+    let h = h.clamp(64, px.len() / w);
+    let g = unsafe { &mut *core::ptr::addr_of_mut!(GLYPHS) };
+    candy_gui::render_setup_gui(&mut px[..w * h], w, h, g, s, status);
+    window.show_pixels(w, h);
+}
+
 fn persist_setting(m: &mut Model, key_id: u16, value: i32, generation: &mut u64) -> bool {
     let result = settings::set(key_id, value);
     sex_pdx::serial_record!("[settings.set] key={} value={} status={}", key_id, value, result.err().unwrap_or(0));
@@ -653,17 +693,39 @@ fn persist_setting(m: &mut Model, key_id: u16, value: i32, generation: &mut u64)
     ok
 }
 
+fn sync_page_for_view(m: &mut Model, v: SidebarView) {
+    let (pages, n) = model::pages();
+    match v {
+        SidebarView::SystemPage(idx) if idx < n => {
+            m.page = idx;
+            m.row = 0;
+        }
+        _ => {
+            if let Some(item) = SIDEBAR_ITEMS.iter().find(|it| it.view == v) {
+                if let Some(pidx) = pages[..n].iter().position(|&p| p == item.schema_section) {
+                    m.page = pidx;
+                    m.row = 0;
+                }
+            }
+        }
+    }
+}
+
 /// First-start setup: runs until its last step or until the window closes.
 fn first_start(window: &mut Window) {
     let mut s = setup::Setup::new();
     let mut status: &[u8] = b"";
     sex_pdx::serial_record!("[settings.setup] step=start");
     loop {
-        let mut text = [0u8; 4096];
-        let n = setup::render(&s, &mut text, status);
-        window.show(&text[..n]);
+        show_setup(window, &s, status);
         if s.step == setup::Step::Done { return; }
-        let key = match window.next() { Event::Close => window_close(), Event::Key(k) => k, _ => continue };
+        let event = window.next();
+        let key = match event {
+            Event::Close => window_close(),
+            Event::Resize { .. } => continue,
+            Event::Key(k) => k,
+            _ => continue,
+        };
         status = b"";
         match (sex_app::nav(key), key.code) {
             (Some(Nav::Up), _) => s.up_down(false),
@@ -698,6 +760,7 @@ pub extern "C" fn _start() -> ! {
     let (values, mut generation) = load();
     let mut m = Model::new(values);
     let gui = unsafe { &mut *core::ptr::addr_of_mut!(GUI) };
+    gui.about.kernel = collect_kernel_facts();
     let mut rows = [grants::Row::EMPTY; grants::ROWS_MAX];
     let mut hashing = false;
     sex_pdx::serial_record!("[settings.open] generation={}", generation);
@@ -728,6 +791,11 @@ pub extern "C" fn _start() -> ! {
             Event::Pointer(p) => {
                 let hit = gui.hit_at(p.x as i32, p.y as i32);
                 match p.kind {
+                    PointerKind::Wheel { steps } => {
+                        gui.scroll_by(-steps as i32 * 28);
+                        show(&mut window, &m, gui);
+                        continue;
+                    }
                     PointerKind::Move => {
                         if gui.hovered != hit {
                             gui.hovered = hit;
@@ -747,7 +815,9 @@ pub extern "C" fn _start() -> ! {
                         gui.hovered = hit;
                         gui.pressed = hit;
                         let Some(act) = hit else {
-                            if gui.updates.focused_field.take().is_some() {
+                            if gui.updates.focused_field.take().is_some() | (gui.search_focused || gui.search_selected) {
+                                gui.search_focused = false;
+                                gui.search_selected = false;
                                 show(&mut window, &m, gui);
                             }
                             continue;
@@ -755,15 +825,19 @@ pub extern "C" fn _start() -> ! {
                         if !matches!(act, UiAction::FocusUpdatesField(_)) {
                             gui.updates.focused_field = None;
                         }
+                        if !matches!(act, UiAction::FocusSearch | UiAction::ClearSearch) {
+                            gui.search_focused = false;
+                            gui.search_selected = false;
+                        }
                         let old_page = m.page;
                         match act {
                             UiAction::SelectView(v) => {
+                                m.clear_search();
                                 gui.view = v;
                                 gui.wifi.focus = candy_gui::WifiFieldFocus::None;
-                                if let SidebarView::SystemPage(idx) = v {
-                                    m.page = idx;
-                                    m.row = 0;
-                                } else if v == SidebarView::Install && !gui.install.loaded {
+                                gui.scroll_y = 0;
+                                sync_page_for_view(&mut m, v);
+                                if v == SidebarView::Install && !gui.install.loaded {
                                     refresh_install_parts(&mut window, gui, &mut m);
                                 } else if v == SidebarView::Wifi {
                                     if !gui.wifi.loaded {
@@ -771,6 +845,19 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     refresh_wifi_live(gui);
                                 }
+                            }
+                            UiAction::FocusSearch => {
+                                if gui.search_focused && m.query_len > 0 {
+                                    gui.search_selected = !gui.search_selected;
+                                } else {
+                                    gui.search_focused = true;
+                                    gui.search_selected = false;
+                                }
+                            }
+                            UiAction::ClearSearch => {
+                                m.clear_search();
+                                gui.search_focused = true;
+                                gui.search_selected = false;
                             }
                             UiAction::SetTheme(val) => {
                                 gui.save_undo(&m.values);
@@ -794,6 +881,36 @@ pub extern "C" fn _start() -> ! {
                                 let next = if m.values.value(id::ANIMATIONS) == 0 { 1 } else { 0 };
                                 persist_setting(&mut m, id::ANIMATIONS, next, &mut generation);
                             }
+                            UiAction::ToggleBoolSetting(kid) => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                let next = if m.values.value(kid) == 0 { 1 } else { 0 };
+                                if persist_setting(&mut m, kid, next, &mut generation) && m.on_privacy() {
+                                    load_grants(&mut window, &mut m, gui, &mut rows);
+                                }
+                            }
+                            UiAction::SetSettingValue(kid, val) => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                if persist_setting(&mut m, kid, val, &mut generation) && m.on_privacy() {
+                                    load_grants(&mut window, &mut m, gui, &mut rows);
+                                }
+                            }
+                            UiAction::StepSetting(kid, forward) => {
+                                gui.save_undo(&m.values);
+                                gui.active_profile = None;
+                                if let Some(k) = sex_config::key(kid) {
+                                    let next = model::step_value(k, m.values.value(kid), forward, false);
+                                    if persist_setting(&mut m, kid, next, &mut generation) && m.on_privacy() {
+                                        load_grants(&mut window, &mut m, gui, &mut rows);
+                                    }
+                                }
+                            }
+                            UiAction::ToggleSetBit(kid, bit) => {
+                                let cur = m.values.value(kid);
+                                let next = cur ^ (1i32 << (bit as u32));
+                                persist_setting(&mut m, kid, next, &mut generation);
+                            }
                             UiAction::SetCornerRadius(idx) => {
                                 gui.save_undo(&m.values);
                                 gui.corner_radius_idx = idx;
@@ -812,18 +929,42 @@ pub extern "C" fn _start() -> ! {
                                 gui.active_profile = None;
                                 m.say("Tiling default updated.");
                             }
+                            UiAction::SetCloseBehavior(cb) => {
+                                gui.close_behavior = cb;
+                                m.say("SilkBar close behavior updated.");
+                            }
                             UiAction::SetKeybinds(prof) => {
                                 gui.save_undo(&m.values);
                                 gui.keybinds = prof;
                                 gui.active_profile = None;
                                 m.say("Hotkey profile updated.");
                             }
+                            UiAction::ToggleTrackpad(which) => {
+                                match which {
+                                    0 => gui.trackpad_tap_click = !gui.trackpad_tap_click,
+                                    1 => gui.trackpad_natural_scroll = !gui.trackpad_natural_scroll,
+                                    2 => gui.trackpad_three_finger_spaces = !gui.trackpad_three_finger_spaces,
+                                    _ => gui.trackpad_four_finger_overview = !gui.trackpad_four_finger_overview,
+                                }
+                                m.say("Trackpad gesture updated.");
+                            }
+                            UiAction::TogglePrediction(which) => {
+                                match which {
+                                    0 => gui.text_prediction = !gui.text_prediction,
+                                    _ => gui.text_autocorrect = !gui.text_autocorrect,
+                                }
+                                m.say("Text prediction updated.");
+                            }
+                            UiAction::ToggleWifiRadio => {
+                                gui.wifi_enabled = !gui.wifi_enabled;
+                                m.say(if gui.wifi_enabled { "Wi-Fi radio enabled." } else { "Wi-Fi radio disabled." });
+                            }
                             UiAction::ApplyProfile(idx) => {
                                 let pairs = gui.apply_profile(idx, &m.values);
                                 for (k, v) in pairs {
                                     persist_setting(&mut m, k, v, &mut generation);
                                 }
-                                m.say("Profile applied live.");
+                                m.say("Noir profile applied live.");
                             }
                             UiAction::Undo => {
                                 if let Some(pairs) = gui.take_undo() {
@@ -838,7 +979,7 @@ pub extern "C" fn _start() -> ! {
                                 for (k, v) in pairs {
                                     persist_setting(&mut m, k, v, &mut generation);
                                 }
-                                m.say("Reset to Candy Lavender defaults.");
+                                m.say("Reset to SexOS Noir Rose defaults.");
                             }
                             UiAction::SelectRow(idx) => {
                                 m.row = idx;
@@ -847,8 +988,21 @@ pub extern "C" fn _start() -> ! {
                                 m.row = idx;
                                 if let Change::Set(k, v) = m.step(forward, false) {
                                     persist_setting(&mut m, k, v, &mut generation);
-                                    if m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                                    if m.on_privacy() { load_grants(&mut window, &mut m, gui, &mut rows); }
                                 }
+                            }
+                            UiAction::SetGrant(idx, allow) => {
+                                if idx < gui.grant_count {
+                                    let row = rows[idx];
+                                    change_grant(&mut window, &mut m, &row, allow);
+                                    load_grants(&mut window, &mut m, gui, &mut rows);
+                                }
+                            }
+                            UiAction::StartPassword => {
+                                m.start_password();
+                            }
+                            UiAction::CancelPassword => {
+                                m.password_key(27);
                             }
                             UiAction::SelectInstallPart(idx) => {
                                 if gui.install.select_part(idx) {
@@ -941,7 +1095,7 @@ pub extern "C" fn _start() -> ! {
                                 submit_wifi_join(&mut window, gui, &mut m);
                             }
                         }
-                        if m.page != old_page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                        if m.page != old_page && m.on_privacy() { load_grants(&mut window, &mut m, gui, &mut rows); }
                         if m.page != old_page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, gui, info)); }
                         show(&mut window, &m, gui);
                         continue;
@@ -1009,21 +1163,38 @@ pub extern "C" fn _start() -> ! {
                 }
                 // Ctrl+P: the Shell keeps F-keys and Tab for itself, so Settings uses keys a
                 // program receives.
-                const KEY_P: u8 = 0x19;
-                const PAGE_UP: u8 = 0x49;
-                const PAGE_DOWN: u8 = 0x51;
                 let page = m.page;
                 let program_row = m.extra_row().filter(|_| !m.entering());
                 let change = if let (Some(i), Some(nav)) = (program_row, sex_app::nav(key).filter(|n| matches!(n, Nav::Left | Nav::Right)).or((key.code == ENTER).then_some(Nav::Right))) {
                     let row = rows[i];
                     change_grant(&mut window, &mut m, &row, matches!(nav, Nav::Right));
-                    load_grants(&mut window, &mut m, &mut rows);
+                    load_grants(&mut window, &mut m, gui, &mut rows);
                     Change::None
                 } else if m.entering() {
                     let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };
                     m.password_key(c)
                 } else if key.control && key.code == KEY_P {
                     m.start_password();
+                    Change::None
+                } else if key.control && key.code == KEY_A {
+                    if m.query_len > 0 {
+                        gui.search_focused = true;
+                        gui.search_selected = true;
+                    }
+                    Change::None
+                } else if key.control && key.code == KEY_V {
+                    if let Ok(clip) = sex_app::clipboard::paste(&mut window) {
+                        if gui.search_selected {
+                            m.clear_search();
+                            gui.search_selected = false;
+                        }
+                        gui.search_focused = true;
+                        for b in clip.bytes() {
+                            if b == b'\n' || b == b'\r' { break; }
+                            m.type_char(b);
+                        }
+                        m.say("Pasted.");
+                    }
                     Change::None
                 } else { match (sex_app::nav(key), key.code) {
                     (Some(Nav::Up), _) => { m.move_row(false); Change::None }
@@ -1032,22 +1203,33 @@ pub extern "C" fn _start() -> ! {
                     (Some(Nav::Right), _) | (_, ENTER) => m.step(true, key.shift),
                     (_, TAB) | (_, PAGE_DOWN) => { m.next_page(!(key.shift && key.code == TAB)); Change::None }
                     (_, PAGE_UP) => { m.next_page(false); Change::None }
-                    (_, ESC) => { m.clear_search(); Change::None }
-                    (_, BACKSPACE) => { m.backspace(); Change::None }
+                    (_, ESC) => { m.clear_search(); gui.search_focused = false; gui.search_selected = false; Change::None }
+                    (_, BACKSPACE) => {
+                        if gui.search_selected {
+                            m.clear_search();
+                            gui.search_selected = false;
+                        } else {
+                            m.backspace();
+                        }
+                        Change::None
+                    }
                     _ => {
-                        if let Some(c) = sex_app::typed(key) { m.type_char(c); }
+                        if let Some(c) = sex_app::typed(key) {
+                            if gui.search_selected {
+                                m.clear_search();
+                                gui.search_selected = false;
+                            }
+                            m.type_char(c);
+                        }
                         Change::None
                     }
                 } };
                 if m.page != page {
                     let (pages, _) = model::pages();
-                    gui.view = if pages[m.page] == "appearance" {
-                        SidebarView::Appearance
-                    } else {
-                        SidebarView::SystemPage(m.page)
-                    };
+                    gui.view = SidebarView::from_section(pages[m.page], m.page);
+                    gui.scroll_y = 0;
                 }
-                if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, gui, &mut rows); }
                 if m.page != page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, gui, info)); }
                 if let Change::Password(mut typed, n) = change {
                     let result = settings::password(sex_config::secret::SET, &typed[..n]);
@@ -1057,7 +1239,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 if let Change::Set(key_id, value) = change {
                     if persist_setting(&mut m, key_id, value, &mut generation) && m.on_privacy() {
-                        load_grants(&mut window, &mut m, &mut rows);
+                        load_grants(&mut window, &mut m, gui, &mut rows);
                     }
                 }
                 show(&mut window, &m, gui);

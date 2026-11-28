@@ -797,5 +797,17 @@ pub const RENAMED: &[(&[u8], &[u8])] = &[
 ];
 /// The program a bare name means now; a path or a current name is kept as given.
 pub fn renamed(target: &[u8]) -> &[u8] {
-    RENAMED.iter().find(|(old, _)| *old == target).map_or(target, |(_, new)| *new)
+    if target == b"moan" {
+        return target;
+    }
+    if let Some((_, new)) = RENAMED.iter().find(|(old, _)| *old == target) {
+        return new;
+    }
+    if let Ok(s) = core::str::from_utf8(target) {
+        let resolved = sex_pdx::spotlight::resolve_program_alias(s);
+        if resolved != s {
+            return resolved.as_bytes();
+        }
+    }
+    target
 }

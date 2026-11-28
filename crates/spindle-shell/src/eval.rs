@@ -19,6 +19,8 @@ pub(crate) struct Ctx<'a> {
     pub host: &'a mut dyn Host,
     pub cols: usize,
     pub color: bool,
+    pub theme: &'a str,
+    pub font: &'a str,
 }
 
 /// Evaluates `e` with `$in` = `input`; in a row condition `row` is the row, its columns

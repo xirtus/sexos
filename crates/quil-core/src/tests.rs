@@ -612,3 +612,25 @@ fn view_follows_the_cursor() {
     tab.follow(10);
     assert_eq!(tab.top, 0);
 }
+
+#[test]
+fn word_line_selection_and_line_delete_helpers() {
+    let mut ed = Editor::from_bytes(b"first\n  alpha beta gamma\nthird");
+    ed.select_word_at(10);
+    assert_eq!(ed.selected(&ed.primary_sel()), b"alpha");
+
+    ed.select_line_at(10);
+    assert_eq!(ed.selected(&ed.primary_sel()), b"  alpha beta gamma");
+
+    ed.set_cursor(14);
+    ed.move_all(Motion::LineStart, false);
+    assert_eq!(ed.cursor(), 6);
+
+    ed.set_cursor(14);
+    ed.delete_word_forward();
+    assert_eq!(ed.text(), b"first\n  alpha gamma\nthird");
+
+    ed.set_cursor(14);
+    ed.delete_to_line_start();
+    assert_eq!(ed.text(), b"first\ngamma\nthird");
+}

@@ -133,13 +133,17 @@ def serve(d: Path, port: int, auto: list, once: bool, quiet: bool):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(('0.0.0.0', port))
-    listener.listen(1)
+    listener.listen(4)
     shown = ', '.join(addresses()) or '(no network address found)'
     print(f'tether: waiting on port {port}. On SexOS, in Spindle: tether ADDRESS  (this computer: {shown})', flush=True)
     write_state(d, connected=False, port=port, waiting_since=time.time())
+    nxt = None
     while True:
-        conn, peer = listener.accept()
-        session(d, conn, peer[0], auto, quiet)
+        conn, peer = nxt or listener.accept()
+        # A new connection while one is open replaces it: SexOS restarted (or its Wi-Fi
+        # dropped) and the old flow will never say goodbye, so waiting on it would leave
+        # the machine's `tether` retrying until this side gave up.
+        nxt = session(d, conn, peer[0], auto, quiet, None if once else listener)
         if once:
             return
 
@@ -199,8 +203,9 @@ def sweep_reply(header: bytes) -> bytes:
     return bytes(out[:want])
 
 
-def session(d: Path, conn, peer: str, auto: list, quiet: bool):
-    """One SexOS session on a connected socket, whichever side connected."""
+def session(d: Path, conn, peer: str, auto: list, quiet: bool, listener=None):
+    """One SexOS session on a connected socket, whichever side connected. With `listener`,
+    a newer connection ends it; that connection is returned for the next session."""
     inbox = d / 'inbox.txt'
     inbox.touch()
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -223,10 +228,16 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
     first = b''
     sweep = False
     last_state = 0.0
+    replaced = None
     with path.open('ab') as log:
         while True:
-            readable, writable, _ = select.select([conn], [conn] if pending else [], [], 0.2)
-            if readable:
+            watch = [conn] + ([listener] if listener is not None else [])
+            readable, writable, _ = select.select(watch, [conn] if pending else [], [], 0.2)
+            if listener is not None and listener in readable:
+                replaced = listener.accept()
+                print(f'\ntether: new connection from {replaced[1][0]}; ending the old session', flush=True)
+                break
+            if conn in readable:
                 try:
                     data = conn.recv(65536)
                 except (BlockingIOError, InterruptedError):
@@ -302,6 +313,7 @@ def session(d: Path, conn, peer: str, auto: list, quiet: bool):
             log.write(f'sweep session ended after {received} bytes\n'.encode())
     print(f'\ntether: {peer} disconnected after {received} bytes', flush=True)
     write_state(d, connected=False, last_session=path.name, bytes=received, ended=time.time())
+    return replaced
 
 
 def current_log(d: Path):

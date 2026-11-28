@@ -371,3 +371,17 @@ fn duplicates_install_check_and_spindle_monospace_handoff() {
 
     paint_assert(&mut ui, 1024, 720);
 }
+
+#[test]
+fn noir_theme_paints_and_meets_contrast() {
+    let theme = filigree::noir_theme();
+    assert_eq!(theme.palette.window, weft::Color::hex(0x0D1017));
+    assert_eq!(theme.palette.surface, weft::Color::hex(0x151924));
+    assert_eq!(theme.palette.border, weft::Color::hex(0x252C3D));
+    assert!(theme.palette.text.contrast(theme.palette.window) >= 7.0);
+    assert!(theme.palette.text_dim.contrast(theme.palette.window) >= 4.5);
+    assert!(theme.palette.on_accent.contrast(theme.palette.accent) >= 4.5);
+    let mut ui = Ui::new(1024, 720, theme, Strings::new("en"));
+    let _app = Filigree::build(&mut ui);
+    paint_assert(&mut ui, 1024, 720);
+}

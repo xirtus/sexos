@@ -12,6 +12,8 @@ use core::fmt::Write;
 use sex_app::net::{self, IpAddr, TcpListener, TcpStream, UdpSocket};
 use sex_app::{files, Event, Window};
 
+mod ui;
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[talk.fatal] {}", info);
@@ -154,9 +156,13 @@ pub extern "C" fn _start() -> ! {
     window.title(b"Flirt");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let args = files::args(&mut window, &mut args).to_vec();
+    let w = words(&args);
+    if w.is_empty() {
+        ui::run_messages_ui(window);
+    }
     let mut screen = Screen(alloc::string::String::from("Talk. F11 closes.\n"));
     screen.line(&mut window, "");
-    match run(&mut window, &mut screen, &words(&args)) {
+    match run(&mut window, &mut screen, &w) {
         Ok(()) => sex_pdx::serial_record!("[talk.done] target={} task={}", window.target, window.task),
         Err(e) => {
             sex_pdx::serial_record!("[talk.failed] error={:?}", e);

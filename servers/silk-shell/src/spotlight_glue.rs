@@ -7,6 +7,7 @@
 
 use sex_pdx::spotlight::{
     ClickOutcome, Controller, KeyOutcome, LaunchTarget, OP_SPOTLIGHT, OP_SPOTLIGHT_QUERY,
+    resolve_program_alias,
 };
 
 static mut CTRL: Controller = Controller::new();
@@ -27,9 +28,22 @@ pub unsafe fn is_open() -> bool {
     (*core::ptr::addr_of!(CTRL)).is_open()
 }
 
+/// Screen rectangle of Spotlight when open, used by Meta Control Hub to dock beside it.
+pub unsafe fn panel_rect() -> (i16, i16, u16, u16) {
+    let (w, h, bar_h) = (
+        crate::desktop_width().max(0) as usize,
+        crate::desktop_height().max(0) as usize,
+        crate::desktop_bar_height().max(0) as usize,
+    );
+    sex_pdx::spotlight::Layout::new(w, h, bar_h, scale()).map_or((0, 0, 0, 0), |l| {
+        (l.panel.0 as i16, l.panel.1 as i16, l.panel.2 as u16, l.panel.3 as u16)
+    })
+}
+
 pub unsafe fn open() {
     // Dismiss any open SilkBar dropdown or tray popup before showing Spotlight.
     crate::silkbar_menus_glue::close("spotlight");
+    crate::bg_apps_glue::close("spotlight");
     if crate::TRAY_VIEW.menu != sex_pdx::tray::Menu::None {
         crate::tray_close();
     }
@@ -38,12 +52,14 @@ pub unsafe fn open() {
     }
     (*core::ptr::addr_of_mut!(CTRL)).open();
     sync_display();
+    crate::meta_hub_glue::sync_visibility();
     sex_pdx::serial_record!("[shell.spotlight] open=1");
 }
 
 pub unsafe fn close(reason: &str) {
     if (*core::ptr::addr_of_mut!(CTRL)).close() {
         sync_display();
+        crate::meta_hub_glue::sync_visibility();
         sex_pdx::serial_record!("[shell.spotlight] open=0 reason={}", reason);
     }
 }
@@ -87,6 +103,7 @@ fn program_needs_network(name: &str) -> bool {
             | "hookup"
             | "lurk"
             | "needle"
+            | "moan-studio"
     )
 }
 
@@ -98,7 +115,9 @@ unsafe fn dispatch_launch(target: LaunchTarget) {
             }
         }
         LaunchTarget::Spindle => {
-            let _ = crate::open_spindle_in_active_scene();
+            if !launch_named_program("spindle", true) {
+                let _ = crate::open_spindle_in_active_scene();
+            }
         }
         LaunchTarget::Quil => {
             let _ = crate::open_quil_in_active_scene();
@@ -122,12 +141,20 @@ unsafe fn dispatch_launch(target: LaunchTarget) {
             }
         }
         LaunchTarget::Program(name) => {
-            let _ = launch_named_program(name, program_needs_network(name));
+            let resolved = resolve_program_alias(name);
+            if !launch_named_program(resolved, program_needs_network(resolved))
+                && resolved == "moan-studio"
+            {
+                let _ = launch_named_program("moan", program_needs_network("moan"));
+            }
         }
         LaunchTarget::QueryProgram(query) => {
-            let name = query.as_str().trim();
-            if !name.is_empty() {
-                let _ = launch_named_program(name, true);
+            let name = resolve_program_alias(query.as_str());
+            if !name.is_empty()
+                && !launch_named_program(name, true)
+                && name == "moan-studio"
+            {
+                let _ = launch_named_program("moan", true);
             }
         }
     }
@@ -139,6 +166,17 @@ pub unsafe fn key(code: u8, value: u64) -> bool {
     if !ctrl.is_open() {
         return false;
     }
+    if (code == 0x1C || code == 0x9C) && value == 1 {
+        let q = ctrl.state().query;
+        if let Some(qcmd) = sex_pdx::meta_hub::parse_quick_command(q.as_str()) {
+            ctrl.close();
+            sync_display();
+            let _ = crate::meta_hub_glue::execute_quick_command(qcmd);
+            crate::meta_hub_glue::sync_visibility();
+            sex_pdx::serial_record!("[shell.spotlight] open=0 reason=quick_control");
+            return true;
+        }
+    }
     let mods = crate::APP_MODIFIERS.key(code);
     match ctrl.handle_key(code, value, mods.control, mods.shift) {
         KeyOutcome::Ignored => false,
@@ -149,11 +187,13 @@ pub unsafe fn key(code: u8, value: u64) -> bool {
         }
         KeyOutcome::Close => {
             sync_display();
+            crate::meta_hub_glue::sync_visibility();
             sex_pdx::serial_record!("[shell.spotlight] open=0 reason=escape");
             true
         }
         KeyOutcome::Launch(target) => {
             sync_display();
+            crate::meta_hub_glue::sync_visibility();
             sex_pdx::serial_record!("[shell.spotlight] open=0 reason=enter");
             dispatch_launch(target);
             true
@@ -181,11 +221,13 @@ pub unsafe fn press(px: i32, py: i32) -> bool {
         }
         ClickOutcome::Dismiss => {
             sync_display();
+            crate::meta_hub_glue::sync_visibility();
             sex_pdx::serial_record!("[shell.spotlight] open=0 reason=outside");
             true
         }
         ClickOutcome::Launch(target) => {
             sync_display();
+            crate::meta_hub_glue::sync_visibility();
             sex_pdx::serial_record!("[shell.spotlight] open=0 reason=click");
             dispatch_launch(target);
             true

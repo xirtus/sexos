@@ -192,8 +192,8 @@ use sex_pdx::sound_mixer as mixer;
 
 /// The person's settings: master volume and mute, and each row's volume and mute.
 /// `mic`: rows whose program the person let hear the microphone, until it ends.
-struct Mixer { master: u8, muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS], mic: [bool; STREAMS] }
-static mut MIXER: Mixer = Mixer { master: 100, muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS], mic: [false; STREAMS] };
+struct Mixer { master: u8, muted: bool, mic_volume: u8, mic_muted: bool, rows: [u8; STREAMS], rows_muted: [bool; STREAMS], mic: [bool; STREAMS] }
+static mut MIXER: Mixer = Mixer { master: 100, muted: false, mic_volume: 100, mic_muted: false, rows: [100; STREAMS], rows_muted: [false; STREAMS], mic: [false; STREAMS] };
 fn settings() -> &'static mut Mixer { unsafe { &mut *core::ptr::addr_of_mut!(MIXER) } }
 
 /// For media keys: which PD each row's program is while it has played since it
@@ -557,14 +557,26 @@ impl Player {
             self.asked = self.asked.saturating_sub(1);
             if !self.hearing { continue; }
             let n = (frames.len() / FRAME_BYTES) as u64;
+            let (mic_vol, mic_muted) = { let m = settings(); (m.mic_volume.min(100), m.mic_muted) };
+            let silence_mic = mic_muted || mic_vol == 0;
             for i in 0..STREAMS {
                 if !self.listener(i) { continue; }
                 let r = self.streams[i].unwrap().ring;
                 let at = r.load(ring::HEARD);
                 let slots = r.heard();
                 for f in 0..n as usize {
-                    let b = &frames[f * FRAME_BYTES..];
-                    let pair = [i16::from_le_bytes([b[0], b[1]]), i16::from_le_bytes([b[2], b[3]])];
+                    let pair = if silence_mic {
+                        [0, 0]
+                    } else {
+                        let b = &frames[f * FRAME_BYTES..];
+                        let l = i16::from_le_bytes([b[0], b[1]]);
+                        let right = i16::from_le_bytes([b[2], b[3]]);
+                        if mic_vol == 100 {
+                            [l, right]
+                        } else {
+                            [((l as i32 * mic_vol as i32) / 100) as i16, ((right as i32 * mic_vol as i32) / 100) as i16]
+                        }
+                    };
                     unsafe { core::ptr::write_volatile(slots.add(((at + f as u64) % ring::CAPTURE_FRAMES) as usize), pair) };
                 }
                 r.store(ring::HEARD, at + n);
@@ -1009,7 +1021,7 @@ pub fn quiet() {
 /// `write` is false for readers such as SilkBar.
 pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
     let m = settings();
-    let state = |m: &Mixer| mixer::state(m.master, m.muted, present());
+    let state = |m: &Mixer| mixer::state_with_mic(m.master, m.muted, present(), m.mic_volume, m.mic_muted);
     let row = |m: &Mixer, k: usize| {
         let (playing, asked, pd, listening) = player().and_then(|p| p.streams[k].as_ref()).filter(|st|!crate::restricted::denied(st.pd))
             .map_or((false, 0, 0, false), |st| (st.active, st.ring.load(ring::VOLUME).min(100) as u8, st.pd, st.ring.load(ring::MIC) == ring::MIC_ON));
@@ -1034,6 +1046,12 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             m.muted = false;
             state(m)
         }
+        mixer::MUTE_MIC if a <= 2 => { m.mic_muted = if a == 2 { !m.mic_muted } else { a == 1 }; state(m) }
+        mixer::STEP_MIC => {
+            m.mic_volume = (m.mic_volume as i64 + a as i64).clamp(0, 100) as u8;
+            state(m)
+        }
+        mixer::SET_MIC if a <= 100 => { m.mic_volume = a as u8; state(m) }
         mixer::SET_STREAM if (a as usize) < STREAMS && b & 0xFF <= 100 => {
             m.rows[a as usize] = b as u8;
             m.rows_muted[a as usize] = b & mixer::MUTED != 0;
@@ -1055,7 +1073,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
         _ => return mixer::REFUSED,
     };
     bt_publish();
-    sex_pdx::serial_record!("[bell.mixer] action={} master={} muted={} reply={:#x}", action, m.master, m.muted as u8, reply);
+    sex_pdx::serial_record!("[bell.mixer] action={} master={} muted={} mic={} mic_muted={} reply={:#x}", action, m.master, m.muted as u8, m.mic_volume, m.mic_muted as u8, reply);
     reply
 }
 

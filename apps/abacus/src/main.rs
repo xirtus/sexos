@@ -19,7 +19,7 @@ mod program {
     extern crate alloc;
     use abacus::{Abacus, Mode, Note};
     use weft::sexos::App;
-    use weft::{Response, Strings, Theme};
+    use weft::{Response, Strings};
 
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -28,7 +28,8 @@ mod program {
     }
 
     extern "C" fn main() -> ! {
-        let mut app = App::open("Abacus", Theme::light(), Strings::new("en"));
+        let mut app = App::open("Abacus", abacus::noir_theme(), Strings::new("en"));
+        app.ui.set_theme(abacus::noir_theme());
         let calc = Abacus::build(&mut app.ui);
         let mut calc = calc;
         app.present();
@@ -56,7 +57,18 @@ mod program {
             for r in out {
                 if r == Response::Close { sex_pdx::serial_record!("[abacus.closed] target={} task={}", target, task); sex_pdx::task_finish(0); }
                 if let Response::Command(c) = &r { sex_pdx::serial_record!("[abacus.command] id={}", c); }
-                if let Response::Command(c) = &r { if c == "abacus.copy" { let t = alloc::string::String::from(calc.result_text(&app.ui)); app.ui.set_clipboard(&t); } }
+                if let Response::Command(c) = &r {
+                    if c == "abacus.copy" {
+                        let t = alloc::string::String::from(calc.result_text(&app.ui));
+                        app.ui.set_clipboard(&t);
+                        let _ = sex_app::clipboard::copy(&mut app.window, &t);
+                        app.ui.toast("Copied result", None, 1500);
+                    }
+                }
+                if r == Response::Clicked(calc.copy_btn) {
+                    let t = alloc::string::String::from(calc.result_text(&app.ui));
+                    let _ = sex_app::clipboard::copy(&mut app.window, &t);
+                }
                 match calc.on(&mut app.ui, &r) {
                     Some(Note::Result { expr, value }) => sex_pdx::serial_record!("[abacus.result] expr={} value={}", ascii(&expr), value),
                     Some(Note::Error(what)) => sex_pdx::serial_record!("[abacus.error] what={}", what),
@@ -71,7 +83,7 @@ mod program {
 
     /// The tray item's menu.
     const TRAY_MENU: &[&[u8]] = &[b"Show answer", b"Clear", b"Scientific", b"Ask me a sum"];
-    const ACCENT: u32 = 0x0035_74E8;
+    const ACCENT: u32 = 0x00F4_3F5E;
 
     /// A row chosen from the tray item's menu, or an answer to the sum notification.
     fn tray_event(app: &mut App, calc: &mut Abacus, event: sex_app::tray::Event, asked: &mut u32) {

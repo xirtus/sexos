@@ -10,7 +10,7 @@ fn main() {
     let w: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1280);
     let h: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(800);
     let scale: f32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1.0);
-    let ctx = egui::Context::default();
+    let ctx = sex_egui::new_context();
     egui_extras::install_image_loaders(&ctx);
     let mut demo = egui_demo_lib::DemoWindows::default();
     let mut painter = Painter::new();

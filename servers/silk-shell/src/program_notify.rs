@@ -35,3 +35,13 @@ pub fn hidden(sender: u16) -> bool {
     let (row, index) = table()[i];
     row == sender as u32 && index >= 0 && crate::config_watch::holds(id::NOTIFY_HIDDEN, index as usize)
 }
+
+/// Program folder name in `sex_config::PROGRAMS` once Files has answered for `row`.
+pub fn name(row: u32) -> Option<&'static str> {
+    let i = slot(row)?;
+    let (r, index) = table()[i];
+    if r != row || index < 0 {
+        return None;
+    }
+    sex_config::PROGRAMS.get(index as usize).copied()
+}
