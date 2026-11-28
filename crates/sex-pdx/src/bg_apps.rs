@@ -66,7 +66,9 @@ impl AppKind {
     pub const fn default_policy(self) -> ClosePolicy {
         match self {
             Self::Tether | Self::Tailor | Self::Qupid | Self::Swingers => ClosePolicy::KeepInSilkBar,
-            _ => ClosePolicy::Ask,
+            // The close button ends an ordinary program at once (no sheet each time);
+            // keeping it in the SilkBar is a remembered choice (Settings or the sheet).
+            _ => ClosePolicy::QuitApp,
         }
     }
 

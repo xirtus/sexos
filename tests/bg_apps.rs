@@ -20,11 +20,11 @@ fn close_policy_defaults_and_persisted_masks() {
         assert_eq!(kind.default_policy(), ClosePolicy::KeepInSilkBar);
         assert_eq!(resolve_policy(name, kind, 0, 0), ClosePolicy::KeepInSilkBar);
     }
-    // Ordinary interactive apps default to Ask.
+    // Ordinary interactive apps quit on close by default.
     for name in [b"abacus".as_slice(), b"loom", b"tatami", b"sexshop", b"spindle"] {
         let kind = classify_name(name);
-        assert_eq!(kind.default_policy(), ClosePolicy::Ask);
-        assert_eq!(resolve_policy(name, kind, 0, 0), ClosePolicy::Ask);
+        assert_eq!(kind.default_policy(), ClosePolicy::QuitApp);
+        assert_eq!(resolve_policy(name, kind, 0, 0), ClosePolicy::QuitApp);
     }
 
     // Remember choice overrides default via persisted bitmasks.

@@ -92,7 +92,9 @@ def main():
   term_line('echo left-pane');rows=snapshot();screen='\n'.join(rows.values())
   # The two-line Noir prompt scrolls older output (`buy milk`) out of a half-width pane.
   assert 'left-pane' in screen and 'Hello, Pane' not in screen,screen
-  # Search and hints over the scrollback (P6).
+  # Search and hints over the scrollback (P6), in the zoomed pane: at half width the
+  # two-line Noir prompt wraps the typed URL across rows.
+  s=len(t());chord('ctrl','shift','z');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={left} zoomed=1 ',s,30)
   term_line('clear');term_line('echo "see https://example.com/x and 1234567"')
   s=len(t());chord('ctrl','shift','f');g['wait'](r'\[term\.mode\] search',s,30);keys('example')
   m=g['wait'](r'\[term\.search\] query=example matches=(\d+)',s,30);assert int(m[1])>=1,m[0]
@@ -100,6 +102,7 @@ def main():
   s=len(t());chord('ctrl','shift','spc');m=g['wait'](r'\[term\.hints\] found=(\d+)',s,30);assert int(m[1])>=1,m[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spindle-hints.ppm')});keys('a')
   m=g['wait'](r'\[term\.hint\] kind=(\w+) text=(\S+)',s,30);assert m.group(1,2)==('Url','https://example.com/x'),m[0]
+  s=len(t());chord('ctrl','shift','z');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={left} zoomed=0 ',s,30)
   # The guest in the right pane still runs and ends there.
   s=len(t());chord('ctrl','shift','right');g['wait'](rf'\[term\.panes\] tabs=1 active=0 focus={right} ',s,30)
   q.key('ret');m=g['wait'](r'\[term\.job\.exit\] name=greet code=(-?\d+)',s,120);assert m[1]=='5',m[0]
