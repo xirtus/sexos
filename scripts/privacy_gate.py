@@ -60,11 +60,11 @@ def main():
   do('pkg allow chello network',r'\[files\.pkg\.consent\] program=chello answered=1 allowed=1\n')
   m,s=do(f'run chello net 10.0.2.2 {pg.ECHO_PORT}',r'\[spindle\.pkg\.note\] program=chello asked=1 answered=1 allowed=1\n')
   out['allowed_checks']=checks(23,s)
-  # Settings: first-start setup, then Privacy: three pages back from the first
-  # (Storage and Updates, the information pages, come after it).
+  # Settings: first-start setup, then Privacy: four pages back from the first
+  # (Bluetooth, then Storage and Updates, the information pages, come after it).
   s=len(t());type_line('run tatami');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
   s=len(t())
-  for _ in range(3):q.key('pgup');time.sleep(.3)
+  for _ in range(4):q.key('pgup');time.sleep(.3)
   g['wait'](r'\[files\.pkg\.settings\] op=15 arg=\n',s,30)
   g['wait'](r'\[settings\.grants\] status=0 rows=1\n',s,30)
   # Two first-run settings, then chello's network row; Left takes it away.

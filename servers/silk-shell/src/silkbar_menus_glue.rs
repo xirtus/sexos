@@ -137,6 +137,16 @@ pub unsafe fn open_or_toggle_top(kind: MenuKind, anchor_x: i32) {
     );
 }
 
+/// Whether `(ux, uy)` is on the bar's Bluetooth icon (shown while a controller is there).
+unsafe fn bluetooth_icon_at(ux: usize, uy: usize) -> bool {
+    let m = crate::chrome_metrics();
+    let mut bar = DEFAULT_SILK_BAR;
+    if !silkbar_model::reflow_chrome(&mut bar, crate::desktop_width().max(0) as usize, m.bar() as usize,
+        m.px(sex_pdx::desktop_style::chrome::TARGET) as usize) { return false; }
+    let c = &bar.layout[ModuleSlot::Chip0 as usize];
+    crate::bt_panel::icon_hit((c.x, c.y, c.w, c.h), ux, uy)
+}
+
 /// Computes which top-bar menu trigger (if any) is under `(ux, uy)`.
 unsafe fn top_bar_trigger_at(ux: usize, uy: usize) -> Option<(TopBarTrigger, i32)> {
     let m = crate::chrome_metrics();
@@ -191,6 +201,12 @@ unsafe fn top_bar_trigger_at(ux: usize, uy: usize) -> Option<(TopBarTrigger, i32
 pub unsafe fn handle_top_bar_click(px: i32, py: i32) -> bool {
     if px < 0 || py < 0 || py >= crate::desktop_bar_height() {
         return false;
+    }
+    // The Bluetooth icon, left of the network chip: opens the Bluetooth panel.
+    if bluetooth_icon_at(px as usize, py as usize) {
+        if is_open() { close("bar_bluetooth"); }
+        sex_pdx::serial_record!("[shell.bar.bluetooth] click=1");
+        return crate::bt_panel::toggle();
     }
     let Some((trig, anchor_x)) = top_bar_trigger_at(px as usize, py as usize) else {
         // Clicking another bar slot (workspace, clock, volume) closes any open dropdown.

@@ -448,3 +448,27 @@ x17 receipt (after section 18), with bonded headphones that do AVRCP 1.4:
    the Shell's volume OSD moves 5%, then `… set=…`. Press the keyboard's volume keys:
    the headset gets louder or quieter (`… set=…`), without the OSD bouncing back.
 4. Send the lines if the volume jumps around (a loop) or a button does nothing.
+
+## 22. Bluetooth on/off, the Bluetooth key and the bar icon (2026-11-28)
+
+| Piece | Where | What |
+|---|---|---|
+| Level | `sex_pdx::bt_ui` word 28 (`Shared::set_off` / `wants_off`) | The Shell writes 1 while the person wants Bluetooth off. A level, not a command: it is set before Cufflinks starts and survives a Cufflinks restart (`cufflinks_start` leaves it) |
+| Phase | `bt_ui::OFF` (5) | A controller is there and Bluetooth is off. `Snapshot::decode` accepts it; `has_power` names the phases with a switch (READY, OFF, STARTING, FAILED) |
+| Cufflinks | `servers/cufflinks/src/main.rs` | Off: every link gets HCI Disconnect, scans stop, then HCI Reset once links and commands are done (or after 1.5 s); the controller stays reset and idle with its firmware. Cufflinks then looks at the level four times a second (no route from the Shell). On: a new host session (bring-up, bonds loaded, bonded devices reconnect). A controller found while off is loaded and left off. Phase changes now wake an attached Shell (for the icon), and so does a device coming into or out of use |
+| Panel | `bt_ui::Ui` | First row "Turn Bluetooth off" / "Turn Bluetooth on" (Enter, click or B); while off only the switch shows ("Bluetooth is off"); a controller-less machine shows "Bluetooth None", no switch. `Action::Power(on)` |
+| Setting | `sex_config::id::BLUETOOTH` (53), `bluetooth.on`, default 1; its own Settings page "Bluetooth" (after Privacy) | The Shell keeps the choice (`config_watch::changed_here`) and follows a change from Settings (`config_watch::take` -> `bt_panel::set_power`) |
+| Key | Shell `desktop_keys::KEY_BLUETOOTH` (0x74), Input usage 0xEF -> 0x74 | One toggle per press (also with the panel open); the bar says "Bluetooth on/off" for 1.5 s |
+| Bar icon | `sex_pdx::tray::Status::bluetooth` (bits 40..47: `BT_NONE`, `BT_OFF`, `BT_ON`, `BT_IN_USE`), `tray::bluetooth_rect`, `bt_ui::tray_icon` | One chip left of the network chip inside the status pill (the pill and the battery text move over, program tray icons too). Dim when off or failed, normal when on, green while a device is in use; hidden with no controller (so QEMU's bar is unchanged). Click: the Bluetooth panel. Display draws it from the icon set's `bluetooth` |
+
+Logs: `[cufflinks.power] off=1 links=…`, `[cufflinks.power] off=1 reset=1 waited_ms=… links_left=…`,
+`[cufflinks.power] off=1 state=idle`, `[cufflinks.power] off=0`; Shell `[shell.bt.power] on=… region=…`,
+`[shell.bt.power.key] on=… osd=…`, `[shell.bar.bluetooth] click=1`; Display `[display.tray] … bt=…`.
+
+Tests: `bt_ui` (switch rows, keys, clicks, OFF round trip, the level across `cufflinks_start`, icon
+choice), `tray` (status word), `tests/desktop_keys.rs` (one toggle per press), `sex-config` schema.
+
+Not done: what the x17's F9 sends is not known yet. Its keyboard (USB 0d62:babc) has a
+vendor page 0xFF89 report and a consumer report; Dell's WMI radio code (0xE008/0x0153) is
+logged by sexacpi as `[sexacpi.hotkey] key=radio` but not routed. Whichever it is, the
+producer sends usage 0xEF (or the Shell code 0x74) and the rest works. HFP (headset mic) next.

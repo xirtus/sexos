@@ -141,6 +141,7 @@ pub mod id {
     pub const AUTOCORRECT: u16 = 50;
     pub const SPELLCHECK: u16 = 51;
     pub const INLINE_PREDICT: u16 = 52;
+    pub const BLUETOOTH: u16 = 53;
 }
 
 /// Programs (program store names) the Shell may start at login and whose
@@ -264,6 +265,7 @@ pub const KEYS: &[Key] = &[
     Key { id: id::NOTIFY_HIDDEN, name: "notifications.hidden", label: "Hide notifications", kind: Kind::Set(PROGRAMS), default: 0 },
     Key { id: id::FIRST_RUN_NETWORK, name: "privacy.network_first_run", label: "New programs asking for the network", kind: Kind::Choice(FIRST_RUN), default: 0 },
     Key { id: id::FIRST_RUN_MICROPHONE, name: "privacy.microphone_first_run", label: "New programs asking for the microphone", kind: Kind::Choice(FIRST_RUN), default: 0 },
+    Key { id: id::BLUETOOTH, name: "bluetooth.on", label: "Bluetooth", kind: Kind::Bool, default: 1 },
 ];
 pub const COUNT: usize = KEYS.len();
 

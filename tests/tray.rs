@@ -6,7 +6,7 @@ use tray::*;
 
 #[test]
 fn status_and_view_round_trip() {
-    let s = Status { volume: 63, muted: true, sound: true, battery: Some(87), charging: true, on_ac: Some(true), wifi: 10 };
+    let s = Status { volume: 63, muted: true, sound: true, battery: Some(87), charging: true, on_ac: Some(true), wifi: 10, bluetooth: BT_IN_USE };
     assert_eq!(Status::decode(s.wire()), s);
     assert_eq!(Status::decode(Status::UNKNOWN.wire()), Status::UNKNOWN);
     for v in [View { menu: Menu::Quick, month_offset: 0 }, View { menu: Menu::Calendar, month_offset: -3 }, View::default()] {

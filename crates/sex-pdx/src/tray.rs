@@ -13,6 +13,18 @@ pub const OP_TRAY: u64 = 0x2E4;
 /// No Wi-Fi state known (no chip, or no answer yet).
 pub const WIFI_UNKNOWN: u8 = 0xFF;
 
+/// The bar's Bluetooth icon ([`Status::bluetooth`]): none (no controller or no
+/// Cufflinks: no icon), off (dim), on, or on with a device in use (headphones playing,
+/// a keyboard typing). The Shell picks one with `sex_pdx::bt_ui::tray_icon`.
+pub const BT_NONE: u8 = 0;
+pub const BT_OFF: u8 = 1;
+pub const BT_ON: u8 = 2;
+pub const BT_IN_USE: u8 = 3;
+
+/// Where the Bluetooth icon sits: one chip left of the network chip (`chip0`, as
+/// x, y, w, h), inside the same status pill. Shell's clicks and Display's drawing use it.
+pub fn bluetooth_rect(chip0: Rect) -> Rect { (chip0.0.saturating_sub(chip0.2), chip0.1, chip0.2, chip0.3) }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Status {
     /// Master volume 0..=100 and mute; `sound` once Bell has answered.
@@ -25,15 +37,17 @@ pub struct Status {
     pub on_ac: Option<bool>,
     /// `sex_pdx::wifi_status` phase, or `WIFI_UNKNOWN`.
     pub wifi: u8,
+    /// `BT_NONE`, `BT_OFF`, `BT_ON` or `BT_IN_USE`.
+    pub bluetooth: u8,
 }
 
 impl Status {
-    pub const UNKNOWN: Self = Self { volume: 0, muted: false, sound: false, battery: None, charging: false, on_ac: None, wifi: WIFI_UNKNOWN };
+    pub const UNKNOWN: Self = Self { volume: 0, muted: false, sound: false, battery: None, charging: false, on_ac: None, wifi: WIFI_UNKNOWN, bluetooth: BT_NONE };
     pub fn wire(&self) -> u64 {
         let (b, has) = match self.battery { Some(p) => (p.min(100) as u64, 1u64), None => (0, 0) };
         let ac = match self.on_ac { Some(v) => 1 | (v as u64) << 1, None => 0 };
         self.volume.min(100) as u64 | (self.muted as u64) << 8 | (self.sound as u64) << 9
-            | b << 16 | has << 24 | (self.charging as u64) << 25 | ac << 26 | (self.wifi as u64) << 32
+            | b << 16 | has << 24 | (self.charging as u64) << 25 | ac << 26 | (self.wifi as u64) << 32 | (self.bluetooth.min(BT_IN_USE) as u64) << 40
     }
     pub fn decode(w: u64) -> Self {
         Self {
@@ -42,6 +56,7 @@ impl Status {
             charging: w & 1 << 25 != 0,
             on_ac: (w & 1 << 26 != 0).then_some(w & 1 << 27 != 0),
             wifi: (w >> 32) as u8,
+            bluetooth: ((w >> 40) as u8).min(BT_IN_USE),
         }
     }
 }
@@ -203,4 +218,23 @@ pub fn battery_text(s: &Status, out: &mut [u8; 32]) -> usize {
         None => put(if s.on_ac == Some(false) { b"On battery" } else { b"On AC power" }, &mut n),
     }
     n
+}
+
+#[cfg(test)]
+mod bluetooth_tests {
+    use super::*;
+
+    #[test]
+    fn bluetooth_icon_rides_the_status_word() {
+        let mut s = Status::UNKNOWN;
+        assert_eq!(Status::decode(s.wire()).bluetooth, BT_NONE);
+        for v in [BT_OFF, BT_ON, BT_IN_USE] {
+            s.bluetooth = v;
+            s.wifi = 10;
+            let d = Status::decode(s.wire());
+            assert_eq!((d.bluetooth, d.wifi), (v, 10));
+        }
+        assert_eq!(Status::decode(7 << 40).bluetooth, BT_IN_USE, "out of range is clamped");
+        assert_eq!(bluetooth_rect((300, 2, 24, 24)), (276, 2, 24, 24));
+    }
 }

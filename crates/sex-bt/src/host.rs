@@ -249,6 +249,8 @@ impl Host {
     }
 
     fn send_command(&mut self, c: Vec<u8>) { self.commands.push_back(c); }
+    /// No command waiting to go and none the controller still owes an answer for.
+    pub fn commands_idle(&self) -> bool { self.commands.is_empty() && self.credits > 0 }
 
     /// Start discovery: classic inquiry (`length` x 1.28 s) and an LE active scan.
     pub fn scan(&mut self, length: u8) {

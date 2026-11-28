@@ -27,6 +27,8 @@ pub struct Desk {
     ticket: u32,
     /// Discovery runs until then (ticks).
     pub scan_until: u64,
+    /// A device was in use at the last publish (the bar shows it).
+    in_use: bool,
 }
 
 impl Desk {
@@ -37,7 +39,7 @@ impl Desk {
         let snap = Snapshot { phase: u::NO_CONTROLLER, ..Snapshot::EMPTY };
         if let Some(r) = region { r.cufflinks_start(&snap); }
         log!("[cufflinks.ui.route] ok={} slot={}", region.is_some() as u8, u::SLOT);
-        Desk { region, snap, dirty: false, published: 0, reachable: true, serial: 0, ticket: 0, scan_until: 0 }
+        Desk { region, snap, dirty: false, published: 0, reachable: true, serial: 0, ticket: 0, scan_until: 0, in_use: false }
     }
 
     /// The desktop can ask the user: a Shell attached to the region and our last
@@ -63,7 +65,9 @@ impl Desk {
         self.snap.phase = phase;
         if phase != u::READY { self.snap.count = 0; self.snap.compare = None; self.snap.scanning = false; self.scan_until = 0; }
         self.flush(sex_pdx::get_ticks());
-        if self.region.is_some_and(|r| r.shell_open()) { self.wake(u::EVENT_CHANGED); }
+        // The bar's Bluetooth icon follows the phase: wake an attached Shell (phases
+        // change only while a controller is there, so an idle Cufflinks stays asleep).
+        if self.region.is_some_and(|r| r.shell_attached()) { self.wake(u::EVENT_CHANGED); }
     }
 
     pub fn changed(&mut self, yes: bool) { self.dirty |= yes; }
@@ -108,8 +112,15 @@ impl Desk {
         if scanning != self.snap.scanning { self.snap.scanning = scanning; self.dirty = true; }
         if !self.dirty || now.saturating_sub(self.published) < PUBLISH_TICKS { return; }
         self.flush(now);
-        if self.region.is_some_and(|r| r.shell_open()) { self.wake(u::EVENT_CHANGED); }
+        // A device coming into or out of use changes the bar's icon too.
+        let in_use = self.snap.devices().iter().any(|d| d.has(u::IN_USE));
+        let icon = in_use != self.in_use;
+        self.in_use = in_use;
+        if self.region.is_some_and(|r| r.shell_open() || (icon && r.shell_attached())) { self.wake(u::EVENT_CHANGED); }
     }
 
     pub fn command(&self) -> Option<Command> { self.region.and_then(|r| r.take_command()) }
+
+    /// The person turned Bluetooth off (the Shell's level in the region).
+    pub fn wants_off(&self) -> bool { self.region.is_some_and(|r| r.wants_off()) }
 }

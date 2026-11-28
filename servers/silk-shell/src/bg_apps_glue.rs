@@ -233,8 +233,10 @@ unsafe fn bar_edges() -> Option<(usize, usize, u32, usize, usize)> {
         &bar.layout[ModuleSlot::Workspace0 as usize]
     };
     let ws_last_right = ws_last.x + ws_last.w;
-    let chip0_x = bar.layout[ModuleSlot::Chip0 as usize].x;
     let tray = *core::ptr::addr_of!(crate::TRAY);
+    // The Bluetooth icon, while it shows, sits left of Chip0: everything else starts left of it.
+    let c0 = &bar.layout[ModuleSlot::Chip0 as usize];
+    let chip0_x = if tray.bluetooth != sex_pdx::tray::BT_NONE { sex_pdx::tray::bluetooth_rect((c0.x, c0.y, c0.w, c0.h)).0 } else { c0.x };
     let batt_reserve = if tray.battery.is_some() {
         if tray.charging || tray.on_ac != Some(true) { 128 * s } else { 52 * s }
     } else {

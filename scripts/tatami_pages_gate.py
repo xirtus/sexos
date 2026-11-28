@@ -37,8 +37,8 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(1)
   g['focus'](153);time.sleep(.5);s=len(t());typ('run tatami');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
-  # Startup programs: six pages back from the first (Updates and Storage come last). Mesh is the third program.
-  keys('pgup','pgup','pgup','pgup','pgup','pgup','down','down')
+  # Startup programs: seven pages back from the first (Bluetooth, Updates and Storage come last). Mesh is the third program.
+  keys('pgup','pgup','pgup','pgup','pgup','pgup','pgup','down','down')
   s=len(t());q.key('right');g['wait'](r'\[settings\.set\] key=33 value=4 status=0',s,30)
   g['wait'](r'\[files\.config\.set\] caller=\d+ key=33 value=4 status=0',s,30)
   # Shortcuts: the overview is the third row; Left from "default" wraps to Escape.
@@ -56,8 +56,8 @@ def main():
   g['wait'](r'\[settings\.facts\] page=setup status=0 slot=\S+ version=\S+ filesystem=- health=- image=(hashing \d+%|[0-9a-f]{64})\n',s,30)
   m=g['wait'](r'\[settings\.facts\] page=setup status=0 slot=(\S+) version=\S+ filesystem=- health=- image=([0-9a-f]{64})\n',s,300);out['image']=m[2]
   out['about_requests']=t()[s:].count('page=setup status=0')
-  # Updates and Storage: six pages on from About, after Privacy. Files answers Tatami alone.
-  s=len(t());keys('pgdn','pgdn','pgdn','pgdn','pgdn','pgdn')
+  # Updates and Storage: seven pages on from About, after Privacy and Bluetooth. Files answers Tatami alone.
+  s=len(t());keys('pgdn','pgdn','pgdn','pgdn','pgdn','pgdn','pgdn')
   m=g['wait'](r'\[settings\.facts\] page=updates status=0 slot=(none|a|b) ',s,30);out['slot']=m[1]
   g['wait'](r'\[files\.facts\] topic=1 bytes=\d+',s,5)
   s=len(t());keys('pgdn')
