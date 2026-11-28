@@ -33,7 +33,7 @@ pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
 /// The Bluetooth key (F9 on the Alienware x17): Input gives it this code (a keyboard
 /// driver sends reserved usage 0xEF). Shell turns Bluetooth on or off; programs never see it.
-pub const KEY_BLUETOOTH: u8 = 0x79;
+pub const KEY_BLUETOOTH: u8 = 0x74;
 /// Set-1 codes for Alt+F4, Alt+F10, and Alt+Space.
 pub const KEY_F4: u8 = 0x3E;
 pub const KEY_F10: u8 = 0x44;

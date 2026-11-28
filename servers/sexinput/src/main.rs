@@ -523,7 +523,7 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         0x81 => 0x76, // Volume Down: KEY_VOLUME_DOWN
         // The Bluetooth key, as a keyboard driver sends it (reserved usage 0xEF): the
         // Shell's KEY_BLUETOOTH (desktop_keys.rs).
-        0xEF => 0x79,
+        0xEF => 0x74,
         // The player keys, as the reserved usages keyboards (and Cufflinks, for a
         // Bluetooth headset's AVRCP buttons) send them: KEY_PLAY_PAUSE, KEY_STOP,
         // KEY_PREVIOUS, KEY_NEXT.
