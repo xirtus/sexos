@@ -241,7 +241,7 @@ impl Agent {
     pub fn add_stun_server(&mut self, server: SocketAddr) { self.stun_servers.push(server); }
     /// Returns the server's number, which `Route::Stream` and `receive_stream` use.
     pub fn add_turn_server(&mut self, config: turn::Config) -> usize {
-        let rng = self.rng.fork();
+        let rng = self.rng.split();
         self.relays.push(Relay { client: turn::Client::new(config, rng), base: None, done: false, candidate: None });
         self.relays.len() - 1
     }

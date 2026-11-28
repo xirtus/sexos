@@ -20,7 +20,7 @@ impl Rng {
     pub fn below(&mut self, n: u64) -> u64 { if n == 0 { 0 } else { self.u64() % n } }
     pub fn transaction(&mut self) -> [u8; 12] { let mut t = [0; 12]; self.fill(&mut t); t }
     /// A seed for another generator.
-    pub fn fork(&mut self) -> Rng { let mut k = [0; 32]; self.fill(&mut k); Rng::new(k) }
+    pub fn split(&mut self) -> Rng { let mut k = [0; 32]; self.fill(&mut k); Rng::new(k) }
     /// `n` ice-chars (ALPHA, DIGIT, `+`, `/`), as ice-ufrag and ice-pwd use.
     pub fn ice_chars(&mut self, n: usize) -> String {
         const SET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
