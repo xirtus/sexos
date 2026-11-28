@@ -15,6 +15,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod zone;
+pub mod dreamspell;
 
 /// Seconds from the Unix epoch to the SexTime epoch.
 pub const UNIX_OFFSET: i64 = 1_356_048_000;
@@ -197,6 +198,90 @@ impl LongCount {
     }
 }
 
+/// The 260-day Tzolk'in: a number 1..=13 with one of twenty day names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tzolkin { pub number: u8, pub name: u8 }
+
+/// The 365-day Haab': day 0..=19 of months 0..=17, or 0..=4 of Wayeb' (18).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Haab { pub day: u8, pub month: u8 }
+
+pub const TZOLKIN_NAMES: [&str; 20] = [
+    "Imix", "Ik'", "Ak'bal", "K'an", "Chikchan", "Kimi", "Manik'", "Lamat", "Muluk", "Ok",
+    "Chuwen", "Eb", "Ben", "Ix", "Men", "Kib", "Kaban", "Etz'nab", "Kawak", "Ajaw",
+];
+pub const HAAB_MONTHS: [&str; 19] = [
+    "Pop", "Wo'", "Sip", "Sotz'", "Sek", "Xul", "Yaxk'in", "Mol", "Ch'en", "Yax",
+    "Sak'", "Keh", "Mak", "K'ank'in", "Muwan", "Pax", "K'ayab", "Kumk'u", "Wayeb'",
+];
+
+impl Tzolkin {
+    /// 0.0.0.0.0 is 4 Ajaw.
+    pub fn from_days(days: i64) -> Self {
+        Self { number: ((days + 3).rem_euclid(13) + 1) as u8, name: (days + 19).rem_euclid(20) as u8 }
+    }
+    pub fn name(self) -> &'static str { TZOLKIN_NAMES[self.name as usize % 20] }
+}
+
+impl Haab {
+    /// 0.0.0.0.0 is 8 Kumk'u.
+    pub fn from_days(days: i64) -> Self {
+        let at = (days + 17 * 20 + 8).rem_euclid(365);
+        Self { day: (at % 20) as u8, month: (at / 20) as u8 }
+    }
+    pub fn month_name(self) -> &'static str { HAAB_MONTHS[self.month as usize % 19] }
+}
+
+/// A full Maya date for one day: Long Count plus Calendar Round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MayaDate { pub long_count: LongCount, pub tzolkin: Tzolkin, pub haab: Haab }
+
+impl MayaDate {
+    pub fn from_days(days: i64) -> Option<Self> {
+        Some(Self { long_count: LongCount::from_days(days)?, tzolkin: Tzolkin::from_days(days), haab: Haab::from_days(days) })
+    }
+    /// The day `ts` falls on; give it local civil seconds for a local calendar.
+    pub fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_days(LongCount::days_of(ts)?) }
+    /// Unix seconds (already shifted into the person's zone, if wanted).
+    pub fn from_unix(seconds: i64) -> Option<Self> { Self::from_timestamp(SexTimestamp::from_unix(seconds, 0)?) }
+
+    /// "13.0.14.2.10" into `out`; returns the length written (truncates).
+    pub fn write_long_count(&self, out: &mut [u8]) -> usize {
+        let lc = self.long_count;
+        let mut w = Writer { out, n: 0 };
+        w.num(lc.baktun);
+        for place in [lc.katun, lc.tun, lc.winal, lc.kin] { w.put(b"."); w.num(place as u64); }
+        w.n
+    }
+    /// "11 Ok 3 Mak" into `out`; returns the length written (truncates).
+    pub fn write_calendar_round(&self, out: &mut [u8]) -> usize {
+        let mut w = Writer { out, n: 0 };
+        w.num(self.tzolkin.number as u64); w.put(b" "); w.put(self.tzolkin.name().as_bytes());
+        w.put(b" ");
+        w.num(self.haab.day as u64); w.put(b" "); w.put(self.haab.month_name().as_bytes());
+        w.n
+    }
+    /// "13.0.14.2.10 11 Ok 3 Mak" into `out`; returns the length written.
+    pub fn write_full(&self, out: &mut [u8]) -> usize {
+        let mut n = self.write_long_count(out);
+        if n < out.len() { out[n] = b' '; n += 1; }
+        n + self.write_calendar_round(&mut out[n..])
+    }
+}
+
+struct Writer<'a> { out: &'a mut [u8], n: usize }
+impl Writer<'_> {
+    fn put(&mut self, bytes: &[u8]) {
+        for &b in bytes { if self.n < self.out.len() { self.out[self.n] = b; self.n += 1; } }
+    }
+    fn num(&mut self, mut v: u64) {
+        let mut d = [0u8; 20];
+        let mut k = 0;
+        loop { d[k] = b'0' + (v % 10) as u8; k += 1; v /= 10; if v == 0 { break; } }
+        while k > 0 { k -= 1; self.put(&[d[k]]); }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +393,28 @@ mod tests {
             assert_eq!(date.days(), Some(days));
             assert_eq!(LongCount::from_timestamp(date.to_timestamp().unwrap()), Some(date));
         }
+    }
+
+    #[test]
+    fn calendar_round_anchors() {
+        // 0.0.0.0.0 = 4 Ajaw 8 Kumk'u; 13.0.0.0.0 (2012-12-21) = 4 Ajaw 3 K'ank'in.
+        let origin = MayaDate::from_days(0).unwrap();
+        assert_eq!((origin.tzolkin.number, origin.tzolkin.name(), origin.haab.day, origin.haab.month_name()), (4, "Ajaw", 8, "Kumk'u"));
+        let epoch = MayaDate::from_timestamp(SexTimestamp::EPOCH).unwrap();
+        let mut buf = [0u8; 48];
+        let n = epoch.write_full(&mut buf);
+        assert_eq!(&buf[..n], b"13.0.0.0.0 4 Ajaw 3 K'ank'in");
+        // 2026-11-28 UTC.
+        let day = MayaDate::from_unix(g(2026, 11, 28, 12, 0, 0).to_timestamp().unwrap().to_unix().unwrap()).unwrap();
+        let n = day.write_full(&mut buf);
+        assert_eq!(&buf[..n], b"13.0.14.2.10 11 Ok 3 Mak");
+        // The Calendar Round repeats every 18,980 days; Wayeb' has five days.
+        assert_eq!(MayaDate::from_days(18_980).unwrap().tzolkin, origin.tzolkin);
+        assert_eq!(MayaDate::from_days(18_980).unwrap().haab, origin.haab);
+        let wayeb = (0..365).map(Haab::from_days).filter(|h| h.month == 18).count();
+        assert_eq!(wayeb, 5);
+        let mut short = [0u8; 4];
+        assert_eq!(epoch.write_long_count(&mut short), 4);
+        assert_eq!(&short, b"13.0");
     }
 }

@@ -144,6 +144,7 @@ mod surface_lifecycle;
 use sex_pdx::app_catalog;
 mod text_transaction;
 mod glyphs;
+mod dreamspell_cross;
 mod lock_screen;
 mod bt_panel;
 mod window_menu;
@@ -1553,7 +1554,7 @@ fn top_bar_menu_fg_at(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSna
 }
 
 /// Same visible top-strip content for full and incremental redraws.
-fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], scene: &scene::SceneSnapshot) -> u32 {
+fn top_strip_pixel(x: usize, y: usize, bar: &SilkBar, lines: &[u8;48], scene: &scene::SceneSnapshot) -> u32 {
     let background = bar_color(x, y, bar, scene);
     if let Some(fg) = clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale()) { fg }
     else if let Some(fg) = bell_badge_at_scaled(x,y,bar,background,scene.metrics.scale()) { fg }
@@ -2439,10 +2440,22 @@ fn civil_clock_lines(clock:&silkbar_model::civil_clock::CivilClock)->[[u8;13];2]
     }
     lines
 }
-/// One real single-line UTC/date caption per paint pass. State remains the
-/// admitted civil-clock state; the legacy two-row data formatter is unchanged.
-fn civil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]{
-    let lines=civil_clock_lines(clock);let mut text=[b' ';20];
+/// SexTime's own date for the bar: the Maya Long Count of the local day
+/// ("13.0.14.2.10"), space padded. Formatting is not a source query.
+fn civil_clock_maya(seconds:u32)->[u8;14]{
+    let mut line=[b' ';14];
+    match sex_time::MayaDate::from_unix(seconds as i64){
+        Some(date)=>{date.write_long_count(&mut line);}
+        None=>line[..12].copy_from_slice(b"Date unknown"),
+    }
+    line
+}
+/// One real single-line caption per paint pass: 24-hour local time, zone,
+/// "28 NOV 2026" and the Maya Long Count "13.0.14.2.10". State
+/// remains the admitted civil-clock state; the legacy two-row data formatter
+/// is unchanged.
+fn civil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;48]{
+    let lines=civil_clock_lines(clock);let mut text=[b' ';48];
     if clock.state()==silkbar_model::civil_clock::State::Snapshot {
         // Local time from the same UTC sample, in the zone the Shell gave (UTC by default).
         let (offset,abbr)=sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds() as i64);
@@ -2451,7 +2464,8 @@ fn civil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]{
         for(at,value)in[(0,day/3600),(3,day/60%60)]{text[at]=b'0'+(value/10)as u8;text[at+1]=b'0'+(value%10)as u8;}
         text[2]=b':';
         let n=abbr.len().min(5);text[6..6+n].copy_from_slice(&abbr.as_bytes()[..n]);text[7+n]=b'|';
-        text[9+n..15+n].copy_from_slice(&civil_clock_date(local)[..6]);
+        text[9+n..20+n].copy_from_slice(&civil_clock_date(local)[..11]);text[21+n]=b'|';
+        text[23+n..37+n].copy_from_slice(&civil_clock_maya(local));
     }else if clock.state()==silkbar_model::civil_clock::State::Unavailable {
         text[..15].copy_from_slice(b"UTC unavailable");
     }else{text[..13].copy_from_slice(&lines[0]);}
@@ -2480,10 +2494,10 @@ fn panel_caption_at(text:&[u8],x:usize,y:usize,background:u32)->Option<u32>{
     };
     (alpha!=0).then(||coverage_blend(sex_pdx::desktop_style::contrast_ink(background),background,alpha))
 }
-fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,text:&[u8;20],background:u32)->Option<u32>{
+fn civil_clock_fg_at(x:usize,y:usize,bar:&SilkBar,text:&[u8;48],background:u32)->Option<u32>{
     civil_clock_fg_at_scaled(x,y,bar,text,background,sex_pdx::desktop_style::ui_scale())
 }
-fn civil_clock_fg_at_scaled(x:usize,y:usize,bar:&SilkBar,text:&[u8;20],background:u32,ui_scale:u32)->Option<u32>{
+fn civil_clock_fg_at_scaled(x:usize,y:usize,bar:&SilkBar,text:&[u8;48],background:u32,ui_scale:u32)->Option<u32>{
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
     let pad=sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(4)as usize;
     let top=cy+ch.saturating_sub(glyphs::UI_H*ui_scale as usize)/2;
@@ -2507,10 +2521,10 @@ fn civil_clock_drawn(bar:&SilkBar,w:usize,h:usize,path:&str){
     }
     sex_pdx::serial_record!("[display.civil.draw] sequence={} state={:?} seconds={} stale={} pixels=written path={} x={} y={} w={} h={}",clock.sequence(),clock.state(),clock.seconds(),clock.is_stale()as u8,path,x,y,cw,ch);
 }
-fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], background: u32) -> Option<u32>{
+fn clock_fg_at(x: usize, y: usize, bar: &SilkBar, lines: &[u8;48], background: u32) -> Option<u32>{
     clock_fg_at_scaled(x,y,bar,lines,background,sex_pdx::desktop_style::ui_scale())
 }
-fn clock_fg_at_scaled(x: usize, y: usize, bar: &SilkBar, lines: &[u8;20], background: u32, ui_scale:u32) -> Option<u32>{
+fn clock_fg_at_scaled(x: usize, y: usize, bar: &SilkBar, lines: &[u8;48], background: u32, ui_scale:u32) -> Option<u32>{
     if bar.civil_enabled {return civil_clock_fg_at_scaled(x,y,bar,lines,background,ui_scale);}
     let(cx,cy,cw,ch)=module_rect(bar,ModuleSlot::Clock);
     if x<cx+2||x>=cx+cw||y<cy+1||y>=cy+ch{return None;}
@@ -3914,13 +3928,20 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
         Menu::Calendar => {
             let Some(c) = tray::Calendar::new(w, y_bar, s) else { return };
             panel(c.panel);
-            let today = if scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0 {
-                sex_time::SexTimestamp::from_unix(scene.bar.civil_clock.seconds() as i64, 0).and_then(sex_time::Gregorian::from_timestamp)
-            } else { None };
+            // Today in the person's zone, like the bar's clock.
+            let local = (scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0).then(|| {
+                let utc = scene.bar.civil_clock.seconds() as i64;
+                utc + sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(utc).0 as i64
+            });
+            let today = local.and_then(|l| sex_time::SexTimestamp::from_unix(l, 0)).and_then(sex_time::Gregorian::from_timestamp);
             let Some(today) = today else {
                 tray_text(fb, w, h, total, b"Date unknown", c.header.0, c.header.1, bg, scale, c.header.2);
                 return;
             };
+            // Above the month: today's Dreamspell kin, wave spell and oracle cross.
+            if let Some(kin) = local.and_then(sex_time::dreamspell::Kin::from_unix) {
+                dreamspell_cross::draw(fb, w, h, total, c.oracle, s, scale, kin, bg, ring);
+            }
             let (year, month) = tray::shift_month(today.year, today.month, view.month_offset as i32);
             // Header: < Month Year >
             let mut head = [0u8; 24];
@@ -3956,6 +3977,28 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
                 let tw = glyphs::ui_width(t, scale).unwrap_or(0);
                 tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, r.1 + r.3.saturating_sub(line) / 2, bg, scale, r.2);
             }
+            // Footer: the Maya date of today, or of the 1st of another month.
+            let maya_day = if this_month { Some(today) } else {
+                Some(sex_time::Gregorian { year, month, day: 1, hour: 0, minute: 0, second: 0 })
+            };
+            let maya = maya_day.and_then(|g| g.to_timestamp()).and_then(sex_time::MayaDate::from_timestamp);
+            let mut foot = [0u8; 48];
+            let mut n = 0;
+            let label: &[u8] = if this_month { b"Today " } else { &tray::MONTH_NAMES[month as usize - 1].as_bytes()[..3] };
+            foot[..label.len()].copy_from_slice(label); n += label.len();
+            if !this_month { foot[n..n + 3].copy_from_slice(b" 1 "); n += 3; }
+            match maya {
+                Some(d) => {
+                    n += d.write_long_count(&mut foot[n..]);
+                    if n + 2 <= foot.len() { foot[n..n + 2].copy_from_slice(b"  "); n += 2; }
+                    n += d.write_calendar_round(&mut foot[n..]);
+                }
+                None => { let t = b"Maya date unknown"; let k = t.len().min(foot.len() - n); foot[n..n + k].copy_from_slice(&t[..k]); n += k; }
+            }
+            let m = c.maya;
+            tray_fill(fb, w, h, total, (m.0, m.1, m.2, s), track);
+            let tw = glyphs::ui_width(&foot[..n], scale).unwrap_or(0);
+            tray_text(fb, w, h, total, &foot[..n], m.0 + m.2.saturating_sub(tw) / 2, m.1 + m.3.saturating_sub(line) / 2, bg, scale, m.2);
             unsafe {
                 // The menu's slide redraws it every frame: log each month shown once.
                 static mut CAL_BUDGET: u32 = 8;

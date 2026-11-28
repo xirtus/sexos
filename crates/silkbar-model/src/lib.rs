@@ -381,18 +381,22 @@ pub fn for_desktop_width(width:usize)->Option<SilkBar>{
 /// No SDK dependency: this model carries data; its consumers supply the one
 /// geometry contract. Narrow desktops expose a real workspace overview target.
 pub const MIN_CHROME_WIDTH:u32=320;
+/// Logical width of the clock box on a full-width bar.
+pub const CLOCK_W_LONG_COUNT:usize=280;
 pub fn reflow_chrome(bar:&mut SilkBar,width:usize,height:usize,target:usize)->bool {
     if !matches!(target,24|48|72) || height<target {return false;}
     let unit=target/24;
     if width<MIN_CHROME_WIDTH as usize*unit {return false;}
     let pad=(height-target)/2;
     let margin=8*unit;
-    let clock=144*unit;
+    let full=width>=600*unit;
+    // Wide enough for local time, zone, date and the Maya Long Count
+    // ("23:59 +0330 | 28 NOV 2026 | 13.19.19.17.19"); narrow bars keep the old box.
+    let clock=if width>=700*unit{CLOCK_W_LONG_COUNT}else{144}*unit;
     let right=width-margin;
     let clock_x=right-clock;
     let bell_x=clock_x-4*unit-target;
     let status_x=bell_x-3*target-4*unit;
-    let full=width>=600*unit;
     for b in &mut bar.layout {b.x=0;b.y=pad;b.w=0;b.h=target;}
     bar.layout[ModuleSlot::Launcher as usize].x=margin;
     bar.layout[ModuleSlot::Launcher as usize].w=target;

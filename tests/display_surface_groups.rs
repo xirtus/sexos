@@ -403,7 +403,7 @@ use paint_batch::{Content,Plan};
 static mut ATLAS_CALLS:usize=0;
 fn draw_atlas_cards_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
 fn draw_atlas_frame_previews_pass(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{ATLAS_CALLS+=1;}}
-fn civil_clock_caption(_:&silkbar_model::civil_clock::CivilClock)->[u8;20]{TEST_CLOCK_LINES}
+fn civil_clock_caption(_:&silkbar_model::civil_clock::CivilClock)->[u8;48]{TEST_CLOCK_LINES}
 #[test]
 fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacements(){
  for (x,y,w,h) in [(-30,-30,144,90),(0,0,220,150),(100,100,624,331),(950,750,624,331)] {
@@ -510,8 +510,8 @@ fn normal_app_indicator_uses_actual_focus_and_clears_with_it(){unsafe{
 
 fn repaint_begin()->u64{0}
 fn repaint_end(_kind:&str,_started:u64){}
-const TEST_CLOCK_LINES:[u8;20]=[b'C';20];
-fn clock_fg_at_scaled(x:usize,y:usize,_:&SilkBar,lines:&[u8;20],_:u32,_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
+const TEST_CLOCK_LINES:[u8;48]=[b'C';48];
+fn clock_fg_at_scaled(x:usize,y:usize,_:&SilkBar,lines:&[u8;48],_:u32,_:u32)->Option<u32>{assert_eq!(*lines,TEST_CLOCK_LINES);(x==0&&y==0).then_some(1)}
 fn bell_badge_at_scaled(x:usize,y:usize,_:&SilkBar,_:u32,_:u32)->Option<u32>{(x==1&&y==0).then_some(2)}
 fn phase5_tint_swatch_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==2&&y==0).then_some(3)}
 fn phase5_palette_dot_at(x:usize,y:usize,_:&SilkBar)->Option<u32>{(x==3&&y==0).then_some(4)}

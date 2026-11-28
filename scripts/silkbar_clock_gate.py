@@ -17,6 +17,14 @@ MONTHS=('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC')
 LEGACY_PROFILE='q35-caption-v1'
 DATE_PROFILE='date-caption-v1'
 SLIM_PROFILE='slim-utc-date-v1'
+# The full-width bar's clock box holds local time, zone and the Maya Long Count.
+CLOCK_W_LONG_COUNT=280
+
+def long_count(unix_seconds):
+ """Maya Long Count (GMT 584283) of a UTC day, as the bar writes it."""
+ days=unix_seconds//86400+2440588-584283
+ places=(days//144000,days%144000//7200,days%7200//360,days%360//20,days%20)
+ return '.'.join(str(p)for p in places)
 
 def _function(source,name):
  # These finite renderer helpers contain no braces in strings. Strip comments
@@ -63,14 +71,14 @@ def _caption_profile(display):
 def _slim_render_shape(display):
  compact=lambda value:re.sub(r'\s+','',value)
  caption=compact(_function(display,'civil_clock_caption'))
- assert caption.split('{',1)[0]=='fncivil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;20]'
- for binding in ('letlines=civil_clock_lines(clock);','sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds()asi64);','text[2]=b\':\';','text[6..6+n].copy_from_slice(&abbr.as_bytes()[..n]);text[7+n]=b\'|\';','text[9+n..15+n].copy_from_slice(&civil_clock_date(local)[..6]);','text[..15].copy_from_slice(b"UTCunavailable");'):
+ assert caption.split('{',1)[0]=='fncivil_clock_caption(clock:&silkbar_model::civil_clock::CivilClock)->[u8;48]'
+ for binding in ('letlines=civil_clock_lines(clock);','sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds()asi64);','text[2]=b\':\';','text[6..6+n].copy_from_slice(&abbr.as_bytes()[..n]);text[7+n]=b\'|\';','text[9+n..20+n].copy_from_slice(&civil_clock_date(local)[..11]);text[21+n]=b\'|\';','text[23+n..37+n].copy_from_slice(&civil_clock_maya(local));','text[..15].copy_from_slice(b"UTCunavailable");'):
   assert binding in caption,('unknown single-line civil binding',binding)
  assert 'clock.state()==silkbar_model::civil_clock::State::Snapshot'in caption
  for name in('civil_clock_fg_at_scaled','clock_fg_at_scaled','top_strip_pixel'):
   helper=compact(_function(display,name))
-  assert all(call not in helper for call in('civil_clock_caption(','civil_clock_lines(','civil_clock_date(')),'calendar recomputed per pixel'
-  if name!='top_strip_pixel':assert ':[u8;20]'in helper.split('{',1)[0].replace('&',''),'clock caption shape changed'
+  assert all(call not in helper for call in('civil_clock_caption(','civil_clock_lines(','civil_clock_date(','civil_clock_maya(')),'calendar recomputed per pixel'
+  if name!='top_strip_pixel':assert ':[u8;48]'in helper.split('{',1)[0].replace('&',''),'clock caption shape changed'
  assert 'clock_fg_at_scaled(x,y,bar,lines,background,scene.metrics.scale())'in compact(_function(display,'top_strip_pixel'))
  assert 'civil_clock_fg_at_scaled(x,y,bar,lines,background,ui_scale)'in compact(_function(display,'clock_fg_at_scaled'))
  helper=compact(_function(display,'civil_clock_fg_at_scaled'))
@@ -243,14 +251,14 @@ def expected_clock_lines(contract,state,seconds,stale=False):
  if state=='Snapshot':
   assert type(seconds)is int and contract['bounds']['MIN_SECONDS']<=seconds<=contract['bounds']['MAX_SECONDS'],'snapshot outside validated source range'
   date=datetime.datetime.fromtimestamp(seconds,datetime.timezone.utc)
-  if profile==SLIM_PROFILE:return f'{date.hour:02d}:{date.minute:02d} UTC | {date.day:02d} {MONTHS[date.month-1]}  ',''
+  if profile==SLIM_PROFILE:return f'{date.hour:02d}:{date.minute:02d} UTC | {date.day:02d} {MONTHS[date.month-1]} {date.year:04d} | {long_count(seconds)}'.ljust(48),''
   first=f'UTC {date.hour:02d}:{date.minute:02d}:{date.second:02d}'
   second='q35 1s snap'if profile==LEGACY_PROFILE else f'{date.day:02d} {MONTHS[date.month-1]} {date.year:04d}'
   return first,second
  assert seconds==0,'unhealthy civil state retained a numeric date'
  if profile==SLIM_PROFILE:
   text={'Unavailable':'UTC unavailable','Rollback':'UTC blocked','Exhausted':'UTC ended','Unknown':'UTC stale'if stale else'UTC unknown'}[state]
-  return text.ljust(20),''
+  return text.ljust(48),''
  if profile==LEGACY_PROFILE:
   rows={'Unavailable':('UTC unknown','q35 1s fail'),'Rollback':('UTC blocked','q35 1s stop'),'Exhausted':('UTC ended','src? prec?'),'Unknown':('UTC stale','q35 1s old')if stale else('UTC unknown','src? prec?')}
  else:rows={'Unavailable':('UTC unknown','Source error'),'Rollback':('UTC blocked','Time blocked'),'Exhausted':('UTC ended','Updates ended'),'Unknown':('UTC stale','Sample stale')if stale else('UTC unknown','Awaiting UTC')}
@@ -330,7 +338,7 @@ def verify_pixels(trace,ppm,contract,resolution=None,expected_state=None):
    from browser_gate_viewport import chrome_metrics
    metric=chrome_metrics(trace[:draw.end()]+'\n');scale=metric['scale']
    assert(metric['width'],metric['height'])==(width,height),'frame geometry differs'
-   assert(x,y,w,h)==(width-152*scale,2*scale,144*scale,24*scale),'slim civil glyph geometry differs'
+   assert(x,y,w,h)==(width-(CLOCK_W_LONG_COUNT+8)*scale,2*scale,CLOCK_W_LONG_COUNT*scale,24*scale),'slim civil glyph geometry differs'
   else:
    d=contract['dimensions'];cx=d['CHIP_X3']-max(0,d['CHIP_X3']+d['CLOCK_W']+16-width)
    assert(x,y,w,h)==(cx,d['CHIP_Y'],d['CLOCK_W'],d['CHIP_H'])and x+w<=width and y+h<=height,'civil glyph geometry differs'

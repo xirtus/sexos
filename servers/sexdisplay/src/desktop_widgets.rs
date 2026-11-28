@@ -24,7 +24,7 @@ struct State {
     cards: u64,
     layout: Option<Layout>,
     /// What the cache shows: the screen it was laid out for and its words.
-    drawn: Option<((usize, usize, usize, usize), [Line; 6])>,
+    drawn: Option<((usize, usize, usize, usize), [Line; 7])>,
     /// The latest weather report and the zone it is for.
     weather: Option<(Report, usize)>,
     sample: Option<Sample>,
@@ -106,20 +106,25 @@ pub fn tick(clock: &silkbar_model::civil_clock::CivilClock, w: usize, h: usize) 
         }
         s.sampled_at = now;
     }
-    let (time, date) = if clock.state() == silkbar_model::civil_clock::State::Snapshot {
+    let (time, date, maya) = if clock.state() == silkbar_model::civil_clock::State::Snapshot {
         let (offset, _) = sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(clock.seconds() as i64);
-        dw::clock_lines(clock.seconds() as i64 + offset as i64, true)
+        let local = clock.seconds() as i64 + offset as i64;
+        let (t, d) = dw::clock_lines(local, true);
+        // The same local day in SexTime's Maya calendar.
+        let mut m = Line::EMPTY;
+        if let Some(day) = sex_time::MayaDate::from_unix(local) { m.len = day.write_full(&mut m.bytes); }
+        (t, d, m)
     } else {
         let mut t = Line::EMPTY; t.bytes[..5].copy_from_slice(b"--:--"); t.len = 5;
         let mut d = Line::EMPTY; d.bytes[..12].copy_from_slice(b"Date unknown"); d.len = 12;
-        (t, d)
+        (t, d, Line::EMPTY)
     };
     let zone = sex_pdx::clock_zone::zone();
     // A report for another zone is old news: the helper is asking about the new one.
     let report = s.weather.filter(|w| w.1 == zone).map(|w| w.0);
     let (sky, temps) = dw::weather_lines(report, sex_time::zone::zone(zone).name);
     let (cpu, free) = dw::system_lines(s.cpu, s.free_pages);
-    let words = [time, date, cpu, free, sky, temps];
+    let words = [time, date, cpu, free, sky, temps, maya];
     let key = (w, h, layout.scale, s.cards as usize);
     if s.layout == Some(layout) && s.drawn.as_ref().is_some_and(|d| d.0 == key && d.1 == words) { return None; }
     let moved = s.layout.map(|l| l.column).filter(|c| *c != layout.column);
@@ -141,7 +146,7 @@ fn union(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> (u
     (x0, y0, x1 - x0, y1 - y0)
 }
 
-fn draw(l: &Layout, words: &[Line; 6]) {
+fn draw(l: &Layout, words: &[Line; 7]) {
     let (cx, cy, cw, ch) = l.column;
     let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
     cache[..cw * ch].fill(0);
@@ -151,7 +156,9 @@ fn draw(l: &Layout, words: &[Line; 6]) {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
         text(cache, cw, words[0].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, 3, r.2 - 32 * s);
-        text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + super::glyphs::UI_H * 3 + 8 * s, desk().card_soft, ui, r.2 - 32 * s);
+        let date_y = r.1 + 12 * s + super::glyphs::UI_H * 3 + 8 * s;
+        text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, date_y, desk().card_soft, ui, r.2 - 32 * s);
+        text(cache, cw, words[6].as_bytes(), r.0 + 16 * s, date_y + super::glyphs::UI_H * s + 4 * s, desk().card_soft, ui, r.2 - 32 * s);
     }
     let line = super::glyphs::UI_H * s + 4 * s;
     if let Some(r) = l.weather {

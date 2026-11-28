@@ -120,7 +120,13 @@ impl Quick {
 
 /// The clock's month calendar: a header with previous/next, weekday names, six weeks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Calendar { pub panel: Rect, pub header: Rect, pub prev: Rect, pub next: Rect, pub grid: (usize, usize), pub cell: (usize, usize) }
+/// `oracle` is the band above the month: the day's Dreamspell kin, its wave
+/// spell and oracle cross. `maya` is the footer row under the weeks: the day in
+/// SexTime's Maya calendar (Long Count and Calendar Round).
+pub struct Calendar { pub panel: Rect, pub oracle: Rect, pub header: Rect, pub prev: Rect, pub next: Rect, pub grid: (usize, usize), pub cell: (usize, usize), pub maya: Rect }
+
+/// Height of the oracle band, logical pixels: a cross of three 36-pixel cells.
+pub const ORACLE_H: usize = 112;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CalendarHit { Prev, Next, Today, Inside, Outside }
@@ -128,14 +134,19 @@ pub enum CalendarHit { Prev, Next, Today, Inside, Outside }
 impl Calendar {
     pub fn new(width: usize, bar: usize, scale: usize) -> Option<Self> {
         let s = scale.max(1);
-        let (cw, ch, pad, head, names) = (36 * s, 28 * s, 12 * s, 32 * s, 24 * s);
-        let (w, h) = (7 * cw + 2 * pad, 2 * pad + head + names + 6 * ch);
+        let (cw, ch, pad, head, names, foot) = (36 * s, 28 * s, 12 * s, 32 * s, 24 * s, 28 * s);
+        let oracle_h = ORACLE_H * s;
+        let (w, h) = (7 * cw + 2 * pad, 2 * pad + oracle_h + pad + head + names + 6 * ch + foot);
         if width < w + 16 * s { return None; }
         let (x, y) = (width - w - 8 * s, bar + 6 * s);
+        let oracle = (x + pad, y + pad, 7 * cw, oracle_h);
+        let y = y + oracle_h + pad;
         let header = (x + pad, y + pad, 7 * cw, head);
         let prev = (header.0, header.1, head, head);
         let next = (header.0 + header.2 - head, header.1, head, head);
-        Some(Self { panel: (x, y, w, h), header, prev, next, grid: (x + pad, y + pad + head + names), cell: (cw, ch) })
+        let grid = (x + pad, y + pad + head + names);
+        let maya = (grid.0, grid.1 + 6 * ch, 7 * cw, foot);
+        Some(Self { panel: (x, oracle.1 - pad, w, h), oracle, header, prev, next, grid, cell: (cw, ch), maya })
     }
     /// The cell for `day` of a month starting on weekday `first` (0 = Monday).
     pub fn day_cell(&self, first: u8, day: u8) -> Rect {

@@ -7,7 +7,7 @@ python3 - "$ROOT" "$TMP/production.rs" <<'PY'
 from pathlib import Path
 import re,sys
 root=Path(sys.argv[1]);s=(root/'servers/sexdisplay/src/main.rs').read_text();parts=[]
-for name in ['module_rect','chrome_metrics','ui_label_at','ui_label_at_scaled','civil_clock_caption','civil_clock_fg_at_scaled','clock_fg_at_scaled','bell_badge_at_scaled','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','clock_fg_at','bell_badge_at']:
+for name in ['module_rect','chrome_metrics','ui_label_at','ui_label_at_scaled','civil_clock_caption','civil_clock_maya','civil_clock_fg_at_scaled','clock_fg_at_scaled','bell_badge_at_scaled','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','clock_fg_at','bell_badge_at']:
  m=re.findall(r'^fn '+name+r'\b.*?^\}',s,re.M|re.S);assert len(m)==1,name;parts+=m
 for name in ['FONT','FONT_ASCII_5X7']:
  m=re.findall(r'^const '+name+r':.*?^\];',s,re.M|re.S);assert len(m)==1,name;parts+=m

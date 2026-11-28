@@ -59,6 +59,13 @@ fn calendar_dates() {
     assert_eq!((d1.0, d1.1), (c.grid.0 + 6 * c.cell.0, c.grid.1));
     let d30 = c.day_cell(first, 30);
     assert!(d30.1 + d30.3 <= c.panel.1 + c.panel.3);
+    // The Maya footer sits under the sixth week, inside the panel.
+    assert!(c.maya.1 >= c.grid.1 + 6 * c.cell.1 && c.maya.1 + c.maya.3 <= c.panel.1 + c.panel.3);
+    assert_eq!(c.hit(c.maya.0 + 1, c.maya.1 + 1), CalendarHit::Inside);
+    // The oracle band is above the month header, inside the panel.
+    assert!(c.oracle.1 >= c.panel.1 && c.oracle.1 + c.oracle.3 <= c.header.1);
+    assert_eq!(c.hit(c.oracle.0 + 1, c.oracle.1 + 1), CalendarHit::Inside);
+    assert!(c.panel.1 + c.panel.3 < 800);
     assert_eq!(c.hit(c.prev.0 + 1, c.prev.1 + 1), CalendarHit::Prev);
     assert_eq!(c.hit(c.next.0 + 1, c.next.1 + 1), CalendarHit::Next);
     assert_eq!(c.hit(c.header.0 + c.header.2 / 2, c.header.1 + 1), CalendarHit::Today);
