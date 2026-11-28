@@ -70,7 +70,7 @@ def main():
   time.sleep(2)
   tile,pw,ph=live_viewport(g,ROOT,surface)
   ox,oy,_,_=canvas_box(ROOT,tile,pw,ph)
-  btn=re.findall(r'\[web.console\] level=0 share button (-?\d+) (-?\d+)',t()[s:]) or [wait(r'\[web.console\] level=0 share button (-?\d+) (-?\d+)',s,60)[1:3]]
+  btn=re.findall(r'\[web.console\] level=0 share button (-?\d+) (-?\d+)',t()[s:]) or [wait(r'\[web.console\] level=0 share button (-?\d+) (-?\d+)',s,60).group(1,2)]
   bx,by=map(int,btn[-1])
   # The page asks from a click; the Shell's picker opens and nothing is shared yet.
   s=len(t());click(ox+bx,oy+BAR+by)
@@ -129,7 +129,7 @@ def main():
   wait(r'\[shell.share.stop\] by=person',s,30)
   wait(rf'\[shell.share.answer\] pd={target} task={task} status=4 ',s,30)
   wait(r'\[display.share.stopped\] frames=\d+ scrubbed=1',s,30)
-  assert wait(r'\[web.console\] level=0 share ended (\S+) (\S+) (\S+)',s,30)[1:4]==('ended','false','live')
+  assert wait(r'\[web.console\] level=0 share ended (\S+) (\S+) (\S+)',s,30).group(1,2,3)==('ended','false','live')
   wait(r'\[web.share.stop\] ',s,30)
   time.sleep(1);img=shot('share-stopped')
   assert not near(img.getpixel((1,rh//2)),red,40),'red ring stayed after stopping'
