@@ -1167,7 +1167,7 @@ fn preview_rows(blocks: &[markdown::Block], cols: usize) -> Vec<PreviewRow> {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
+pub extern "C" fn _start() -> ! { main() }
 
 fn handle_ask(window: &mut Window, jot: &mut Jot, ask: Ask) -> bool {
     match ask {

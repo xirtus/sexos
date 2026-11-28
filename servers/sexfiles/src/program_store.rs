@@ -11,6 +11,11 @@ fn read(lba: u64, bytes: u64, out: &mut [u8], buf_va: u64) -> Result<(), u32> {
     Ok(())
 }
 static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; store::SECTOR * store::MAX_DIRECTORY_SECTORS];
+/// The store program the image region was last filled with: (name, len, hash). Only a
+/// hint: a later load of the same entry re-hashes the region and reads the disk again
+/// unless it still hashes to the directory's value, so nothing else that wrote the
+/// region (a ticket, `/bin`, media, another image job) can be passed off as this program.
+static mut LAST_IMAGE: Option<([u64; 2], u32, u64)> = None;
 /// `requester`: the program Shell starts a ticket for, 0 for Spindle.
 pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
@@ -23,6 +28,9 @@ pub fn load_unbound(name:[u64;2])->u64 {
 }
 fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u32> {
     let _writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
+    // Whatever happens below, the region stops holding the remembered program unless the
+    // disk store path proves it again.
+    let last = unsafe { core::ptr::replace(core::ptr::addr_of_mut!(LAST_IMAGE), None) };
     if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
     let view = sex_pdx::memory_region_view(store::IMAGE_SLOT_FILES, 0, store::IMAGE_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| store::IO)?;
     let image = unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, store::IMAGE_BYTES) };
@@ -45,7 +53,7 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
         },
         crate::fs_service::Program::Absent => {}
     }
-    match try_load_from_disk_store(name, remember, image) {
+    match try_load_from_disk_store(name, remember, image, last) {
         Ok(len) => Ok(len),
         Err(err) if matches!(err, store::NOT_FOUND | store::IO) => {
             // Live USB / removable media fallback: search mounted `/media/<vol>/programs/<name>`.
@@ -63,7 +71,7 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
     }
 }
 
-fn try_load_from_disk_store(name: [u64; 2], remember: bool, image: &mut [u8]) -> Result<u32, u32> {
+fn try_load_from_disk_store(name: [u64; 2], remember: bool, image: &mut [u8], last: Option<([u64; 2], u32, u64)>) -> Result<u32, u32> {
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
     // The directory: its first sector says how many follow.
@@ -82,10 +90,19 @@ fn try_load_from_disk_store(name: [u64; 2], remember: bool, image: &mut [u8]) ->
     let entry = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
     if entry.len == 0 || entry.len as usize > store::IMAGE_BYTES { return Err(store::TOO_LARGE); }
     if entry.lba < store::DIRECTORY_LBA + sectors as u64 { return Err(store::CORRUPT); }
+    let len = entry.len as usize;
+    // The same program again (closed and opened, a second window): when the region still
+    // hashes to the directory's value it already holds exactly these bytes.
+    if last == Some((name, entry.len, entry.hash)) && store::fnv(&image[..len]) == entry.hash {
+        unsafe { LAST_IMAGE = last; }
+        sex_pdx::serial_record!("[files.program.read] bytes={} lba={} kept=1", len, entry.lba);
+        remember_store_name(name, remember);
+        return Ok(entry.len);
+    }
     // One command per shared-buffer run (up to 128 KiB), copied straight into the image:
     // a page at a time, a 26 MiB program cost 6,600 drive round trips.
     let run = (crate::vfs::diskfs_bridge_buf_len() as usize & !(store::SECTOR - 1)).max(BLOCK_BYTES);
-    let (mut lba, mut done, len) = (entry.lba, 0usize, entry.len as usize);
+    let (mut lba, mut done) = (entry.lba, 0usize);
     while done < len {
         // The drive transfers whole sectors; the last one may be only partly the file's.
         let bytes = (len - done).next_multiple_of(store::SECTOR).min(run);
@@ -99,8 +116,12 @@ fn try_load_from_disk_store(name: [u64; 2], remember: bool, image: &mut [u8]) ->
         sex_pdx::serial_record!("[files.program.corrupt] bytes={}", len);
         return Err(store::CORRUPT);
     }
+    unsafe { LAST_IMAGE = Some((name, entry.len, entry.hash)); }
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
+    remember_store_name(name, remember);
+    Ok(entry.len)
+}
+fn remember_store_name(name: [u64; 2], remember: bool) {
     let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
     if remember { crate::fs_service::loaded_from_store(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
-    Ok(entry.len)
 }

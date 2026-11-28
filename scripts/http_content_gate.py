@@ -228,7 +228,7 @@ def _wheel_shell_contract(source,root):
   if program_pointer_wheel(scroll.vertical()){return}
   sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
  };
- let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
+ let accepted=APP_INPUT.push_scroll(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
  sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
  app_input_poll();""")
  expect(shell,'clipboard_live',"""let Some(e)=APP_CUSTODY.iter().flatten().find(|e|e.target==subject.pd && e.task==subject.task) else{return Some(false)};
@@ -256,6 +256,23 @@ def _wheel_shell_contract(source,root):
  expect(fifo,'front','self.items[self.head]')
  expect(fifo,'push',"""if self.len==CAPACITY || !item.destination.subject.valid() || item.destination.route==0 {return false;}
  self.items[(self.head+self.len)%CAPACITY]=Some(item);self.len+=1;true""")
+ # A full queue may fold a same-direction step into the last wheel of the same window
+ # (never below capacity, never opposite steps); everything else is the exact push.
+ expect(fifo,'push_scroll',"""if self.len==CAPACITY {
+  if let Input::Scroll(new)=item.input {
+   let last=(self.head+self.len-1)%CAPACITY;
+   if let Some(Item{destination,input:Input::Scroll(old)})=self.items[last] {
+    let (a,b)=(old.vertical(),new.vertical());
+    if destination==item.destination && (a>0)==(b>0) {
+     if let Some(sum)=a.checked_add(b).and_then(sex_pdx::app_scroll::Scroll::new) {
+      self.items[last]=Some(Item{destination,input:Input::Scroll(sum)});
+      return true;
+     }
+    }
+   }
+  }
+ }
+ self.push(item)""")
  return 'held-participant'if held else'archival-literal'
 
 def load_wheel_contract(root):

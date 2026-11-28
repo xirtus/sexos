@@ -14,6 +14,8 @@ USB tablet and a sound card. Each round stops one driver in the middle of real u
   Input          killed mid-request; typed keys must still run commands after.
   sound (Bell)   killed mid-request; a beep must still play after.
   Network        killed mid-download; the next download must arrive whole.
+  Files (last)   left stuck mid-request: the desk watch ends it after 60 s, it starts
+                 again and files read back and save as before.
 
 Usage: python3 scripts/driver_restart_gate.py --iso sexos-v1.0.0.iso --source-disk blank.img --out DIR
 """
@@ -42,10 +44,10 @@ SPINDLE_SURFACE=153
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path)
- p.add_argument('--resolution',default='1280x800');p.add_argument('--only',default='',help='comma list of rounds to run (disk,hang,usb,input,bell,network)');a=p.parse_args()
+ p.add_argument('--resolution',default='1280x800');p.add_argument('--only',default='',help='comma list of rounds to run (disk,hang,usb,input,bell,network,fileshang)');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- want=set(filter(None,a.only.split(',')))or{'disk','hang','usb','input','bell','network'}
+ want=set(filter(None,a.only.split(',')))or{'disk','hang','usb','input','bell','network','fileshang'}
  g=boot(a.iso,disk,a.out,'drivers',a.resolution);t=g['text'];q=g['q'];result={'rounds':{}}
  def keys(text):
   for k in text:
@@ -101,6 +103,16 @@ def main():
    s=crash('network',13,'busy');fetch('/blob3',ok=False);restarted(13,s,120);time.sleep(5);fetch('/blob4');check('/blob4');result['rounds']['network']='ok'
   files=re.findall(r'\[service.restarted\] pd=11 ',t())
   assert not files,'Files restarted: a driver restart must not take Files down'
+  if 'fileshang' in want:
+   # Files stuck mid-request (parked, its code making no syscalls): the desk watch ends it
+   # after 60 s and Files starts again; earlier rounds, where Files was only busy or
+   # waiting on Drive, must never have tripped it (checked just above).
+   slow=len(re.findall(r'\[service.slow\] pd=11 ',t()))
+   s=crash('files',11,'hang');line('sum /blob0',r'\[spindle.fs.(line|expired)\]',120)
+   g['wait'](r'\[crash.probe.hang\] pd=11',s,120);h=g['wait'](r'\[service.hung\] pd=11 held_ticks=(\d+) queued=\d+ desk=1',s,300)
+   assert int(h[1])>60_000,h[0]
+   restarted(11,s,180);time.sleep(5);check('/blob0');fetch('/blob5');check('/blob5')
+   result['rounds']['fileshang']=dict(held_ticks=int(h[1]),slow_before=slow)
   save(True);print('driver restart gate: PASS',json.dumps(result['rounds']))
  except BaseException as e:
   save(False,repr(e));raise

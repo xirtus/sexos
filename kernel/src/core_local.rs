@@ -21,8 +21,9 @@ pub struct CoreLocal {
     pub last_fs_base: AtomicU64,
     /// Last IA32_TSC_AUX written on this core (gs:[48]); `switch_to` skips WRMSR when unchanged.
     pub last_gate_aux: AtomicU64,
-    /// Reserved for a per-core active-view cache (gs:[56]); unused, so `views::enter` keeps
-    /// comparing the full CR3 (a cached index would miss a view whose root changed).
+    /// The protection view whose root this core's CR3 holds (gs:[56]), `u32::MAX` when
+    /// unknown; `views::enter` skips its CR3 read when it matches (view roots never change
+    /// after `views::init`; other CR3 writes keep the root).
     pub active_view: AtomicU32,
     pub _pad_iret: u32,
     /// Per-core last IRET frame debug snapshot (gs:[64..112]: rsp, rip, cs, rflags, user_rsp, ss),
