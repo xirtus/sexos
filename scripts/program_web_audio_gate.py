@@ -86,7 +86,7 @@ def main():
   shot('webaudio-heard')
   assert wait(r'\[web.console\] level=0 webaudio ended (\w+)',s,60)[1]=='true'
   outs=[tuple(map(int,o)) for o in re.findall(r'\[web.audio.out\] frames=(\d+) heard=(\d+) peak=(\d+) ring=(\d)',t()[s:])]
-  if not outs:outs=[tuple(map(int,wait(r'\[web.audio.out\] frames=(\d+) heard=(\d+) peak=(\d+) ring=(\d)',s,30)[1:5]))]
+  if not outs:outs=[tuple(map(int,wait(r'\[web.audio.out\] frames=(\d+) heard=(\d+) peak=(\d+) ring=(\d)',s,30).group(1,2,3,4)))]
   frames,heard=max(o[0] for o in outs),max(o[1] for o in outs);loud=max(o[2] for o in outs)
   # Three seconds of a 0.2 tone (6553 of 32768), faded in over the first half second.
   assert heard>=48000*2 and 4000<=loud<=8000,('oscillator not heard',outs)
