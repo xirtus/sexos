@@ -87,7 +87,7 @@ def main():
    m=wait(r'\[web.console\] level=0 webrtc stats (\d+) (\d+) (\d+) (\d+) (\w+)',len(t()),30);stats.append(tuple(map(int,m.groups()[:4]))+(m[5],))
   assert stats[-1][0]>stats[0][0] and stats[-1][4]=='rising',('bytes sent do not rise',stats)
   assert stats[-1][2]>stats[0][2] and stats[-1][3]>stats[0][3]>0,('remote frames not decoded',stats)
-  rect=wait(r'\[web.console\] level=0 webrtc rect (-?\d+) (-?\d+) (\d+) (\d+)',s,60);vx,vy,vw,vh=map(int,rect[1:5])
+  rect=wait(r'\[web.console\] level=0 webrtc rect (-?\d+) (-?\d+) (\d+) (\d+)',s,60);vx,vy,vw,vh=map(int,rect.group(1,2,3,4))
   # The remote video shows the fake camera's moving picture.
   def video_pixels(img):return [img.getpixel((ox+vx+x,oy+BAR+vy+y)) for y in range(8,vh-8,12) for x in range(8,vw-8,12)]
   one=video_pixels(shot('webrtc-remote-1'));time.sleep(1.5);two=video_pixels(shot('webrtc-remote-2'))
