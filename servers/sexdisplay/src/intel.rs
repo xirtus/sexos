@@ -9,7 +9,8 @@
 //! register logic is `sex-gpu-intel`, host-tested against simulated registers.
 
 use sex_gpu_intel::regs::{self, PORTS};
-use sex_gpu_intel::{aux, backlight, hotplug, readout, Mmio};
+use sex_gpu_intel::{aux, backlight, hotplug, readout, refresh, timing, watermarks, Mmio};
+use sex_gpu_intel::timing::Timing;
 use sex_pdx::{display_frames as df, memory_region as m};
 
 struct Bar { va: u64, len: u64 }
@@ -80,6 +81,13 @@ pub fn report() -> bool {
             r.h[0], r.h[1], r.h[2], r.h[3], r.v[0], r.v[1], r.v[2], r.v[3], r.src_w, r.src_h,
             r.plane.enabled as u8, r.plane.linear_xrgb() as u8, r.plane.stride_bytes, r.plane.width, r.plane.height, r.plane.surf,
             r.psr as u8, r.psr2 as u8, f0, refresh_mhz);
+        let mn = refresh::read(&mut bar, p);
+        let wm = watermarks::read(&mut bar, p, watermarks::Which::Plane(1));
+        let cur = watermarks::read(&mut bar, p, watermarks::Which::Cursor);
+        sex_pdx::serial_record!("[display.intel.link] pipe={} tu={} data_m={:#x} data_n={:#x} link_m={:#x} link_n={:#x} link_use_bp={} cdclk_khz={} ddb_blocks={} wm_levels={} wm0={:#x} wm_trans={:#x} cursor_ddb={} cursor_levels={}",
+            (b'A' + p as u8) as char, mn.tu, mn.data_m, mn.data_n, mn.link_m, mn.link_n, mn.link_use_bp(), refresh::cdclk_khz(&mut bar),
+            wm.ddb_blocks(), wm.enabled_levels(), wm.levels[0], wm.trans, cur.ddb_blocks(), cur.enabled_levels());
+        if (p as usize) < 4 { unsafe { (*core::ptr::addr_of_mut!(PANEL)).measured_mhz[p as usize] = refresh_mhz; } }
     }
     let live = hotplug::scan(&mut bar);
     let mut names = [0u8; 64];
@@ -112,6 +120,13 @@ pub fn report() -> bool {
                         sex_pdx::serial_record!("[display.intel.edid.mode] port={} index={} width={} height={} refresh_mhz={} clock_khz={}",
                             regs::port_name(port), i, w, h, mhz, u16::from_le_bytes([d[0], d[1]]) as u32 * 10);
                     }
+                }
+                // Every timing (base block and CTA extension), kept for refresh changes.
+                let panel = unsafe { &mut *core::ptr::addr_of_mut!(PANEL) };
+                panel.count = timing::edid_timings(&edid[..len], &mut panel.timings);
+                for t in &panel.timings[..panel.count] {
+                    sex_pdx::serial_record!("[display.intel.edid.timing] port={} width={} height={} refresh_mhz={} clock_khz={} h={},{},{},{} v={},{},{},{} flags={}",
+                        regs::port_name(port), t.h[0], t.v[0], t.refresh_mhz(), t.clock_khz, t.h[0], t.h[1], t.h[2], t.h[3], t.v[0], t.v[1], t.v[2], t.v[3], t.flags);
                 }
             }
             Err(e) => sex_pdx::serial_record!("[display.intel.edid] port={} error={:?}", regs::port_name(port), e),
@@ -146,6 +161,7 @@ pub struct Intel {
     height: usize,
     /// Rows the back buffer lacks: what the last flip changed on the front.
     behind: (usize, usize),
+    refresh: Option<Refresh>,
 }
 
 /// Write back cache lines so the display engine, which does not snoop the
@@ -190,8 +206,25 @@ pub fn take_over(width: u32, height: u32, boot_fb: u64, boot_pitch_px: u32) -> R
     let cursor = Cursor::new(chain.pipe, 64, layout.ggtt(2) as u32);
     sex_pdx::serial_record!("[display.intel.takeover] takeover=1 pipe={} width={} height={} stride={} buffers={:#x},{:#x} firmware_surf={:#x} cursor_plane={} source=boot_copy modeset=0",
         (b'A' + chain.pipe as u8) as char, width, height, layout.stride, buffers[0], buffers[1], chain.saved.surf, cursor.is_some() as u8);
-    Ok(Intel { bar, chain, cursor, cursor_scale: 0, va: so.virtual_address, layout, width: w, height: h, behind: (0, 0) })
+    let mut intel = Intel { bar, chain, cursor, cursor_scale: 0, va: so.virtual_address, layout, width: w, height: h, behind: (0, 0), refresh: None };
+    intel.refresh = intel.panel_refresh();
+    if intel.refresh.is_some() { let _ = intel.set_refresh(0); }
+    Ok(intel)
 }
+
+/// The eDP panel's EDID timings and the refresh each pipe measured at boot.
+struct Panel { timings: [Timing; 12], count: usize, measured_mhz: [u32; 4] }
+static mut PANEL: Panel = Panel { timings: [Timing { clock_khz: 0, h: [0; 4], v: [0; 4], flags: 0 }; 12], count: 0, measured_mhz: [0; 4] };
+
+/// Refresh control on the taken-over pipe: firmware's mode and watermarks,
+/// and the mode running now.
+#[derive(Clone, Copy)]
+pub struct Refresh { boot: refresh::Boot, running: Timing, psr: bool }
+
+/// Fail-safe check after a switch: the pipe still counts frames at the new
+/// rate (within 3 %) and raised no FIFO underrun.
+const DE_PIPE_ISR: u32 = 0x44400;
+const PIPE_FIFO_UNDERRUN: u32 = 1 << 31;
 
 impl Intel {
     fn buffer(&self, index: usize) -> u64 { self.va + index as u64 * self.layout.span }
@@ -264,6 +297,95 @@ impl Intel {
 
     pub fn hide_cursor(&mut self) {
         if let Some(cur) = self.cursor.as_mut() { cur.hide(&mut self.bar); }
+    }
+
+    /// What firmware runs on the taken pipe, matched to the panel's EDID
+    /// timing with the same raster and the nearest refresh to the measured one.
+    fn panel_refresh(&mut self) -> Option<Refresh> {
+        let p = self.chain.pipe;
+        let r = readout::read_pipe(&mut self.bar, p);
+        let panel = unsafe { &*core::ptr::addr_of!(PANEL) };
+        let measured = *panel.measured_mhz.get(p as usize)?;
+        // Sync polarity barely matters on DP (the sink reads it from the MSA)
+        // and firmware may not mirror the EDID's, so match on counts here;
+        // alternatives must then share the EDID mode's own polarity.
+        let running = panel.timings[..panel.count].iter().filter(|t| t.h == r.h && t.v == r.v)
+            .min_by_key(|t| t.refresh_mhz().abs_diff(measured)).copied();
+        let alts = running.map_or(0, |run| panel.timings[..panel.count].iter().filter(|t| t.same_raster(&run)).count());
+        sex_pdx::serial_record!("[display.intel.refresh.boot] pipe={} measured_mhz={} edid_match={} same_raster_modes={} psr={}",
+            (b'A' + p as u8) as char, measured, running.map_or(0, |t| t.refresh_mhz()), alts, r.psr as u8);
+        let running = running?;
+        // Only trust the match when the measurement agrees within 3 %.
+        if running.refresh_mhz().abs_diff(measured) * 100 > running.refresh_mhz() * 3 { return None; }
+        let boot = refresh::Boot::read(&mut self.bar, p, running.clock_khz, r.plane.width.max(self.width as u32));
+        Some(Refresh { boot, running, psr: r.psr })
+    }
+
+    /// Refresh rates the panel offers without a modeset, millihertz.
+    pub fn refresh_rates(&self, out: &mut [u32]) -> usize {
+        let Some(rf) = self.refresh else { return 0 };
+        let panel = unsafe { &*core::ptr::addr_of!(PANEL) };
+        let mut n = 0;
+        for t in panel.timings[..panel.count].iter().filter(|t| t.same_raster(&rf.running)) {
+            if n < out.len() { out[n] = t.refresh_mhz(); n += 1; }
+        }
+        n
+    }
+
+    /// Switch the panel to the same-raster mode nearest `mhz` (0 = fastest).
+    /// The pipe, link and picture stay up; on any sign of trouble the boot
+    /// M/N and watermarks come back. Returns the refresh now running.
+    pub fn set_refresh(&mut self, mhz: u32) -> Result<u32, &'static str> {
+        let Some(mut rf) = self.refresh else { return Err("no_refresh_control") };
+        let panel = unsafe { &*core::ptr::addr_of!(PANEL) };
+        let same = panel.timings[..panel.count].iter().filter(|t| t.same_raster(&rf.running));
+        let target = if mhz == 0 { same.max_by_key(|t| t.clock_khz) } else { same.min_by_key(|t| t.refresh_mhz().abs_diff(mhz)) };
+        let Some(target) = target.copied() else { return Err("no_mode") };
+        let p = self.chain.pipe;
+        if target == rf.running { return Ok(target.refresh_mhz()); }
+        // PSR1 may have the main link off while the panel self-refreshes; a
+        // stream-rate change belongs with PSR's own exit, which stage 3 owns.
+        if rf.psr { return self.refuse(&rf.running, &target, "psr_active"); }
+        let plan = match refresh::plan(&mut self.bar, p, &rf.running, &target, &rf.boot) {
+            Ok(plan) => plan,
+            Err(e) => return self.refuse(&rf.running, &target, e.name()),
+        };
+        // Let the underrun event latch in IIR (IMR unmasked; IER stays as it
+        // is, so nothing interrupts), clear it, switch, then look.
+        let (imr, iir) = (DE_PIPE_ISR + p * 0x10 + 4, DE_PIPE_ISR + p * 0x10 + 8);
+        let mask = self.bar.read(imr);
+        self.bar.write(imr, mask & !PIPE_FIFO_UNDERRUN);
+        self.bar.write(iir, PIPE_FIFO_UNDERRUN);
+        if let Err(e) = refresh::apply(&mut self.bar, &plan, TAKE_READS) {
+            self.bar.write(imr, mask);
+            return self.refuse(&rf.running, &target, e.name());
+        }
+        let measured = measure_refresh(&mut self.bar, p);
+        let underrun = self.bar.read(iir) & PIPE_FIFO_UNDERRUN != 0;
+        self.bar.write(iir, PIPE_FIFO_UNDERRUN);
+        self.bar.write(imr, mask);
+        let ok = !underrun && measured.abs_diff(target.refresh_mhz()) * 100 <= target.refresh_mhz() * 3;
+        sex_pdx::serial_record!("[display.intel.refresh] pipe={} from_mhz={} to_mhz={} measured_mhz={} watermarks={} data_m={:#x} underrun={} ok={} modeset=0",
+            (b'A' + p as u8) as char, rf.running.refresh_mhz(), target.refresh_mhz(), measured, plan.wm.is_some() as u8, plan.after.data_m, underrun as u8, ok as u8);
+        if !ok {
+            // Back to exactly what firmware programmed.
+            let _ = refresh::write(&mut self.bar, p, &plan.before, rf.running.v[0] as u32, TAKE_READS);
+            if plan.wm.is_some() {
+                watermarks::write(&mut self.bar, p, watermarks::Which::Plane(1), &rf.boot.primary);
+                watermarks::write(&mut self.bar, p, watermarks::Which::Cursor, &rf.boot.cursor);
+            }
+            sex_pdx::serial_record!("[display.intel.refresh.revert] pipe={} back_mhz={}", (b'A' + p as u8) as char, rf.running.refresh_mhz());
+            return Err(if underrun { "fifo_underrun" } else { "refresh_mismatch" });
+        }
+        rf.running = target;
+        self.refresh = Some(rf);
+        Ok(target.refresh_mhz())
+    }
+
+    fn refuse(&self, from: &Timing, to: &Timing, why: &'static str) -> Result<u32, &'static str> {
+        sex_pdx::serial_record!("[display.intel.refresh] pipe={} from_mhz={} to_mhz={} ok=0 reason={}",
+            (b'A' + self.chain.pipe as u8) as char, from.refresh_mhz(), to.refresh_mhz(), why);
+        Err(why)
     }
 
     /// Give the panel back to the firmware framebuffer.
