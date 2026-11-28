@@ -77,15 +77,23 @@ fn tip_rect(t: &sex_pdx::program_tray::TipView, w: usize, scale: u32) -> (usize,
     (x, t.y as usize, tw, th)
 }
 
-/// Text at (x0, y0) in `ink`, cut at `max_w`; returns the width drawn.
-fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) -> usize {
-    let width = super::glyphs::ui_width(t, scale).unwrap_or(0).min(max_w);
+fn text_weight(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize, body: bool) -> usize {
+    let width = if body {
+        super::glyphs::ui_body_width(t, scale)
+    } else {
+        super::glyphs::ui_width(t, scale)
+    }.unwrap_or(0).min(max_w);
     let lh = super::glyphs::UI_H * scale as usize;
     for y in y0..(y0 + lh).min(h) {
         for x in x0..(x0 + width).min(w) {
             let at = y * w + x;
             if at >= total { return width; }
-            let Some(alpha) = super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale) else { break };
+            let cov = if body {
+                super::glyphs::ui_body_coverage(t, (x - x0) as i32, y - y0, scale)
+            } else {
+                super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale)
+            };
+            let Some(alpha) = cov else { break };
             if alpha == 0 { continue; }
             unsafe {
                 let p = fb.add(at);
@@ -94,6 +102,16 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
         }
     }
     width
+}
+
+/// Text at (x0, y0) in `ink`, cut at `max_w`; returns the width drawn.
+fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) -> usize {
+    text_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, false)
+}
+
+fn body_text_in(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], r: (usize, usize, usize, usize), inset: usize, ink: u32, scale: u32) -> usize {
+    let line = super::glyphs::UI_H * scale as usize;
+    text_weight(fb, w, h, total, t, r.0 + inset, r.1 + r.3.saturating_sub(line) / 2, ink, scale, r.2.saturating_sub(2 * inset), true)
 }
 
 /// Text in the middle of `r` vertically, `inset` from its left.
@@ -146,19 +164,19 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     if let Some(t) = v.tip.filter(|_| v.menu.is_none()) {
         let r = tip_rect(&t, w, scale);
         panel(fb, w, h, total, r, s, frost::Panel::TrayItemsTip, scale, bar);
-        text_in(fb, w, h, total, t.text.as_bytes(), r, 8 * s, desk().menu_ink, scale);
+        body_text_in(fb, w, h, total, t.text.as_bytes(), r, 8 * s, desk().menu_ink, scale);
     }
     let Some(c) = v.card else { return };
     let Some(l) = CardLayout::new(w, bar, s, c.actions as usize, c.reply) else { return };
     panel(fb, w, h, total, l.panel, s, frost::Panel::TrayItemsCard, scale, bar);
     // "From: summary", then the body, cut to the card.
-    let used = text_in(fb, w, h, total, c.from.as_bytes(), l.head, 0, desk().menu_dim, scale);
+    let used = body_text_in(fb, w, h, total, c.from.as_bytes(), l.head, 0, desk().menu_dim, scale);
     let gap = 8 * s;
     let head_rest = (l.head.0 + used + gap, l.head.1, l.head.2.saturating_sub(used + gap), l.head.3);
     text_in(fb, w, h, total, c.summary(), head_rest, 0, desk().menu_ink, scale);
     let body = c.body();
     let line = &body[..body.iter().position(|b| *b == b'\n').unwrap_or(body.len())];
-    text_in(fb, w, h, total, line, l.body, 0, desk().menu_ink, scale);
+    body_text_in(fb, w, h, total, line, l.body, 0, desk().menu_ink, scale);
     // Close: an x in its corner.
     let (cx, cy, cw, ch) = l.close;
     let n = cw.min(ch).saturating_sub(s);
@@ -180,9 +198,9 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         // The end of a long reply shows, as in any one-line field.
         let room = inner.2.saturating_sub(16 * s);
         let mut from = 0;
-        while from < typed.len() && super::glyphs::ui_width(&typed[from..], scale).unwrap_or(0) > room { from += 1; }
-        let tw = if typed.is_empty() && !active { text_in(fb, w, h, total, c.placeholder.as_bytes(), inner, 8 * s, desk().menu_dim, scale); 0 }
-            else { text_in(fb, w, h, total, &typed[from..], inner, 8 * s, desk().menu_ink, scale) };
+        while from < typed.len() && super::glyphs::ui_body_width(&typed[from..], scale).unwrap_or(0) > room { from += 1; }
+        let tw = if typed.is_empty() && !active { body_text_in(fb, w, h, total, c.placeholder.as_bytes(), inner, 8 * s, desk().menu_dim, scale); 0 }
+            else { body_text_in(fb, w, h, total, &typed[from..], inner, 8 * s, desk().menu_ink, scale) };
         if active {
             let line = super::glyphs::UI_H * s;
             fill(fb, w, h, total, (inner.0 + 8 * s + tw + s, inner.1 + inner.3.saturating_sub(line) / 2, s.max(1) * 2, line), desk().menu_ink);

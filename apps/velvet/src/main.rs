@@ -3,8 +3,8 @@
 #![cfg_attr(feature = "sexos", no_main)]
 #[cfg(feature = "sexos")]
 mod program {
-    use velvet::{Game, Velvet};
-    use weft::{sexos::App, Response, Strings, Theme};
+    use velvet::{noir_theme, Game, Velvet};
+    use weft::{sexos::App, Response, Strings};
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
         sex_pdx::serial_record!("[velvet.fatal] {}", info);
@@ -47,7 +47,8 @@ mod program {
         sex_pdx::serial_record!("[velvet.frame] n={}", app.frames);
     }
     extern "C" fn main() -> ! {
-        let mut app = App::open("Velvet", Theme::light(), Strings::new("en"));
+        let mut app = App::open("Velvet", noir_theme(), Strings::new("en"));
+        app.ui.set_theme(noir_theme());
         let mut games = Velvet::build(&mut app.ui, sex_pdx::get_ticks());
         app.present();
         sex_pdx::serial_record!(

@@ -15,7 +15,7 @@
 pub const OP_SILKBAR_MENU: u64 = 0x2FC;
 
 /// Maximum rows in any single menu or popover.
-pub const MAX_ROWS: usize = 12;
+pub const MAX_ROWS: usize = 16;
 
 /// Power profile identifiers packed into `MenuState::flags`.
 pub const PROFILE_BALANCED: u8 = 0;
@@ -105,13 +105,15 @@ impl MenuKind {
     /// Base logical width of the panel at 1x scale.
     pub const fn base_width(self) -> usize {
         match self {
-            Self::System => 236,
-            Self::AppFile | Self::AppEdit => 196,
-            Self::AppView | Self::AppWindow => 228,
+            Self::System => 316,
+            Self::AppFile => 224,
+            Self::AppEdit => 196,
+            Self::AppView => 228,
+            Self::AppWindow => 256,
             Self::WifiPopover | Self::BatteryPopover | Self::ClockPopover => 256,
             Self::VolumePopover => 264,
             Self::DesktopContext => 216,
-            Self::WindowContext => 208,
+            Self::WindowContext => 240,
         }
     }
 }
@@ -180,6 +182,11 @@ pub enum MenuAction {
     MinimizeWindow,
     ToggleMaximizeWindow,
     ToggleFloatWindow,
+    TileLeft,
+    TileRight,
+    MoveToNextSpace,
+    MoveToPrevSpace,
+    MoveToSpace(u8),
     BringToFront,
     GroupWindow,
     UngroupTab,
@@ -200,6 +207,11 @@ pub enum MenuAction {
     PowerProfilePerformance,
     OpenCalendar,
     OpenSpotlight,
+    LaunchAppStore,
+    OpenAppsSwitcher,
+    ForceQuitApps,
+    LockScreen,
+    QuitApp,
 }
 
 impl MenuAction {
@@ -222,6 +234,11 @@ impl MenuAction {
             Self::MinimizeWindow => "minimize_window",
             Self::ToggleMaximizeWindow => "toggle_maximize",
             Self::ToggleFloatWindow => "toggle_float",
+            Self::TileLeft => "tile_left",
+            Self::TileRight => "tile_right",
+            Self::MoveToNextSpace => "move_next_space",
+            Self::MoveToPrevSpace => "move_prev_space",
+            Self::MoveToSpace(_) => "move_to_space",
             Self::BringToFront => "bring_to_front",
             Self::GroupWindow => "group_window",
             Self::UngroupTab => "ungroup_tab",
@@ -242,6 +259,11 @@ impl MenuAction {
             Self::PowerProfilePerformance => "profile_performance",
             Self::OpenCalendar => "open_calendar",
             Self::OpenSpotlight => "open_spotlight",
+            Self::LaunchAppStore => "launch_app_store",
+            Self::OpenAppsSwitcher => "open_apps_switcher",
+            Self::ForceQuitApps => "force_quit_apps",
+            Self::LockScreen => "lock_screen",
+            Self::QuitApp => "quit_app",
         }
     }
 
@@ -305,6 +327,8 @@ pub struct MenuState {
     pub wifi_phase: u8,
     /// System uptime in minutes (for Clock popover).
     pub uptime_mins: u32,
+    /// Active Desktop Space index (0..=4) for Space-move indicators.
+    pub active_space: u8,
 }
 
 impl MenuState {
@@ -321,6 +345,7 @@ impl MenuState {
             battery: 0xFF,
             wifi_phase: 0xFF,
             uptime_mins: 0,
+            active_space: 0,
         }
     }
 
@@ -340,17 +365,17 @@ impl MenuState {
     /// Number of rows in this menu/popover.
     pub const fn row_count(&self) -> usize {
         match self.kind {
-            MenuKind::System => 12,
-            MenuKind::AppFile => 3,
+            MenuKind::System => 9,
+            MenuKind::AppFile => 4,
             MenuKind::AppEdit => 3,
             MenuKind::AppView => 4,
-            MenuKind::AppWindow => 7,
+            MenuKind::AppWindow => 16,
             MenuKind::WifiPopover => 4,
             MenuKind::VolumePopover => 3,
             MenuKind::BatteryPopover => 5,
             MenuKind::ClockPopover => 4,
             MenuKind::DesktopContext => 6,
-            MenuKind::WindowContext => 4,
+            MenuKind::WindowContext => 13,
         }
     }
 
@@ -360,24 +385,22 @@ impl MenuState {
         let float_lbl = if self.floating() { "Tile Window" } else { "Float Window" };
         let prof = self.power_profile();
         Some(match (self.kind, index) {
-            // Left SexOS / System pill dropdown
-            (MenuKind::System, 0) => RowSpec::item("About SexOS", MenuAction::AboutSexOs),
-            (MenuKind::System, 1) => RowSpec::item("Spotlight Search", MenuAction::OpenSpotlight).key("Super+Spc").sep(),
-            (MenuKind::System, 2) => RowSpec::item("Kaleidoscope Browser", MenuAction::LaunchBrowser).sep(),
-            (MenuKind::System, 3) => RowSpec::item("Spindle Terminal", MenuAction::LaunchTerminal).key("Super+Ret"),
-            (MenuKind::System, 4) => RowSpec::item("Tailor AI", MenuAction::LaunchTailor),
-            (MenuKind::System, 5) => RowSpec::item("Flash Webcam", MenuAction::LaunchFlash),
-            (MenuKind::System, 6) => RowSpec::item("PD Graph", MenuAction::LaunchPdGraph),
-            (MenuKind::System, 7) => RowSpec::item("Files", MenuAction::LaunchFiles),
-            (MenuKind::System, 8) => RowSpec::item("Settings", MenuAction::LaunchSettings),
-            (MenuKind::System, 9) => RowSpec::item("Refresh Desktop", MenuAction::RefreshDesktop).sep(),
-            (MenuKind::System, 10) => RowSpec::item("Reboot", MenuAction::Reboot).danger(),
-            (MenuKind::System, 11) => RowSpec::item("Shutdown", MenuAction::Shutdown).danger(),
+            // Left SexOS Lips / System menu (Apple  + KDE polish)
+            (MenuKind::System, 0) => RowSpec::item("About This SexOS", MenuAction::AboutSexOs),
+            (MenuKind::System, 1) => RowSpec::item("System Settings...", MenuAction::LaunchSettings).key("Super+,").sep(),
+            (MenuKind::System, 2) => RowSpec::item("App Store (SexShop)...", MenuAction::LaunchAppStore),
+            (MenuKind::System, 3) => RowSpec::item("Spotlight Search...", MenuAction::OpenSpotlight).key("Super+Spc").sep(),
+            (MenuKind::System, 4) => RowSpec::item("Active & Background Apps...", MenuAction::OpenAppsSwitcher),
+            (MenuKind::System, 5) => RowSpec::item("Force Quit Applications...", MenuAction::ForceQuitApps).key("Super+Alt+Esc").sep(),
+            (MenuKind::System, 6) => RowSpec::item("Lock Screen", MenuAction::LockScreen).key("Super+L").sep(),
+            (MenuKind::System, 7) => RowSpec::item("Restart...", MenuAction::Reboot).danger(),
+            (MenuKind::System, 8) => RowSpec::item("Shut Down...", MenuAction::Shutdown).danger(),
 
             // App contextual menus (with macOS Finder / KDE-style right-aligned shortcut hints)
             (MenuKind::AppFile, 0) => RowSpec::item("New Window", MenuAction::NewWindow).key("Super+Ret"),
             (MenuKind::AppFile, 1) => RowSpec::item("Open Files", MenuAction::LaunchFiles),
-            (MenuKind::AppFile, 2) => RowSpec::item("Close Window", MenuAction::CloseWindow).key("Super+Q").sep().danger(),
+            (MenuKind::AppFile, 2) => RowSpec::item("Close Window", MenuAction::CloseWindow).key("Super+W").sep(),
+            (MenuKind::AppFile, 3) => RowSpec::item("Quit App", MenuAction::QuitApp).key("Super+Q").danger(),
 
             (MenuKind::AppEdit, 0) => RowSpec::item("Copy", MenuAction::EditCopy).key("Ctrl+C"),
             (MenuKind::AppEdit, 1) => RowSpec::item("Paste", MenuAction::EditPaste).key("Ctrl+V"),
@@ -391,13 +414,22 @@ impl MenuState {
             (MenuKind::AppWindow, 0) => RowSpec::item("Minimize", MenuAction::MinimizeWindow),
             (MenuKind::AppWindow, 1) => RowSpec::item(max_lbl, MenuAction::ToggleMaximizeWindow).key("Super+F"),
             (MenuKind::AppWindow, 2) => RowSpec::item(float_lbl, MenuAction::ToggleFloatWindow).key("Super+V"),
-            (MenuKind::AppWindow, 3) => RowSpec::item("Group Tab", MenuAction::GroupWindow).key("Super+G").sep(),
-            (MenuKind::AppWindow, 4) => RowSpec::item(
+            (MenuKind::AppWindow, 3) => RowSpec::item("Tile Left", MenuAction::TileLeft).key("Super+H").sep(),
+            (MenuKind::AppWindow, 4) => RowSpec::item("Tile Right", MenuAction::TileRight).key("Super+L"),
+            (MenuKind::AppWindow, 5) => RowSpec::item("Move to Next Space", MenuAction::MoveToNextSpace).sep(),
+            (MenuKind::AppWindow, 6) => RowSpec::item("Move to Prev Space", MenuAction::MoveToPrevSpace),
+            (MenuKind::AppWindow, 7) => RowSpec::item("Move to Space 1", MenuAction::MoveToSpace(0)).active(self.active_space == 0),
+            (MenuKind::AppWindow, 8) => RowSpec::item("Move to Space 2", MenuAction::MoveToSpace(1)).active(self.active_space == 1),
+            (MenuKind::AppWindow, 9) => RowSpec::item("Move to Space 3", MenuAction::MoveToSpace(2)).active(self.active_space == 2),
+            (MenuKind::AppWindow, 10) => RowSpec::item("Move to Space 4", MenuAction::MoveToSpace(3)).active(self.active_space == 3),
+            (MenuKind::AppWindow, 11) => RowSpec::item("Move to Space 5", MenuAction::MoveToSpace(4)).active(self.active_space == 4),
+            (MenuKind::AppWindow, 12) => RowSpec::item("Group Tab", MenuAction::GroupWindow).key("Super+G").sep(),
+            (MenuKind::AppWindow, 13) => RowSpec::item(
                 if self.grouped() { "Ungroup Tab" } else { "Next Tab" },
                 if self.grouped() { MenuAction::UngroupTab } else { MenuAction::NextTab },
             ).key(if self.grouped() { "Shift+G" } else { "Super+." }),
-            (MenuKind::AppWindow, 5) => RowSpec::item("Bring to Front", MenuAction::BringToFront),
-            (MenuKind::AppWindow, 6) => RowSpec::item("Close Window", MenuAction::CloseWindow).key("Alt+F4").sep().danger(),
+            (MenuKind::AppWindow, 14) => RowSpec::item("Bring to Front", MenuAction::BringToFront),
+            (MenuKind::AppWindow, 15) => RowSpec::item("Close Window", MenuAction::CloseWindow).key("Super+W").sep().danger(),
 
             // Right-side Wi-Fi popover
             (MenuKind::WifiPopover, 0) => RowSpec::header(wifi_status_label(self.wifi_phase)),
@@ -441,11 +473,20 @@ impl MenuState {
             (MenuKind::DesktopContext, 4) => RowSpec::item("Refresh Desktop", MenuAction::RefreshDesktop).sep(),
             (MenuKind::DesktopContext, 5) => RowSpec::item("Display Settings", MenuAction::DisplaySettings),
 
-            // Window titlebar right-click context menu
-            (MenuKind::WindowContext, 0) => RowSpec::item("Minimize", MenuAction::MinimizeWindow),
-            (MenuKind::WindowContext, 1) => RowSpec::item(max_lbl, MenuAction::ToggleMaximizeWindow).key("Super+F"),
-            (MenuKind::WindowContext, 2) => RowSpec::item("Bring to Front", MenuAction::BringToFront),
-            (MenuKind::WindowContext, 3) => RowSpec::item("Close", MenuAction::CloseWindow).key("Alt+F4").sep().danger(),
+            // Window titlebar right-click / Ctrl+Click context menu
+            (MenuKind::WindowContext, 0) => RowSpec::item("Tile Left", MenuAction::TileLeft),
+            (MenuKind::WindowContext, 1) => RowSpec::item("Tile Right", MenuAction::TileRight),
+            (MenuKind::WindowContext, 2) => RowSpec::item(max_lbl, MenuAction::ToggleMaximizeWindow).key("Super+F"),
+            (MenuKind::WindowContext, 3) => RowSpec::item(float_lbl, MenuAction::ToggleFloatWindow).key("Super+V"),
+            (MenuKind::WindowContext, 4) => RowSpec::item("Move to Next Space", MenuAction::MoveToNextSpace).sep(),
+            (MenuKind::WindowContext, 5) => RowSpec::item("Move to Prev Space", MenuAction::MoveToPrevSpace),
+            (MenuKind::WindowContext, 6) => RowSpec::item("Move to Space 1", MenuAction::MoveToSpace(0)).active(self.active_space == 0),
+            (MenuKind::WindowContext, 7) => RowSpec::item("Move to Space 2", MenuAction::MoveToSpace(1)).active(self.active_space == 1),
+            (MenuKind::WindowContext, 8) => RowSpec::item("Move to Space 3", MenuAction::MoveToSpace(2)).active(self.active_space == 2),
+            (MenuKind::WindowContext, 9) => RowSpec::item("Move to Space 4", MenuAction::MoveToSpace(3)).active(self.active_space == 3),
+            (MenuKind::WindowContext, 10) => RowSpec::item("Move to Space 5", MenuAction::MoveToSpace(4)).active(self.active_space == 4),
+            (MenuKind::WindowContext, 11) => RowSpec::item("Minimize", MenuAction::MinimizeWindow).sep(),
+            (MenuKind::WindowContext, 12) => RowSpec::item("Close Window", MenuAction::CloseWindow).key("Super+W").sep().danger(),
 
             _ => return None,
         })
@@ -464,10 +505,12 @@ impl MenuState {
             | ((self.flags as u64) << 41)
             | (1u64 << 63);
         let vol = if self.volume > 100 { 100 } else { self.volume };
+        let active = if self.active_space <= 7 { self.active_space } else { 0 };
         let w1 = (vol as u64)
             | ((self.battery as u64) << 8)
             | ((self.wifi_phase as u64) << 16)
-            | (((self.uptime_mins & 0x00FF_FFFF) as u64) << 24);
+            | (((self.uptime_mins & 0x00FF_FFFF) as u64) << 24)
+            | ((active as u64) << 48);
         (w0, w1)
     }
 
@@ -477,7 +520,11 @@ impl MenuState {
             return None;
         }
         // Reserved bits 49..63 must be zero.
-        if ((w0 >> 49) & 0x3FFF) != 0 {
+        if ((w0 >> 49) & 0x3FFF) != 0 || (w1 >> 52) != 0 {
+            return None;
+        }
+        let active_space = ((w1 >> 48) & 0xF) as u8;
+        if active_space > 7 {
             return None;
         }
         let kind = MenuKind::from_u8(((w0 >> 32) & 0xF) as u8)?;
@@ -492,6 +539,7 @@ impl MenuState {
             battery: ((w1 >> 8) & 0xFF) as u8,
             wifi_phase: ((w1 >> 16) & 0xFF) as u8,
             uptime_mins: ((w1 >> 24) & 0x00FF_FFFF) as u32,
+            active_space,
         };
         if raw_hover != 31 && raw_hover as usize >= state.row_count() {
             return None;
@@ -749,6 +797,7 @@ impl Controller {
         next.battery = cur.battery;
         next.wifi_phase = cur.wifi_phase;
         next.uptime_mins = cur.uptime_mins;
+        next.active_space = cur.active_space;
         self.open = Some(next);
         true
     }

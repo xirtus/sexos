@@ -6,3 +6,4 @@ license = "GPL-3.0-only"
 description = "Text editing for SexOS programs: a buffer with an undo tree, find and replace, and syntax colouring"
 
 [dependencies]
+sex-spell = { path = "../sex-spell" }

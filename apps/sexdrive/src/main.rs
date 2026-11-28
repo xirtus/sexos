@@ -405,6 +405,9 @@ fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::
             if inbox_busy{
                 // A queued IPC message keeps sys_wait_self_ticks from parking until this
                 // DMA finishes; yield cleanly instead of spinning in syscall 70.
+                // Only for this turn: the next pause tries a timed sleep again, so a long
+                // command (a flush) waits by time rather than by spinning out its turns.
+                inbox_busy=false;
                 for _ in 0..64{core::hint::spin_loop();}
                 sex_pdx::sys_yield();
                 return Ok(());

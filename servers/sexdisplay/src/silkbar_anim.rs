@@ -7,7 +7,7 @@
 
 use crate::chrome_candy::{
     mix_u8, MODE_DARK, MODE_HIGH_CONTRAST,
-    SILKBAR_DARK_SPECULAR, SILKBAR_LIGHT_PILL_RIM, SILKBAR_ORCHID_ACCENT, SILKBAR_ORCHID_GLOW,
+    SILKBAR_DARK_PILL_RIM, SILKBAR_DARK_SPECULAR, SILKBAR_LIGHT_PILL_RIM,
 };
 
 /// Matches `silkbar_model::LAYOUT_COUNT` (Launcher + 9 workspaces + 3 chips + Clock + Bell).
@@ -291,17 +291,18 @@ pub fn slot_capsule_pixel(
 
     let strength = hover_alpha.max(active_alpha).max(if pressed { 255 } else { 0 });
     let is_active = active_alpha > 16 || pressed;
-    let candy_accent = mix_u8(accent & 0x00FF_FFFF, SILKBAR_ORCHID_ACCENT, 96);
+    let accent_rgb = accent & 0x00FF_FFFF;
+    let glow_rgb = mix_u8(accent_rgb, 0x00FF_FFFF, 72);
     let (fill_col, max_fill_a, rim_col, max_rim_a): (u32, u32, u32, u32) = if mode_id == MODE_DARK {
         if is_active {
-            (mix_u8(SILKBAR_ORCHID_GLOW, candy_accent, 140), 82, SILKBAR_ORCHID_GLOW, 152)
+            (mix_u8(accent_rgb, glow_rgb, 96), 76, glow_rgb, 148)
         } else {
-            (SILKBAR_DARK_SPECULAR, 48, SILKBAR_ORCHID_GLOW, 92)
+            (SILKBAR_DARK_SPECULAR, 38, SILKBAR_DARK_PILL_RIM, 128)
         }
     } else if is_active {
-        (mix_u8(SILKBAR_ORCHID_ACCENT, accent & 0x00FF_FFFF, 110), 68, candy_accent, 156)
+        (accent_rgb, 58, accent_rgb, 148)
     } else {
-        (SILKBAR_ORCHID_ACCENT, 40, SILKBAR_LIGHT_PILL_RIM, 96)
+        (accent_rgb, 32, SILKBAR_LIGHT_PILL_RIM, 96)
     };
 
     let fill_a = ((max_fill_a * strength as u32) / 255) as u8;
@@ -361,7 +362,7 @@ pub fn animated_workspace_pill_pixel(
     let dy = py2 - cy2;
     let d2 = dx * dx + dy * dy;
 
-    // Soft orchid/lavender outer halo around active/urgent workspace pill.
+    // Soft halo around active/urgent workspace pill matching the live accent.
     if d2 >= r * r {
         if glow_pad == 0 { return None; }
         let glow_r = r + (glow_pad as i32) * 2;
@@ -371,22 +372,22 @@ pub fn animated_workspace_pill_pixel(
         let glow_col = if urgent {
             urgent_col & 0x00FF_FFFF
         } else {
-            mix_u8(SILKBAR_ORCHID_GLOW, active_col & 0x00FF_FFFF, 96)
+            mix_u8(active_col & 0x00FF_FFFF, 0x00FF_FFFF, 64)
         };
-        let glow_a = (((num * 92) / den) * e / 255).min(96) as u8;
+        let glow_a = (((num * 84) / den) * e / 255).min(88) as u8;
         if glow_a == 0 { return None; }
         return Some(mix_u8(bg, glow_col, glow_a));
     }
 
-    let glowing_active = mix_u8(active_col & 0x00FF_FFFF, SILKBAR_ORCHID_ACCENT, 84);
+    let glowing_active = active_col & 0x00FF_FFFF;
     let base_col = if urgent {
         urgent_col & 0x00FF_FFFF
     } else {
         mix_u8(muted_col & 0x00FF_FFFF, glowing_active, expand)
     };
-    // Subtle candy top-half sheen inside the active capsule.
+    // Subtle specular top-half sheen inside the active capsule.
     let sheen_col = if e > 128 && y < top + ph / 2 {
-        mix_u8(base_col, SILKBAR_ORCHID_GLOW, 72)
+        mix_u8(base_col, 0x00FF_FFFF, 56)
     } else {
         base_col
     };

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Bold and italic: the real Geist faces, and synthetic ones for fonts without them.
 use sex_font::raster::scratch_len;
-use sex_font::{geist, Font, Style, Synthetic};
+use sex_font::{
+    geist, geist_weight, Font, Style, Synthetic, Weight, GEIST_MONO_MEDIUM, GEIST_MONO_SEMIBOLD,
+    GEIST_SANS_MEDIUM, GEIST_SANS_SEMIBOLD,
+};
 
 const W: usize = 48;
 const H: usize = 48;
@@ -82,4 +85,66 @@ fn synthetic_bold_keeps_counters_open() {
     for x in 0..W { if bold[row * W + x] > 128 { x0 = x0.min(x); x1 = x1.max(x); } }
     let mid = (x0 + x1) / 2;
     assert!(bold[row * W + mid] < 64, "counter filled at x={mid}");
+}
+
+#[test]
+fn geist_medium_and_semibold_parse_and_order_coverage_cleanly() {
+    // Verify raw TTF headers + ttf-parser metadata for all 4 newly bundled faces.
+    for (bytes, expected_weight) in [
+        (GEIST_SANS_MEDIUM, Weight::Medium),
+        (GEIST_SANS_SEMIBOLD, Weight::SemiBold),
+        (GEIST_MONO_MEDIUM, Weight::Medium),
+        (GEIST_MONO_SEMIBOLD, Weight::SemiBold),
+    ] {
+        let face = ttf_parser::Face::parse(bytes, 0).expect("ttf-parser parses Geist Medium/SemiBold");
+        assert_eq!(face.weight().to_number(), expected_weight.number());
+        assert!(face.number_of_glyphs() > 900);
+        assert!(face.glyph_index('A').is_some());
+        assert!(face.glyph_index('g').is_some());
+
+        let font = Font::new(bytes).expect("sex_font::Font parses");
+        assert_eq!(font.weight(), expected_weight);
+        assert_eq!(font.weight_number(), expected_weight.number());
+    }
+
+    // Verify coverage ordering Regular < Medium < SemiBold < Bold at 12px, 14px, 17px
+    // for both Geist Sans and Geist Mono.
+    for mono in [false, true] {
+        let regular = Font::new(geist_weight(mono, Weight::Regular, false)).unwrap();
+        let medium = Font::new(geist_weight(mono, Weight::Medium, false)).unwrap();
+        let semibold = Font::new(geist_weight(mono, Weight::SemiBold, false)).unwrap();
+        let bold = Font::new(geist_weight(mono, Weight::Bold, false)).unwrap();
+
+        for px in [12u32, 14, 17] {
+            let cov = |font: &Font, ch: char| -> u32 {
+                let g = font.glyph(ch as u32).unwrap();
+                let (w, h) = (px as usize * 2, px as usize * 2);
+                let mut acc = vec![0; scratch_len(w, h)];
+                let mut out = vec![0u8; w * h];
+                assert!(font.draw(g, px * 64, 4 * 256, (px as i32 * 3 / 2) * 256, w, h, &mut acc, &mut out));
+                let sum = out.iter().map(|&v| v as u32).sum::<u32>();
+                assert!(sum > 0, "non-empty bitmap for {ch} at {px}px");
+                sum
+            };
+
+            for ch in ['H', 'a', 'e', 'n', '0'] {
+                let r = cov(&regular, ch);
+                let m = cov(&medium, ch);
+                let s = cov(&semibold, ch);
+                let b = cov(&bold, ch);
+                assert!(
+                    m > r,
+                    "mono={mono} {px}px '{ch}': Medium ({m}) must exceed Regular ({r})"
+                );
+                assert!(
+                    s > m,
+                    "mono={mono} {px}px '{ch}': SemiBold ({s}) must exceed Medium ({m})"
+                );
+                assert!(
+                    s < b,
+                    "mono={mono} {px}px '{ch}': SemiBold ({s}) must be lighter than Bold ({b})"
+                );
+            }
+        }
+    }
 }

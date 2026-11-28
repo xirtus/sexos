@@ -17,15 +17,15 @@ use crate::desk_theme::current as desk;
 
 /// The popups that are glass, for receipts and for their once-per-show log.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Panel { TrayItemsMenu, TrayItemsTip, TrayItemsCard, TrayMenu, Bluetooth, Switcher, WindowMenu, SilkBarMenu, Spotlight }
-const PANELS: usize = 9;
+pub enum Panel { TrayItemsMenu, TrayItemsTip, TrayItemsCard, TrayMenu, Bluetooth, Switcher, WindowMenu, SilkBarMenu, Spotlight, BgApps, MetaHub }
+const PANELS: usize = 11;
 impl Panel {
     pub const fn name(self) -> &'static str {
         match self {
             Panel::TrayItemsMenu => "tray_items_menu", Panel::TrayItemsTip => "tray_items_tip",
             Panel::TrayItemsCard => "tray_items_card", Panel::TrayMenu => "tray_menu", Panel::Bluetooth => "bt_panel",
             Panel::Switcher => "switcher", Panel::WindowMenu => "window_menu", Panel::SilkBarMenu => "silkbar_menu",
-            Panel::Spotlight => "spotlight",
+            Panel::Spotlight => "spotlight", Panel::BgApps => "bg_apps", Panel::MetaHub => "meta_hub",
         }
     }
     const fn index(self) -> usize { self as usize }
@@ -33,6 +33,7 @@ impl Panel {
 
 /// Every panel that shows this frame, with its whole rectangle (rim included).
 pub type Shown = [Option<(Panel, Rect)>; PANELS];
+pub const EMPTY_SHOWN: Shown = [None; PANELS];
 
 /// The pixels the glass of `panel` reads, as (x0, y0, x1, y1): the panel grown
 /// by the blur margin, below the bar. A partial frame paints these again.

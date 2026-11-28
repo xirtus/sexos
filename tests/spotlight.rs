@@ -61,11 +61,12 @@ fn live_search_filtering_and_backspace() {
     assert_eq!(n, 1);
     assert_eq!(CATALOG[order[0]].id, "files");
 
-    // Search "moan" -> Moan DAW.
+    // Search "moan" -> Moan Studio DAW.
     let (order, n) = filter_catalog(Category::All, "moan");
     assert_eq!(n, 1);
     assert_eq!(CATALOG[order[0]].id, "moan");
-    assert_eq!(CATALOG[order[0]].target, LaunchTarget::Program("moan"));
+    assert_eq!(CATALOG[order[0]].name, "Moan Studio");
+    assert_eq!(CATALOG[order[0]].target, LaunchTarget::Program("moan-studio"));
 
     // Search "splicy", "fcp", and "video editor" -> Splicy video editor.
     for query in ["splicy", "fcp", "video editor"] {
@@ -201,9 +202,10 @@ fn grid_arrow_navigation_and_enter_launch_dispatch() {
     assert_eq!(ctrl.handle_key(0x4B, 1, false, false), KeyOutcome::Redraw);
     assert_eq!(ctrl.state().selected as usize, (GRID_COLS * GRID_ROWS).min(CATALOG_LEN) - 1);
 
-    // Move back to index 1 (Kaleidoscope) and press Enter -> Launch(Browser) and close.
+    // Move back to index 2 (Kaleidoscope) and press Enter -> Launch(Browser) and close.
     assert_eq!(ctrl.handle_key(0x4D, 1, false, false), KeyOutcome::Redraw); // 0
     assert_eq!(ctrl.handle_key(0x4D, 1, false, false), KeyOutcome::Redraw); // 1
+    assert_eq!(ctrl.handle_key(0x4D, 1, false, false), KeyOutcome::Redraw); // 2
     assert_eq!(
         ctrl.handle_key(0x1C, 1, false, false),
         KeyOutcome::Launch(LaunchTarget::Browser)
@@ -261,4 +263,73 @@ fn spotlight_hotkeys_super_space_super_d_and_alt_space() {
     assert_eq!(k.event(desktop_keys::KEY_SPACE, 1), desktop_keys::Action::Spotlight);
     assert_eq!(k.event(desktop_keys::KEY_SPACE, 0), desktop_keys::Action::Consume);
     assert_eq!(k.event(0x38, 0), desktop_keys::Action::Consume);
+}
+
+#[test]
+fn human_aliases_and_keyword_priority_rank_exact_tile_first() {
+    assert_eq!(resolve_program_alias("settings"), "tatami");
+    assert_eq!(resolve_program_alias("preferences"), "tatami");
+    assert_eq!(resolve_program_alias("prefs"), "tatami");
+    assert_eq!(resolve_program_alias("system-settings"), "tatami");
+    assert_eq!(resolve_program_alias("store"), "sexshop");
+    assert_eq!(resolve_program_alias("appstore"), "sexshop");
+    assert_eq!(resolve_program_alias("app-store"), "sexshop");
+    assert_eq!(resolve_program_alias("packages"), "sexshop");
+    assert_eq!(resolve_program_alias("pkg"), "sexshop");
+    assert_eq!(resolve_program_alias("files"), "loom");
+    assert_eq!(resolve_program_alias("finder"), "loom");
+    assert_eq!(resolve_program_alias("explorer"), "loom");
+    assert_eq!(resolve_program_alias("browser"), "kaleidoscope");
+    assert_eq!(resolve_program_alias("web"), "kaleidoscope");
+    assert_eq!(resolve_program_alias("internet"), "kaleidoscope");
+    assert_eq!(resolve_program_alias("monitor"), "mesh");
+    assert_eq!(resolve_program_alias("activity"), "mesh");
+    assert_eq!(resolve_program_alias("tasks"), "mesh");
+    assert_eq!(resolve_program_alias("top"), "mesh");
+    assert_eq!(resolve_program_alias("htop"), "mesh");
+    assert_eq!(resolve_program_alias("calendar"), "date");
+    assert_eq!(resolve_program_alias("schedule"), "date");
+    assert_eq!(resolve_program_alias("music"), "qupid");
+    assert_eq!(resolve_program_alias("audio"), "qupid");
+    assert_eq!(resolve_program_alias("player"), "qupid");
+    assert_eq!(resolve_program_alias("vlc"), "qupid");
+    assert_eq!(resolve_program_alias("chat"), "flirt");
+    assert_eq!(resolve_program_alias("messages"), "flirt");
+    assert_eq!(resolve_program_alias("messaging"), "flirt");
+    assert_eq!(resolve_program_alias("daw"), "moan-studio");
+    assert_eq!(resolve_program_alias("moan"), "moan-studio");
+    assert_eq!(resolve_program_alias("synth"), "moan-studio");
+    assert_eq!(resolve_program_alias("notes"), "jot");
+    assert_eq!(resolve_program_alias("notepad"), "jot");
+    assert_eq!(resolve_program_alias("editor"), "vellum");
+    assert_eq!(resolve_program_alias("textedit"), "vellum");
+    assert_eq!(resolve_program_alias("calc"), "abacus");
+    assert_eq!(resolve_program_alias("calculator"), "abacus");
+    assert_eq!(resolve_program_alias("ai"), "tailor");
+    assert_eq!(resolve_program_alias("assistant"), "tailor");
+    assert_eq!(resolve_program_alias("claude"), "tailor");
+    assert_eq!(resolve_program_alias("codex"), "tailor");
+    assert_eq!(resolve_program_alias("bridge"), "tether");
+    assert_eq!(resolve_program_alias("remote"), "tether");
+    assert_eq!(resolve_program_alias("mcp"), "tether");
+    assert_eq!(resolve_program_alias("torrent"), "swingers");
+    assert_eq!(resolve_program_alias("p2p"), "swingers");
+    assert_eq!(resolve_program_alias("webcam"), "flash");
+    assert_eq!(resolve_program_alias("camera"), "flash");
+
+    let expected_top = [
+        ("store", "sexshop"),
+        ("preferences", "settings"),
+        ("calculator", "abacus"),
+        ("music", "qupid"),
+        ("wifi", "settings"),
+        ("bluetooth", "hookup"),
+        ("firewall", "corset"),
+        ("backup", "aftercare"),
+    ];
+    for (query, expected_id) in expected_top {
+        let (order, n) = filter_catalog(Category::All, query);
+        assert!(n >= 1, "expected match for {}", query);
+        assert_eq!(CATALOG[order[0]].id, expected_id, "query={}", query);
+    }
 }

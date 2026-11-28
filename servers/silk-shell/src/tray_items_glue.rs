@@ -30,8 +30,7 @@ unsafe fn screen() -> Option<Screen> {
     let s = m.scale().max(1) as usize;
     let chips = &bar.layout[ModuleSlot::Chip0 as usize];
     let left = bar.layout[1..1 + silkbar_model::WORKSPACE_COUNT].iter().filter(|b| b.w > 0).map(|b| b.x + b.w).max().unwrap_or(0) + 8 * s;
-    // Program tray icons end left of the Bluetooth icon while it shows.
-    let right = if crate::TRAY.bluetooth != sex_pdx::tray::BT_NONE { sex_pdx::tray::bluetooth_rect((chips.x, chips.y, chips.w, chips.h)).0 } else { chips.x };
+    let right = crate::bg_apps_glue::tray_right_edge(chips.x, s);
     Some(Screen { width: w, height: h, bar: m.bar() as usize, scale: s, right, left, y: chips.y, size: target, gap: 4 * s })
 }
 

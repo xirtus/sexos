@@ -9,8 +9,8 @@ use sex_pdx::spotlight::{
     self, CATALOG, Category, FOOTER_HINTS, Layout, PLACEHOLDER, Rect, SpotlightState, eval_calc,
     filter_catalog,
 };
-use sex_theme::{candy_lavender as cl, Mode};
-use crate::desk_theme::current as desk;
+use sex_theme::{noir as nr, Mode};
+use crate::desk_theme::{current as desk, resolved_accent, resolved_fill_and_ink};
 
 const SHELL_PD: u32 = 3;
 
@@ -192,6 +192,8 @@ struct Palette {
 
 fn palette() -> Palette {
     let d = desk();
+    let accent = resolved_accent();
+    let (pill_active, on_active) = resolved_fill_and_ink();
     match d.mode {
         Mode::HighContrast => Palette {
             bg: d.menu,
@@ -202,44 +204,44 @@ fn palette() -> Palette {
             tile_sel: d.menu_picked,
             tile_hover: d.menu_picked,
             pill_bg: d.menu_button,
-            pill_active: d.focus,
-            on_active: 0x00FF_FFFF,
+            pill_active,
+            on_active,
             divider: d.menu_rim,
             ink: d.menu_ink,
             subtext: d.menu_soft,
-            accent: d.focus,
+            accent,
         },
         Mode::Dark => Palette {
-            bg: cl::DARK_MENU_BG & 0x00FF_FFFF,
-            rim: cl::DARK_MENU_RIM & 0x00FF_FFFF,
-            specular: cl::DARK_SPECULAR & 0x00FF_FFFF,
-            input_bg: cl::DARK_SPOTLIGHT_INPUT & 0x00FF_FFFF,
-            tile_bg: cl::DARK_SPOTLIGHT_TILE & 0x00FF_FFFF,
-            tile_sel: cl::DARK_SPOTLIGHT_SELECTED & 0x00FF_FFFF,
-            tile_hover: cl::DARK_MENU_HOVER & 0x00FF_FFFF,
-            pill_bg: cl::DARK_SPOTLIGHT_PILL & 0x00FF_FFFF,
-            pill_active: cl::ORCHID_PILL_ACTIVE & 0x00FF_FFFF,
-            on_active: cl::ON_ORCHID_ACTIVE & 0x00FF_FFFF,
-            divider: cl::DARK_MENU_DIVIDER & 0x00FF_FFFF,
-            ink: cl::DARK_TEXT & 0x00FF_FFFF,
-            subtext: cl::DARK_MENU_SUBTEXT & 0x00FF_FFFF,
-            accent: cl::ORCHID_ACCENT & 0x00FF_FFFF,
+            bg: nr::DARK_MENU_BG & 0x00FF_FFFF,
+            rim: nr::DARK_MENU_RIM & 0x00FF_FFFF,
+            specular: nr::DARK_SPECULAR & 0x00FF_FFFF,
+            input_bg: nr::DARK_SPOTLIGHT_INPUT & 0x00FF_FFFF,
+            tile_bg: nr::DARK_SPOTLIGHT_TILE & 0x00FF_FFFF,
+            tile_sel: nr::DARK_SPOTLIGHT_SELECTED & 0x00FF_FFFF,
+            tile_hover: nr::DARK_MENU_HOVER & 0x00FF_FFFF,
+            pill_bg: nr::DARK_SPOTLIGHT_PILL & 0x00FF_FFFF,
+            pill_active,
+            on_active,
+            divider: nr::DARK_MENU_DIVIDER & 0x00FF_FFFF,
+            ink: nr::DARK_TEXT & 0x00FF_FFFF,
+            subtext: nr::DARK_MENU_SUBTEXT & 0x00FF_FFFF,
+            accent,
         },
         Mode::Light => Palette {
-            bg: cl::LIGHT_MENU_BG & 0x00FF_FFFF,
-            rim: cl::LIGHT_MENU_RIM & 0x00FF_FFFF,
-            specular: cl::LIGHT_SPECULAR & 0x00FF_FFFF,
-            input_bg: cl::LIGHT_SPOTLIGHT_INPUT & 0x00FF_FFFF,
-            tile_bg: cl::LIGHT_SPOTLIGHT_TILE & 0x00FF_FFFF,
-            tile_sel: cl::LIGHT_SPOTLIGHT_SELECTED & 0x00FF_FFFF,
-            tile_hover: cl::LIGHT_MENU_HOVER & 0x00FF_FFFF,
-            pill_bg: cl::LIGHT_SPOTLIGHT_PILL & 0x00FF_FFFF,
-            pill_active: cl::ORCHID_PILL_ACTIVE & 0x00FF_FFFF,
-            on_active: cl::ON_ORCHID_ACTIVE & 0x00FF_FFFF,
-            divider: cl::LIGHT_MENU_DIVIDER & 0x00FF_FFFF,
-            ink: cl::LIGHT_TEXT & 0x00FF_FFFF,
-            subtext: cl::LIGHT_MENU_SUBTEXT & 0x00FF_FFFF,
-            accent: cl::ORCHID_ACCENT & 0x00FF_FFFF,
+            bg: nr::LIGHT_MENU_BG & 0x00FF_FFFF,
+            rim: nr::LIGHT_MENU_RIM & 0x00FF_FFFF,
+            specular: nr::LIGHT_SPECULAR & 0x00FF_FFFF,
+            input_bg: nr::LIGHT_SPOTLIGHT_INPUT & 0x00FF_FFFF,
+            tile_bg: nr::LIGHT_SPOTLIGHT_TILE & 0x00FF_FFFF,
+            tile_sel: nr::LIGHT_SPOTLIGHT_SELECTED & 0x00FF_FFFF,
+            tile_hover: nr::LIGHT_MENU_HOVER & 0x00FF_FFFF,
+            pill_bg: nr::LIGHT_SPOTLIGHT_PILL & 0x00FF_FFFF,
+            pill_active,
+            on_active,
+            divider: nr::LIGHT_MENU_DIVIDER & 0x00FF_FFFF,
+            ink: nr::LIGHT_TEXT & 0x00FF_FFFF,
+            subtext: nr::LIGHT_MENU_SUBTEXT & 0x00FF_FFFF,
+            accent,
         },
     }
 }
@@ -359,8 +361,12 @@ fn tint_glass(fb: *mut u32, w: usize, h: usize, total: usize, r: Rect, tint: u32
     }
 }
 
-fn draw_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
-    let width = super::glyphs::ui_width(t, scale).unwrap_or(0).min(max_w);
+fn draw_text_weight(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize, body: bool) {
+    let width = if body {
+        super::glyphs::ui_body_width(t, scale)
+    } else {
+        super::glyphs::ui_width(t, scale)
+    }.unwrap_or(0).min(max_w);
     let lh = super::glyphs::UI_H * scale as usize;
     for y in y0..(y0 + lh).min(h) {
         for x in x0..(x0 + width).min(w) {
@@ -368,7 +374,12 @@ fn draw_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize
             if at >= total {
                 return;
             }
-            let Some(alpha) = super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale) else {
+            let cov = if body {
+                super::glyphs::ui_body_coverage(t, (x - x0) as i32, y - y0, scale)
+            } else {
+                super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale)
+            };
+            let Some(alpha) = cov else {
                 break;
             };
             if alpha == 0 {
@@ -380,6 +391,14 @@ fn draw_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize
             }
         }
     }
+}
+
+fn draw_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
+    draw_text_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, false);
+}
+
+fn draw_body_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
+    draw_text_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, true);
 }
 
 /// Draws a crisp magnifying glass icon centered vertically inside the search bar.
@@ -423,11 +442,11 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     let p = palette();
     let inner = crate::frost::inside(l.panel, s);
 
-    // 1. Frosted Candy Lavender glass backdrop + specular top sheen + orchid rim.
+    // 1. Frosted macOS Noir obsidian glass backdrop + specular top highlight + dark rim.
     crate::frost::glass_or(fb, w, h, total, crate::frost::Panel::Spotlight, inner, sc, bar, p.bg);
     if desk().mode != Mode::HighContrast {
-        tint_glass(fb, w, h, total, inner, p.bg, 84);
-        tint_glass(fb, w, h, total, (inner.0, inner.1, inner.2, 2 * s), p.specular, 80);
+        tint_glass(fb, w, h, total, inner, p.bg, if desk().mode == Mode::Dark { 104 } else { 84 });
+        tint_glass(fb, w, h, total, (inner.0, inner.1, inner.2, s), p.specular, if desk().mode == Mode::Dark { 34 } else { 80 });
     }
     crate::frost::rim(fb, w, h, total, l.panel, s, p.rim);
 
@@ -441,6 +460,11 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     draw_search_icon(fb, w, h, total, sb.0 + 20 * s, sb.1 + sb.3 / 2 - s, s, p.accent);
 
     let calc = eval_calc(st.query.as_str());
+    let quick_cmd = if calc.is_none() {
+        sex_pdx::meta_hub::parse_quick_command(st.query.as_str())
+    } else {
+        None
+    };
     let mut calc_pill_w = 0usize;
     if let Some(res) = calc {
         let rb = res.as_str().as_bytes();
@@ -453,18 +477,35 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         let ty = py + ph.saturating_sub(line_h) / 2;
         draw_text(fb, w, h, total, rb, px + 10 * s, ty, p.on_active, sc, tw);
         calc_pill_w = pw + 16 * s;
+    } else if let Some(cmd) = quick_cmd {
+        let mut qbuf = [0u8; 48];
+        qbuf[0] = b'>';
+        qbuf[1] = b' ';
+        let mut tbuf = [0u8; 48];
+        let tlen = sex_pdx::meta_hub::format_quick_command(cmd, &mut tbuf).min(46);
+        qbuf[2..2 + tlen].copy_from_slice(&tbuf[..tlen]);
+        let rb = &qbuf[..2 + tlen];
+        let tw = super::glyphs::ui_width(rb, sc).unwrap_or(0);
+        let pw = (tw + 20 * s).min(sb.2 / 2);
+        let ph = sb.3.saturating_sub(14 * s);
+        let px = sb.0 + sb.2.saturating_sub(pw + 8 * s);
+        let py = sb.1 + (sb.3.saturating_sub(ph)) / 2;
+        fill_rounded(fb, w, h, total, (px, py, pw, ph), 8 * s, p.pill_active);
+        let ty = py + ph.saturating_sub(line_h) / 2;
+        draw_text(fb, w, h, total, rb, px + 10 * s, ty, p.on_active, sc, pw.saturating_sub(16 * s));
+        calc_pill_w = pw + 16 * s;
     }
 
     let text_x = sb.0 + 40 * s;
     let text_y = sb.1 + sb.3.saturating_sub(line_h) / 2;
     let text_max_w = sb.2.saturating_sub(50 * s + calc_pill_w);
     if st.query.is_empty() {
-        draw_text(fb, w, h, total, PLACEHOLDER.as_bytes(), text_x, text_y, p.subtext, sc, text_max_w);
+        draw_body_text(fb, w, h, total, PLACEHOLDER.as_bytes(), text_x, text_y, p.subtext, sc, text_max_w);
     } else {
         let qb = st.query.as_bytes();
-        draw_text(fb, w, h, total, qb, text_x, text_y, p.ink, sc, text_max_w);
-        let qw = super::glyphs::ui_width(qb, sc).unwrap_or(0).min(text_max_w);
-        // Crisp orchid text caret
+        draw_body_text(fb, w, h, total, qb, text_x, text_y, p.ink, sc, text_max_w);
+        let qw = super::glyphs::ui_body_width(qb, sc).unwrap_or(0).min(text_max_w);
+        // Crisp accent text caret
         fill(fb, w, h, total, (text_x + qw + 2 * s, text_y, 2 * s, line_h), p.accent);
     }
 
@@ -501,15 +542,17 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     if shown == 0 {
         let msg: &[u8] = if calc.is_some() {
             b"Calculator result ready above"
+        } else if quick_cmd.is_some() {
+            b"Press Enter to apply quick control"
         } else if !st.query.as_str().trim().is_empty() {
             b"Press Enter to run program directly"
         } else {
             b"No matching apps found"
         };
-        let tw = super::glyphs::ui_width(msg, sc).unwrap_or(0);
+        let tw = super::glyphs::ui_body_width(msg, sc).unwrap_or(0);
         let tx = l.grid_area.0 + l.grid_area.2.saturating_sub(tw) / 2;
         let ty = l.grid_area.1 + l.grid_area.3.saturating_sub(line_h) / 2;
-        draw_text(fb, w, h, total, msg, tx, ty, p.subtext, sc, l.grid_area.2);
+        draw_body_text(fb, w, h, total, msg, tx, ty, p.subtext, sc, l.grid_area.2);
     } else {
         let sel_idx = (st.selected as usize).min(shown - 1);
         for i in 0..shown {
@@ -579,8 +622,8 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     let ft = l.footer;
     fill(fb, w, h, total, (ft.0, ft.1, ft.2, s), p.divider);
     let hints = FOOTER_HINTS.as_bytes();
-    let hw = super::glyphs::ui_width(hints, sc).unwrap_or(0);
+    let hw = super::glyphs::ui_body_width(hints, sc).unwrap_or(0);
     let hx = ft.0 + ft.2.saturating_sub(hw.min(ft.2)) / 2;
     let hy = ft.1 + ft.3.saturating_sub(line_h) / 2;
-    draw_text(fb, w, h, total, hints, hx, hy, p.subtext, sc, ft.2);
+    draw_body_text(fb, w, h, total, hints, hx, hy, p.subtext, sc, ft.2);
 }

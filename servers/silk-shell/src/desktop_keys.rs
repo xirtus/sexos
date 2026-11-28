@@ -17,6 +17,8 @@ pub enum Action {
     DisplayScale(i8),
     /// Master volume by this many percent; 0 toggles mute.
     Volume(i8),
+    /// Master microphone gain by this many percent; 0 toggles microphone mute.
+    MicVolume(i8),
     /// The Bluetooth key (F9 on the Alienware x17): Bluetooth on or off.
     Bluetooth,
     /// Alt+F4: close the focused window (KDE / standard desktop).
@@ -31,6 +33,7 @@ pub enum Action {
 pub const KEY_MUTE: u8 = 0x75;
 pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
+pub const KEY_MIC_MUTE: u8 = 0x79;
 /// The Bluetooth key (F9 on the Alienware x17): Input gives it this code (a keyboard
 /// driver sends reserved usage 0xEF). Shell turns Bluetooth on or off; programs never see it.
 pub const KEY_BLUETOOTH: u8 = 0x74;
@@ -61,7 +64,10 @@ impl Keys {
         }
     }
     pub fn event(&mut self, code: u8, value: u64) -> Action {
-        // Volume keys: presses and repeats step, mute toggles once, releases are Shell's.
+        // Volume & mic mute keys: presses and repeats step, mutes toggle once, releases are Shell's.
+        if code == KEY_MIC_MUTE {
+            return if value == 1 { Action::MicVolume(0) } else { Action::Consume };
+        }
         let volume = match code {
             KEY_VOLUME_UP => Some(VOLUME_STEP),
             KEY_VOLUME_DOWN => Some(-VOLUME_STEP),
@@ -74,8 +80,8 @@ impl Keys {
         }
         if let Some(step) = volume {
             return match value {
-                1 => Action::Volume(step),
-                2 if step != 0 => Action::Volume(step),
+                1 => if self.ctrl && step != 0 { Action::MicVolume(step) } else { Action::Volume(step) },
+                2 if step != 0 => if self.ctrl { Action::MicVolume(step) } else { Action::Volume(step) },
                 _ => Action::Consume,
             };
         }
@@ -238,5 +244,21 @@ mod tests {
         assert_eq!(k.event(0x0B, 0), Action::Consume);
         assert_eq!(k.event(0x1D, 0), Action::Pass);
         assert_eq!(k.event(0x0D, 1), Action::TextZoom(1));
+    }
+    #[test]
+    fn mic_mute_and_ctrl_volume_keys_control_microphone() {
+        let mut k = Keys::new();
+        assert_eq!(k.event(KEY_MIC_MUTE, 1), Action::MicVolume(0));
+        assert_eq!(k.event(KEY_MIC_MUTE, 2), Action::Consume);
+        assert_eq!(k.event(KEY_MIC_MUTE, 0), Action::Consume);
+        // Ctrl+VolumeUp/Down steps mic gain; plain VolumeUp/Down still steps speaker.
+        assert_eq!(k.event(0x1D, 1), Action::Pass);
+        assert_eq!(k.event(KEY_VOLUME_UP, 1), Action::MicVolume(VOLUME_STEP));
+        assert_eq!(k.event(KEY_VOLUME_UP, 2), Action::MicVolume(VOLUME_STEP));
+        assert_eq!(k.event(KEY_VOLUME_UP, 0), Action::Consume);
+        assert_eq!(k.event(KEY_VOLUME_DOWN, 1), Action::MicVolume(-VOLUME_STEP));
+        assert_eq!(k.event(KEY_MUTE, 1), Action::Volume(0));
+        assert_eq!(k.event(0x1D, 0), Action::Pass);
+        assert_eq!(k.event(KEY_VOLUME_UP, 1), Action::Volume(VOLUME_STEP));
     }
 }

@@ -31,11 +31,12 @@ const FRAME: Duration = Duration::from_millis(16);
 fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawInput) -> egui::FullOutput) -> ! {
     let window = sex_std::window();
     window.title(options.title.as_bytes());
-    let ctx = egui::Context::default();
+    let ctx = crate::new_context();
     let mut painter = Painter::new();
     let start = Instant::now();
     let mut clipboard = String::new();
     let mut modifiers = egui::Modifiers::NONE;
+    let mut super_down = 0u8;
     let mut events: Vec<egui::Event> = Vec::new();
     let mut frames: u64 = 0;
     // When egui wants the next frame; None waits for input.
@@ -60,8 +61,33 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                 WinEvent::Close => closing = true,
                 WinEvent::Resize { .. } => resized = true,
                 WinEvent::Key(key) => {
-                    modifiers = keys::modifiers(key.shift, key.control);
-                    keys::key_events(key.code, key.shift, key.control, sex_app::text(key), &clipboard, &mut events);
+                    match key.code {
+                        keys::CODE_SUPER_LEFT => super_down |= 1,
+                        keys::CODE_SUPER_RIGHT => super_down |= 2,
+                        _ => {}
+                    }
+                    let super_cmd = super_down != 0;
+                    modifiers = keys::modifiers_with(key.shift, key.control, key.alt, super_cmd);
+                    if !matches!(key.code, keys::CODE_SUPER_LEFT | keys::CODE_SUPER_RIGHT) {
+                        keys::key_events_with(
+                            key.code,
+                            key.shift,
+                            key.control,
+                            key.alt,
+                            super_cmd,
+                            sex_app::text(key),
+                            &clipboard,
+                            &mut events,
+                        );
+                    }
+                }
+                WinEvent::KeyUp(key) => {
+                    match key.code {
+                        keys::CODE_SUPER_LEFT => super_down &= !1,
+                        keys::CODE_SUPER_RIGHT => super_down &= !2,
+                        _ => {}
+                    }
+                    modifiers = keys::modifiers_with(key.shift, key.control, key.alt, super_down != 0);
                 }
                 WinEvent::Pointer(p) => {
                     let kind = match p.kind {
@@ -76,10 +102,15 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                             sex_std::sex_pdx::serial_record!("[egui.wheel] steps={} x={} y={} t={}", steps, p.x, p.y, start.elapsed().as_millis());
                         }
                     }
-                    keys::pointer_events(p.x, p.y, kind, ppp, modifiers, &mut events);
+                    let ptr_mods = if p.mods != 0 {
+                        keys::pointer_modifiers(p.mods, super_down != 0)
+                    } else {
+                        modifiers
+                    };
+                    keys::pointer_events(p.x, p.y, kind, ppp, ptr_mods, &mut events);
                 }
                 // Drops reach egui once dnd forwarding lands (sex_app::dnd holds the bytes).
-                WinEvent::Drop { .. } | WinEvent::DragEnded { .. } | WinEvent::KeyUp(_) => {}
+                WinEvent::Drop { .. } | WinEvent::DragEnded { .. } => {}
             }
             next = window.poll();
         }
@@ -91,10 +122,14 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
 
         let (width, height) = window.size();
         let began = Instant::now();
+        crate::set_clipboard(&ctx, &clipboard);
         let raw = raw_input(width, height, options.scale, ctx.zoom_factor(), start.elapsed().as_secs_f64(), std::mem::take(&mut events));
         let output = frame(&ctx, raw);
         for command in &output.platform_output.commands {
-            if let egui::OutputCommand::CopyText(text) = command { clipboard = text.clone(); }
+            if let egui::OutputCommand::CopyText(text) = command {
+                clipboard = text.clone();
+                crate::set_clipboard(&ctx, &clipboard);
+            }
         }
         let viewport = output.viewport_output.get(&egui::ViewportId::ROOT);
         let repaint = viewport.map_or(Duration::MAX, |v| v.repaint_delay);

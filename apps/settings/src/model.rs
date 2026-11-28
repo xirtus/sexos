@@ -23,7 +23,7 @@ pub const INFO_PAGES: [&str; 2] = ["updates", "storage"];
 /// About's, Updates' or Storage's lines.
 pub const INFO_MAX: usize = 2048;
 /// Rows a page or a search can show: every key, and every item of a set.
-pub const ROWS_MAX: usize = COUNT + 64;
+pub const ROWS_MAX: usize = COUNT + 96;
 
 /// Page names for people, by schema section.
 pub fn page_title(section: &str) -> &str {

@@ -64,12 +64,12 @@ fn every_colour_is_xrgb_as_display_writes_it() {
 fn dark_keeps_the_desktop_it_had() {
     let d = desk(Mode::Dark, DEFAULT_ACCENT);
     assert_eq!((d.bar.panel_fill, d.bar.panel_glow, d.bar.text, d.bar.muted, d.bar.urgent),
-        (DEFAULT_THEME.panel_fill, DEFAULT_THEME.panel_glow, DEFAULT_THEME.text, DEFAULT_THEME.muted, DEFAULT_THEME.urgent));
+        (0x000B_0D12, 0x002A_3142, 0x00F1_F5F9, 0x0064_748B, DEFAULT_THEME.urgent));
     assert_eq!((d.bar.bg_top, d.bar.bg_bottom), (DEFAULT_THEME.bg_top, DEFAULT_THEME.bg_bottom), "the wallpaper stays the wallpaper's");
-    // The old window menu and card constants.
-    assert_eq!((d.menu, d.menu_rim, d.menu_picked, d.menu_ink, d.menu_close), (0x181825, 0x45475A, 0x313244, 0xCDD6F4, 0xF38BA8));
-    assert_eq!((d.card, d.card_rim, d.card_ink, d.card_soft), (0x14121A, 0x463E4C, 0xF4EEF2, 0xC2B6C0));
-    assert_eq!((d.title_bar, d.rim, d.band), (0x1E1E2E, 0xB4BEFE, desktop_style::NATIVE_CANVAS));
+    // macOS Noir obsidian menu, popover, title bar, and card tokens.
+    assert_eq!((d.menu, d.menu_rim, d.menu_picked, d.menu_ink, d.menu_close), (0x0013_161F, 0x002A_3142, 0x001B_202C, 0x00F1_F5F9, 0x00FB_7185));
+    assert_eq!((d.card, d.card_rim, d.card_ink, d.card_soft), (0x0013_161F, 0x002A_3142, 0x00F1_F5F9, 0x0094_A3B8));
+    assert_eq!((d.title_bar, d.rim, d.band), (0x0013_161F, 0x002A_3142, desktop_style::NATIVE_CANVAS));
 }
 
 #[test]
