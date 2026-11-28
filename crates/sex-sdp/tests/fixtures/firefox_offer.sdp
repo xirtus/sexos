@@ -1,0 +1,110 @@
+v=0
+o=mozilla...THIS_IS_SDPARTA-99.0 6213478031862591342 0 IN IP4 0.0.0.0
+s=-
+t=0 0
+a=sendrecv
+a=fingerprint:sha-256 3B:9C:2F:70:6D:8E:1C:44:A0:5D:9B:07:E2:13:4F:C8:61:AF:52:3E:90:D7:BB:1A:6C:F4:25:88:0E:39:D2:7B
+a=group:BUNDLE 0 1 2
+a=ice-options:trickle
+a=msid-semantic:WMS *
+m=audio 9 UDP/TLS/RTP/SAVPF 109 9 0 8 101
+c=IN IP4 0.0.0.0
+a=sendrecv
+a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level
+a=extmap:2/recvonly urn:ietf:params:rtp-hdrext:csrc-audio-level
+a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid
+a=fmtp:109 maxplaybackrate=48000;stereo=1;useinbandfec=1
+a=fmtp:101 0-15
+a=ice-pwd:0c4b37a5d9bd7f6e1a52c4fd9a2b8e10
+a=ice-ufrag:6f1a2b3c
+a=mid:0
+a=msid:{5f0c3a1e-9b2d-4c7a-8e6f-1d2c3b4a5e6f} {a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d}
+a=rtcp-mux
+a=rtpmap:109 opus/48000/2
+a=rtpmap:9 G722/8000/1
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+a=rtpmap:101 telephone-event/8000/1
+a=setup:actpass
+a=ssrc:1835067920 cname:{d7e8f9a0-b1c2-4d3e-9f4a-5b6c7d8e9f01}
+m=video 9 UDP/TLS/RTP/SAVPF 120 124 121 125 126 127 97 98 123 122 119
+c=IN IP4 0.0.0.0
+a=sendrecv
+a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid
+a=extmap:4 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time
+a=extmap:5 urn:ietf:params:rtp-hdrext:toffset
+a=extmap:6/recvonly http://www.webrtc.org/experiments/rtp-hdrext/playout-delay
+a=extmap:7 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01
+a=fmtp:126 profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1
+a=fmtp:97 profile-level-id=42e01f;level-asymmetry-allowed=1
+a=fmtp:120 max-fs=12288;max-fr=60
+a=fmtp:124 apt=120
+a=fmtp:121 max-fs=12288;max-fr=60
+a=fmtp:125 apt=121
+a=fmtp:127 apt=126
+a=fmtp:98 apt=97
+a=fmtp:119 apt=122
+a=ice-pwd:0c4b37a5d9bd7f6e1a52c4fd9a2b8e10
+a=ice-ufrag:6f1a2b3c
+a=mid:1
+a=msid:{5f0c3a1e-9b2d-4c7a-8e6f-1d2c3b4a5e6f} {0f1e2d3c-4b5a-4968-8776-655443322110}
+a=rid:0 send
+a=rid:1 send
+a=rid:2 send
+a=rtcp-fb:120 nack
+a=rtcp-fb:120 nack pli
+a=rtcp-fb:120 ccm fir
+a=rtcp-fb:120 goog-remb
+a=rtcp-fb:120 transport-cc
+a=rtcp-fb:121 nack
+a=rtcp-fb:121 nack pli
+a=rtcp-fb:121 ccm fir
+a=rtcp-fb:121 goog-remb
+a=rtcp-fb:121 transport-cc
+a=rtcp-fb:126 nack
+a=rtcp-fb:126 nack pli
+a=rtcp-fb:126 ccm fir
+a=rtcp-fb:126 goog-remb
+a=rtcp-fb:126 transport-cc
+a=rtcp-fb:97 nack
+a=rtcp-fb:97 nack pli
+a=rtcp-fb:97 ccm fir
+a=rtcp-fb:97 goog-remb
+a=rtcp-fb:97 transport-cc
+a=rtcp-fb:123 nack
+a=rtcp-fb:123 nack pli
+a=rtcp-fb:123 ccm fir
+a=rtcp-fb:123 goog-remb
+a=rtcp-fb:123 transport-cc
+a=rtcp-fb:122 nack
+a=rtcp-fb:122 nack pli
+a=rtcp-fb:122 ccm fir
+a=rtcp-fb:122 goog-remb
+a=rtcp-fb:122 transport-cc
+a=rtcp-mux
+a=rtcp-rsize
+a=rtpmap:120 VP8/90000
+a=rtpmap:124 rtx/90000
+a=rtpmap:121 VP9/90000
+a=rtpmap:125 rtx/90000
+a=rtpmap:126 H264/90000
+a=rtpmap:127 rtx/90000
+a=rtpmap:97 H264/90000
+a=rtpmap:98 rtx/90000
+a=rtpmap:123 ulpfec/90000
+a=rtpmap:122 red/90000
+a=rtpmap:119 rtx/90000
+a=setup:actpass
+a=simulcast:send 0;1;2
+a=ssrc:3302124877 cname:{d7e8f9a0-b1c2-4d3e-9f4a-5b6c7d8e9f01}
+a=ssrc:2178309466 cname:{d7e8f9a0-b1c2-4d3e-9f4a-5b6c7d8e9f01}
+a=ssrc-group:FID 3302124877 2178309466
+m=application 9 UDP/DTLS/SCTP webrtc-datachannel
+c=IN IP4 0.0.0.0
+a=sendrecv
+a=ice-pwd:0c4b37a5d9bd7f6e1a52c4fd9a2b8e10
+a=ice-ufrag:6f1a2b3c
+a=mid:2
+a=setup:actpass
+a=sctp-port:5000
+a=max-message-size:1073741823

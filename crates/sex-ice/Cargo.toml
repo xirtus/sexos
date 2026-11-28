@@ -1,0 +1,13 @@
+[package]
+name = "sex-ice"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "STUN, ICE (with consent freshness and trickle) and TURN for SexOS WebRTC; no I/O"
+
+[dependencies]
+sex-sdp = { path = "../sex-sdp" }
+hmac = { version = "=0.12.1", default-features = false }
+sha1 = { version = "=0.10.7", default-features = false, features = ["force-soft"] }
+md-5 = { version = "=0.10.6", default-features = false }
+crc32fast = { version = "=1.5.4", default-features = false }

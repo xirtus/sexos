@@ -235,6 +235,8 @@ jobs:
       run: cargo test --locked -p corset --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
+    - name: WebRTC SDP (Chrome, Firefox, SFU round trips) and STUN/ICE/TURN (RFC 5769 vectors, agents over NAT and relays) on the host
+      run: cargo test --locked -p sex-sdp -p sex-ice
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
       run: |
         python3 -m pip install --quiet --user --break-system-packages h2==4.4.1
