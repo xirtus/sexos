@@ -190,6 +190,7 @@ static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod screen_share;
 static mut SCREEN_SHARE:screen_share::Server=screen_share::Server::new();
 fn draw_screen_share(fb:*mut u32,w:usize,h:usize,total:usize,scene:&scene::SceneSnapshot){unsafe{(*core::ptr::addr_of!(SCREEN_SHARE)).draw(fb,w,h,total,scene);}}
+fn screen_share_published(w:usize,h:usize,front:&[u32],scene:&scene::SceneSnapshot){unsafe{(*core::ptr::addr_of_mut!(SCREEN_SHARE)).published(w,h,front,scene,sex_pdx::get_ticks());}}
 mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
 // One Display-owned scratch scene. Intake cannot run concurrently with a
@@ -2895,7 +2896,7 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
         if plan.clock_dirty(){RECORDING_CAPTURE.published(scene.recording,
             recording_indicator::matches(front,w,h,&scene.bar,scene.metrics.scale(),DEFAULT_THEME.urgent,DEFAULT_THEME.chip_fill),
             store.generation(),w,h,front,sex_pdx::desktop_look::night_level(),sex_pdx::get_ticks());}
-        (*core::ptr::addr_of_mut!(SCREEN_SHARE)).published(w,h,front,scene,sex_pdx::get_ticks());
+        screen_share_published(w,h,front,scene);
         if SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level()){
             let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
             if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){

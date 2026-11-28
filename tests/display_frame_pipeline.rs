@@ -158,6 +158,8 @@ fn draw_launcher_panel(fb:*mut u32,_w:usize,_h:usize,len:usize,s:&scene::SceneSn
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
+fn draw_screen_share(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
+fn screen_share_published(_:usize,_:usize,_:&[u32],_:&scene::SceneSnapshot){}
 fn draw_frame_meter_hud(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 mod bt_panel{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
