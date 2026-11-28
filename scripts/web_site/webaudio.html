@@ -1,0 +1,53 @@
+<!doctype html>
+<html><head><title>Web Audio check</title>
+<style>
+body { margin: 12px; background: #fff; }
+h1 { font-size: 18px; margin: 120px 0 8px; }
+</style></head>
+<body>
+<h1 id="h">Asking for the microphone</h1>
+<script>
+// Web Audio end to end: the microphone (the browser's test tone, 440 Hz) reaches an
+// AnalyserNode, which finds its bin; an oscillator plays through the destination.
+const say = (...a) => console.log('webaudio', ...a);
+const Ctx = window.AudioContext || window.webkitAudioContext;
+say('api', typeof Ctx, typeof OfflineAudioContext, typeof AnalyserNode);
+navigator.mediaDevices.getUserMedia({ audio: true }).then(st => {
+  const ctx = new Ctx();
+  say('state', ctx.state, ctx.sampleRate);
+  const mic = ctx.createMediaStreamSource(st);
+  const an = ctx.createAnalyser();
+  an.fftSize = 2048;
+  an.smoothingTimeConstant = 0;
+  mic.connect(an);
+  // Heard: a quiet 660 Hz tone that fades in.
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = 660;
+  g.gain.setValueAtTime(0, 0);
+  g.gain.linearRampToValueAtTime(0.2, 0.5);
+  o.connect(g).connect(ctx.destination);
+  o.onended = () => say('ended', ctx.currentTime > 2);
+  o.start();
+  o.stop(ctx.currentTime + 3);
+  const out = ctx.createMediaStreamDestination();
+  g.connect(out);
+  say('stream', out.stream.getAudioTracks().length, out.stream.getAudioTracks()[0].kind);
+  const f = new Float32Array(an.frequencyBinCount), b = new Uint8Array(an.fftSize);
+  let tries = 0;
+  const look = setInterval(() => {
+    an.getFloatFrequencyData(f);
+    an.getByteTimeDomainData(b);
+    let bin = 0;
+    for (let i = 1; i < f.length; i++) if (f[i] > f[bin]) bin = i;
+    let swing = 0;
+    for (const v of b) swing = Math.max(swing, Math.abs(v - 128));
+    if ((swing > 8 && ctx.currentTime > 1) || ++tries > 60) {
+      clearInterval(look);
+      say('peak', bin, Math.round(bin * ctx.sampleRate / an.fftSize), swing, f[bin] > -60, ctx.currentTime > 0.5);
+      const h = document.getElementById('h');
+      if (h) h.textContent = 'Heard ' + bin;
+    }
+  }, 100);
+}, e => say('failed', e.name));
+</script>
+</body></html>

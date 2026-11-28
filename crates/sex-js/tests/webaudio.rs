@@ -158,3 +158,42 @@ fn offline_rendering_buffers_and_decoding() {
     want.sort();
     assert_eq!(l, want);
 }
+
+/// The QEMU gate's page (scripts/web_site/webaudio.html) against the browser's
+/// fake microphone tone (capture.rs `tone`: a 440 Hz triangle).
+#[test]
+fn gate_page_hears_the_test_tone() {
+    let html = include_str!("../../../scripts/web_site/webaudio.html");
+    let code = &html[html.find("<script>").unwrap() + 8..html.rfind("</script>").unwrap()];
+    let hub = Rc::new(RefCell::new(Hub::new()));
+    let mut s = page(&hub, true);
+    s.eval(code, "webaudio.html").unwrap();
+    let id = std::mem::take(&mut s.page_mut().capture_asks)[0].id;
+    s.dispatch(&format!("capture\t{id}\tok\tBuilt-in microphone\tmic0\t\t\t0\t0\t0")).unwrap();
+    let tone = |i: u32| { let period = 48_000 / 440; let p = (i % period) as i32; let half = period as i32 / 2;
+        let tri = if p < half { p * 2 - half } else { (period as i32 - p) * 2 - half }; (tri * 8000 / half) as i16 };
+    let mut at = 0u32;
+    let mut heard = 0;
+    for _ in 0..30 {
+        for _ in 0..40 {
+            let f: Vec<[i16; 2]> = (0..QUANTUM).map(|_| { let v = tone(at); at += 1; [v, v] }).collect();
+            hub.borrow_mut().feed(&f);
+            heard += render(&hub, 1).iter().filter(|f| f[0] != 0).count();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(105));
+        tick(&mut s);
+        deliver(&hub, &mut s);
+        if logs_peek(&mut s).iter().any(|l| l.starts_with("webaudio ended")) { break; }
+    }
+    let l = logs(&mut s);
+    assert_eq!(l[0], "webaudio api function function function");
+    assert_eq!(l[1], "webaudio state running 48000");
+    assert_eq!(l[2], "webaudio stream 1 audio");
+    // 440.4 Hz * 2048 / 48000 = 18.8; the triangle swings 8000 / 32768 of full scale.
+    let peak = l.iter().find(|x| x.starts_with("webaudio peak")).expect("peak");
+    assert_eq!(peak, "webaudio peak 19 445 32 true true", "{l:?}");
+    assert!(l.iter().any(|x| x == "webaudio ended true") && l.len() == 5, "{l:?}");
+    assert!(heard > 48_000, "oscillator heard {heard}");
+}
+
+fn logs_peek(s: &mut Script<Document>) -> Vec<String> { s.page_mut().log.iter().map(|(_, t)| t.clone()).collect() }
