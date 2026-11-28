@@ -17,6 +17,8 @@
 
 extern crate alloc;
 
+mod mic;
+
 use alloc::vec;
 use alloc::vec::Vec;
 use sex_app::net::direct::{Socket, State};
@@ -751,6 +753,8 @@ extern "C" fn flash_main() -> ! {
     let mut recording = auto_record_frames.is_some();
     let mut record_frames_done = 0u64;
     let mut video_exporter: Option<Exporter> = None;
+    // The microphone while a video records (`mic`).
+    let mut listen: Option<mic::Listen> = None;
     let mut video_bytes = Vec::new();
 
     if recording {
@@ -760,10 +764,13 @@ extern "C" fn flash_main() -> ! {
             height: frame_h as u32,
             fps_num: frame_fps,
             fps_den: 1,
-            sound: false,
+            sound: true,
             quality: 32,
         }) {
-            Ok(exp) => video_exporter = Some(exp),
+            Ok(exp) => {
+                video_exporter = Some(exp);
+                listen = Some(mic::Listen::start());
+            }
             Err(e) => {
                 log!("[flash.video.unavailable] error={:?}", e);
                 recording = false;
@@ -867,11 +874,12 @@ extern "C" fn flash_main() -> ! {
                                         height: frame_h as u32,
                                         fps_num: frame_fps,
                                         fps_den: 1,
-                                        sound: false,
+                                        sound: true,
                                         quality: 32,
                                     }) {
                                         Ok(exp) => {
                                             video_exporter = Some(exp);
+                                            listen = Some(mic::Listen::start());
                                             video_bytes.clear();
                                             record_frames_done = 0;
                                             recording = true;
@@ -881,6 +889,7 @@ extern "C" fn flash_main() -> ! {
                                         }
                                     }
                                 } else if let Some(mut exp) = video_exporter.take() {
+                                    if let Some(l) = listen.take() { l.stop(); }
                                     let _ = exp.finish();
                                     drain_exporter(&mut exp, &mut video_bytes);
                                     let _ = files::write(&mut window, b"library/video-0001.webm", &video_bytes);
@@ -1062,15 +1071,17 @@ extern "C" fn flash_main() -> ! {
                                         height: frame_h as u32,
                                         fps_num: frame_fps,
                                         fps_den: 1,
-                                        sound: false,
+                                        sound: true,
                                         quality: 32,
                                     }) {
                                         video_exporter = Some(exp);
+                                        listen = Some(mic::Listen::start());
                                         video_bytes.clear();
                                         record_frames_done = 0;
                                         recording = true;
                                     }
                                 } else if let Some(mut exp) = video_exporter.take() {
+                                    if let Some(l) = listen.take() { l.stop(); }
                                     let _ = exp.finish();
                                     drain_exporter(&mut exp, &mut video_bytes);
                                     let _ = files::write(&mut window, b"library/video-0001.webm", &video_bytes);
@@ -1545,10 +1556,14 @@ extern "C" fn flash_main() -> ! {
                     let _ = exp.picture(&filtered_pixels, record_frames_done);
                     drain_exporter(exp, &mut video_bytes);
                     record_frames_done += 1;
+                    if let Some(l) = listen.as_mut() {
+                        l.feed(exp, record_frames_done, frame_fps, &mut |e| drain_exporter(e, &mut video_bytes));
+                    }
 
                     if let Some(target) = auto_record_frames {
                         if record_frames_done >= target {
                             if let Some(mut exp) = video_exporter.take() {
+                                if let Some(l) = listen.take() { l.stop(); }
                                 let _ = exp.finish();
                                 drain_exporter(&mut exp, &mut video_bytes);
                                 let _ = files::write(&mut window, b"library/video-0001.webm", &video_bytes);
@@ -1876,6 +1891,7 @@ extern "C" fn flash_main() -> ! {
 
     // Flush any remaining active recording
     if let Some(mut exp) = video_exporter.take() {
+        if let Some(l) = listen.take() { l.stop(); }
         let _ = exp.finish();
         drain_exporter(&mut exp, &mut video_bytes);
         let _ = files::write(&mut window, b"library/video-0001.webm", &video_bytes);
