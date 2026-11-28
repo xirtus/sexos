@@ -1265,11 +1265,12 @@
       return MEDIA_TYPES.test(s) ? 'maybe' : '';
     }
     // What a stream element shows now: 'video' while its stream has a live, enabled
-    // camera track, else nothing (a microphone alone is not played back: it would echo).
+    // camera track, 'screen' for a shared screen or window, else nothing (a microphone alone is not played back: it would echo).
     _live() {
       const st = this._srcObject;
-      const v = st instanceof MediaStream && st.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
-      const key = v ? 'video' : '';
+      // The first live, enabled video track says what shows: the camera or the shared screen.
+      const t = st instanceof MediaStream ? st.getVideoTracks().find(t => t.readyState === 'live' && t.enabled) : undefined;
+      const key = t ? (t._screen ? 'screen' : 'video') : '';
       if (this._liveKey === key) return;
       this._liveKey = key;
       this._ask('live', key);
@@ -1335,9 +1336,9 @@
   const trackId = () => crypto.randomUUID();
   const GROUP = 'sexos';
   function captureUse() {
-    let a = false, v = false;
-    for (const t of liveTracks) if (t.enabled) { if (t.kind === 'audio') a = true; else v = true; }
-    H(OP.CAPTURE, 'use', a ? '1' : '0', v ? '1' : '0');
+    let a = false, v = false, s = false;
+    for (const t of liveTracks) if (t.enabled) { if (t.kind === 'audio') a = true; else if (t._screen) s = true; else v = true; }
+    H(OP.CAPTURE, 'use', a ? '1' : '0', v ? '1' : '0', s ? '1' : '0');
     for (const el of liveElements) el._live();
   }
   class MediaStreamTrack extends EventTarget {
@@ -1358,12 +1359,17 @@
     }
     clone() {
       const t = new MediaStreamTrack(this.kind, this.label, this._dev, this._settings);
-      t._c = Object.assign({}, this._c); t._enabled = this._enabled; t._muted = this._muted;
+      t._c = Object.assign({}, this._c); t._enabled = this._enabled; t._muted = this._muted; t._screen = this._screen;
       if (this.readyState === 'ended') { t.readyState = 'ended'; liveTracks.delete(t); }
       return t;
     }
     getSettings() {
       const s = this._settings;
+      if (this.kind === 'video' && this._screen) {
+        const w = s.width || 0, h = s.height || 0;
+        return { deviceId: this._dev, groupId: GROUP, width: w, height: h, aspectRatio: h ? w / h : 0, frameRate: s.frameRate || 15, resizeMode: 'crop-and-scale',
+          displaySurface: s.displaySurface || 'monitor', logicalSurface: true, cursor: 'always' };
+      }
       if (this.kind === 'video') {
         const w = s.width || 0, h = s.height || 0;
         return { deviceId: this._dev, groupId: GROUP, width: w, height: h, aspectRatio: h ? w / h : 0, frameRate: s.frameRate || 30, facingMode: 'user', resizeMode: 'none' };
@@ -1467,7 +1473,21 @@
         H(OP.CAPTURE, 'ask', String(id), a ? '1' : '0', v ? '1' : '0', wantedDevice(c.audio), wantedDevice(c.video));
       });
     }
-    getDisplayMedia() { return Promise.reject(domError('Screen sharing is not available yet', 'NotSupportedError')); }
+    // The Shell asks the person, in its own picker over the desktop (the page and the
+    // browser only ask): one window, or the entire screen. No sound is shared yet.
+    getDisplayMedia(c) {
+      if (c === undefined || c === null) c = {};
+      if (typeof c !== 'object') return Promise.reject(new TypeError("Failed to execute 'getDisplayMedia' on 'MediaDevices': The provided value is not of type 'DisplayMediaStreamOptions'."));
+      if (c.video === false) return Promise.reject(new TypeError("Failed to execute 'getDisplayMedia' on 'MediaDevices': video must be requested"));
+      const exact = v => v && typeof v === 'object' && (v.min !== undefined || v.exact !== undefined);
+      if (c.video && typeof c.video === 'object' && Object.values(c.video).some(exact)) return Promise.reject(new TypeError("Failed to execute 'getDisplayMedia' on 'MediaDevices': min and exact are not allowed"));
+      if (H(OP.CAPTURE, 'secure') !== '1') return Promise.reject(domError('Permission denied', 'NotAllowedError'));
+      const id = ++captureSeq;
+      return new Promise((resolve, reject) => {
+        captureAsks.set(id, { resolve, reject, a: false, v: true, c: { video: c.video }, screen: true });
+        H(OP.CAPTURE, 'display', String(id));
+      });
+    }
   }
   const mediaDevices = new MediaDevices();
   // 'capture\tID\tRESULT\tAUDIO_LABEL\tAUDIO_ID\tVIDEO_LABEL\tVIDEO_ID\tW\tH\tFPS'
@@ -1478,12 +1498,15 @@
     if (f[2] !== 'ok') { const [m, n] = CAPTURE_ERRORS[f[2]] || CAPTURE_ERRORS.denied; ask.reject(domError(m, n)); return; }
     const tracks = [];
     if (ask.a) { const t = new MediaStreamTrack('audio', f[3], f[4], {}); t._c = typeof ask.c.audio === 'object' ? Object.assign({}, ask.c.audio) : {}; tracks.push(t); }
-    if (ask.v) { const t = new MediaStreamTrack('video', f[5], f[6], { width: +f[7] || 0, height: +f[8] || 0, frameRate: +f[9] || 30 }); t._c = typeof ask.c.video === 'object' ? Object.assign({}, ask.c.video) : {}; tracks.push(t); }
+    if (ask.v) { const t = new MediaStreamTrack('video', f[5], f[6], { width: +f[7] || 0, height: +f[8] || 0, frameRate: +f[9] || 30, displaySurface: f[10] }); if (ask.screen) { t._screen = true; t.contentHint = 'detail'; } t._c = typeof ask.c.video === 'object' ? Object.assign({}, ask.c.video) : {}; tracks.push(t); }
     captureUse();
     ask.resolve(new MediaStream(tracks));
   }
-  function captureGone(kind) { for (const t of Array.from(liveTracks)) if (t.kind === kind) t._end(); }
-  function captureMute(kind, on) { for (const t of liveTracks) if (t.kind === kind) t._mute(on); }
+  // KIND 'audio', 'video' (the camera) or 'screen' (the person stopped sharing).
+  function captureGone(kind) {
+    for (const t of Array.from(liveTracks)) if (kind === 'screen' ? t._screen : t.kind === kind && !t._screen) t._end();
+  }
+  function captureMute(kind, on) { for (const t of liveTracks) if (t.kind === kind && !t._screen) t._mute(on); }
   class PermissionStatus extends EventTarget {
     constructor(name, state) { super(); this.name = name; this.state = state; this.onchange = null; }
   }

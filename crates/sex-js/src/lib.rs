@@ -154,12 +154,15 @@ pub mod op {
     /// the page may ask at all; (`ask`, id, audio 0/1, video 0/1, audio device, video
     /// device) a `getUserMedia` call, which the browser answers with
     /// `capture\tID\tRESULT\tAUDIO_LABEL\tAUDIO_ID\tVIDEO_LABEL\tVIDEO_ID\tW\tH\tFPS`,
-    /// RESULT `ok`, `denied`, `none` or `busy`; (`use`, audio 0/1, video 0/1) which
-    /// kinds the page's live tracks still use, so the browser can let the others go;
-    /// (`devices`) the `enumerateDevices` lines; (`state`, `camera` or `microphone`) the
-    /// permission state. The browser also dispatches `capturegone\tKIND` when a device
-    /// stops (unplugged, or the person took it back), `capturemute\tKIND\t0|1`, and
-    /// `devicechange`.
+    /// RESULT `ok`, `denied`, `none` or `busy`; (`display`, id) a `getDisplayMedia`
+    /// call, which the Shell asks the person about and the browser answers the same
+    /// way, with `\tSURFACE` (`monitor` or `window`) after FPS and `screen` as the
+    /// video id; (`use`, audio 0/1, video 0/1, screen 0/1) which kinds the page's live
+    /// tracks still use, so the browser can let the others go; (`devices`) the
+    /// `enumerateDevices` lines; (`state`, `camera` or `microphone`) the permission
+    /// state. The browser also dispatches `capturegone\tKIND` (KIND `audio`, `video` or
+    /// `screen`) when a device stops (unplugged, the person took it back, or stopped
+    /// sharing), `capturemute\tKIND\t0|1`, and `devicechange`.
     pub const CAPTURE: u32 = 40;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;

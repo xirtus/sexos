@@ -146,4 +146,7 @@ pub struct CaptureAsk {
     /// The device ids the page asked for exactly (empty: any).
     pub audio_device: String,
     pub video_device: String,
+    /// `getDisplayMedia`: the screen or a window, which the Shell asks the person for
+    /// (the browser shows no card of its own), rather than the camera.
+    pub screen: bool,
 }

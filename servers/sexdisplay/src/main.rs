@@ -187,6 +187,8 @@ mod recording_capture;
 mod recording_indicator;
 static mut RECORDING_CAPTURE:recording_capture::Server=recording_capture::Server::new();
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
+mod screen_share;
+static mut SCREEN_SHARE:screen_share::Server=screen_share::Server::new();
 mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
 // One Display-owned scratch scene. Intake cannot run concurrently with a
@@ -2851,6 +2853,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         silkbar_menus::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize,scene);
         spotlight::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
+        unsafe{(*core::ptr::addr_of!(SCREEN_SHARE)).draw(fb,w,h,total,scene);}
         draw_frame_meter_hud(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
@@ -2891,6 +2894,7 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
         if plan.clock_dirty(){RECORDING_CAPTURE.published(scene.recording,
             recording_indicator::matches(front,w,h,&scene.bar,scene.metrics.scale(),DEFAULT_THEME.urgent,DEFAULT_THEME.chip_fill),
             store.generation(),w,h,front,sex_pdx::desktop_look::night_level(),sex_pdx::get_ticks());}
+        (*core::ptr::addr_of_mut!(SCREEN_SHARE)).published(w,h,front,scene,sex_pdx::get_ticks());
         if SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level()){
             let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
             if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
@@ -5429,6 +5433,10 @@ pub extern "C" fn _start() -> ! {
                 }
                 // Only the Shell shows the Bluetooth panel (bt_panel.rs checks the caller).
                 sex_pdx::bt_ui::OP_PANEL => { if bt_panel::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
+                // Only the Shell says what is shared and with whom (screen_share.rs checks).
+                sex_pdx::screen_share::OP_SHARE_VIEW => {
+                    if unsafe { (*core::ptr::addr_of_mut!(SCREEN_SHARE)).receive(msg.caller_pd, [msg.arg0, msg.arg1, msg.arg2]) } { needs_full_redraw = true; }
+                }
                 sex_pdx::screenshot::OP_SCREENSHOT_UI => {
                     // Only the Shell shows, moves and hides the screenshot selection.
                     if msg.caller_pd == 3 {

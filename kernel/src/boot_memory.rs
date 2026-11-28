@@ -953,6 +953,27 @@ pub fn init_usb_uvc(usb: u32, uvc: u32) {
     crate::serial_println!("[boot.usb.uvc] usb={} sexuvc={} slot={} notify={} bytes={} frame_bytes={} runtime_mint=0", usb, uvc, u::SLOT, u::NOTIFY_SLOT, u::BYTES, u::FRAME_BYTES);
 }
 
+/// Screen sharing (`sex_pdx::screen_share`): Display writes one 4 MiB bank of the
+/// shared window's or screen's pixels, and every program row maps it read-only, as the
+/// webcam's frame bank. Shell decides with the person what goes in it and for whom.
+pub fn init_screen_share(display: u32) {
+    use sex_pdx::screen_share as s;
+    require_boot();
+    let Some(disp) = (display != 0).then(|| DOMAIN_REGISTRY.get(display)).flatten() else { return };
+    let Some(physical) = try_backing(s::BYTES) else { crate::serial_println!("[boot.screen.share] bytes={} ok=0", s::BYTES); return };
+    let writer_va = alias(disp, physical, s::BYTES, true, false);
+    grant(disp, s::WRITER_SLOT, RegionGrant { region_id: s::REGION_ID, virtual_base: writer_va, length: s::BYTES,
+        rights: QUERY_VIEW | READ | WRITE, dma_base: None, peer_pd: None });
+    for row in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program && r.target != 0) {
+        if let Some(pd) = DOMAIN_REGISTRY.get(row.target) {
+            let va = alias(pd, physical, s::BYTES, false, false);
+            grant(pd, s::CLIENT_SLOT, RegionGrant { region_id: s::REGION_ID, virtual_base: va, length: s::BYTES,
+                rights: QUERY_VIEW | READ, dma_base: None, peer_pd: Some(display) });
+        }
+    }
+    crate::serial_println!("[boot.screen.share] display={} slot={} client_slot={} bytes={} runtime_mint=0", display, s::WRITER_SLOT, s::CLIENT_SLOT, s::BYTES);
+}
+
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
     require_boot();
     let virtual_base = alias(pd, physical, length, true, true);

@@ -77,14 +77,16 @@ fn refusals_and_errors() {
         show(navigator.mediaDevices.getDisplayMedia({ video: true }));
     "#, "t.js").unwrap();
     let asks = std::mem::take(&mut s.page_mut().capture_asks);
-    assert_eq!(asks.len(), 2);
+    assert_eq!(asks.len(), 3);
+    assert!(asks[2].screen && !asks[0].screen, "getDisplayMedia asks for the screen");
     s.dispatch(&format!("capture\t{}\tdenied", asks[0].id)).unwrap();
     s.dispatch(&format!("capture\t{}\tnone", asks[1].id)).unwrap();
+    s.dispatch(&format!("capture\t{}\tbusy", asks[2].id)).unwrap();
     let l = logs(&mut s);
     assert!(l.contains(&String::from("0:TypeError Failed to execute 'getUserMedia' on 'MediaDevices': At least one of audio and video must be requested")), "{l:?}");
     assert!(l.contains(&String::from("0:NotAllowedError Permission denied")), "{l:?}");
     assert!(l.contains(&String::from("0:NotFoundError Requested device not found")), "{l:?}");
-    assert!(l.contains(&String::from("0:NotSupportedError Screen sharing is not available yet")), "{l:?}");
+    assert!(l.contains(&String::from("0:NotReadableError Could not start video source")), "{l:?}");
 
     // A plain http page may not ask at all; the browser is never bothered.
     let mut s = page("http://insecure.example/", "", Some(cap.clone()));

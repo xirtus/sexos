@@ -898,6 +898,7 @@ pub fn init() {
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_pixel_regions(sexdisp_id);
     crate::boot_memory::init_screen_capture(sexdisp_id);
+    crate::boot_memory::init_screen_share(sexdisp_id);
     // Recorder authority exists only in the explicit profile with a retained,
     // exact image source and a uniquely private reusable key.
     let recorder_source=if sex_pdx::desktop_recording::ENABLED{

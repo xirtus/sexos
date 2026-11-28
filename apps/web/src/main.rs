@@ -1596,8 +1596,10 @@ impl Browser {
         let owner = doc.owner();
         let asks = core::mem::take(&mut doc.capture_asks);
         let uses = doc.capture_use.take();
+        let screen = doc.screen_use.take();
         if let Some((a, v)) = uses { self.capture.uses(owner, a, v); }
-        if asks.is_empty() && uses.is_none() { return; }
+        if let Some(on) = screen { self.capture.uses_screen(owner, on); }
+        if asks.is_empty() && uses.is_none() && screen.is_none() { return; }
         let shown = self.capture.take(owner, asks, framed);
         if let Some(card) = self.capture.prompt().filter(|_| shown) {
             let (r, b) = sex_web::permission_rects(&card, self.surface.w, self.show_bookmarks_bar);
@@ -1612,7 +1614,7 @@ impl Browser {
     /// microphone flowing. Returns how soon to come back.
     #[inline(never)]
     fn capture_tick(&mut self) -> Option<u64> {
-        let (fresh, card, next) = self.capture.tick(sex_pdx::get_ticks());
+        let ((fresh, fresh_screen), card, next) = self.capture.tick(sex_pdx::get_ticks());
         if card { self.frame_dirty = true; }
         let owner = self.doc.get().owner();
         let answers: Vec<String> = self.capture.answers.drain(..).filter(|(o, _)| *o == owner).map(|(_, t)| t).collect();
@@ -1635,13 +1637,14 @@ impl Browser {
             }
         }
         let mut changed: Vec<String> = Vec::new();
-        if fresh && self.capture.owner() == owner {
-            if let Some(pic) = self.capture.picture.clone() {
-                let seq = self.capture.seq;
-                for m in self.media.iter_mut() {
-                    if m.live_step(&mut self.fonts, &pic, seq) { changed.push(m.picture_name()); }
-                    relayout |= core::mem::take(&mut m.resized);
-                }
+        // Each stream element shows its own source: the camera or the shared screen.
+        if (fresh || fresh_screen) && self.capture.owner() == owner {
+            let camera = self.capture.picture.clone().filter(|_| fresh).map(|p| (p, self.capture.seq));
+            let screen = self.capture.screen_picture.clone().filter(|_| fresh_screen).map(|p| (p, self.capture.screen_seq));
+            for m in self.media.iter_mut() {
+                let Some((pic, seq)) = (if m.live_screen { screen.as_ref() } else { camera.as_ref() }) else { continue };
+                if m.live_step(&mut self.fonts, pic, *seq) { changed.push(m.picture_name()); }
+                relayout |= core::mem::take(&mut m.resized);
             }
         }
         if !changed.is_empty() { self.doc.get().pictures = self.fonts.images.clone(); }
@@ -2641,7 +2644,8 @@ pub extern "C" fn _start() -> ! {
     (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());
     b.shields = shields::Shields::load(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
-    b.capture = capture::Capture::new(&mut b.window, given.split_ascii_whitespace().any(|a| a == "--fake-media"), b.jarbox == profile::Jarbox::Private);
+    let flag = |f: &str| given.split_ascii_whitespace().any(|a| a == f);
+    b.capture = capture::Capture::new(&mut b.window, flag("--fake-media"), flag("--fake-screen"), b.jarbox == profile::Jarbox::Private);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
     b.start_backgrounds();

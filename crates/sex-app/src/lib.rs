@@ -353,6 +353,8 @@ impl Window {
         if pages::told(m) { return None; }
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
+        // Screen sharing answers wait for `screen_share::take`.
+        if m.type_id == sex_pdx::screen_share::OP_SHARED { screen_share::receive(m); return None; }
         if m.type_id == 0x202 {
             if let Some((w, h)) = sex_pdx::pixel_region::resize_decode(m.arg0, m.arg1, m.arg2) {
                 self.size = (w as usize, h as usize);
@@ -435,6 +437,70 @@ pub enum Any { Window(Event), Tray(tray::Event) }
 /// three buttons and an inline reply field. The Shell tells the program what
 /// was clicked, chosen or replied as [`tray::Event`]s ([`Window::next_any`], or
 /// [`tray::take`] after [`Window::next`]). See [`sex_pdx::program_tray`].
+/// Sharing the screen or one window ([`sex_pdx::screen_share`]). The program only
+/// asks, right after the person pressed a key or clicked in its window; Shell shows
+/// its own picker, and the answer comes later from [`take`]. Pictures are read from
+/// [`Bank`] while a share made for this program is on.
+pub mod screen_share {
+    use sex_pdx::screen_share as s;
+    pub use s::{Bank, Frame, Info, MAX_H, MAX_PIXELS, MAX_W, SCREEN, WINDOW};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Event {
+        /// The person picked: `kind` is [`SCREEN`] or [`WINDOW`].
+        Started { kind: u64, session: u32 },
+        /// The person said no (or the ask was not right after a key or click).
+        Denied,
+        /// Another program is picking or sharing.
+        Busy,
+        /// The share ended: the person stopped it, or the window went away.
+        Stopped { session: u32 },
+    }
+
+    static mut EVENTS: [Option<Event>; 4] = [None; 4];
+
+    fn send(arg: u64) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, s::OP_SHARE, arg, 0, 0) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+    /// Asks Shell to let the person pick. False when Shell could not be told.
+    pub fn ask() -> bool { send(s::ASK) }
+    /// This program no longer shares.
+    pub fn stop() -> bool { send(s::STOP) }
+
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) {
+        let e = match m.arg0 {
+            s::STARTED => Event::Started { kind: m.arg1, session: m.arg2 as u32 },
+            s::DENIED => Event::Denied,
+            s::BUSY => Event::Busy,
+            s::STOPPED => Event::Stopped { session: m.arg2 as u32 },
+            _ => return,
+        };
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(EVENTS) };
+        match q.iter_mut().find(|e| e.is_none()) { Some(slot) => *slot = Some(e), None => { q.rotate_left(1); q[3] = Some(e); } }
+    }
+    /// The oldest answer not yet taken.
+    pub fn take() -> Option<Event> {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(EVENTS) };
+        let e = q[0].take();
+        q.rotate_left(1);
+        e
+    }
+    /// The bank, mapped read-only.
+    pub fn bank() -> Option<Bank> {
+        #[cfg(target_os = "none")]
+        { Bank::open_reader() }
+        #[cfg(not(target_os = "none"))]
+        { None }
+    }
+}
+
 pub mod tray {
     use sex_pdx::program_tray as pt;
     pub use pt::{GONE_CLOSED, GONE_EXPIRED, GONE_REPLACED, MAX_ACTIONS, MAX_ROWS, REPLY_MAX};

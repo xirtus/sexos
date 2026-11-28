@@ -1,0 +1,45 @@
+<!doctype html>
+<html><head><title>Share check</title>
+<style>
+body { margin: 12px; background: #fff; }
+h1 { font-size: 18px; margin: 120px 0 8px; padding: 6px; background: #ddd; width: 200px; }
+video { display: block; width: 384px; height: 240px; background: #000; }
+</style></head>
+<body>
+<h1 id="h">Share screen</h1>
+<video id="v" autoplay muted playsinline></video>
+<script>
+// getDisplayMedia end to end: a click asks; the Shell lets the person pick in its
+// own picker; the shared screen shows in a <video>; the person stops it in the Shell
+// and the track ends; a second ask the person says no to rejects.
+const say = (...a) => console.log('share', ...a);
+const v = document.getElementById('v');
+const h = document.getElementById('h');
+let asks = 0;
+v.addEventListener('playing', () => say('playing', v.videoWidth, v.videoHeight));
+setTimeout(() => {
+  const r = h.getBoundingClientRect();
+  say('button', Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+}, 1500);
+say('asked', typeof navigator.mediaDevices.getDisplayMedia);
+h.addEventListener('click', () => {
+  asks++;
+  if (asks === 1) {
+    navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: true }).then(st => {
+      const [t] = st.getVideoTracks();
+      const g = t.getSettings();
+      say('ok', t.label + '|' + g.displaySurface, g.width + 'x' + g.height, st.getAudioTracks().length);
+      t.addEventListener('ended', () => say('ended', t.readyState, st.active));
+      v.srcObject = st;
+      setTimeout(() => {
+        const r = v.getBoundingClientRect();
+        say('rect', Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height));
+        say('frames', v.getVideoPlaybackQuality().totalVideoFrames);
+      }, 2500);
+    }, e => say('failed', e.name));
+  } else {
+    navigator.mediaDevices.getDisplayMedia({ video: true }).then(st => { say('again', 'ok'); st.getTracks().forEach(t => t.stop()); }, e => say('again', e.name));
+  }
+});
+</script>
+</body></html>

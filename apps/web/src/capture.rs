@@ -14,6 +14,15 @@
 //! `--fake-media` (for gates, like Chrome's `--use-fake-device-for-media-stream`)
 //! gives a moving test pattern camera and a 440 Hz microphone, and lets plain http
 //! pages ask.
+//!
+//! Screen sharing (`getDisplayMedia`): the browser shows no card of its own; it asks
+//! the Shell (`sex_app::screen_share`), which lets the person pick a window or the
+//! entire screen in its own picker, and copies what was picked into a read-only bank
+//! this program reads. The shared picture shows as `video:N` beside the camera's:
+//! each stream element shows its own source. The share ends when the person stops it
+//! in the Shell (the page's track gets `ended`), or when no live track uses it.
+//! `--fake-screen` (for gates that test pages, not the Shell) shares a moving test
+//! pattern without asking the Shell.
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -44,6 +53,21 @@ struct Camera {
     next_fake: u64,
     frames: u32,
     errors: u32,
+}
+
+/// The shared screen or window while a page uses it.
+struct Screen {
+    bank: Option<sex_app::screen_share::Bank>,
+    /// The Shell's session for this share (0: the test pattern).
+    session: u32,
+    kind: u64,
+    last_seq: u32,
+    buf: Vec<u32>,
+    frames: u32,
+    next_fake: u64,
+    /// The page's question, answered once the first picture came (its size).
+    ask: Option<(u64, CaptureAsk)>,
+    since: u64,
 }
 
 /// The microphone while a page uses it.
@@ -81,24 +105,35 @@ pub struct Capture {
     pub using: (bool, bool),
     /// Bell's microphone row for this program (for the note).
     row: usize,
+    fake_screen: bool,
+    /// A `getDisplayMedia` waiting for the person's pick in the Shell.
+    screen_ask: Option<(u64, CaptureAsk)>,
+    screen: Option<Screen>,
+    /// The shared screen's latest picture, bumped `screen_seq` with each.
+    pub screen_picture: Option<Rc<Image>>,
+    pub screen_seq: u32,
+    /// This program's pd: a share in the bank must be for it.
+    me: u32,
 }
 
 impl Capture {
     /// Before the window's files are reachable (replaced by `new`).
     pub fn empty() -> Capture {
         Capture { shared: Rc::new(RefCell::new(Shared::default())), asking: None, queue: Vec::new(), answers: Vec::new(), note: None, fake: false, keep: false,
-            saved: String::new(), owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row: 0 }
+            saved: String::new(), owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row: 0,
+            fake_screen: false, screen_ask: None, screen: None, screen_picture: None, screen_seq: 0, me: 0 }
     }
 
-    pub fn new(window: &mut Window, fake: bool, private: bool) -> Capture {
-        let mut shared = Shared { any_origin: fake, ..Default::default() };
+    pub fn new(window: &mut Window, fake: bool, fake_screen: bool, private: bool) -> Capture {
+        let mut shared = Shared { any_origin: fake || fake_screen, ..Default::default() };
         let mut saved = String::new();
         if !private {
             if let Some(text) = read(window, SITES) { shared.load(&text); saved = shared.save(); }
         }
         let row = sex_pdx::sound_ring::index_of(window.target).unwrap_or(0);
         let mut c = Capture { shared: Rc::new(RefCell::new(shared)), asking: None, queue: Vec::new(), answers: Vec::new(), note: None, fake, keep: !private,
-            saved, owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row };
+            saved, owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row,
+            fake_screen, screen_ask: None, screen: None, screen_picture: None, screen_seq: 0, me: window.target };
         c.refresh_devices();
         sex_pdx::serial_record!("[web.capture.ready] fake={} sites={} camera={}", fake as u8, c.shared.borrow().sites.len(), c.camera_present() as u8);
         c
@@ -127,6 +162,7 @@ impl Capture {
     pub fn take(&mut self, owner: u64, asks: Vec<CaptureAsk>, framed: bool) -> bool {
         let mut shown = false;
         for ask in asks {
+            if ask.screen { self.take_screen(owner, ask, framed); continue; }
             sex_pdx::serial_record!("[web.capture.ask] id={} origin={} audio={} video={} framed={}", ask.id, ask.origin, ask.audio as u8, ask.video as u8, framed as u8);
             let (secure, mic, cam) = {
                 let s = self.shared.borrow();
@@ -148,6 +184,120 @@ impl Capture {
         }
         if shown { self.log_prompt(); }
         shown
+    }
+
+    /// A `getDisplayMedia`: the Shell asks the person, not this browser.
+    fn take_screen(&mut self, owner: u64, ask: CaptureAsk, framed: bool) {
+        let secure = self.shared.borrow().secure(&ask.origin);
+        sex_pdx::serial_record!("[web.share.ask] id={} origin={} framed={} fake={}", ask.id, ask.origin, framed as u8, self.fake_screen as u8);
+        if framed || !secure { return self.answer(owner, &ask, "denied"); }
+        if self.screen_ask.is_some() { return self.answer(owner, &ask, "busy"); }
+        if self.owner != owner { self.stop(); self.owner = owner; }
+        if self.fake_screen {
+            self.stop_screen(false);
+            let now = sex_pdx::get_ticks();
+            self.screen = Some(Screen { bank: None, session: 0, kind: sex_app::screen_share::SCREEN, last_seq: 0, buf: Vec::new(), frames: 0, next_fake: now, ask: Some((owner, ask)), since: now });
+            return;
+        }
+        if !sex_app::screen_share::ask() { return self.answer(owner, &ask, "busy"); }
+        self.screen_ask = Some((owner, ask));
+    }
+
+    /// The Shell's answers: a pick starts the share, a stop ends it.
+    fn screen_events(&mut self, now: u64) {
+        use sex_app::screen_share::Event;
+        while let Some(e) = sex_app::screen_share::take() {
+            sex_pdx::serial_record!("[web.share.event] {:?}", e);
+            match e {
+                Event::Started { kind, session } => {
+                    let Some((owner, ask)) = self.screen_ask.take() else { let _ = sex_app::screen_share::stop(); continue };
+                    if owner != self.owner { let _ = sex_app::screen_share::stop(); continue; }
+                    // A new pick takes the old share's place: its tracks end.
+                    if self.screen.as_ref().is_some_and(|s| s.ask.is_none()) { self.stop_screen(false); self.answers.push((owner, String::from("capturegone\tscreen"))); }
+                    let bank = sex_app::screen_share::bank();
+                    if bank.is_none() { let _ = sex_app::screen_share::stop(); self.answer(owner, &ask, "busy"); continue; }
+                    self.screen = Some(Screen { bank, session, kind, last_seq: 0, buf: Vec::new(), frames: 0, next_fake: 0, ask: Some((owner, ask)), since: now });
+                }
+                Event::Denied | Event::Busy => {
+                    if let Some((owner, ask)) = self.screen_ask.take() { self.answer(owner, &ask, if e == Event::Busy { "busy" } else { "denied" }); }
+                }
+                Event::Stopped { session } => {
+                    if self.screen.as_ref().is_some_and(|s| s.session == session) {
+                        let waiting = self.screen.as_mut().and_then(|s| s.ask.take());
+                        self.stop_screen(false);
+                        match waiting { Some((o, a)) => self.answer(o, &a, "denied"), None => self.answers.push((self.owner, String::from("capturegone\tscreen"))) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The share ends; `tell`: the Shell hears this program no longer wants it.
+    fn stop_screen(&mut self, tell: bool) {
+        let Some(s) = self.screen.take() else { return };
+        if tell && s.session != 0 { let _ = sex_app::screen_share::stop(); }
+        sex_pdx::serial_record!("[web.share.stop] frames={} told={}", s.frames, (tell && s.session != 0) as u8);
+        self.screen_picture = None;
+    }
+
+    /// The page's live tracks still use (or no longer use) the shared screen.
+    pub fn uses_screen(&mut self, owner: u64, on: bool) {
+        if owner == self.owner && !on && self.screen.as_ref().is_some_and(|s| s.ask.is_none()) { self.stop_screen(true); }
+    }
+
+    /// Takes the newest shared picture; true when it is new.
+    fn screen_step(&mut self, now: u64) -> bool {
+        let me = self.me;
+        let Some(s) = self.screen.as_mut() else { return false };
+        let img = if s.session == 0 {
+            // The test screen: bands and a moving box, at a screen's shape.
+            if now < s.next_fake { return false; }
+            s.next_fake = now + 1000 / 15;
+            let (w, h) = (sex_app::screen_share::MAX_W, sex_app::screen_share::MAX_H);
+            s.buf.resize(w * h, 0);
+            let x0 = (s.frames as usize * 8) % (w - 64);
+            for y in 0..h { for x in 0..w {
+                s.buf[y * w + x] = if x >= x0 && x < x0 + 64 && y >= 200 && y < 264 { 0xFFFF_FFFF } else { [0xFF20_60C0, 0xFF30_A040, 0xFFC0_4040, 0xFFE0_C040][(x * 4 / w + y / 135) % 4] };
+            } }
+            Image { width: w, height: h, pixels: s.buf.clone() }
+        } else {
+            let Some(bank) = s.bank else { return false };
+            // Only a share made for this program, in this session.
+            if !bank.info().is_some_and(|i| i.target == me && i.session == s.session) { return false; }
+            s.buf.resize(sex_app::screen_share::MAX_PIXELS, 0);
+            let Some(f) = bank.read(s.last_seq, &mut s.buf) else { return false };
+            s.last_seq = f.seq;
+            let (mut w, mut h) = (f.width, f.height);
+            let mut px = s.buf[..w * h].to_vec();
+            if w > MAX_W || h > MAX_H {
+                let (fw, fh) = sex_media::fit(w, h, MAX_W, MAX_H);
+                let mut out = alloc::vec![0u32; fw * fh];
+                sex_uvc::pixel::scale_argb_fit(&px, w, h, &mut out, fw, fh);
+                (w, h, px) = (fw, fh, out);
+            }
+            // Display's pixels carry no alpha; pictures are opaque.
+            for p in px.iter_mut() { *p |= 0xFF00_0000; }
+            Image { width: w, height: h, pixels: px }
+        };
+        s.frames += 1;
+        if s.frames <= 3 || s.frames.is_power_of_two() { sex_pdx::serial_record!("[web.share.frame] n={} w={} h={}", s.frames, img.width, img.height); }
+        self.screen_picture = Some(Rc::new(img));
+        true
+    }
+
+    /// Answers the page once the first shared picture came (or after a while anyway).
+    fn screen_answer(&mut self, now: u64) {
+        let me = self.me;
+        let Some(s) = self.screen.as_mut() else { return };
+        if s.ask.is_none() || (self.screen_picture.is_none() && now.saturating_sub(s.since) < 3000) { return; }
+        let Some((owner, ask)) = s.ask.take() else { return };
+        let (w, h) = self.screen_picture.as_ref().map_or((sex_app::screen_share::MAX_W, sex_app::screen_share::MAX_H), |p| (p.width, p.height));
+        let title = s.bank.and_then(|b| b.info()).filter(|i| i.target == me && i.session == s.session)
+            .map(|i| String::from_utf8_lossy(i.title()).replace(['\t', '\n'], " "));
+        let label = if s.session == 0 { String::from("SexOS test screen") } else { title.filter(|t| !t.is_empty()).unwrap_or_else(|| String::from("Screen")) };
+        let surface = if s.kind == sex_app::screen_share::WINDOW { "window" } else { "monitor" };
+        sex_pdx::serial_record!("[web.capture.result] id={} result=ok screen={} label={} size={}x{}", ask.id, surface, label, w, h);
+        self.answers.push((owner, alloc::format!("capture\t{}\tok\t\t\t{label}\tscreen\t{w}\t{h}\t15\t{surface}", ask.id)));
     }
 
     fn log_prompt(&self) {
@@ -282,19 +432,26 @@ impl Capture {
         self.answers.retain(|(o, _)| *o != owner);
         if self.asking.is_none() && !self.queue.is_empty() { self.asking = Some(self.queue.remove(0)); }
         if owner == self.owner { self.stop(); }
+        if self.screen_ask.as_ref().is_some_and(|(o, _)| *o == owner) { self.screen_ask = None; let _ = sex_app::screen_share::stop(); }
     }
 
     pub fn stop(&mut self) {
         self.stop_camera();
         self.stop_mic();
+        self.stop_screen(true);
         self.using = (false, false);
     }
 
     pub fn owner(&self) -> u64 { self.owner }
 
-    /// Takes new camera pictures and microphone sound. Returns whether a new picture
-    /// came, whether the card changed, and how soon to look again.
-    pub fn tick(&mut self, now: u64) -> (bool, bool, Option<u64>) {
+    /// Takes new camera and screen pictures and microphone sound. Returns whether a new
+    /// camera and screen picture came, whether the card changed, and how soon to look again.
+    pub fn tick(&mut self, now: u64) -> ((bool, bool), bool, Option<u64>) {
+        self.screen_events(now);
+        let fresh_screen = self.screen_step(now);
+        if fresh_screen { self.screen_seq = self.screen_seq.wrapping_add(1); }
+        self.screen_answer(now);
+        let screen_next = (self.screen.is_some() || self.screen_ask.is_some()).then_some(20u64);
         let mut fresh = false;
         let mut card = false;
         let mut next: Option<u64> = None;
@@ -360,7 +517,8 @@ impl Capture {
             if now >= m.logged + 1000 { m.logged = now; sex_pdx::serial_record!("[web.capture.mic.heard] frames={}", m.heard); }
             next = Some(next.map_or(20, |n| n.min(20)));
         }
-        (fresh, card, next)
+        let next = match (next, screen_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
+        ((fresh, fresh_screen), card, next)
     }
 
     /// Keeps the person's choices in Files when they changed.

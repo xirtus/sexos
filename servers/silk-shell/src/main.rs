@@ -5794,6 +5794,9 @@ unsafe fn display_came_back() {
     if let Ok(physical)=sex_pdx::display_boot::physical(){sex_pdx::desktop_style::set_ui_scale(sex_pdx::desktop_style::chrome::fit_scale(desktop_width()as u32,physical.scale,silkbar_model::MIN_CHROME_WIDTH));}
     static mut COMEBACKS: u32 = 0;
     COMEBACKS += 1;
+    // Display forgot what was shared: the share ends, and its program hears so.
+    if SHARE.picking.is_some() { share_finish(None); }
+    if SHARE.sharing.is_some() { share_effect(SHARE.stop(true)); }
     let _ = raw_pdx_call(SLOT_DISPLAY, OP_REGISTER_WM, sex_pdx::crash_log::restarts(), 0, 0);
     let (cx, cy) = (desktop_width() / 2, desktop_height() / 2);
     let _ = raw_pdx_call(SLOT_DISPLAY, 0xEC, SURFACE_ID_CURSOR, (cy as u64) << 32 | cx as u64, (18u64 << 32) | 12u64);
@@ -10957,6 +10960,8 @@ unsafe fn overview_toggle() -> bool {
 }
 /// `keep`: go to the selected window; otherwise stay where focus was.
 unsafe fn overview_close(keep: bool) {
+    // The share picker closed by anything but a pick: the program hears no.
+    if SHARE.picking.is_some() { share_finish(None); return; }
     let Some(sid) = OVERVIEW.end(keep) else { return };
     if keep && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
     switcher_send(sex_pdx::window_switcher::State::HIDDEN);
@@ -10967,6 +10972,14 @@ unsafe fn overview_key(code: u8, value: u64) -> bool {
     if !OVERVIEW.is_open() || matches!(code, 0x1D | 0x2A | 0x36 | 0x38 | 0x5B | 0x5C | 0x61 | 0x64) { return false; }
     if value == 0 { return true; }
     let cols = overview_layout().map_or(1, |l| l.cols) as isize;
+    // The share picker: Enter shares the selected window, E the entire screen.
+    if SHARE.picking.is_some() && value == 1 {
+        match code {
+            0x1C => { let sid = OVERVIEW.end(true); share_finish(sid.map(|sid| (sex_pdx::screen_share::WINDOW, sid))); return true; }
+            0x12 => { share_finish(Some((sex_pdx::screen_share::SCREEN, 0))); return true; }
+            _ => {}
+        }
+    }
     let moved = match code {
         0x01 if value == 1 => { overview_close(false); return true; }
         0x1C if value == 1 => { overview_close(true); return true; }
@@ -10981,10 +10994,129 @@ unsafe fn overview_key(code: u8, value: u64) -> bool {
 }
 /// A click while the overview is open: a card goes there, anywhere else closes.
 unsafe fn overview_click(px: i32, py: i32) {
+    if SHARE.picking.is_some() { share_click(px, py); return; }
     let hit = overview_layout().and_then(|l| if px < 0 || py < 0 { None } else { l.card_at(px as usize, py as usize) });
     match hit.and_then(|i| OVERVIEW.select(i)) {
         Some(_) => overview_close(true),
         None => overview_close(false),
+    }
+}
+// ── Screen sharing (sex_pdx::screen_share, a page's getDisplayMedia) ─────
+// A program asks right after the person used it; the overview opens as the picker,
+// with Display's hint pill and "Entire screen" button over it. Only the person picks.
+// Display then copies what was picked into the read-only bank and rings it in red,
+// with a "Stop sharing" pill that only the Shell answers.
+static mut SHARE: sex_pdx::screen_share::Custody<sex_pdx::clipboard::Participant> = sex_pdx::screen_share::Custody::new();
+fn share_send(route: u64, w: [u64; 3]) -> bool {
+    for _ in 0..1024 {
+        match pdx_call_checked(route, sex_pdx::screen_share::OP_SHARED, w[0], w[1], w[2]) { Ok(_) => return true, Err(sex_pdx::ERR_SERVICE_NOT_READY) => sys_yield(), Err(_) => return false }
+    }
+    false
+}
+unsafe fn share_view(v: sex_pdx::screen_share::View) {
+    let [a, b, c] = v.wire();
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::screen_share::OP_SHARE_VIEW, a, b, c);
+    sex_pdx::serial_record!("[shell.share.view] view={} surface={} status={:#x}", a, b, status);
+}
+unsafe fn share_effect(e: sex_pdx::screen_share::Effect<sex_pdx::clipboard::Participant>) {
+    if let Some((who, w)) = e.0 {
+        let ok = share_send(who.route, w);
+        sex_pdx::serial_record!("[shell.share.answer] pd={} task={} status={} kind={} session={} ok={}", who.subject.pd, who.subject.task, w[0], w[1], w[2], ok as u8);
+    }
+    if let Some(v) = e.1 {
+        share_view(v);
+        if matches!(v, sex_pdx::screen_share::View::Sharing { .. }) {
+            let (x, y, w, h) = sex_pdx::screen_share::stop_pill(desktop_width() as usize, desktop_height() as usize, sex_pdx::desktop_style::ui_scale());
+            sex_pdx::serial_record!("[shell.share.on] stop={},{} pill={}x{}+{}+{}", x + w / 2, y + h / 2, w, h, x, y);
+        }
+    }
+}
+/// The picker closes: `choice` is (kind, window), or None when the person said no.
+unsafe fn share_finish(choice: Option<(u64, u64)>) {
+    let _ = OVERVIEW.end(false);
+    switcher_send(sex_pdx::window_switcher::State::HIDDEN);
+    let target = SHARE.picking.map_or(0, |p| p.subject.pd);
+    sex_pdx::serial_record!("[shell.share.picked] kind={} surface={}", choice.map_or(0, |c| c.0), choice.map_or(0, |c| c.1));
+    let e = SHARE.picked(choice, target);
+    share_effect(e);
+}
+unsafe fn share_click(px: i32, py: i32) {
+    if px < 0 || py < 0 { return; }
+    let (x, y) = (px as usize, py as usize);
+    let picker = sex_pdx::screen_share::Picker::new(desktop_width() as usize, desktop_bar_height() as usize, sex_pdx::desktop_style::ui_scale());
+    if picker.is_some_and(|p| p.on_button(x, y)) { share_finish(Some((sex_pdx::screen_share::SCREEN, 0))); return; }
+    let hit = overview_layout().and_then(|l| l.card_at(x, y));
+    // Anywhere else does nothing: only a pick or Escape closes the picker.
+    if let Some(sid) = hit.and_then(|i| OVERVIEW.select(i)) { share_finish(Some((sex_pdx::screen_share::WINDOW, sid))); }
+}
+/// A left press on the "Stop sharing" pill.
+unsafe fn share_stop_hit(px: i32, py: i32) -> bool {
+    if SHARE.sharing.is_none() || px < 0 || py < 0 { return false; }
+    let pill = sex_pdx::screen_share::stop_pill(desktop_width() as usize, desktop_height() as usize, sex_pdx::desktop_style::ui_scale());
+    if !sex_pdx::screen_share::inside(pill, px as usize, py as usize) { return false; }
+    sex_pdx::serial_record!("[shell.share.stop] by=person");
+    share_effect(SHARE.stop(true));
+    true
+}
+/// A program's `OP_SHARE`: ask (only the focused program, just used) or stop.
+unsafe fn shell_share_message(msg: &sex_pdx::PdxMessage) -> bool {
+    use sex_pdx::screen_share as s;
+    if msg.type_id != s::OP_SHARE { return false; }
+    let subject = sex_pdx::clipboard::Subject { pd: msg.caller_pd, task: msg.caller_task };
+    let Some(p) = APP_CUSTODY.iter().flatten().find(|e| e.target == subject.pd && e.task == subject.task && !e.dead && !e.retired)
+        .and_then(|e| program_participant(e.surface)).filter(|p| p.subject == subject) else {
+        sex_pdx::serial_record!("[shell.share.denied] caller={} task={} reason=not_program", subject.pd, subject.task); return true
+    };
+    match msg.arg0 {
+        s::ASK => {
+            let focused = focused_program_participant().is_some_and(|f| f.subject == subject);
+            let used = focused && CLIP_TOUCH.is_some_and(|(t, at)| t == subject && sex_pdx::get_ticks().saturating_sub(at) <= sex_pdx::program_clipboard::TOUCH_TICKS);
+            let was = SHARE.picking.is_some();
+            if used && !was {
+                if SWITCHER.is_open() { switcher_end(true); }
+                if OVERVIEW.is_open() { overview_close(false); }
+                if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
+            }
+            let (open, reply) = SHARE.ask(p, used);
+            sex_pdx::serial_record!("[shell.share.ask] pd={} task={} focused={} used={} open={}", subject.pd, subject.task, focused as u8, used as u8, open as u8);
+            if let Some((who, w)) = reply { share_send(who.route, w); }
+            if open && !was {
+                let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
+                let count = switcher_windows(&mut ordered);
+                if !OVERVIEW.open_grid(&ordered[..count], FOCUSED_SURFACE_ID) { share_finish(None); return true; }
+                switcher_send(OVERVIEW.state());
+                share_view(s::View::Picking { asker: p.surface });
+                if let Some(l) = overview_layout() {
+                    for (i, sid) in ordered[..count].iter().enumerate() {
+                        let (x, y, w, h) = l.card(i);
+                        sex_pdx::serial_record!("[shell.share.card] index={} sid={} x={} y={} w={} h={}", i, sid, x, y, w, h);
+                    }
+                }
+                if let Some(pk) = s::Picker::new(desktop_width() as usize, desktop_bar_height() as usize, sex_pdx::desktop_style::ui_scale()) {
+                    let b = pk.button;
+                    sex_pdx::serial_record!("[shell.share.picker] windows={} screen={},{}", count, b.0 + b.2 / 2, b.1 + b.3 / 2);
+                }
+            }
+        }
+        s::STOP => {
+            if SHARE.picking.is_some_and(|w| w.subject == subject) { share_finish(None); }
+            if SHARE.sharing.is_some_and(|h| h.who.subject == subject) {
+                sex_pdx::serial_record!("[shell.share.stop] by=program pd={}", subject.pd);
+                share_effect(SHARE.stop(false));
+            }
+        }
+        _ => {}
+    }
+    true
+}
+/// The asker or sharer ended, or the shared window went away.
+unsafe fn share_poll() {
+    if let Some(p) = SHARE.picking { if program_participant(p.surface) != Some(p) { share_finish(None); } }
+    let Some(s) = SHARE.sharing else { return };
+    if program_participant(s.who.surface) != Some(s.who) { sex_pdx::serial_record!("[shell.share.stop] by=ended"); share_effect(SHARE.stop(false)); return; }
+    if s.kind == sex_pdx::screen_share::WINDOW && get_surface_bounds(s.surface).is_none() {
+        sex_pdx::serial_record!("[shell.share.stop] by=window_gone sid={}", s.surface);
+        share_effect(SHARE.stop(true));
     }
 }
 // ── Screenshot UI (Print): drag a region, click a window, Enter for the whole
@@ -25233,6 +25365,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
     if buttons_val&1!=0&&recording_stop_hit(px,py){return(HitTarget::None,true);}
+    if buttons_val&1!=0&&share_stop_hit(px,py){return(HitTarget::None,true);}
     // The overview takes every click while it is open.
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
@@ -26579,7 +26712,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
         unsafe { decorations_glue::poll(); silkbar_menus_glue::poll(); spotlight_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
-        unsafe { sound_panel_poll(); }
+        unsafe { sound_panel_poll(); share_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]
@@ -27289,6 +27422,7 @@ pub extern "C" fn _start() -> ! {
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
             if shell_keys_message(&msg) { continue; }
+            if shell_share_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
             if autofill_routes::receive(&mut msg) {continue;}
