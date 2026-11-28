@@ -111,3 +111,43 @@ pub fn scale(wm: &Wm, from_khz: u32, to_khz: u32, width: u32) -> Option<Wm> {
     if wm.trans & WM_ENABLE != 0 && out.trans & WM_ENABLE == 0 { out.trans = wm.trans & !WM_ENABLE; }
     Some(out)
 }
+
+/// Watermarks computed from memory latency (PRM Vol 12 "Display
+/// watermark programming") for a linear, unrotated plane: method 1 (bytes
+/// fetched over the latency) and method 2 (whole lines over the latency),
+/// method 2 once the latency spans a line. Level 0 covers SAGV too (the
+/// Gen12 rule when SAGV may run: latency + block time). Levels that do not
+/// fit `ddb_blocks` are off; None when level 0 does not fit.
+pub fn compute(latency_us: &[u16; LEVELS], sagv_us: u32, pixel_khz: u32, htotal: u32, width: u32, cpp: u32, ddb_blocks: u32) -> Option<[u32; LEVELS]> {
+    if pixel_khz == 0 || htotal == 0 { return None; }
+    let bytes_per_line = width * cpp;
+    // Linear: blocks per line rounded up, plus one (Gen10+).
+    let bpl = bytes_per_line.div_ceil(BLOCK_BYTES) + 1;
+    let linetime_us = (htotal as u64 * 1000).div_ceil(pixel_khz as u64) as u32;
+    let mut out = [0u32; LEVELS];
+    let (mut prev_blocks, mut prev_lines) = (0u32, 0u32);
+    for l in 0..LEVELS {
+        let mut lat = latency_us[l] as u32;
+        if lat == 0 { break; }
+        if l == 0 { lat += sagv_us; }
+        // method1 = lat * rate * cpp / (1000 * 512) + 1 (fixed point rounded up)
+        let m1 = (lat as u64 * pixel_khz as u64 * cpp as u64).div_ceil(1000 * BLOCK_BYTES as u64) + 1;
+        // method2 = ceil(lat * rate / (htotal * 1000)) * blocks_per_line
+        let lines_over = (lat as u64 * pixel_khz as u64).div_ceil(htotal as u64 * 1000);
+        let m2 = lines_over * bpl as u64;
+        let tiny = cpp * htotal / BLOCK_BYTES < 1 && bytes_per_line / BLOCK_BYTES < 1;
+        let sel = if tiny || lat >= linetime_us { m2 } else { m1 };
+        let mut blocks = (sel + 1).max(bpl as u64) as u32;
+        let mut lines = (sel.div_ceil(bpl as u64)) as u32;
+        blocks = blocks.max(prev_blocks);
+        lines = lines.max(prev_lines);
+        let min_ddb = blocks + blocks.div_ceil(10);
+        if min_ddb > ddb_blocks || blocks > WM_BLOCKS_MASK || lines > 31 {
+            if l == 0 { return None; }
+            break;
+        }
+        out[l] = WM_ENABLE | lines << WM_LINES_SHIFT | blocks;
+        prev_blocks = blocks; prev_lines = lines;
+    }
+    Some(out)
+}

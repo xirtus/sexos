@@ -18,14 +18,19 @@ extern crate alloc;
 
 pub mod aux;
 pub mod backlight;
+pub mod dpll;
 pub mod gmbus;
 pub mod hotplug;
+pub mod modeset;
+pub mod pcode;
+pub mod phy;
 pub mod plane;
 pub mod readout;
 pub mod refresh;
 pub mod regs;
 pub mod takeover;
 pub mod timing;
+pub mod training;
 pub mod watermarks;
 
 /// 32-bit register access to the display MMIO BAR (GTTMMADR, BAR 0).
