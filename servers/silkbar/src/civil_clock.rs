@@ -12,6 +12,19 @@ pub struct Probe {
     ended: bool,
 }
 
+
+/// Below this the kernel's civil time and the CMOS reading only differ by tick
+/// drift between its once-a-minute re-reads; a network-time step is larger
+/// (the x17's CMOS ran 6 h off).
+pub const STEP_SECONDS: u64 = 120;
+
+/// The seconds to show for a CMOS reading `cmos`, given the kernel's civil time
+/// `civil` (the CMOS plus sexnet's network-time step): `civil` when it has been
+/// stepped well away from the CMOS, else the CMOS reading itself.
+pub fn network_corrected(cmos: u64, civil: Option<u64>) -> u64 {
+    match civil { Some(c) if c.abs_diff(cmos) >= STEP_SECONDS => c, _ => cmos }
+}
+
 impl Probe {
     pub const fn new() -> Self {
         Self { next: 1, pending: None, high_water: None, rollback: false, ended: false }
@@ -148,5 +161,16 @@ mod tests {
         // A correction out of range falls back to the CMOS reading.
         assert!(p.stage_corrected(info, || sample(T + 21_602), |_| 0));
         assert_eq!(p.pending().unwrap().seconds, (T + 21_602) as u32);
+    }
+
+    #[test]
+    fn only_a_real_network_step_replaces_the_cmos_reading() {
+        // Tick drift between the kernel's re-reads: show the CMOS reading itself.
+        assert_eq!(network_corrected(T, Some(T - 1)), T);
+        assert_eq!(network_corrected(T, Some(T + STEP_SECONDS - 1)), T);
+        assert_eq!(network_corrected(T, None), T);
+        // A network-time step (the x17's CMOS six hours off) wins, either way.
+        assert_eq!(network_corrected(T + 21_600, Some(T)), T);
+        assert_eq!(network_corrected(T, Some(T + STEP_SECONDS)), T + STEP_SECONDS);
     }
 }
