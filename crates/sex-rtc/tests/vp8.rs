@@ -80,6 +80,8 @@ fn key_frame_decodes_with_image_webp() {
 #[test]
 fn moving_sequence_matches_ffmpeg_bit_for_bit() {
     if Command::new("ffmpeg").arg("-version").output().is_err() {
+        // CI sets this where ffmpeg is installed, so the test cannot skip quietly.
+        assert!(std::env::var_os("SEX_RTC_REQUIRE_FFMPEG").is_none(), "ffmpeg missing");
         eprintln!("ffmpeg not installed: skipped");
         return;
     }

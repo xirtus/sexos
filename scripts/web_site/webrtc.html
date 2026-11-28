@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><title>WebRTC check</title>
+<style>
+body { margin: 12px; background: #fff; }
+h1 { font-size: 18px; margin: 40px 0 8px; }
+video { display: inline-block; width: 320px; height: 240px; background: #000; margin-right: 8px; }
+</style></head>
+<body>
+<h1 id="h">Calling</h1>
+<video id="local" autoplay muted playsinline></video><video id="remote" autoplay playsinline></video>
+<script>
+// Two peer connections in one page call each other over the machine's own UDP (host
+// candidates): the camera goes out of pc1 as VP8 and the microphone as G.711, and pc2's
+// remote track shows in the second <video>.
+const say = (...a) => console.log('webrtc', ...a);
+const local = document.getElementById('local'), remote = document.getElementById('remote');
+const pc1 = new RTCPeerConnection({ iceServers: [] }), pc2 = new RTCPeerConnection();
+pc1.onicecandidate = e => { if (e.candidate) { say('candidate', e.candidate.type, e.candidate.protocol); pc2.addIceCandidate(e.candidate); } };
+pc2.onicecandidate = e => { if (e.candidate) pc1.addIceCandidate(e.candidate); };
+for (const [n, pc] of [['pc1', pc1], ['pc2', pc2]]) {
+  pc.onconnectionstatechange = () => say(n, 'connection', pc.connectionState);
+  pc.oniceconnectionstatechange = () => say(n, 'ice', pc.iceConnectionState);
+}
+pc2.ontrack = e => {
+  say('track', e.track.kind, e.streams.length);
+  if (e.track.kind === 'video') { remote.srcObject = e.streams[0]; e.track.onunmute = () => say('remote unmuted'); }
+};
+remote.addEventListener('playing', () => say('remote playing'));
+remote.addEventListener('resize', () => say('remote size', remote.videoWidth, remote.videoHeight));
+say('asked', typeof RTCPeerConnection);
+navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(async st => {
+  local.srcObject = st;
+  pc1.addTrack(st.getAudioTracks()[0], st);
+  pc1.addTransceiver(st.getVideoTracks()[0], { streams: [st], sendEncodings: [{ maxBitrate: 800000, scaleResolutionDownBy: 2 }] });
+  const offer = await pc1.createOffer();
+  say('offer', /a=fingerprint:sha-256 /.test(offer.sdp), /a=ice-ufrag:/.test(offer.sdp), /a=group:BUNDLE/.test(offer.sdp), /VP8\/90000/.test(offer.sdp), /opus\/48000/.test(offer.sdp));
+  await pc1.setLocalDescription(offer);
+  await pc2.setRemoteDescription(offer);
+  await pc2.setLocalDescription(await pc2.createAnswer());
+  await pc1.setRemoteDescription(pc2.localDescription);
+  say('negotiated', pc1.signalingState, pc2.signalingState);
+  let last = 0;
+  setInterval(async () => {
+    const r = await pc1.getStats();
+    let sent = 0, frames = 0;
+    r.forEach(s => { if (s.type === 'outbound-rtp' && s.kind === 'video') { sent = s.bytesSent; frames = s.framesEncoded; } });
+    const r2 = await pc2.getStats();
+    let got = 0, decoded = 0;
+    r2.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') { got = s.bytesReceived; decoded = s.framesDecoded; } });
+    say('stats', sent, frames, got, decoded, sent > last ? 'rising' : 'flat');
+    last = sent;
+  }, 1000);
+  setTimeout(() => {
+    const r = remote.getBoundingClientRect();
+    say('rect', Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height));
+  }, 1500);
+}, e => say('failed', e.name, e.message));
+</script>
+</body></html>
