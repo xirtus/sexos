@@ -814,6 +814,10 @@ mod guest {
                                 paused = false;
                                 s.pause(false);
                                 s.skip();
+                                const _: () = assert!(moan::input::HEADSET == sex_pdx::sound_mixer::INPUT_HEADSET
+                                    && moan::input::BUILT_IN == sex_pdx::sound_mixer::INPUT_BUILT_IN
+                                    && moan::input::USB == sex_pdx::sound_mixer::INPUT_USB);
+                                s.set_input(studio.record_input);
                                 s.listen(true);
                                 for meter in &mut meters {
                                     meter.reset();

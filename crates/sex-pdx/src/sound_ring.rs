@@ -66,6 +66,14 @@ pub const WAKE: usize = 88;
 /// play on time. Bell clears it when the stream closes.
 pub const DOORBELL: usize = 96;
 
+/// (program writes) the microphone this program wants while it listens: a
+/// `sound_mixer::INPUT_*` kind, 0 for the person's choice. Bell records from one input
+/// at a time; the first listening program that names one that is present gets it.
+pub const INPUT: usize = 104;
+/// (Bell writes) the `sound_mixer::inputs` word, so a program can offer the inputs
+/// there are and show which one records.
+pub const INPUTS: usize = 112;
+
 /// The program's own view, writable.
 pub const CLIENT_SLOT: u64 = 260;
 /// Bell's views, one per program row; Bell writes the counters it owns.
