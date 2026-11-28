@@ -28,7 +28,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, CAPTURE: 40, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, CAPTURE: 40, RECORDER: 80, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -1085,6 +1085,11 @@
       return (this._gl = v2 ? new WebGL2RenderingContext(this, attrs) : new WebGLRenderingContext(this, attrs));
     }
     toDataURL() { return 'data:,'; }
+    // A stream of what the canvas draws, at most `fps` pictures a second (default 30).
+    captureStream(fps) {
+      const rate = fps === undefined ? 30 : Math.min(60, Math.max(0, +fps || 0));
+      return new MediaStream([new CanvasCaptureMediaStreamTrack(this, rate)]);
+    }
   }
 
   // ---- Canvas 2D ----
@@ -1254,6 +1259,8 @@
       liveElements.delete(this);
       const ms = blobUrls.get(this.getAttribute('src') || '');
       if (ms instanceof MediaSource) { this._ms = ms; ms._attach(this); return; }
+      // A Blob (a MediaRecorder's recording, a file the page made): its bytes play as a file.
+      if (ms instanceof Blob) { this._ask('blob'); H(OP.MEDIA_APPEND, this._id, 'file', ms._b.slice().buffer); return; }
       this._ask('load');
     }
     canPlayType(type) {
@@ -1265,11 +1272,12 @@
       return MEDIA_TYPES.test(s) ? 'maybe' : '';
     }
     // What a stream element shows now: 'video' while its stream has a live, enabled
-    // camera track, else nothing (a microphone alone is not played back: it would echo).
+    // camera track, 'canvas:N' for a canvas's captureStream, else nothing (a microphone
+    // alone is not played back: it would echo).
     _live() {
       const st = this._srcObject;
-      const v = st instanceof MediaStream && st.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
-      const key = v ? 'video' : '';
+      const t = st instanceof MediaStream && st.getVideoTracks().find(t => t.readyState === 'live' && t.enabled);
+      const key = !t ? '' : t._src === 'camera' ? 'video' : t._src.startsWith('canvas:') ? t._src : '';
       if (this._liveKey === key) return;
       this._liveKey = key;
       this._ask('live', key);
@@ -1336,28 +1344,31 @@
   const GROUP = 'sexos';
   function captureUse() {
     let a = false, v = false;
-    for (const t of liveTracks) if (t.enabled) { if (t.kind === 'audio') a = true; else v = true; }
+    // Only the devices' own tracks hold them (not a canvas's or a Web Audio node's).
+    for (const t of liveTracks) if (t.enabled) { if (t._src === 'mic') a = true; else if (t._src === 'camera') v = true; }
     H(OP.CAPTURE, 'use', a ? '1' : '0', v ? '1' : '0');
     for (const el of liveElements) el._live();
   }
   class MediaStreamTrack extends EventTarget {
-    constructor(kind, label, deviceId, settings) {
+    // `src` names what the browser takes the track's pictures or sound from: 'camera',
+    // 'mic', 'canvas:N' (captureStream) or 'audio:N' (a Web Audio destination node).
+    constructor(kind, label, deviceId, settings, src) {
       super();
-      this.kind = kind; this.label = label || ''; this.id = trackId(); this.contentHint = '';
+      this.kind = kind; this.label = label || ''; this.id = trackId(); this.contentHint = ''; this._src = src || '';
       this._dev = deviceId || ''; this._settings = settings || {}; this._c = {};
       this._enabled = true; this._muted = false; this.readyState = 'live';
       this.onended = null; this.onmute = null; this.onunmute = null;
       liveTracks.add(this);
     }
     get enabled() { return this._enabled; }
-    set enabled(v) { v = !!v; if (v === this._enabled) return; this._enabled = v; if (this.readyState === 'live') captureUse(); }
+    set enabled(v) { v = !!v; if (v === this._enabled) return; this._enabled = v; if (this.readyState === 'live') { captureUse(); recorderTracks(); } }
     get muted() { return this._muted; }
     stop() {
       if (this.readyState === 'ended') return;
-      this.readyState = 'ended'; liveTracks.delete(this); captureUse();
+      this.readyState = 'ended'; liveTracks.delete(this); captureUse(); recorderTracks();
     }
     clone() {
-      const t = new MediaStreamTrack(this.kind, this.label, this._dev, this._settings);
+      const t = new MediaStreamTrack(this.kind, this.label, this._dev, this._settings, this._src);
       t._c = Object.assign({}, this._c); t._enabled = this._enabled; t._muted = this._muted;
       if (this.readyState === 'ended') { t.readyState = 'ended'; liveTracks.delete(t); }
       return t;
@@ -1386,6 +1397,7 @@
       this.readyState = 'ended'; liveTracks.delete(this);
       this.dispatchEvent(new Event('ended'));
       for (const el of liveElements) el._live();
+      recorderTracks();
     }
     _mute(on) {
       if (this._muted === on || this.readyState === 'ended') return;
@@ -1477,13 +1489,14 @@
     captureAsks.delete(id);
     if (f[2] !== 'ok') { const [m, n] = CAPTURE_ERRORS[f[2]] || CAPTURE_ERRORS.denied; ask.reject(domError(m, n)); return; }
     const tracks = [];
-    if (ask.a) { const t = new MediaStreamTrack('audio', f[3], f[4], {}); t._c = typeof ask.c.audio === 'object' ? Object.assign({}, ask.c.audio) : {}; tracks.push(t); }
-    if (ask.v) { const t = new MediaStreamTrack('video', f[5], f[6], { width: +f[7] || 0, height: +f[8] || 0, frameRate: +f[9] || 30 }); t._c = typeof ask.c.video === 'object' ? Object.assign({}, ask.c.video) : {}; tracks.push(t); }
+    if (ask.a) { const t = new MediaStreamTrack('audio', f[3], f[4], {}, 'mic'); t._c = typeof ask.c.audio === 'object' ? Object.assign({}, ask.c.audio) : {}; tracks.push(t); }
+    if (ask.v) { const t = new MediaStreamTrack('video', f[5], f[6], { width: +f[7] || 0, height: +f[8] || 0, frameRate: +f[9] || 30 }, 'camera'); t._c = typeof ask.c.video === 'object' ? Object.assign({}, ask.c.video) : {}; tracks.push(t); }
     captureUse();
     ask.resolve(new MediaStream(tracks));
   }
-  function captureGone(kind) { for (const t of Array.from(liveTracks)) if (t.kind === kind) t._end(); }
-  function captureMute(kind, on) { for (const t of liveTracks) if (t.kind === kind) t._mute(on); }
+  const deviceOf = kind => kind === 'audio' ? 'mic' : 'camera';
+  function captureGone(kind) { for (const t of Array.from(liveTracks)) if (t._src === deviceOf(kind)) t._end(); }
+  function captureMute(kind, on) { for (const t of liveTracks) if (t._src === deviceOf(kind)) t._mute(on); }
   class PermissionStatus extends EventTarget {
     constructor(name, state) { super(); this.name = name; this.state = state; this.onchange = null; }
   }
@@ -1492,6 +1505,119 @@
     if (name === undefined) return Promise.reject(new TypeError("Failed to execute 'query' on 'Permissions': required member name is undefined."));
     const state = name === 'camera' || name === 'microphone' ? (H(OP.CAPTURE, 'state', name) || 'prompt') : 'prompt';
     return Promise.resolve(new PermissionStatus(String(name), state));
+  }
+  // ---- MediaRecorder ----
+  // The browser records (WebM: VP8 or VP9 pictures, Opus sound) from the sources the
+  // stream's tracks name (MediaStreamTrack `src`); pieces come back as Blobs. A Web
+  // Audio MediaStreamAudioDestinationNode's track records once it is made with src
+  // 'audio:N' and the browser feeds that node's sound (apps/web recorder.rs feed_audio).
+  const recorders = new Map();
+  let recorderSeq = 0;
+  // A track's source for the browser: '' for none, '-' before it while disabled.
+  const trackSource = t => !t || t.readyState !== 'live' || !t._src ? '' : (t.enabled ? '' : '-') + t._src;
+  class CanvasCaptureMediaStreamTrack extends MediaStreamTrack {
+    constructor(canvas, fps) {
+      super('video', '', '', { width: canvas.width, height: canvas.height, frameRate: fps || 30 }, 'canvas:' + canvas._id);
+      this.canvas = canvas; this._fps = fps;
+    }
+    getSettings() { return Object.assign(super.getSettings(), { width: this.canvas.width, height: this.canvas.height, deviceId: '', groupId: '' }); }
+    // Pictures go as the canvas draws; asking for one changes nothing.
+    requestFrame() {}
+  }
+  class BlobEvent extends Event {
+    constructor(type, init) {
+      super(type, init);
+      if (!init || !(init.data instanceof Blob)) throw new TypeError("Failed to construct 'BlobEvent': required member data is undefined.");
+      this.data = init.data; this.timecode = +init.timecode || 0;
+    }
+  }
+  const recorderState = (r, verb) => domError(`Failed to execute '${verb}' on 'MediaRecorder': The MediaRecorder's state is '${r.state}'.`, 'InvalidStateError');
+  class MediaRecorder extends EventTarget {
+    constructor(stream, options) {
+      super();
+      if (!(stream instanceof MediaStream)) throw new TypeError("Failed to construct 'MediaRecorder': parameter 1 is not of type 'MediaStream'.");
+      const o = options && typeof options === 'object' ? options : {};
+      const mime = o.mimeType === undefined ? '' : String(o.mimeType);
+      if (mime && !MediaRecorder.isTypeSupported(mime)) throw domError(`Failed to construct 'MediaRecorder': Unsupported mimeType: ${mime}`, 'NotSupportedError');
+      const bits = +o.bitsPerSecond || 0;
+      this._stream = stream; this._mime = mime; this._state = 'inactive'; this._id = 0;
+      this._abps = Math.round(+o.audioBitsPerSecond || (bits ? Math.min(128000, Math.max(6000, bits / 10)) : 128000));
+      this._vbps = Math.round(+o.videoBitsPerSecond || (bits ? Math.max(100000, bits - this._abps) : 2500000));
+      this.ondataavailable = this.onstart = this.onstop = this.onpause = this.onresume = this.onerror = null;
+    }
+    static isTypeSupported(type) { type = String(type); return type === '' || H(OP.RECORDER, 'type', type) === '1'; }
+    get stream() { return this._stream; }
+    get mimeType() { return this._mime; }
+    get state() { return this._state; }
+    get videoBitsPerSecond() { return this._vbps; }
+    get audioBitsPerSecond() { return this._abps; }
+    get audioBitrateMode() { return 'variable'; }
+    _sources() {
+      const st = this._stream;
+      return [trackSource(st.getVideoTracks().find(t => t.readyState === 'live')), trackSource(st.getAudioTracks().find(t => t.readyState === 'live'))];
+    }
+    start(timeslice) {
+      if (this._state !== 'inactive') throw recorderState(this, 'start');
+      if (!this._stream.active) throw domError("Failed to execute 'start' on 'MediaRecorder': The MediaRecorder cannot start because there are no audio or video tracks available.", 'NotSupportedError');
+      const [v, a] = this._sources();
+      const vt = this._stream.getVideoTracks().find(t => t.readyState === 'live');
+      const fps = vt ? (vt._fps !== undefined ? vt._fps : vt.getSettings().frameRate) || 30 : 0;
+      const slice = timeslice === undefined ? 0 : Math.max(0, Math.round(+timeslice || 0));
+      const id = ++recorderSeq;
+      const mime = H(OP.RECORDER, 'start', String(id), v, a, this._mime, String(this._vbps), String(this._abps), String(slice), String(Math.round(fps)));
+      if (!mime) throw domError("Failed to execute 'start' on 'MediaRecorder': There was an error starting the MediaRecorder.", 'NotSupportedError');
+      this._id = id; this._mime = mime; this._state = 'recording'; this._seen = [v, a].join('\t');
+      recorders.set(id, this);
+    }
+    stop() {
+      if (this._state === 'inactive') return;
+      this._state = 'inactive';
+      H(OP.RECORDER, 'stop', String(this._id));
+    }
+    pause() {
+      if (this._state === 'inactive') throw recorderState(this, 'pause');
+      if (this._state === 'paused') return;
+      this._state = 'paused'; H(OP.RECORDER, 'pause', String(this._id));
+      setTimeout(() => this.dispatchEvent(new Event('pause')), 0);
+    }
+    resume() {
+      if (this._state === 'inactive') throw recorderState(this, 'resume');
+      if (this._state === 'recording') return;
+      this._state = 'recording'; H(OP.RECORDER, 'resume', String(this._id));
+      setTimeout(() => this.dispatchEvent(new Event('resume')), 0);
+    }
+    requestData() {
+      if (this._state === 'inactive') throw recorderState(this, 'requestData');
+      H(OP.RECORDER, 'data', String(this._id));
+    }
+  }
+  // A track was disabled, enabled or ended: recorders hear of it, and stop once
+  // their stream has no live track left (as the specification says).
+  function recorderTracks() {
+    for (const r of recorders.values()) {
+      if (r._state === 'inactive') continue;
+      if (!r._stream.active) { r.stop(); continue; }
+      const [v, a] = r._sources(), seen = v + '\t' + a;
+      if (seen !== r._seen) { r._seen = seen; H(OP.RECORDER, 'sources', String(r._id), v, a); }
+    }
+  }
+  // 'recorder\tID\tstart' | 'data\tBYTES' | 'error\tNAME' | 'stop'
+  function recorderEvent(f) {
+    const r = recorders.get(+f[1]);
+    if (!r) return;
+    if (f[2] === 'start') r.dispatchEvent(new Event('start'));
+    else if (f[2] === 'data') {
+      const bytes = H(OP.RECORDER | 0x10000, 'take', f[1]) || new ArrayBuffer(0);
+      r.dispatchEvent(new BlobEvent('dataavailable', { data: new Blob([bytes], { type: r._mime }), timecode: performance.now() }));
+    } else if (f[2] === 'error') {
+      r._state = 'inactive';
+      const e = new Event('error');
+      e.error = domError(f[3] === 'NotSupportedError' ? 'This browser cannot record this stream' : 'Recording failed', f[3] || 'UnknownError');
+      r.dispatchEvent(e);
+    } else if (f[2] === 'stop') {
+      recorders.delete(+f[1]); r._state = 'inactive';
+      r.dispatchEvent(new Event('stop'));
+    }
   }
   function timeRanges(r) {
     const range = i => { if (!(i >= 0 && i < r.length)) throw domError('IndexSizeError'); return r[i]; };
@@ -4704,7 +4830,7 @@
     Event, UIEvent, MouseEvent, PointerEvent, WheelEvent, FocusEvent, KeyboardEvent, CustomEvent, PromiseRejectionEvent, EventTarget, Node, Text, Comment, CDATASection, ProcessingInstruction, CharacterData, Element, HTMLElement,
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio, MediaSource, SourceBuffer, SourceBufferList,
-    MediaStream, MediaStreamTrack, MediaStreamTrackEvent, MediaDevices, MediaDeviceInfo, InputDeviceInfo, PermissionStatus,
+    MediaStream, MediaStreamTrack, MediaStreamTrackEvent, MediaDevices, MediaRecorder, BlobEvent, CanvasCaptureMediaStreamTrack, MediaDeviceInfo, InputDeviceInfo, PermissionStatus,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
@@ -4881,6 +5007,7 @@
       case 'capturegone': captureGone(f[1]); return 0;
       case 'capturemute': captureMute(f[1], f[2] === '1'); return 0;
       case 'devicechange': mediaDevices.dispatchEvent(new Event('devicechange')); return 0;
+      case 'recorder': recorderEvent(f); return 0;
       // An extension's message or event: `ext\tJSON` (extensions.js).
       case 'ext': return extEvent ? (extEvent(f.slice(1).join('\t')) || 0) : 0;
       // A change another world made to the document (see mutation()).

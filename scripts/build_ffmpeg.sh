@@ -25,7 +25,8 @@
 #   MUSL_INCLUDE   musl's include directory (default: found below)
 #   FFMPEG_SRC     an FFmpeg checkout (default: cloned at FFMPEG_TAG)
 #   FFMPEG_RECORDING=1 additionally builds FFV1 encode/decode and Matroska muxing
-#   FFMPEG_RECORDING=2 also builds Splicy's export: VP9 (libvpx, scripts/build_libvpx.sh),
+#   FFMPEG_RECORDING=2 also builds Splicy's export and the browser's MediaRecorder:
+#                      VP8 and VP9 (libvpx, scripts/build_libvpx.sh),
 #                      AV1 (libaom, scripts/build_libaom.sh), H.264 (x264, GPL-2.0-or-later,
 #                      scripts/build_x264.sh; this profile's FFmpeg is therefore GPL),
 #                      Opus and AAC encoders, WebM and MP4 muxers
@@ -45,7 +46,7 @@ if [[ $FFMPEG_RECORDING != 0 ]]; then
   RECORDING_FLAGS=(--enable-encoder=ffv1 --enable-decoder=ffv1 --enable-muxer=matroska)
 fi
 if [[ $FFMPEG_RECORDING == 2 ]]; then
-  RECORDING_FLAGS+=(--enable-gpl --enable-libvpx --enable-libaom --enable-libx264 --enable-encoder=libvpx_vp9,libaom_av1,libx264,opus,aac --enable-muxer=webm,mp4)
+  RECORDING_FLAGS+=(--enable-gpl --enable-libvpx --enable-libaom --enable-libx264 --enable-encoder=libvpx_vp8,libvpx_vp9,libaom_av1,libx264,opus,aac --enable-muxer=webm,mp4)
 fi
 
 if [[ -z "${MUSL_INCLUDE:-}" ]]; then

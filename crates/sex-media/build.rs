@@ -22,7 +22,11 @@ fn main() {
     let recording_marker = ff.join("sexos-recording-v1");
     if recording_marker.exists() { println!("cargo:rerun-if-changed={}", recording_marker.display()); }
     let target = env::var("TARGET").unwrap_or_default();
+    println!("cargo:rerun-if-env-changed=SEXOS_MEDIA_HOST_FFMPEG");
     if !target.contains("sex") && !target.ends_with("-none") {
+        // Host tests: with SEXOS_MEDIA_HOST_FFMPEG=1, the bridges are built against the
+        // system's FFmpeg (pkg-config) so the encoders' output can be decoded back.
+        if env::var("SEXOS_MEDIA_HOST_FFMPEG").is_ok_and(|v| v == "1") { host_ffmpeg(); }
         return; // host checks only; the program itself is built for SexOS
     }
     if !ff.join("lib/libavcodec.a").exists() {
@@ -88,6 +92,18 @@ fn main() {
             .args(["-c", "src/export/bridge.c", "-o"]).arg(&object)
             .status().expect("clang export bridge").success());
         objects.push(object);
+        // The live recorder (MediaRecorder) uses the same encoders.
+        println!("cargo:rerun-if-changed=src/live/bridge.c");
+        let object = out.join("live_bridge.o");
+        assert!(Command::new("clang")
+            .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-std=c17", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
+            .args(["-msse2", "-mno-avx", "-mno-red-zone", "-fno-stack-protector", "-Wall", "-Werror", "-D_GNU_SOURCE"])
+            .arg("-isystem").arg(format!("{}/include", resource.trim()))
+            .arg("-isystem").arg(ff.join("include-c"))
+            .arg("-I").arg(ff.join("include"))
+            .args(["-c", "src/live/bridge.c", "-o"]).arg(&object)
+            .status().expect("clang live bridge").success());
+        objects.push(object);
     }
     assert!(Command::new("llvm-ar").arg("crs").arg(&lib).args(&objects).status().unwrap().success());
     println!("cargo:rustc-link-search=native={}", out.display());
@@ -101,4 +117,35 @@ fn main() {
         if matches!(l, "shine" | "dav1d" | "vpx" | "aom" | "x264") && !ff.join(format!("lib/lib{l}.a")).exists() { continue; }
         println!("cargo:rustc-link-lib=static={l}");
     }
+}
+
+/// The bridges against the host's FFmpeg, linked dynamically, for host tests only.
+fn host_ffmpeg() {
+    let pkg = Command::new("pkg-config").args(["--cflags", "--libs", "libavformat", "libavcodec", "libswscale", "libswresample", "libavutil"]).output();
+    let Ok(pkg) = pkg.map_err(|_| ()).and_then(|o| if o.status.success() { Ok(o) } else { Err(()) }) else {
+        println!("cargo:warning=SEXOS_MEDIA_HOST_FFMPEG=1 but pkg-config finds no FFmpeg development files");
+        return;
+    };
+    let flags = String::from_utf8(pkg.stdout).unwrap();
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let mut objects = Vec::new();
+    for (src, name) in [("src/bridge.c", "bridge"), ("src/recording/bridge.c", "recording"), ("src/export/bridge.c", "export"), ("src/live/bridge.c", "live"), ("src/bench.c", "bench")] {
+        println!("cargo:rerun-if-changed={src}");
+        let object = out.join(format!("host_{name}.o"));
+        let mut cc = Command::new("cc");
+        cc.args(["-std=gnu17", "-O2", "-fPIC", "-D_GNU_SOURCE", "-c", src, "-o"]).arg(&object);
+        for f in flags.split_whitespace().filter(|f| f.starts_with("-I")) { cc.arg(f); }
+        assert!(cc.status().expect("cc").success(), "compiling {src} against the host's FFmpeg failed");
+        objects.push(object);
+    }
+    let lib = out.join("libmediahost.a");
+    let _ = std::fs::remove_file(&lib);
+    assert!(Command::new("ar").arg("crs").arg(&lib).args(&objects).status().unwrap().success());
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=mediahost");
+    for f in flags.split_whitespace() {
+        if let Some(d) = f.strip_prefix("-L") { println!("cargo:rustc-link-search=native={d}"); }
+        if let Some(l) = f.strip_prefix("-l") { println!("cargo:rustc-link-lib={l}"); }
+    }
+    for cfg in ["ffmpeg", "ffmpeg_recording", "ffmpeg_export"] { println!("cargo:rustc-cfg={cfg}"); }
 }

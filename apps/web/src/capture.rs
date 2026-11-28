@@ -81,13 +81,16 @@ pub struct Capture {
     pub using: (bool, bool),
     /// Bell's microphone row for this program (for the note).
     row: usize,
+    /// What the microphone gave in the last `tick`, 48 kHz stereo (MediaRecorder's
+    /// sound; at most two seconds).
+    pub heard_now: Vec<[i16; 2]>,
 }
 
 impl Capture {
     /// Before the window's files are reachable (replaced by `new`).
     pub fn empty() -> Capture {
         Capture { shared: Rc::new(RefCell::new(Shared::default())), asking: None, queue: Vec::new(), answers: Vec::new(), note: None, fake: false, keep: false,
-            saved: String::new(), owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row: 0 }
+            saved: String::new(), owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row: 0, heard_now: Vec::new() }
     }
 
     pub fn new(window: &mut Window, fake: bool, private: bool) -> Capture {
@@ -98,7 +101,7 @@ impl Capture {
         }
         let row = sex_pdx::sound_ring::index_of(window.target).unwrap_or(0);
         let mut c = Capture { shared: Rc::new(RefCell::new(shared)), asking: None, queue: Vec::new(), answers: Vec::new(), note: None, fake, keep: !private,
-            saved, owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row };
+            saved, owner: 0, camera: None, mic: None, picture: None, seq: 0, using: (false, false), row, heard_now: Vec::new() };
         c.refresh_devices();
         sex_pdx::serial_record!("[web.capture.ready] fake={} sites={} camera={}", fake as u8, c.shared.borrow().sites.len(), c.camera_present() as u8);
         c
@@ -328,11 +331,14 @@ impl Capture {
         if fresh { self.seq = self.seq.wrapping_add(1); }
         let owner = self.owner;
         let row = self.row;
+        self.heard_now.clear();
+        let heard = &mut self.heard_now;
+        let mut keep = |pcm: &[[i16; 2]]| if heard.len() + pcm.len() <= 96_000 { heard.extend_from_slice(pcm) };
         if let Some(m) = self.mic.as_mut() {
             let mut buf = [[0i16; 2]; 1024];
             if let Some(l) = m.listener.as_mut() {
                 l.keep();
-                loop { let n = l.hear(&mut buf); m.heard += n as u64; if n < buf.len() { break; } }
+                loop { let n = l.hear(&mut buf); m.heard += n as u64; keep(&buf[..n]); if n < buf.len() { break; } }
                 let state = l.state();
                 if state != m.state {
                     sex_pdx::serial_record!("[web.capture.mic.state] state={}", state);
@@ -355,6 +361,7 @@ impl Capture {
                     let n = ((due - m.heard) as usize).min(buf.len());
                     for f in buf[..n].iter_mut() { let v = tone(m.phase); m.phase = m.phase.wrapping_add(1); *f = [v, v]; }
                     m.heard += n as u64;
+                    keep(&buf[..n]);
                 }
             }
             if now >= m.logged + 1000 { m.logged = now; sex_pdx::serial_record!("[web.capture.mic.heard] frames={}", m.heard); }

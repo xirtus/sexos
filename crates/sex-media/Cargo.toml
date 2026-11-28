@@ -8,6 +8,11 @@ description = "Video and sound for SexOS programs: FFmpeg decoding, paced by the
 
 [dependencies]
 sex-pdx = { path = "../sex-pdx" }
-sex-app = { path = "../sex-app" }
 sex-libc = { path = "../sex-libc" }
 sex-episodes = { path = "../sex-episodes" }
+
+# Programs get the SDK's heap; host tests (tests/live.rs) keep the host's allocator.
+[target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))'.dependencies]
+sex-app = { path = "../sex-app" }
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+sex-app = { path = "../sex-app", default-features = false }

@@ -214,6 +214,18 @@ impl Media {
                     _ => if let Some(b) = arg.parse::<usize>().ok().and_then(|i| m.buffers.get_mut(i)) { b.dropped = true; },
                 }
             }
+            // A Blob's object URL: its bytes come next (sex-js MEDIA_FILE) and play as a file.
+            "blob" => {
+                self.blank |= self.live.take().is_some();
+                self.player = None;
+                self.mse = None;
+                self.pending = None;
+                self.frames = 0;
+                self.src = String::from("blob");
+                self.state = State::Loading;
+                self.events.extend_from_slice(&["emptied", "loadstart"]);
+                self.want_play |= dom.attr(self.node, "autoplay").is_some();
+            }
             "load" => {
                 self.blank |= self.live.take().is_some();
                 self.player = None;
