@@ -951,4 +951,4 @@ extern "C" fn main() -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
+pub extern "C" fn _start() -> ! { main() }
