@@ -187,3 +187,4 @@ bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
 9f8558504caeadaeaa3b6acc564f2fa4297c9aae16f27d5aecc8b976f4e3e8ea  kernel/src/vmx.rs
+
