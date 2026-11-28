@@ -41,12 +41,17 @@ pub struct Config {
     pub swipe_distance: i32,
     /// Finger spread change, in percent, for one zoom step.
     pub pinch_percent: i32,
+    /// Pointer acceleration: a frame's travel (touchpad units) at which motion is
+    /// twice as fast; 0 turns acceleration off. Slow motion keeps the base speed.
+    pub accel_units: i32,
 }
 impl Config {
-    /// Defaults scaled to the pad: crossing its width moves the pointer ~700 pixels.
+    /// Defaults scaled to the pad: crossing its width slowly moves the pointer ~2000
+    /// pixels (a whole 1920-wide screen, as on the x17), a quick flick up to three
+    /// times as far.
     pub fn for_extent(x_max: i32) -> Self {
         let w = x_max.max(64);
-        Self { pointer_q8: (700 * 256 / w).max(1), scroll_step: (w / 40).max(1), tap_ms: 180, tap_slop: (w / 60).max(1), swipe_distance: w / 5, pinch_percent: 25 }
+        Self { pointer_q8: (2000 * 256 / w).max(1), scroll_step: (w / 40).max(1), tap_ms: 180, tap_slop: (w / 60).max(1), swipe_distance: w / 5, pinch_percent: 25, accel_units: (w / 40).max(1) }
     }
 }
 
@@ -240,7 +245,11 @@ impl Recognizer {
     }
 
     fn pointer(&mut self, dx: i32, dy: i32, emit: &mut impl FnMut(Event)) {
-        let q = self.config.pointer_q8 as i64;
+        // Gain grows with this frame's travel: x1 when still, x2 at `accel_units`, at most x3.
+        let travel = dx.unsigned_abs().max(dy.unsigned_abs()) as i64;
+        let a = self.config.accel_units as i64;
+        let boost = if a > 0 { (256 + travel * 256 / a).min(768) } else { 256 };
+        let q = self.config.pointer_q8 as i64 * boost / 256;
         let (x, y) = (dx as i64 * q + self.rem.0 as i64, dy as i64 * q + self.rem.1 as i64);
         let (px, py) = (x / 256, y / 256);
         self.rem = ((x - px * 256) as i32, (y - py * 256) as i32);
@@ -392,11 +401,11 @@ mod tests {
 
     #[test]
     fn one_finger_moves_the_pointer() {
-        let mut r = rec();
+        let mut r = Recognizer::new(Config { accel_units: 0, ..Config::for_extent(3000) });
         let ev = run(&mut r, &[(0, frame(&[(1, 1000, 1000)], false)), (10, frame(&[(1, 1100, 1050)], false)), (20, frame(&[(1, 1200, 1100)], false)), (300, frame(&[], false))]);
         let (sx, sy) = ev.iter().fold((0, 0), |a, e| if let Event::Move(x, y) = e { (a.0 + x, a.1 + y) } else { a });
-        // 200 units at 700 px per 3000 units: about 46 px, half that down.
-        assert!((44..=47).contains(&sx) && (21..=24).contains(&sy), "{} {}", sx, sy);
+        // 200 units at 2000 px per 3000 units: about 133 px, half that down.
+        assert!((130..=134).contains(&sx) && (64..=67).contains(&sy), "{} {}", sx, sy);
         assert!(!ev.iter().any(|e| matches!(e, Event::Button(..))), "a drag is not a tap: {:?}", ev);
     }
 
@@ -537,7 +546,22 @@ mod tests {
         let mut r = rec();
         let ev = run(&mut r, &[(0, frame(&[(1, 100, 100)], false)), (10, frame(&[(1, 200, 100)], false)), (20, frame(&[], false)),
                                (500, frame(&[(2, 2900, 1900)], false)), (510, frame(&[(2, 2900, 1900)], false))]);
-        assert!(ev.iter().all(|e| match e { Event::Move(x, y) => x.abs() < 40 && y.abs() < 40, _ => true }), "{:?}", ev);
+        assert!(ev.iter().all(|e| match e { Event::Move(x, y) => x.abs() < 200 && y.abs() < 200, _ => true }), "{:?}", ev);
+    }
+
+    #[test]
+    fn quick_motion_goes_further_than_slow() {
+        let total = |step: i32| {
+            let mut r = rec();
+            let mut frames = vec![];
+            for k in 0..=(600 / step) { frames.push((k as u64 * 10, frame(&[(1, 1000 + k * step, 1000)], false))); }
+            frames.push((10_000, frame(&[], false)));
+            run(&mut r, &frames).iter().fold(0, |a, e| if let Event::Move(x, _) = e { a + x } else { a })
+        };
+        // The same 600 units: slowly (10 a frame) near the base speed, quickly (150) at least twice as far.
+        let (slow, fast) = (total(10), total(150));
+        assert!((400..=560).contains(&slow), "{slow}");
+        assert!(fast >= slow * 2 && fast <= slow * 3 + 10, "{slow} {fast}");
     }
 
     #[test]

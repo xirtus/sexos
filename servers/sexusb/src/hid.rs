@@ -237,6 +237,25 @@ impl MediaLayout {
         }
         (reach != 0).then_some(held & !reach | pressed & reach)
     }
+    /// Panel brightness keys in this report (Consumer Brightness Increment 0x6F,
+    /// Decrement 0x70), as the reserved keyboard usages SexUSB hands Input for them:
+    /// 0xEE up, 0xED down. None when the report carries none of this layout's fields.
+    pub fn brightness(&self, report: &[u8]) -> Option<u64> {
+        let (id, body) = if self.ids { (*report.first()?, report.get(1..)?) } else { (0, report) };
+        let mut keys = 0u64;
+        let mut seen = false;
+        for f in self.fields[..self.n as usize].iter().filter(|f| f.report_id == id && f.array) {
+            let field = Field { bit: f.bit, size: f.size, signed: false, min: 0, max: 0 };
+            let Some(v) = field.read(body) else { continue };
+            seen = true;
+            match (f.umin as i64 + v as i64 - f.lmin as i64) as u32 {
+                0x000C_006F => keys = keys << 8 | 0xEE,
+                0x000C_0070 => keys = keys << 8 | 0xED,
+                _ => {}
+            }
+        }
+        seen.then_some(keys)
+    }
     /// The held keys as up to six keyboard usages, one per byte.
     pub fn usages(held: u8) -> u64 {
         let mut keys = 0u64;
@@ -246,6 +265,47 @@ impl MediaLayout {
         }
         keys
     }
+}
+
+/// The report ID of a descriptor's keyboard collection (Generic Desktop / Keyboard),
+/// when its reports carry IDs: such a keyboard (the Alienware x17's built-in Darfon
+/// `0d62:babc`) sends its media keys under another ID, in report protocol only.
+pub fn keyboard_report_id(desc: &[u8]) -> Option<u8> {
+    let (mut page, mut usage, mut depth, mut in_kbd) = (0u32, 0u32, 0usize, None::<usize>);
+    let mut i = 0usize;
+    while i < desc.len() {
+        let prefix = desc[i];
+        if prefix == 0xFE { i += 3 + *desc.get(i + 1)? as usize; continue; }
+        let len = match prefix & 3 { 3 => 4, n => n as usize };
+        if i + 1 + len > desc.len() { break; }
+        let raw = desc[i + 1..i + 1 + len].iter().rev().fold(0u32, |a, b| (a << 8) | *b as u32);
+        i += 1 + len;
+        match prefix & 0xFC {
+            0x04 => page = raw,
+            0x08 => usage = if len == 4 { raw } else { (page << 16) | raw },
+            0xA0 => { depth += 1; if raw == 1 && usage == 0x0001_0006 && in_kbd.is_none() { in_kbd = Some(depth); } }
+            0xC0 => { if in_kbd == Some(depth) { in_kbd = None; } depth = depth.saturating_sub(1); }
+            0x84 if in_kbd.is_some() => return (raw != 0).then_some(raw as u8),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Keys pressed in an N-key-rollover bitmap (one bit per usage from 0), as up to six
+/// usages one per byte, skipping those `have` already holds.
+pub fn bitmap_keys(bits: &[u8], have: u64) -> u64 {
+    let held = |u: u8| (0..6).any(|i| (have >> (8 * i)) as u8 == u);
+    let (mut keys, mut n) = (have, (0..6).filter(|i| (have >> (8 * i)) as u8 != 0).count());
+    for (byte, b) in bits.iter().enumerate() {
+        for bit in 0..8 {
+            let u = (byte * 8 + bit) as u32;
+            if b >> bit & 1 == 0 || u < 4 || u > 0xDF || n >= 6 || held(u as u8) { continue; }
+            keys |= (u as u64) << (8 * n);
+            n += 1;
+        }
+    }
+    keys
 }
 
 /// Find media buttons in a report descriptor: None when it has none.
@@ -376,6 +436,35 @@ mod tests {
     const CONSUMER_ARRAY: &[u8] = &[0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x03, 0x15, 0x00, 0x26, 0x9c, 0x02,
         0x19, 0x00, 0x2a, 0x9c, 0x02, 0x75, 0x10, 0x95, 0x01, 0x81, 0x00, 0xc0];
 
+    /// The Alienware x17 R1's built-in keyboard (Darfon 0d62:babc), read off the machine.
+    const X17_KEYBOARD: &[u8] = &[
+        0x06,0x89,0xff,0x09,0x10,0xa1,0x01,0x85,0x5a,0x09,0x01,0x15,0x00,0x26,0xff,0x00,0x75,0x08,0x95,0x10,0xb1,0x00,0xc0,
+        0x06,0x89,0xff,0x09,0xcc,0xa1,0x01,0x85,0xcc,0x09,0x01,0x15,0x00,0x26,0xff,0x00,0x75,0x08,0x95,0x3f,0xb1,0x00,0xc0,
+        0x05,0x01,0x09,0x06,0xa1,0x01,0x85,0x01,0x75,0x01,0x95,0x08,0x05,0x07,0x19,0xe0,0x29,0xe7,0x15,0x00,0x25,0x01,0x81,0x02,
+        0x95,0x01,0x75,0x08,0x81,0x03,0x95,0x05,0x75,0x01,0x05,0x08,0x19,0x01,0x29,0x05,0x91,0x02,0x95,0x01,0x75,0x03,0x91,0x03,
+        0x05,0x07,0x19,0x00,0x2a,0xff,0x00,0x15,0x00,0x26,0xff,0x00,0x95,0x06,0x75,0x08,0x81,0x00,
+        0x05,0x07,0x19,0x00,0x29,0xdf,0x15,0x00,0x25,0x01,0x95,0xe0,0x75,0x01,0x81,0x02,0xc0,
+        0x05,0x0c,0x09,0x01,0xa1,0x01,0x85,0x02,0x19,0x00,0x2a,0x3c,0x02,0x15,0x00,0x26,0x3c,0x02,0x75,0x10,0x95,0x01,0x81,0x00,0xc0,
+    ];
+    #[test] fn x17_keyboard_media_keys() {
+        assert_eq!(keyboard_report_id(X17_KEYBOARD), Some(1));
+        let m = parse_media(X17_KEYBOARD).unwrap();
+        assert!(m.ids);
+        // Consumer report 2: Volume Up (0xE9) held, then released; Mute (0xE2).
+        let h = m.decode(&[2, 0xe9, 0x00], 0).unwrap();
+        assert_eq!(MediaLayout::usages(h), 0x80);
+        assert_eq!(m.decode(&[2, 0, 0], h), Some(0));
+        assert_eq!(MediaLayout::usages(m.decode(&[2, 0xe2, 0x00], 0).unwrap()), 0x7F);
+        // Keyboard report 1 is not a media report.
+        assert_eq!(m.decode(&[1, 0, 0, 0x04, 0, 0, 0, 0, 0], 0), None);
+        // F10 / F11: Consumer Brightness Decrement / Increment, as the x17 sends them.
+        assert_eq!(m.brightness(&[2, 0x70, 0x00]), Some(0xED));
+        assert_eq!(m.brightness(&[2, 0x6f, 0x00]), Some(0xEE));
+        assert_eq!(m.brightness(&[2, 0x00, 0x00]), Some(0));
+        // N-key rollover: A (0x04) and B (0x05) as bitmap bits only.
+        assert_eq!(bitmap_keys(&[0b0011_0000], 0), 0x0504);
+        assert_eq!(bitmap_keys(&[0b0011_0000], 0x04), 0x0504);
+    }
     #[test] fn headset_buttons() {
         let l = parse_media(HEADSET).unwrap();
         assert!(l.ids);

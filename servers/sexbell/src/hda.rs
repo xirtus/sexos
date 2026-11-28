@@ -403,6 +403,11 @@ impl Hda {
             if self.param(pin, P_WIDGET) >> 20 & 0xf != WIDGET_PIN { continue; }
             let caps = self.param(pin, P_PIN);
             let config = self.verb(pin, GET_CONFIG_DEFAULT, 0).unwrap_or(0);
+            // Every pin that can take sound in, chosen or not: on laptops whose built-in
+            // microphones sit on the chipset's DSP (Tiger Lake DMIC), none is wired here.
+            if caps & 1 << 5 != 0 {
+                sex_pdx::serial_record!("[bell.hda.pin.in] codec={} pin={} config={:#010x} caps={:#010x}", self.codec, pin, config, caps);
+            }
             let Some(input) = crate::mic::input(config, caps) else { continue };
             for &adc in &adcs[..n_adc] {
                 let mut mic = Mic { codec: self.codec, afg, pin, path: [0; 6], pick: [0; 6], len: 0, input };

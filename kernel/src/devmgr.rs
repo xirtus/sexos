@@ -283,6 +283,8 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
         crate::hal::acpi::stall_us(10_000);
         serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind={:?}", dev.bus, dev.dev, dev.func, kind);
     }
+    // Firmware may also leave a Serial IO controller it does not use unassigned.
+    if kind == crate::device_lease::Kind::SerialIo { let _ = dev.assign_boot_bar64(kind.bar()); }
     let Some((view, window)) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
         let bar = kind.bar();
         let at = 0x10 + bar * 4;

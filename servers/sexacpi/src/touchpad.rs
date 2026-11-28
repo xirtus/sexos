@@ -120,8 +120,62 @@ fn counts(aml: &Aml, controller: &AmlName, khz: u32) -> Option<(u16, u16, u16)> 
 
 /// One touchpad's description, or why there is none.
 pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
-    let crs = eval(aml, dev, "_CRS", Vec::new()).ok_or("no_crs")?;
+    let crs = match crate::eval_result(aml, dev, "_CRS", Vec::new()) {
+        Ok(Some(o)) => o,
+        Ok(None) => {
+            if let Ok(parent) = dev.parent() { list_level(aml, &parent); power_on(aml, &parent); }
+            list_level(aml, dev);
+            power_on(aml, dev);
+            return Err("no_crs");
+        }
+        Err(e) => {
+            serial_println!("[sexacpi.touchpad.crs.err] path={} err={:?}", dev, e);
+            dump_methods(aml, dev);
+            list_level(aml, dev);
+            // What the method compares against, wherever it is defined.
+            for n in ["TPDF", "TPID", "OSYS"] {
+                let Some(nm) = name(n) else { continue };
+                match aml.namespace.lock().search(&nm, dev) {
+                    Ok((full, o)) => {
+                        let shown = match &*o {
+                            Object::Integer(v) => alloc::format!("{v:#x}"),
+                            Object::Package(items) => alloc::format!("{} items: {:?}", items.len(),
+                                items.iter().take(8).map(|i| match &**i {
+                                    Object::Package(row) => alloc::format!("{:?}", row.iter().map(|x| alloc::format!("{:?}", x.typ())).collect::<Vec<_>>()),
+                                    other => alloc::format!("{:?}", other.typ()),
+                                }).collect::<Vec<_>>()),
+                            other => alloc::format!("{:?}", other.typ()),
+                        };
+                        serial_println!("[sexacpi.aml.name] name={} path={} value={}", n, full, shown);
+                    }
+                    Err(e) => serial_println!("[sexacpi.aml.name] name={} missing={:?}", n, e),
+                }
+            }
+            // Intel reference firmware (the x17's Dell BIOS among it) builds `_CRS` from
+            // named templates: SBFB the I2C bus, SBFG the GPIO interrupt, SBFI the APIC
+            // one. Read those when the method itself fails.
+            let named = |n: &str| name(n).and_then(|nm| aml.namespace.lock().search(&nm, dev).ok())
+                .and_then(|(_, o)| match &*o { Object::Buffer(b) => Some(b.clone()), _ => None });
+            match (named("SBFB"), named("SBFG").or_else(|| named("SBFI"))) {
+                (Some(bus), Some(irq)) => {
+                    serial_println!("[sexacpi.touchpad.crs.templates] path={} bus_bytes={} irq_bytes={}", dev, bus.len(), irq.len());
+                    // Each template ends with an end tag (2 bytes); keep the last one only.
+                    let mut joined = bus[..bus.len().saturating_sub(2)].to_vec();
+                    joined.extend_from_slice(&irq);
+                    WrappedObject::new(Object::Buffer(joined))
+                }
+                _ => {
+                    // Power the pad and its controller anyway: Input's fallback scan finds
+                    // the pad on the bus without `_CRS`, but only if firmware switched it on.
+                    if let Ok(parent) = dev.parent() { power_on(aml, &parent); }
+                    power_on(aml, dev);
+                    return Err("crs_failed");
+                }
+            }
+        }
+    };
     let Object::Buffer(bytes) = &*crs else { return Err("crs_not_buffer") };
+
     let (mut bus, mut gpio, mut apic) = (None, None, None);
     resources::parse(bytes, |r| match r {
         Resource::I2c { address, ten_bit, hz, controller } if bus.is_none() => bus = Some((address, ten_bit, hz, controller.to_vec())),
@@ -175,4 +229,78 @@ pub fn send(pending: &mut Vec<Found>) -> bool {
         pending.remove(0);
     }
     true
+}
+
+/// When a touchpad's `_CRS` fails: its AML and that of every method it names (one
+/// level, at most 6 KiB), so the failing opcode can be found from the log alone.
+fn dump_methods(aml: &Aml, dev: &AmlName) {
+    let mut seen: Vec<AmlName> = Vec::new();
+    let mut queue: Vec<AmlName> = Vec::new();
+    if let Some(n) = name("_CRS").and_then(|n| n.resolve(dev).ok()) { queue.push(n); }
+    let mut budget = 6144usize;
+    let mut level = 0;
+    while !queue.is_empty() && level < 2 {
+        let mut next = Vec::new();
+        for path in core::mem::take(&mut queue) {
+            if seen.contains(&path) { continue; }
+            seen.push(path.clone());
+            let Ok(obj) = aml.namespace.lock().get(path.clone()) else { continue };
+            let Object::Method { code, flags } = &*obj else { continue };
+            let take = code.len().min(budget);
+            budget -= take;
+            serial_println!("[sexacpi.aml.method] path={} flags={:#x} bytes={}", path, flags.0, code.len());
+            for (i, chunk) in code[..take].chunks(48).enumerate() {
+                let mut hex = alloc::string::String::new();
+                for b in chunk { let _ = core::fmt::Write::write_fmt(&mut hex, format_args!("{b:02x}")); }
+                serial_println!("[sexacpi.aml.hex] path={} at={:#x} {}", path, i * 48, hex);
+            }
+            for w in code.windows(4) {
+                let ok = (w[0].is_ascii_uppercase() || w[0] == b'_') && w[1..].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'_');
+                if !ok { continue; }
+                let Ok(text) = core::str::from_utf8(w) else { continue };
+                let Some(n) = name(text) else { continue };
+                if let Ok((full, o)) = aml.namespace.lock().search(&n, dev) {
+                    if matches!(*o, Object::Method { .. }) && !seen.contains(&full) && !next.contains(&full) { next.push(full); }
+                }
+            }
+            if budget == 0 { return; }
+        }
+        queue = next;
+        level += 1;
+    }
+}
+
+/// Every object directly in `path` with its type, and the AML of each method (6 KiB
+/// cap): for a device firmware describes without the object we expected.
+fn list_level(aml: &Aml, path: &AmlName) {
+    let mut found: Vec<(AmlName, alloc::string::String)> = Vec::new();
+    let _ = aml.namespace.lock().traverse(|name, level| {
+        if name == path {
+            for (seg, (_, obj)) in level.values.iter() {
+                if let Ok(full) = AmlName::from_name_seg(*seg).resolve(path) {
+                    found.push((full, alloc::format!("{:?}", obj.typ())));
+                }
+            }
+            return Ok(false);
+        }
+        // Only descend toward `path`.
+        let (n, p) = (name.as_string(), path.as_string());
+        Ok(p.starts_with(n.as_str()))
+    });
+    let names: Vec<alloc::string::String> = found.iter().map(|(n, t)| alloc::format!("{}:{}", n.as_string().rsplit('.').next().unwrap_or(""), t)).collect();
+    serial_println!("[sexacpi.aml.level] path={} objects={} {:?}", path, found.len(), names);
+    let mut budget = 6144usize;
+    for (full, typ) in &found {
+        if typ != "Method" || budget == 0 { continue; }
+        let Ok(obj) = aml.namespace.lock().get(full.clone()) else { continue };
+        let Object::Method { code, flags } = &*obj else { continue };
+        let take = code.len().min(budget);
+        budget -= take;
+        serial_println!("[sexacpi.aml.method] path={} flags={:#x} bytes={}", full, flags.0, code.len());
+        for (i, chunk) in code[..take].chunks(48).enumerate() {
+            let mut hex = alloc::string::String::new();
+            for b in chunk { let _ = core::fmt::Write::write_fmt(&mut hex, format_args!("{b:02x}")); }
+            serial_println!("[sexacpi.aml.hex] path={} at={:#x} {}", full, i * 48, hex);
+        }
+    }
 }

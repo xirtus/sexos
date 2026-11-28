@@ -10909,6 +10909,11 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
         desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
+        desktop_keys::Action::Brightness(up)=>{
+            // The GPU's own backlight (Intel eDP: ACPI only asks a graphics driver), and
+            // ACPI for panels the firmware drives itself.
+            let _=pdx_call(SLOT_DISPLAY,sex_pdx::power::OP_DISPLAY_BACKLIGHT,up as u64,0,0);
+            let _=laptop_command(if up{Command::BrightnessUp}else{Command::BrightnessDown});true}
         desktop_keys::Action::MicVolume(step)=>{mic_volume_key(step);true}
         desktop_keys::Action::Close=>{
             let sid=FOCUSED_SURFACE_ID;
@@ -12489,7 +12494,10 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
                 return false;
             }
             _ => {
-                serial_println!("[shell.surface.unknown.reject] point_in_surface id={}", sid);
+                static LAST_UNKNOWN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+                if LAST_UNKNOWN.swap(sid, core::sync::atomic::Ordering::Relaxed) != sid {
+                    serial_println!("[shell.surface.unknown.reject] point_in_surface id={}", sid);
+                }
                 return false;
             }
         };
@@ -12519,7 +12527,12 @@ fn surface_is_alive(sid: u64) -> bool {
         SURFACE_ID_BELL     => unsafe { BELL_ACTIVE },
         SURFACE_ID_SCENE_SETTINGS => unsafe { SCENE_SETTINGS_ACTIVE },
         _ => {
-            serial_println!("[shell.surface.unknown.reject] surface_is_alive id={}", sid);
+            // Asked every frame for a surface that went away: log it once per surface,
+            // or it pushes everything else out of the kernel's log tail.
+            static LAST_UNKNOWN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+            if LAST_UNKNOWN.swap(sid, core::sync::atomic::Ordering::Relaxed) != sid {
+                serial_println!("[shell.surface.unknown.reject] surface_is_alive id={}", sid);
+            }
             false
         }
     }

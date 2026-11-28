@@ -87,6 +87,12 @@ struct Interrupt {
     keys: u64,
     modifiers: u8,
     buttons: u8,
+    /// A report-protocol keyboard: its keyboard report ID (0: boot protocol). Its media
+    /// report is in `Usb::media`; `media_held` holds the media keys held, `typed` the keys.
+    report_kbd: u8,
+    typed: u64,
+    /// Brightness keys held (keyboard usages 0xED/0xEE, one per byte).
+    bright: u64,
     media_held: u8,
 }
 impl Interrupt {
@@ -96,7 +102,7 @@ impl Interrupt {
                 x: crate::hid::Field { bit: 0, size: 0, signed: false, min: 0, max: 0 },
                 y: crate::hid::Field { bit: 0, size: 0, signed: false, min: 0, max: 0 },
                 wheel: crate::hid::Field { bit: 0, size: 0, signed: false, min: 0, max: 0 }, absolute: false },
-            errors: 0, keys: 0, modifiers: 0, buttons: 0, media_held: 0 }
+            errors: 0, keys: 0, modifiers: 0, buttons: 0, media_held: 0, report_kbd: 0, typed: 0, bright: 0 }
     }
 }
 
@@ -431,6 +437,8 @@ impl Usb {
                     if addr & 0x80 != 0 && attr & 3 == 3 && (iclass == 3 || hub) && n < MAX_INTR {
                         picks[n] = Some(Pick { iface, sub: isub, proto: iproto, ep: addr & 0xf, mps, interval, report_len, hub });
                         n += 1;
+                    } else if addr & 0x80 != 0 && attr & 3 == 3 && iclass == 3 {
+                        log!("[sexusb.hid.skip] slot={} iface={} sub={} proto={} reason=max_intr", self.dev[i].slot, iface, isub, iproto);
                     }
                 }
                 _ => {}
@@ -577,7 +585,22 @@ impl Usb {
         let _ = self.set(i, 0x21, 0x0A, 0, iface as u16); // SET_IDLE 0: report on change only
         let buf = self.dev[i].mem.unwrap().buf;
         let role = if sub == 1 && proto == 1 {
-            let _ = self.set(i, 0x21, 0x0B, 0, iface as u16); // boot protocol
+            // A keyboard whose descriptor puts its keys under a report ID and also has
+            // media keys (a laptop's built-in one, such as the x17's) stays in report
+            // protocol: boot protocol carries the typing keys only.
+            let len = report_len.clamp(1, 4096);
+            let got = self.get(i, 0x81, 6, 0x2200, iface as u16, buf.0, len).unwrap_or(0) as usize;
+            let desc = unsafe { core::slice::from_raw_parts(buf.1 as *const u8, got.min(len as usize)) };
+            let report = crate::hid::keyboard_report_id(desc).zip(crate::hid::parse_media(desc))
+                .zip(self.media.iter().position(|s| s.0 == 0));
+            if let Some(((id, m), at)) = report {
+                self.media[at] = (i as u8 + 1, k as u8, m);
+                self.dev[i].intr[k].report_kbd = id;
+                let _ = self.set(i, 0x21, 0x0B, 1, iface as u16); // report protocol
+                log!("[sexusb.hid.keyboard.report] slot={} iface={} keyboard_id={} media_fields={}", self.dev[i].slot, iface, id, m.n);
+            } else {
+                let _ = self.set(i, 0x21, 0x0B, 0, iface as u16); // boot protocol
+            }
             self.stats.keyboards += 1;
             Role::Keyboard
         } else {
@@ -612,7 +635,7 @@ impl Usb {
             }
         };
         self.dev[i].intr[k].role = role;
-        if role == Role::None { self.dev[i].intr[k].active = false; return; }
+        if role == Role::None { self.log_descriptor(i, iface, sub, proto, report_len); self.dev[i].intr[k].active = false; return; }
         self.stats.hid += 1;
         let l = self.dev[i].intr[k].layout;
         log!("[sexusb.hid.bind.summary] keyboard_ep={} pointer_role={} slot={} iface={} report_id={} wheel={} ep_dci={}",
@@ -627,6 +650,25 @@ impl Usb {
             },
             self.dev[i].slot, iface, l.report_id, l.wheel.present() as u8, self.dev[i].intr[k].dci);
         self.arm(i, k, IN_FLIGHT);
+    }
+
+    /// A HID interface's report descriptor in the log: one nothing here understood (no
+    /// pointer, keys or media buttons), or a boot keyboard about to lose its other reports.
+    fn log_descriptor(&mut self, i: usize, iface: u8, sub: u8, proto: u8, report_len: u16) {
+        let buf = self.dev[i].mem.unwrap().buf;
+        let len = report_len.clamp(1, 4096);
+        let got = self.get(i, 0x81, 6, 0x2200, iface as u16, buf.0, len).unwrap_or(0) as usize;
+        let desc = unsafe { core::slice::from_raw_parts(buf.1 as *const u8, got.min(len as usize)) };
+        let (vendor, product, slot) = (self.dev[i].vendor, self.dev[i].product, self.dev[i].slot);
+        log!("[sexusb.hid.descriptor] slot={} vendor={:#06x} product={:#06x} iface={} sub={} proto={} descriptor_bytes={}", slot, vendor, product, iface, sub, proto, got);
+        for (n, chunk) in desc[..desc.len().min(512)].chunks(28).enumerate() {
+            let mut hex = [0u8; 56];
+            for (j, b) in chunk.iter().enumerate() {
+                const H: &[u8; 16] = b"0123456789abcdef";
+                hex[j * 2] = H[(b >> 4) as usize]; hex[j * 2 + 1] = H[(b & 15) as usize];
+            }
+            log!("[usb.desc] s={} i={} @{} {}", slot, iface, n * 28, core::str::from_utf8(&hex[..chunk.len() * 2]).unwrap_or(""));
+        }
     }
 
     /// Queue `n` interrupt-IN TRBs, each with the report buffer of its ring position.
@@ -739,9 +781,9 @@ impl Usb {
             let e = &mut self.dev[i].intr[k];
             if !e.active { continue; }
             if matches!(e.role, Role::Keyboard | Role::Media | Role::PointerMedia) && (e.keys != 0 || e.modifiers != 0 || e.media_held != 0) {
-                e.keys = 0; e.modifiers = 0; e.media_held = 0; keys_changed = true;
+                e.keys = 0; e.modifiers = 0; e.media_held = 0; e.typed = 0; e.bright = 0; keys_changed = true;
             }
-            if matches!(e.role, Role::Media | Role::PointerMedia) {
+            if matches!(e.role, Role::Media | Role::PointerMedia) || e.report_kbd != 0 {
                 self.media.iter_mut().filter(|s| s.0 == i as u8 + 1 && s.1 == k as u8).for_each(|s| s.0 = 0);
             }
             let e = &mut self.dev[i].intr[k];
@@ -870,6 +912,8 @@ impl Usb {
     }
 
     fn keyboard(&mut self, i: usize, k: usize, r: &[u8]) {
+        let id = self.dev[i].intr[k].report_kbd;
+        if id != 0 { return self.report_keyboard(i, k, id, r); }
         if r.len() < 3 { return; }
         // Phantom state (rollover overflow): every key reads 0x01. Keep the last state.
         if r[2..].iter().take(6).any(|b| *b == 1) { return; }
@@ -882,6 +926,42 @@ impl Usb {
         if e.keys == keys && e.modifiers == r[0] { return; }
         e.keys = keys;
         e.modifiers = r[0];
+        self.send_keys();
+    }
+
+    /// A report-protocol keyboard: its keyboard report (modifiers, reserved, six keys,
+    /// then on the x17 an N-key-rollover bitmap) or its media report. Both kinds of keys
+    /// go to Input in one snapshot.
+    fn report_keyboard(&mut self, i: usize, k: usize, id: u8, r: &[u8]) {
+        let Some((&rid, body)) = r.split_first() else { return };
+        let e = self.dev[i].intr[k];
+        let (mut typed, mut modifiers, mut media) = (e.typed, e.modifiers, e.media_held);
+        if rid == id {
+            if body.len() < 8 || body[2..8].iter().any(|b| *b == 1) { return; }
+            typed = 0;
+            let mut n = 0;
+            for b in &body[2..8] { if *b > 3 && n < 6 { typed |= (*b as u64) << (8 * n); n += 1; } }
+            if body.len() > 8 { typed = crate::hid::bitmap_keys(&body[8..], typed); }
+            modifiers = body[0];
+        } else {
+            let Some(m) = self.media.iter().find(|s| s.0 == i as u8 + 1 && s.1 == k as u8).map(|s| s.2) else { return };
+            if let Some(b) = m.brightness(r) { self.dev[i].intr[k].bright = b; }
+            if let Some(held) = m.decode(r, media) {
+                if held != media { log!("[sexusb.hid.media.keys] slot={} held={:#04x}", self.dev[i].slot, held); }
+                media = held;
+            }
+        }
+        // Typed keys first, then brightness and media usages, six at most.
+        let mut keys = typed;
+        let mut n = (0..6).filter(|b| (typed >> (8 * b)) as u8 != 0).count();
+        let extra = crate::hid::MediaLayout::usages(media) << 16 | self.dev[i].intr[k].bright & 0xffff;
+        for b in 0..6 { let u = (extra >> (8 * b)) as u8; if u != 0 && n < 6 { keys |= (u as u64) << (8 * n); n += 1; } }
+        let e = &mut self.dev[i].intr[k];
+        e.typed = typed;
+        e.media_held = media;
+        if e.keys == keys && e.modifiers == modifiers { return; }
+        e.keys = keys;
+        e.modifiers = modifiers;
         self.send_keys();
     }
 

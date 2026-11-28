@@ -274,6 +274,23 @@ impl Intel {
 }
 
 /// Backlight as it was before the machine slept.
+/// One brightness step on the eDP panel's PWM: 10 % (5 % below 10 %), never below 5 %.
+/// None when no Intel display engine is leased or firmware left the PWM off.
+pub fn backlight_step(up: bool) -> Option<u32> {
+    let id = sex_pdx::device_identity(df::INTEL_SLOT).ok()?;
+    if !sex_gpu_intel::supported(id.vendor, id.product) { return None; }
+    let view = sex_pdx::memory_region_full_view(df::INTEL_SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok()?;
+    let mut bar = Bar { va: view.virtual_address, len: view.length };
+    let now = backlight::read(&mut bar);
+    let cur = now.percent();
+    let step = if cur <= 10 && !up || cur < 10 && up { 5 } else { 10 };
+    let next = if up { (cur + step).min(100) } else { cur.saturating_sub(step).max(5) };
+    let set = backlight::set_percent(&mut bar, next);
+    sex_pdx::serial_record!("[display.intel.backlight.step] up={} from={} to={} enabled={} period={} ok={}",
+        up as u8, cur, next, now.enabled as u8, now.period, set.is_some() as u8);
+    set.map(|b| b.percent())
+}
+
 static mut BEFORE_SLEEP: Option<backlight::Backlight> = None;
 
 /// The machine is going to sleep (true) or woke: the eDP panel's backlight goes off

@@ -228,8 +228,12 @@ ACPI_AUX_COHORTS=(
  ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','19c24cbf7758b2a07386c8d4f4756c585cf2ba7e365e5aed65f64f5e3ec21363'),
  # power::RESTART_ONLY for Spindle's `restart` (wait loop unchanged), 2026-11-27
  ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','1e34e043d5df4cda6048d2214d4c874784e00be0f2d143eb979b24f97b6701f0'),
+ # power::OP_DISPLAY_BACKLIGHT for native Intel eDP brightness (wait loop unchanged), 2026-11-28
+ ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','9b49816283817e6dd3a9b108b574842df892074ee82b10766046019268e00f23'),
  # noir x17 WMI hotkeys merged with power::RESTART_ONLY (wait loop unchanged), 2026-11-28
- ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','c9ad1784233989efcdcb7d5a84cc174d155850fda2659f1c4bd0bb35acbe2ec5'))
+ ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','c9ad1784233989efcdcb7d5a84cc174d155850fda2659f1c4bd0bb35acbe2ec5'),
+ # noir x17 WMI hotkeys merged with power::OP_DISPLAY_BACKLIGHT (wait loop unchanged), 2026-11-28
+ ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','68f34530a768c3fc96a274d06bac35e0ee1cb7cd89c383920c385249a0bac231'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')

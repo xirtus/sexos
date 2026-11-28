@@ -622,6 +622,9 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         // Cufflinks / SexUSB media endpoints) send them: KEY_PLAY_PAUSE, KEY_STOP,
         // KEY_PREVIOUS, KEY_NEXT, KEY_MIC_MUTE.
         0xE8 => 0x78, 0xE9 => 0x7A, 0xEA => 0x7F, 0xEB => 0x7C, 0xEC => 0x79,
+        // Brightness down / up, as SexUSB sends a keyboard's Consumer brightness keys:
+        // KEY_BRIGHTNESS_DOWN, KEY_BRIGHTNESS_UP.
+        0xED => 0x7B, 0xEE => 0x7D,
         _ => return None,
     })
 }
