@@ -4,7 +4,10 @@
 pub const POLL_QUANTUM:u32=64;
 /// As long as Linux gives a command (30 s): a flush on a busy or slow disk can take seconds.
 pub const MAX_TICKS:u64=30_000;
-pub const MAX_TURNS:u32=32_768;
+/// A backstop for a clock that never advances; the deadline above is what ends a wait.
+/// (32,768 turns of a yield returned in ~70 ms on an idle core: a host flush that took
+/// longer than that quarantined the disk and every later read failed.)
+pub const MAX_TURNS:u32=1<<22;
 pub const MAX_POLLS:u32=POLL_QUANTUM*MAX_TURNS;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Failure{Deadline,ClockRollback,ClockOverflow,TurnLimit,WaitDenied(u64)}

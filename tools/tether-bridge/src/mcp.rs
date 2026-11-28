@@ -123,7 +123,9 @@ pub fn run_mcp_stdio(control_addr: &str) -> Result<(), String> {
             "tools/list" => Some(format!(
                 "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"tools\":{}}}}}",
                 id.unwrap_or(0),
-                TOOLS_LIST_JSON
+                // One JSON message per line: MCP stdio clients (Claude Code) drop a
+                // reply that spans lines, and then see no tools at all.
+                TOOLS_LIST_JSON.replace('\n', "")
             )),
             "tools/call" => {
                 let tool = json_get_str(trimmed, "name").unwrap_or_default();
