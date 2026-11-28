@@ -131,6 +131,26 @@ pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
         Err(e) => {
             serial_println!("[sexacpi.touchpad.crs.err] path={} err={:?}", dev, e);
             dump_methods(aml, dev);
+            list_level(aml, dev);
+            // What the method compares against, wherever it is defined.
+            for n in ["TPDF", "TPID", "OSYS"] {
+                let Some(nm) = name(n) else { continue };
+                match aml.namespace.lock().search(&nm, dev) {
+                    Ok((full, o)) => {
+                        let shown = match &*o {
+                            Object::Integer(v) => alloc::format!("{v:#x}"),
+                            Object::Package(items) => alloc::format!("{} items: {:?}", items.len(),
+                                items.iter().take(8).map(|i| match &**i {
+                                    Object::Package(row) => alloc::format!("{:?}", row.iter().map(|x| alloc::format!("{:?}", x.typ())).collect::<Vec<_>>()),
+                                    other => alloc::format!("{:?}", other.typ()),
+                                }).collect::<Vec<_>>()),
+                            other => alloc::format!("{:?}", other.typ()),
+                        };
+                        serial_println!("[sexacpi.aml.name] name={} path={} value={}", n, full, shown);
+                    }
+                    Err(e) => serial_println!("[sexacpi.aml.name] name={} missing={:?}", n, e),
+                }
+            }
             // Power the pad and its controller anyway: Input's fallback scan finds the pad
             // on the bus without `_CRS`, but only if firmware has switched it on.
             if let Ok(parent) = dev.parent() { power_on(aml, &parent); }
