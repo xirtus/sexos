@@ -1,0 +1,18 @@
+[package]
+name = "sex-rtc"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "RTCPeerConnection's engine for Kaleidoscope: SDP offer/answer, ICE, DTLS-SRTP and RTP tied together, a VP8 encoder and G.711; no I/O"
+
+[dependencies]
+sex-sdp = { path = "../sex-sdp" }
+sex-ice = { path = "../sex-ice" }
+sex-dtls = { path = "../sex-dtls" }
+sex-srtp = { path = "../sex-srtp" }
+sex-rtp = { path = "../sex-rtp" }
+rand_chacha = { version = "=0.3.1", default-features = false }
+rand_core = { version = "=0.6.4", default-features = false }
+
+[dev-dependencies]
+image-webp = "0.2.4"

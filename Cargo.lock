@@ -7897,6 +7897,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-rtc"
+version = "0.1.0"
+dependencies = [
+ "image-webp 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "sex-dtls",
+ "sex-ice",
+ "sex-rtp",
+ "sex-sdp",
+ "sex-srtp",
+]
+
+[[package]]
 name = "sex-rtp"
 version = "0.1.0"
 
