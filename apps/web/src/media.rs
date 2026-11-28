@@ -336,6 +336,13 @@ impl Media {
             if self.want_play { self.events.extend_from_slice(&["play", "playing"]); }
         }
         self.frames += 1;
+        // Like playback, a live element tells the page its time (and frame count) every
+        // REPORT_MS, or getVideoPlaybackQuality() would stop at the first picture.
+        let now = sex_pdx::get_ticks();
+        if now >= self.last_report + REPORT_MS {
+            self.last_report = now;
+            if !self.events.contains(&"timeupdate") { self.events.push("timeupdate"); }
+        }
         true
     }
 
