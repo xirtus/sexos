@@ -424,25 +424,31 @@ impl Intel {
         let (max_rate, max_lanes) = (caps[1] as u32 * 27_000, (caps[2] & 0x1f).clamp(1, 4));
         let (tps3, tps4) = (caps[2] & 0x40 != 0, caps[3] & 0x80 != 0);
         // eDP 1.4 panels may list their rates instead (DPCD 0x010, 200 kHz units).
+        // Candidate rates with the DPCD index each one has in the panel's
+        // own table (eDP 1.4 LINK_RATE_SET must name that index, not a
+        // position after filtering).
         let mut rates = [0u32; 8];
+        let mut index = [0u8; 8];
         let mut table = [0u8; 16];
         let mut n = 0;
         let edp_table = max_rate == 0 && aux::dpcd_read(&mut self.bar, port, 0x010, &mut table).is_ok();
         if edp_table {
-            for c in table.chunks(2) { let v = u16::from_le_bytes([c[0], c[1]]) as u32 * 20; if v != 0 && n < 8 { rates[n] = v; n += 1; } }
+            for (i, c) in table.chunks(2).enumerate() {
+                let v = u16::from_le_bytes([c[0], c[1]]) as u32 * 20;
+                // Only rates the combo PLL table can make.
+                if v != 0 && n < 8 && dpll::DP_RATES.contains(&v) { rates[n] = v; index[n] = i as u8; n += 1; }
+            }
         } else {
-            for &rt in &dpll::DP_RATES { if rt <= max_rate && n < 8 && matches!(rt, 162_000 | 270_000 | 540_000 | 810_000) { rates[n] = rt; n += 1; } }
+            for &rt in &[162_000u32, 270_000, 540_000, 810_000] { if rt <= max_rate && n < 8 { rates[n] = rt; n += 1; } }
         }
-        // Only rates the combo PLL table can make.
-        let mut k = 0;
-        for i in 0..n { if dpll::DP_RATES.contains(&rates[i]) { rates[k] = rates[i]; k += 1; } }
-        let n = k;
+        let index_of = |rate: u32| -> Option<u8> { if edp_table { rates[..n].iter().position(|&x| x == rate).map(|i| index[i]) } else { None } };
         let link = match modeset::choose_link(target.clock_khz, modeset::BPP_8BPC, &rates[..n], max_lanes, boot_link.lanes) {
             Some(l) => l,
             None => return self.refuse(&rf.running, &target, "link_bandwidth"),
         };
         if target.clock_khz > 2 * refresh::cdclk_khz(&mut self.bar) { return self.refuse(&rf.running, &target, "cdclk"); }
-        let rate_index = if edp_table { rates[..n].iter().position(|&x| x == link.rate_khz).map(|i| i as u8) } else { None };
+        let rate_index = index_of(link.rate_khz);
+        if edp_table && rate_index.is_none() { return self.refuse(&rf.running, &target, "rate_index"); }
         // Watermarks for the new rate from memory latency (pcode).
         let Ok(lat) = sex_gpu_intel::pcode::wm_latency(&mut self.bar, TAKE_READS) else { return self.refuse(&rf.running, &target, "pcode") };
         let sagv = sex_gpu_intel::pcode::sagv_block_us(&mut self.bar, TAKE_READS);
@@ -451,6 +457,8 @@ impl Intel {
         let cursor = watermarks::compute(&lat, sagv, target.clock_khz, target.h[3] as u32, 64, 4, rf.boot.cursor.ddb_blocks());
         let (Some(primary), Some(cursor)) = (primary, cursor) else { return self.refuse(&rf.running, &target, "watermarks") };
         let plan = modeset::Plan { pipe: p, port, pll, timing: target, link, edp: true, tps3, tps4, rate_index };
+        let before_primary = watermarks::read(&mut self.bar, p, watermarks::Which::Plane(1)).levels;
+        let before_cursor = watermarks::read(&mut self.bar, p, watermarks::Which::Cursor).levels;
         sex_pdx::serial_record!("[display.intel.modeset.plan] pipe={} port={} from_mhz={} to_mhz={} clock_khz={} link_khz={} lanes={} boot_link_khz={} boot_lanes={} tps3={} tps4={} rate_index={} wm_latency_us={:?} sagv_us={}",
             (b'A' + p as u8) as char, regs::port_name(port), rf.running.refresh_mhz(), target.refresh_mhz(), target.clock_khz, link.rate_khz, link.lanes,
             boot_link.rate_khz, boot_link.lanes, tps3 as u8, tps4 as u8, rate_index.map_or(-1, |i| i as i32), lat, sagv);
@@ -463,9 +471,10 @@ impl Intel {
             }
             Err(why) => {
                 sex_pdx::serial_record!("[display.intel.refresh] pipe={} from_mhz={} to_mhz={} modeset=1 ok=0 reason={}", (b'A' + p as u8) as char, rf.running.refresh_mhz(), target.refresh_mhz(), why);
-                let back = modeset::Plan { timing: rf.running, link: boot_link, rate_index: None, ..plan };
-                let back = if edp_table { modeset::Plan { rate_index: rates[..n].iter().position(|&x| x == boot_link.rate_khz).map(|i| i as u8), ..back } } else { back };
-                let restored = self.relight(&back, &rf.boot.primary.levels, &rf.boot.cursor.levels);
+                // Back to the mode that was running, with the watermarks it
+                // was running with (deeper than firmware's after a faster switch).
+                let back = modeset::Plan { timing: rf.running, link: boot_link, rate_index: index_of(boot_link.rate_khz), ..plan };
+                let restored = self.relight(&back, &before_primary, &before_cursor);
                 sex_pdx::serial_record!("[display.intel.refresh.revert] pipe={} back_mhz={} modeset=1 ok={} reason={}", (b'A' + p as u8) as char, rf.running.refresh_mhz(), restored.is_ok() as u8, restored.err().unwrap_or("none"));
                 Err(why)
             }
