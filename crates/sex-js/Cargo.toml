@@ -26,3 +26,5 @@ sex-app = { path = "../sex-app" }
 
 [dev-dependencies]
 serde_json = "1"
+sex-rtc = { path = "../sex-rtc" }
+sex-ice = { path = "../sex-ice" }

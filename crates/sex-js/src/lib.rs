@@ -161,6 +161,17 @@ pub mod op {
     /// stops (unplugged, or the person took it back), `capturemute\tKIND\t0|1`, and
     /// `devicechange`.
     pub const CAPTURE: u32 = 40;
+    /// WebRTC peer connections (`RTCPeerConnection`), run by the browser (sex-rtc): (`new`,
+    /// ICE servers as `url\tusername\tcredential` lines, `all` or `relay`) answers
+    /// `{"id":N,...}`; then (verb, id, ...) with verb `offer`, `answer`, `local`/`remote`
+    /// (type, sdp; an empty sdp is made by the browser), `addtrack`/`addtransceiver`
+    /// (kind, direction, source, stream ids, track id, encodings), `removetrack`,
+    /// `direction`, `stop`, `prefs`, `replace`, `params` (transceiver, ...), `candidate`
+    /// (line, mid), `desc`, `stats`, `close`, `restart`. Answers JSON with the peer's
+    /// `state`, or `!Name\tmessage` for an error. The browser dispatches
+    /// `rtc\tID\tcandidate\tMID\tLINE` (empty LINE: gathering done), `rtc\tID\tgathering|ice|connection\tSTATE`
+    /// and `rtc\tID\tunmute\tTRANSCEIVER`. A remote track's pictures are the live source `rtc:ID:N`.
+    pub const RTC: u32 = 42;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
     /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code

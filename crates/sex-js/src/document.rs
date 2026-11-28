@@ -101,6 +101,9 @@ pub struct Document {
     pub capture_asks: Vec<crate::capture::CaptureAsk>,
     /// The kinds (audio, video) the page's live tracks use, when that changed.
     pub capture_use: Option<(bool, bool)>,
+    /// The browser's peer connections (op::RTC): called with the page's owner and the
+    /// op's arguments.
+    pub rtc: Option<alloc::rc::Rc<dyn Fn(u64, &[&str]) -> Option<String>>>,
 }
 
 /// What a page asked of its WebSockets.
@@ -212,7 +215,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None, capture: None, capture_asks: Vec::new(), capture_use: None, ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new() }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None, capture: None, capture_asks: Vec::new(), capture_use: None, rtc: None, ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -487,6 +490,10 @@ impl Page for Document {
                     "use" => { self.capture_use = Some((flag(1), flag(2))); None }
                     _ => None,
                 };
+            }
+            op::RTC => {
+                let f = self.rtc.clone()?;
+                return f(self.resource_owner, a);
             }
             op::IDB => {
                 let store = self.storage.clone()?;
