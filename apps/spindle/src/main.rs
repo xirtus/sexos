@@ -869,6 +869,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"play"=>{unsafe{play_command::PLAY.command(args,sb);}true},
         b"sweep"=>{sweep_command::command(args,sb);true},
         b"power"=>{power_command::power_command(sb);true},
+        // Restarts the machine (Files flushes first): after `update`, to try the new slot.
+        b"restart"=>{match sex_pdx::power::request(sex_pdx::power::RESTART){Ok(())=>{sex_pdx::serial_record!("[spindle.restart] ok=1");sb.push(b"Restarting...");}Err(e)=>{sex_pdx::serial_record!("[spindle.restart] ok=0 status={:#x}",e);sb.push(b"restart: not allowed or busy");}}true},
         b"profile"=>{power_command::profile_command(args,sb);true},
         b"fan"=>{power_command::fan_command(sb);true},
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},

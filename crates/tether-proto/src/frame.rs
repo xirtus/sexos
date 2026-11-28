@@ -28,6 +28,11 @@ pub const FLAG_ERROR: u8 = 1 << 1;
 pub const FLAG_REQUIRES_APPROVAL: u8 = 1 << 2;
 pub const FLAG_BINARY: u8 = 1 << 3;
 
+/// Heartbeat payload tag: Ping (receiver replies with `HEARTBEAT_PONG` + remaining bytes).
+pub const HEARTBEAT_PING: u8 = 0;
+/// Heartbeat payload tag: Pong (receiver updates liveness timestamp and does NOT echo).
+pub const HEARTBEAT_PONG: u8 = 1;
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameKind {
@@ -101,6 +106,22 @@ impl Frame {
 
     pub fn acp(json: &[u8]) -> Self {
         Self::new(STREAM_ACP, FrameKind::AcpJson, 0, json.to_vec())
+    }
+
+    pub fn heartbeat_ping(seq_or_ticks: u64) -> Self {
+        let mut payload = Vec::with_capacity(9);
+        payload.push(HEARTBEAT_PING);
+        payload.extend_from_slice(&seq_or_ticks.to_le_bytes());
+        Self::control(FrameKind::Heartbeat, payload)
+    }
+
+    pub fn heartbeat_pong(ping_payload: &[u8]) -> Self {
+        let mut payload = Vec::with_capacity(ping_payload.len().max(1));
+        payload.push(HEARTBEAT_PONG);
+        if ping_payload.len() > 1 {
+            payload.extend_from_slice(&ping_payload[1..]);
+        }
+        Self::control(FrameKind::Heartbeat, payload)
     }
 
     pub fn encode(&self, out: &mut Vec<u8>) {

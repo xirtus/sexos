@@ -13,8 +13,9 @@
 //!
 //! Each line the other side sends back is run as if typed, and shown first as
 //! `remote> LINE`, so the person sees every command. A few commands that write disks or
-//! boot entries (`install go`, `update`, `format`) are refused from the tether: those stay
-//! the person's to type. `tether off` or closing Spindle ends it; `tether`
+//! boot entries (`install go`, `format`) are refused from the tether: those stay the
+//! person's to type. `update` is allowed: Files applies only an image signed by this
+//! system's release key, newer than it, into the other slot, tried once with fallback. `tether off` or closing Spindle ends it; `tether`
 //! alone says whether it is up. The host side is `scripts/tether_host.py`.
 //!
 //! `tether sweep HOST [ROUNDS]` runs Wi-Fi transfer trials instead (see [`SHAPES`]): each
@@ -164,6 +165,8 @@ const RESUME_NONE: Resume = Resume { active: false, listening: false, host: [0; 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Call { Plain, Send, Receive, State, Close }
 
+/// The largest server image a hot swap takes.
+const HOTSWAP_BUF_CAP: usize = sex_pdx::crash_log::HOTSWAP_MAX_BYTES;
 struct HotswapRx {
     active: bool,
     discard: bool,
@@ -173,12 +176,12 @@ struct HotswapRx {
     expected_len: usize,
     received: usize,
     expected_fnv: u64,
-    /// Allocated on the heap only while a hot-swap binary frame is in flight, then dropped.
-    buf: alloc::vec::Vec<u8>,
+    /// FNV of the bytes passed to the kernel so far (it gathers the image, not Spindle).
+    fnv: u64,
 }
 const HOTSWAP_IDLE: HotswapRx = HotswapRx {
     active: false, discard: false, pd: 0, name: [0; 24], name_len: 0,
-    expected_len: 0, received: 0, expected_fnv: 0, buf: alloc::vec::Vec::new(),
+    expected_len: 0, received: 0, expected_fnv: 0, fnv: log::FNV64_OFFSET,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -357,13 +360,14 @@ fn parse_port(digits: &[u8]) -> Option<u16> {
     if (1..=65535).contains(&p) { Some(p as u16) } else { None }
 }
 
-/// Commands the tether may not run: they write disks or boot entries.
+/// Commands the tether may not run: they write disks or boot entries unchecked. (`update`
+/// is not one: its image must carry the release signature, and a failed try falls back.)
 pub fn refused(line: &[u8]) -> bool {
     let mut words = line.split(|b| b.is_ascii_whitespace()).filter(|w| !w.is_empty());
     match words.next() {
         // Files runs the install when `go` is any of its words.
         Some(b"install") => words.any(|w| w == b"go"),
-        Some(b"update") | Some(b"format") | Some(b"mkfs") => true,
+        Some(b"format") | Some(b"mkfs") => true,
         _ => false,
     }
 }
@@ -564,7 +568,7 @@ impl Tether {
         self.hotswap.expected_len = 0;
         self.hotswap.received = 0;
         self.hotswap.expected_fnv = 0;
-        self.hotswap.buf = alloc::vec::Vec::new();
+        self.hotswap.fnv = log::FNV64_OFFSET;
     }
 
     fn pushfile_reset(&mut self) {
@@ -1266,7 +1270,15 @@ impl Tether {
         let need = self.hotswap.expected_len.saturating_sub(self.hotswap.received);
         let take = bytes.len().min(need);
         if !self.hotswap.discard && take > 0 {
-            self.hotswap.buf.extend_from_slice(&bytes[..take]);
+            // Each part goes straight to the kernel, which gathers the image.
+            match log::hotswap_part(self.hotswap.pd, self.hotswap.received, &bytes[..take]) {
+                Ok(()) => self.hotswap.fnv = log::fnv64_update(self.hotswap.fnv, &bytes[..take]),
+                Err(code) => {
+                    self.hotswap.discard = true;
+                    let name = self.hotswap.name;
+                    say!(sb, "hotswap: err {} pd={} code={} (part at {})", core::str::from_utf8(&name[..self.hotswap.name_len]).unwrap_or("?"), self.hotswap.pd, code, self.hotswap.received);
+                }
+            }
         }
         self.hotswap.received += take;
         if self.hotswap.received < self.hotswap.expected_len { return; }
@@ -1275,14 +1287,12 @@ impl Tether {
             let nlen = self.hotswap.name_len;
             let name_str = core::str::from_utf8(&name[..nlen]).unwrap_or("?");
             let pd = self.hotswap.pd;
-            let len = self.hotswap.buf.len();
-            let got = log::fnv64(&self.hotswap.buf);
+            let len = self.hotswap.expected_len;
+            let got = self.hotswap.fnv;
             if got != self.hotswap.expected_fnv {
-                self.hotswap.buf = alloc::vec::Vec::new();
                 say!(sb, "hotswap: err {} checksum mismatch (got {:016x} want {:016x})", name_str, got, self.hotswap.expected_fnv);
             } else {
-                let res = log::hotswap_server(pd, &self.hotswap.buf);
-                self.hotswap.buf = alloc::vec::Vec::new();
+                let res = log::hotswap_server(pd, &[]);
                 match res {
                     Ok(entry) => say!(sb, "hotswap: ok {} pd={} entry={:#x} bytes={}", name_str, pd, entry, len),
                     Err(code) => say!(sb, "hotswap: err {} pd={} code={}", name_str, pd, code),
@@ -1342,12 +1352,9 @@ impl Tether {
                 match hdr.pd {
                     Some(pd) => {
                         self.hotswap.pd = pd;
-                        let mut buf = alloc::vec::Vec::new();
-                        if buf.try_reserve_exact(hdr.size).is_ok() {
-                            self.hotswap.buf = buf;
-                        } else {
+                        if hdr.size > HOTSWAP_BUF_CAP {
                             self.hotswap.discard = true;
-                            say!(sb, "hotswap: err {} out of memory ({} bytes)", hdr.name, hdr.size);
+                            say!(sb, "hotswap: err {} too large ({} > {} bytes)", hdr.name, hdr.size, HOTSWAP_BUF_CAP);
                         }
                     }
                     None => {

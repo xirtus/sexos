@@ -6,7 +6,8 @@
 2. `tether 10.0.2.2:PORT` typed in Spindle: the host gets `SEXOS-TETHER 1`, the whole
    boot log head between its markers, then Spindle's lines; the host's automatic `hw`
    comes back as `remote> hw` and the hardware report follows.
-3. A command sent from the host (`df`) runs and its answer streams back; `install go`
+3. A command sent from the host (`df`) runs and its answer streams back; a server ELF
+   pushed from the host (`push-server sexbell`) hot-swaps Bell live; `install go`
    (also `install 32 go`) from the host is refused; `fetch` typed while tethered waits for `tether off`.
 4. `tether off` closes the flow and the host sees the session end.
 5. `tether listen`: the host's `tether_host.py connect` finds it, gets the boot log head
@@ -113,6 +114,11 @@ def main():
 
         r = host('send', 'df', '--wait', '8')
         assert 'remote> df' in r.stdout and 'MiB free of' in r.stdout, (r.stdout, r.stderr)
+        # A live hot swap of a running server (Bell, with its own image) over the tether:
+        # Spindle gathers the ELF in pages it asks for, the kernel restarts Bell on it.
+        r = host('push-server', 'sexbell', str(ROOT / 'iso_root/servers/sexbell'), '--wait', '90')
+        assert r.returncode == 0 and 'hotswap: ok sexbell' in r.stdout, (r.returncode, r.stdout[-800:], r.stderr[-400:])
+        report['hotswap'] = re.search(r'hotswap: ok [^\n]*', r.stdout)[0]
         r = host('send', 'install go', '--wait', '5')
         assert 'remote: refused' in r.stdout, r.stdout
         assert re.search(r'\[spindle\.tether\.refused\]', t()[s:]), 'refusal not logged'
@@ -125,7 +131,7 @@ def main():
 
         s2 = len(t())
         line('tether off')
-        g['wait'](r'\[spindle\.tether\.closed\] bytes=\d+ commands=4', s2, 60)
+        g['wait'](r'\[spindle\.tether\.closed\] bytes=\d+ commands=[45]', s2, 60)
         serve.wait(60)
         assert re.search(r'disconnected after \d+ bytes', (a.out / 'tether-host.log').read_text())
 

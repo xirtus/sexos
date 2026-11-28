@@ -5,13 +5,16 @@
 pub const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 pub const FNV64_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-pub fn fnv64(bytes: &[u8]) -> u64 {
-    let mut h = FNV64_OFFSET;
+pub fn fnv64_update(mut h: u64, bytes: &[u8]) -> u64 {
     for &b in bytes {
         h ^= b as u64;
         h = h.wrapping_mul(FNV64_PRIME);
     }
     h
+}
+
+pub fn fnv64(bytes: &[u8]) -> u64 {
+    fnv64_update(FNV64_OFFSET, bytes)
 }
 
 /// Constant-time 32-byte comparison.

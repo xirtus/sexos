@@ -89,6 +89,23 @@ fn read_file(fs: &mut Fs<'static, crate::fs_service::Disk>, path: &[u8], max: us
     Ok(buf)
 }
 
+/// The installed system on the internal disk even when booted from live USB/ISO,
+/// using `st.current` from `LIMINE.CFG` so recovery `update` can upgrade the inactive slot
+/// (and migrate a legacy 16 KiB `LIMINE.CFG` to 64 KiB) without wiping the 97 GiB store.
+fn installed_for_update() -> Option<(RawDisk, System, update::Slot, State)> {
+    if let Some(found) = installed() {
+        return Some(found);
+    }
+    let layout = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0);
+    if layout & 0xFF != sex_pdx::BLOCK_LAYOUT_STORE { return None; }
+    let mut disk = RawDisk { sectors: layout >> 8 };
+    let sys = System::find(&mut disk).ok()?;
+    let menu = sys.read_menu(&mut disk).ok()?;
+    let st = State::parse(&menu).ok()?;
+    sex_pdx::serial_record!("[files.update.recovery] live-iso targeting installed slot={:?} version={}", st.current.other(), st.version);
+    Some((disk, sys, st.current, st))
+}
+
 /// Why an update failed, in the update's terms (the installer's words for the same
 /// errors talk about partitions to shrink, which an update never asks for).
 fn update_why(e: Error) -> &'static str {
@@ -126,8 +143,8 @@ pub fn run(fs: &mut Fs<'static, crate::fs_service::Disk>, paths: &[u8], out: &mu
             return finish(w::DENIED, text, out);
         }
     };
-    let Some((mut disk, sys, slot, st)) = installed() else {
-        text.push_str("Not updated. Updates go to an installed SexOS; this one started from somewhere else (a USB stick or CD).\n");
+    let Some((mut disk, sys, slot, st)) = installed_for_update() else {
+        text.push_str("Not updated. No installed SexOS system was found on this disk.\n");
         return finish(w::DENIED, text, out);
     };
     if index.version <= st.version {

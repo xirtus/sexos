@@ -26,14 +26,15 @@ const TOOLS_LIST_JSON: &str = r#"[
   {"name":"sexos_exec","description":"Execute a command on SexOS (requires Dev mode + exclusive lease).","inputSchema":{"type":"object","properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer"}},"required":["command"]}},
   {"name":"sexos_fs_list","description":"List directory entries on SexOS.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
   {"name":"sexos_fs_read","description":"Read a file from SexOS.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
-  {"name":"sexos_fs_write","description":"Write a file atomically to SexOS (requires Dev mode + exclusive lease).","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}},
-  {"name":"sexos_hotswap","description":"Live hot-swap a running SexOS ring-3 server ELF with rollback watchdog (requires Dev mode + exclusive lease).","inputSchema":{"type":"object","properties":{"server":{"type":"string"},"elf_path":{"type":"string"}},"required":["server","elf_path"]}},
+  {"name":"sexos_fs_write","description":"Write a UTF-8 or raw binary file to SexOS via chunked streaming (requires Dev mode + exclusive lease). Provide one of: local_path (host file path to stream raw bytes), base64 (base64-encoded binary), or content (UTF-8 text).","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Destination path on SexOS (e.g. /bin/splicy)"},"content":{"type":"string","description":"UTF-8 text content"},"base64":{"type":"string","description":"Base64-encoded raw binary content"},"local_path":{"type":"string","description":"Host file path to stream as raw binary bytes"}},"required":["path"]}},
+  {"name":"sexos_hotswap","description":"Live hot-swap a running SexOS ring-3 server ELF (requires Dev mode + exclusive lease). elf_path may be a host file path (streamed directly) or an on-device SexOS path.","inputSchema":{"type":"object","properties":{"server":{"type":"string","description":"Server name (e.g. sexdisplay, sexnet, sexfiles, sexbell, denim) or PD ID"},"elf_path":{"type":"string","description":"Host path or SexOS path to the replacement ELF binary"},"local_path":{"type":"string","description":"Optional alias for host ELF file path"}},"required":["server","elf_path"]}},
   {"name":"sexos_screenshot","description":"Capture a live screenshot from SexOS display frame bank.","inputSchema":{"type":"object","properties":{}}},
   {"name":"sexos_a11y_tree","description":"Fetch the structured Weft/AccessKit UI tree from SexOS.","inputSchema":{"type":"object","properties":{}}},
   {"name":"sexos_silk","description":"Run a silk_ctl window/workspace management command on SexOS (requires Full Control).","inputSchema":{"type":"object","properties":{"action":{"type":"string"}},"required":["action"]}},
   {"name":"sexos_input","description":"Inject gated synthetic pointer/keyboard input into SexOS (requires Full Control + visible indicator).","inputSchema":{"type":"object","properties":{"kind":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"},"text":{"type":"string"}},"required":["kind"]}},
   {"name":"sexos_snapshot_create","description":"Create a named SexOS snapshot checkpoint before risky edits or deploys (requires Dev mode).","inputSchema":{"type":"object","properties":{"label":{"type":"string"}},"required":["label"]}},
   {"name":"sexos_snapshot_restore","description":"Restore a previously created SexOS snapshot checkpoint (requires Dev mode).","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+  {"name":"sexos_ota_push","description":"Signed A/B system update of SexOS (requires Full Control). dir = a release folder on this host holding sexos-update.txt, sexos-update.sig and sexos-boot.img (tools/sexos-release sign); they are streamed to SexOS, then Files checks the release signature and version and writes the system slot that is not running, tried once at the next start with automatic fallback. apply=false only checks whether the index is good and newer. Without dir, uses files already on SexOS (index/sig/image paths).","inputSchema":{"type":"object","properties":{"dir":{"type":"string","description":"Host folder with the signed release"},"apply":{"type":"boolean","description":"false: only check (default true)"},"index":{"type":"string"},"sig":{"type":"string"},"image":{"type":"string"}}}},
   {"name":"sexos_wave_review","description":"Push a Wave Review summary and unified diff to the SexOS Tether GUI for human approval.","inputSchema":{"type":"object","properties":{"wave":{"type":"string"},"summary":{"type":"string"},"diff":{"type":"string"}},"required":["wave","summary"]}}
 ]"#;
 
@@ -55,6 +56,7 @@ fn map_tool_to_rpc(tool_name: &str) -> Option<&'static str> {
         "sexos_snapshot_create" => Some("snapshot_create"),
         "sexos_snapshot_restore" => Some("snapshot_restore"),
         "sexos_wave_review" => Some("wave_review"),
+        "sexos_ota_push" => Some("ota_push"),
         _ => None,
     }
 }

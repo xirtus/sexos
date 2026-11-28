@@ -7,21 +7,27 @@
 //! - Enforces concurrent read vs exclusive mutating hardware leases for fanned-out subagents
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tether_proto::auth::{compute_auth_tag, verify_auth_tag};
+use tether_proto::auth::{compute_auth_tag, fnv64, verify_auth_tag};
 use tether_proto::frame::{
-    Frame, FrameDecoder, FrameKind, FLAG_ERROR, MAGIC, STREAM_RPC_START,
+    Frame, FrameDecoder, FrameKind, FLAG_BINARY, FLAG_END_STREAM, FLAG_ERROR, HEARTBEAT_PING,
+    MAGIC, STREAM_RPC_START,
 };
 use tether_proto::rpc::{
-    json_escape, json_get_str, json_get_u64, rpc_err_json, rpc_ok_json, CapabilityMode, RpcMethod,
+    decode_base64, json_escape, json_get_str, json_get_u64, rpc_err_json, rpc_ok_json,
+    CapabilityMode, RpcMethod, STREAM_CHUNK_BYTES,
 };
+
+const HOTSWAP_MAX_BYTES: usize = 8 * 1024 * 1024;
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct BridgeConfig {
     pub listen_addr: String,
@@ -29,6 +35,14 @@ pub struct BridgeConfig {
     pub pin: Option<String>,
     pub acp_cmd: Vec<String>,
     pub mock_acp: bool,
+    /// The agent behind ACP at the start of each session: "antigravity" (the `acp_cmd` /
+    /// `agy` path) or "claude" (Claude Code headless). The SexOS app may switch with the
+    /// `tether/agent` ACP request.
+    pub agent: String,
+    /// The `claude` command for the Claude agent (default `claude`).
+    pub claude_cmd: Vec<String>,
+    /// Folder the agent works in (default: the bridge's current folder).
+    pub workdir: Option<String>,
 }
 
 struct PendingRpc {
@@ -48,9 +62,12 @@ pub struct BridgeState {
     pub next_stream_id: AtomicU32,
     pub next_rpc_id: AtomicU64,
     pub out_tx: Mutex<Option<mpsc::Sender<Frame>>>,
+    pub active_stream: Mutex<Option<Arc<TcpStream>>>,
     pending_rpcs: Mutex<HashMap<u32, PendingRpc>>,
     pub recent_logs: Mutex<Vec<String>>,
     pub snapshots: Mutex<Vec<String>>,
+    /// The agent behind ACP now ("antigravity" or "claude").
+    pub agent: Mutex<String>,
 }
 
 impl BridgeState {
@@ -66,9 +83,11 @@ impl BridgeState {
             next_stream_id: AtomicU32::new(STREAM_RPC_START),
             next_rpc_id: AtomicU64::new(1),
             out_tx: Mutex::new(None),
+            active_stream: Mutex::new(None),
             pending_rpcs: Mutex::new(HashMap::new()),
             recent_logs: Mutex::new(Vec::new()),
             snapshots: Mutex::new(Vec::new()),
+            agent: Mutex::new(String::from("antigravity")),
         })
     }
 
@@ -98,12 +117,13 @@ impl BridgeState {
             .clone()
             .unwrap_or_default();
         format!(
-            "{{\"connected\":{},\"peer\":\"{}\",\"capability\":\"{}\",\"kill_switch\":{},\"active_lease\":\"{}\"}}",
+            "{{\"connected\":{},\"peer\":\"{}\",\"capability\":\"{}\",\"kill_switch\":{},\"active_lease\":\"{}\",\"agent\":\"{}\"}}",
             connected,
             json_escape(&peer),
             cap.label(),
             killed,
-            json_escape(&lease)
+            json_escape(&lease),
+            json_escape(&self.agent.lock().unwrap())
         )
     }
 
@@ -143,6 +163,41 @@ impl BridgeState {
             );
         }
 
+        // Long operations get the time they need whatever the caller asked: a streamed
+        // write or hot swap moves megabytes over Wi-Fi, an update hashes and writes 32 MiB.
+        let timeout = timeout.max(match method {
+            RpcMethod::FsWrite | RpcMethod::Hotswap => Duration::from_secs(600),
+            RpcMethod::OtaPush => Duration::from_secs(900),
+            _ => Duration::from_secs(0),
+        });
+
+        // ota_push with `dir`: a release folder on this host (sexos-update.txt, .sig and
+        // sexos-boot.img, as `tools/sexos-release sign` writes it). Its files go to SexOS
+        // first; then Files checks the signature and writes the other slot.
+        if method == RpcMethod::OtaPush {
+            if let Some(dir) = json_get_str(params_json, "dir") {
+                let apply = !params_json.replace(' ', "").contains("\"apply\":false");
+                let files: &[(&str, &str)] = if apply {
+                    &[("sexos-update.txt", "/sexos-update.txt"), ("sexos-update.sig", "/sexos-update.sig"), ("sexos-boot.img", "/sexos-boot.img")]
+                } else {
+                    &[("sexos-update.txt", "/sexos-update.txt"), ("sexos-update.sig", "/sexos-update.sig")]
+                };
+                for (name, dest) in files {
+                    let local = std::path::Path::new(&dir).join(name);
+                    if !local.is_file() {
+                        return rpc_err_json(id, "local_read_failed", &format!("{} is missing", local.display()));
+                    }
+                    let p = format!("{{\"path\":\"{}\",\"local_path\":\"{}\"}}", dest, json_escape(&local.display().to_string()));
+                    let r = self.call_rpc("fs_write", &p, caller, Duration::from_secs(600));
+                    if r.contains("\"ok\":false") {
+                        return r;
+                    }
+                }
+                let p = format!("{{\"index\":\"/sexos-update.txt\",\"sig\":\"/sexos-update.sig\",\"image\":\"/sexos-boot.img\",\"apply\":{}}}", apply);
+                return self.call_rpc("ota_push", &p, caller, timeout);
+            }
+        }
+
         // For Screenshot, trigger Spindle's native `capture /tether-shot.png` if the
         // Spindle tether inbox exists on this host so we always grab a fresh frame.
         if method == RpcMethod::Screenshot {
@@ -156,6 +211,116 @@ impl BridgeState {
                 }
             }
         }
+
+        // Prepare optional binary payload streaming for `fs_write` (local_path/base64)
+        // and `hotswap` (when elf_path/local_path points to a readable host file).
+        let mut stream_bytes: Option<Vec<u8>> = None;
+        let effective_params: String = match method {
+            RpcMethod::FsWrite => {
+                let local_path = json_get_str(params_json, "local_path");
+                let b64 = json_get_str(params_json, "base64");
+                if local_path.is_some() || b64.is_some() {
+                    let dest_path = json_get_str(params_json, "path").unwrap_or_default();
+                    if dest_path.is_empty() {
+                        return rpc_err_json(id, "bad_args", "Missing destination 'path'");
+                    }
+                    let raw = if let Some(lp) = local_path {
+                        match std::fs::read(&lp) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return rpc_err_json(
+                                    id,
+                                    "local_read_failed",
+                                    &format!("Could not read local_path '{}': {}", lp, e),
+                                );
+                            }
+                        }
+                    } else {
+                        match decode_base64(b64.as_deref().unwrap_or("")) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return rpc_err_json(id, "bad_base64", e);
+                            }
+                        }
+                    };
+                    let checksum = fnv64(&raw);
+                    let total = raw.len();
+                    stream_bytes = Some(raw);
+                    format!(
+                        "{{\"path\":\"{}\",\"stream\":true,\"size\":{},\"fnv64\":\"{:016x}\"}}",
+                        json_escape(&dest_path),
+                        total,
+                        checksum
+                    )
+                } else if params_json.trim().is_empty() {
+                    String::from("{}")
+                } else {
+                    String::from(params_json)
+                }
+            }
+            RpcMethod::Hotswap => {
+                let server = json_get_str(params_json, "server").unwrap_or_default();
+                if server.is_empty() {
+                    return rpc_err_json(id, "bad_args", "Missing 'server' name or PD");
+                }
+                let elf_path = json_get_str(params_json, "local_path")
+                    .or_else(|| json_get_str(params_json, "elf_path"))
+                    .unwrap_or_default();
+                if elf_path.is_empty() {
+                    return rpc_err_json(id, "bad_args", "Missing 'elf_path'");
+                }
+                if std::path::Path::new(&elf_path).is_file() {
+                    let raw = match std::fs::read(&elf_path) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            return rpc_err_json(
+                                id,
+                                "local_read_failed",
+                                &format!("Could not read ELF '{}': {}", elf_path, e),
+                            );
+                        }
+                    };
+                    if raw.is_empty() || raw.len() > HOTSWAP_MAX_BYTES {
+                        return rpc_err_json(
+                            id,
+                            "bad_elf",
+                            &format!(
+                                "ELF size {} out of bounds (1..={})",
+                                raw.len(),
+                                HOTSWAP_MAX_BYTES
+                            ),
+                        );
+                    }
+                    if raw.len() < 4 || &raw[..4] != b"\x7fELF" {
+                        return rpc_err_json(
+                            id,
+                            "bad_elf",
+                            "File does not begin with ELF magic (\\x7fELF)",
+                        );
+                    }
+                    let checksum = fnv64(&raw);
+                    let total = raw.len();
+                    stream_bytes = Some(raw);
+                    format!(
+                        "{{\"server\":\"{}\",\"stream\":true,\"size\":{},\"fnv64\":\"{:016x}\"}}",
+                        json_escape(&server),
+                        total,
+                        checksum
+                    )
+                } else if params_json.trim().is_empty() {
+                    String::from("{}")
+                } else {
+                    String::from(params_json)
+                }
+            }
+            _ => {
+                if params_json.trim().is_empty() {
+                    String::from("{}")
+                } else {
+                    String::from(params_json)
+                }
+            }
+        };
 
         // Exclusive lease for mutating operations so fanned-out agents never stomp on SexOS.
         let _lease_guard = if method.is_mutating() {
@@ -183,16 +348,48 @@ impl BridgeState {
             id,
             method.as_name(),
             json_escape(caller),
-            if params_json.trim().is_empty() { "{}" } else { params_json }
+            effective_params
         );
 
-        let res = match self.send_frame(Frame::new(
+        let wait_timeout = if stream_bytes.is_some() {
+            timeout.max(Duration::from_secs(120))
+        } else {
+            timeout
+        };
+
+        let mut send_res = self.send_frame(Frame::new(
             stream_id,
             FrameKind::RpcRequest,
             0,
             payload.into_bytes(),
-        )) {
-            Ok(()) => match rx.recv_timeout(timeout) {
+        ));
+
+        if send_res.is_ok() {
+            if let Some(bytes) = stream_bytes {
+                for chunk in bytes.chunks(STREAM_CHUNK_BYTES) {
+                    if let Err(e) = self.send_frame(Frame::new(
+                        stream_id,
+                        FrameKind::RpcStreamChunk,
+                        FLAG_BINARY,
+                        chunk.to_vec(),
+                    )) {
+                        send_res = Err(e);
+                        break;
+                    }
+                }
+                if send_res.is_ok() {
+                    send_res = self.send_frame(Frame::new(
+                        stream_id,
+                        FrameKind::RpcStreamEnd,
+                        FLAG_END_STREAM,
+                        Vec::new(),
+                    ));
+                }
+            }
+        }
+
+        let res = match send_res {
+            Ok(()) => match rx.recv_timeout(wait_timeout) {
                 Ok(reply) => {
                     if method == RpcMethod::Screenshot {
                         let bytes = chunks.lock().unwrap();
@@ -328,6 +525,14 @@ fn perform_host_handshake(
 }
 
 enum AcpBackend {
+    /// Claude Code headless (`claude -p` with stream-json in and out): one long-lived
+    /// conversation, SexOS reachable through this bridge's MCP tools.
+    ClaudeStream {
+        child: Child,
+        stdin: std::process::ChildStdin,
+        out_tx: mpsc::Sender<Frame>,
+        last_prompt_id: Arc<AtomicU64>,
+    },
     AgyStream {
         child: Child,
         stdin: std::process::ChildStdin,
@@ -367,7 +572,67 @@ fn find_agy_binary() -> Option<String> {
     None
 }
 
+/// An ACP `session/update` agent message chunk.
+fn acp_text_chunk(session: &str, text: &str) -> Frame {
+    Frame::acp(format!(
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{{\"sessionId\":\"{}\",\"update\":{{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{{\"type\":\"text\",\"text\":\"{}\"}}}}}}}}",
+        session, json_escape(text)
+    ).as_bytes())
+}
+
+/// What the Claude agent is told about where it is.
+const CLAUDE_CONTEXT: &str = "You are Claude, connected from the SexOS Tether app (a native SexOS GUI) through tether-bridge on the developer's host. SexOS is a pure-Rust single-address-space microkernel OS, not Unix/POSIX. The sexos-tether MCP tools act on the live SexOS machine (sysinfo, logs, fs_read/fs_write, exec, hotswap of servers, screenshot, ota_push for signed A/B updates); the person at SexOS gates them with the capability tier (Observe/Dev/Full Control) and the F12 kill switch. Keep replies short: they show in a small chat pane on SexOS.";
+
 impl AcpBackend {
+    /// The backend for `agent` ("claude", else the configured Antigravity/ACP command).
+    fn start_agent(cfg: &BridgeConfig, agent: &str, out_tx: mpsc::Sender<Frame>) -> Self {
+        if cfg.mock_acp {
+            return Self::Mock { out_tx };
+        }
+        if agent == "claude" {
+            return Self::start_claude(cfg, out_tx);
+        }
+        Self::start(cfg, out_tx)
+    }
+
+    fn start_claude(cfg: &BridgeConfig, out_tx: mpsc::Sender<Frame>) -> Self {
+        let claude = if cfg.claude_cmd.is_empty() { vec![String::from("claude")] } else { cfg.claude_cmd.clone() };
+        let me = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| String::from("tether-bridge"));
+        let control_port = cfg.control_addr.rsplit(':').next().unwrap_or("7179");
+        let mcp = format!(
+            "{{\"mcpServers\":{{\"sexos-tether\":{{\"command\":\"{}\",\"args\":[\"mcp\",\"--control-port\",\"{}\"]}}}}}}",
+            json_escape(&me), json_escape(control_port)
+        );
+        let mut cmd = Command::new(&claude[0]);
+        cmd.args(&claude[1..]).args([
+            "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--include-partial-messages", "--mcp-config", &mcp,
+            // SexOS's tools are gated on SexOS itself (tier + kill switch); nothing else is
+            // allowed without the person at the host.
+            "--allowedTools", "mcp__sexos-tether",
+            "--append-system-prompt", CLAUDE_CONTEXT,
+        ])
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+        if let Some(dir) = &cfg.workdir { cmd.current_dir(dir); }
+        match cmd.spawn() {
+            Ok(mut child) => {
+                eprintln!("tether-bridge: spawned Claude backend: {}", claude.join(" "));
+                let stdin = child.stdin.take().expect("claude stdin");
+                let stdout = child.stdout.take().expect("claude stdout");
+                let tx = out_tx.clone();
+                let last_prompt_id = Arc::new(AtomicU64::new(0));
+                let prompt_id = Arc::clone(&last_prompt_id);
+                thread::spawn(move || claude_reader(stdout, tx, prompt_id));
+                Self::ClaudeStream { child, stdin, out_tx, last_prompt_id }
+            }
+            Err(e) => {
+                eprintln!("tether-bridge: failed to spawn Claude ({}): {}; falling back to mock ACP", claude.join(" "), e);
+                let _ = out_tx.send(acp_text_chunk("claude-live", &format!("[bridge] could not start Claude: {}", e)));
+                Self::Mock { out_tx }
+            }
+        }
+    }
+
     fn start(cfg: &BridgeConfig, out_tx: mpsc::Sender<Frame>) -> Self {
         if cfg.mock_acp {
             return Self::Mock { out_tx };
@@ -536,6 +801,31 @@ impl AcpBackend {
 
     fn send_acp_json(&mut self, json: &str) {
         match self {
+            Self::ClaudeStream { stdin, out_tx, last_prompt_id, .. } => {
+                let method = json_get_str(json, "method").unwrap_or_default();
+                let id = json_get_u64(json, "id").unwrap_or(1);
+                match method.as_str() {
+                    "initialize" => {
+                        let reply = format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"protocolVersion\":1,\"agentInfo\":{{\"name\":\"Claude\",\"version\":\"claude-code\"}}}}}}", id);
+                        let _ = out_tx.send(Frame::acp(reply.as_bytes()));
+                    }
+                    "session/new" => {
+                        let reply = format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"sessionId\":\"claude-live\"}}}}", id);
+                        let _ = out_tx.send(Frame::acp(reply.as_bytes()));
+                    }
+                    "session/prompt" => {
+                        let prompt = json_get_str(json, "text").unwrap_or_default();
+                        last_prompt_id.store(id, Ordering::SeqCst);
+                        eprintln!("tether-bridge: [SexOS -> Claude] {}", prompt);
+                        let line = format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"{}\"}}}}", json_escape(&prompt));
+                        if writeln!(stdin, "{}", line).and_then(|_| stdin.flush()).is_err() {
+                            let _ = out_tx.send(acp_text_chunk("claude-live", "[bridge] Claude has exited; switch agents or reconnect to restart it."));
+                            let _ = out_tx.send(Frame::acp(format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"stopReason\":\"end_turn\"}}}}", id).as_bytes()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Self::AgyStream {
                 stdin,
                 out_tx,
@@ -618,11 +908,63 @@ impl AcpBackend {
 impl Drop for AcpBackend {
     fn drop(&mut self) {
         match self {
-            Self::AgyStream { child, .. } | Self::Subprocess { child, .. } => {
+            Self::AgyStream { child, .. } | Self::Subprocess { child, .. } | Self::ClaudeStream { child, .. } => {
                 let _ = child.kill();
                 let _ = child.wait();
             }
             Self::Mock { .. } => {}
+        }
+    }
+}
+
+/// Turns Claude Code's stream-json events into ACP updates: text deltas as message
+/// chunks, tool uses as tool-call updates, the turn's result as the prompt's answer.
+fn claude_reader(stdout: std::process::ChildStdout, tx: mpsc::Sender<Frame>, prompt_id: Arc<AtomicU64>) {
+    let reader = BufReader::new(stdout);
+    let mut streamed = false;
+    for line in reader.lines().map_while(Result::ok) {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let ty = json_get_str(line, "type").unwrap_or_default();
+        let frames: Vec<Frame> = match ty.as_str() {
+            "stream_event" if line.contains("\"text_delta\"") => {
+                let text = line.find("\"delta\"").and_then(|at| json_get_str(&line[at..], "text")).unwrap_or_default();
+                if text.is_empty() { Vec::new() } else { streamed = true; vec![acp_text_chunk("claude-live", &text)] }
+            }
+            "assistant" => {
+                let mut out = Vec::new();
+                let mut rest = line;
+                while let Some(at) = rest.find("\"type\":\"tool_use\"") {
+                    let block = &rest[at..];
+                    let name = json_get_str(block, "name").unwrap_or_else(|| String::from("tool"));
+                    let tid = json_get_str(block, "id").unwrap_or_default();
+                    eprintln!("tether-bridge: [claude tool] {}", name);
+                    out.push(Frame::acp(format!(
+                        "{{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{{\"sessionId\":\"claude-live\",\"update\":{{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"{}\",\"title\":\"{}\",\"status\":\"running\"}}}}}}",
+                        json_escape(&tid), json_escape(&name)
+                    ).as_bytes()));
+                    rest = &block[20..];
+                }
+                out
+            }
+            "result" => {
+                let mut out = Vec::new();
+                if !streamed {
+                    if let Some(text) = json_get_str(line, "result").filter(|t| !t.is_empty()) { out.push(acp_text_chunk("claude-live", &text)); }
+                }
+                if line.contains("\"is_error\":true") {
+                    let why = json_get_str(line, "result").or_else(|| json_get_str(line, "subtype")).unwrap_or_else(|| String::from("Claude reported an error"));
+                    out.push(Frame::acp(format!("{{\"jsonrpc\":\"2.0\",\"error\":{{\"code\":-32000,\"message\":\"{}\"}}}}", json_escape(&why)).as_bytes()));
+                }
+                let pid = prompt_id.load(Ordering::SeqCst);
+                if pid > 0 { out.push(Frame::acp(format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"stopReason\":\"end_turn\"}}}}", pid).as_bytes())); }
+                streamed = false;
+                out
+            }
+            _ => Vec::new(),
+        };
+        for f in frames {
+            if tx.send(f).is_err() { return; }
         }
     }
 }
@@ -641,8 +983,9 @@ fn spawn_control_server(control_addr: String, state: Arc<BridgeState>) -> Result
     Ok(listener)
 }
 
-fn handle_control_client(mut stream: TcpStream, state: Arc<BridgeState>) {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
+fn handle_control_client(stream: TcpStream, state: Arc<BridgeState>) {
+    let stream = Arc::new(stream);
+    let mut reader = BufReader::new(&*stream);
     let mut line = String::new();
     while reader.read_line(&mut line).unwrap_or(0) > 0 {
         let trimmed = line.trim();
@@ -668,8 +1011,9 @@ fn handle_control_client(mut stream: TcpStream, state: Arc<BridgeState>) {
                 let params = extract_params_object(trimmed).unwrap_or("{}");
                 state.call_rpc(&method, params, &caller, Duration::from_millis(timeout_ms))
             };
-            let _ = writeln!(stream, "{}", reply);
-            let _ = stream.flush();
+            let mut w = &*stream;
+            let _ = writeln!(w, "{}", reply);
+            let _ = w.flush();
         }
         line.clear();
     }
@@ -712,22 +1056,118 @@ fn extract_params_object(json: &str) -> Option<&str> {
     None
 }
 
+fn dispatch_incoming_frame(
+    frame: Frame,
+    acp: &mut AcpBackend,
+    cfg: &BridgeConfig,
+    state: &BridgeState,
+    out_tx: &mpsc::Sender<Frame>,
+) {
+    match frame.kind {
+        FrameKind::AcpJson => {
+            if let Ok(s) = core::str::from_utf8(&frame.payload) {
+                // The app picks the agent: the old backend ends, the new one starts.
+                if json_get_str(s, "method").as_deref() == Some("tether/agent") {
+                    let agent = json_get_str(s, "agent").unwrap_or_else(|| cfg.agent.clone());
+                    let agent = if agent == "claude" { String::from("claude") } else { String::from("antigravity") };
+                    eprintln!("tether-bridge: SexOS selected agent {}", agent);
+                    *acp = AcpBackend::start_agent(cfg, &agent, out_tx.clone());
+                    *state.agent.lock().unwrap() = agent.clone();
+                    let id = json_get_u64(s, "id").unwrap_or(0);
+                    let _ = out_tx.send(Frame::acp(format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"agent\":\"{}\"}}}}", id, agent).as_bytes()));
+                    return;
+                }
+                acp.send_acp_json(s);
+            }
+        }
+        FrameKind::RpcStreamChunk => {
+            if let Some(pending) = state.pending_rpcs.lock().unwrap().get(&frame.stream_id) {
+                pending.chunks.lock().unwrap().extend_from_slice(&frame.payload);
+            }
+        }
+        FrameKind::RpcResponse => {
+            let reply = String::from_utf8_lossy(&frame.payload).into_owned();
+            if let Some(pending) = state.pending_rpcs.lock().unwrap().remove(&frame.stream_id) {
+                let _ = pending.tx.send(reply);
+            }
+        }
+        FrameKind::CapabilitySync => {
+            if let Some(&b) = frame.payload.first() {
+                if let Some(new_cap) = CapabilityMode::from_u8(b) {
+                    *state.capability_mode.lock().unwrap() = new_cap;
+                    eprintln!(
+                        "tether-bridge: SexOS capability changed to {}",
+                        new_cap.label()
+                    );
+                }
+            }
+        }
+        FrameKind::KillSwitch => {
+            let active = frame.payload.first().copied().unwrap_or(1) != 0;
+            state.kill_switch_active.store(active, Ordering::SeqCst);
+            eprintln!("tether-bridge: SexOS kill switch = {}", active);
+            if active {
+                let mut pending = state.pending_rpcs.lock().unwrap();
+                for (_, p) in pending.drain() {
+                    let _ = p.tx.send(rpc_err_json(
+                        0,
+                        "kill_switch",
+                        "Aborted by SexOS Kill Switch",
+                    ));
+                }
+            }
+        }
+        FrameKind::LogEvent => {
+            let line = String::from_utf8_lossy(&frame.payload).into_owned();
+            let mut logs = state.recent_logs.lock().unwrap();
+            logs.push(line);
+            if logs.len() > 2000 {
+                let drain = logs.len() - 2000;
+                logs.drain(..drain);
+            }
+        }
+        FrameKind::Heartbeat => {
+            // Only reply to explicit Ping frames; never echo Pong (prevents infinite ping-pong).
+            if frame.payload.first() == Some(&HEARTBEAT_PING) {
+                let _ = out_tx.send(Frame::heartbeat_pong(&frame.payload));
+            }
+        }
+        _ => {
+            if (frame.flags & FLAG_ERROR) != 0 {
+                eprintln!("tether-bridge: error frame on stream {}", frame.stream_id);
+            }
+        }
+    }
+}
+
 pub fn handle_sexos_session(
     mut stream: TcpStream,
     peer: String,
     cfg: &BridgeConfig,
     state: Arc<BridgeState>,
 ) {
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+
     let mut dec = FrameDecoder::new(true);
     let cap = match perform_host_handshake(&mut stream, &mut dec, cfg.pin.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("tether-bridge: handshake failed with {}: {}", peer, e);
+            let _ = stream.shutdown(Shutdown::Both);
             return;
         }
     };
 
     let my_gen = state.session_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let stream = Arc::new(stream);
+
+    // Preempt any prior live session immediately so its reader & writer threads wake up,
+    // drop their TcpStream refs, and never leak TCP FDs across reconnects.
+    if let Some(old_stream) = state.active_stream.lock().unwrap().replace(Arc::clone(&stream)) {
+        let _ = old_stream.shutdown(Shutdown::Both);
+    }
+
     eprintln!(
         "tether-bridge: SexOS connected from {} (gen={}, capability: {})",
         peer,
@@ -742,105 +1182,135 @@ pub fn handle_sexos_session(
     let (out_tx, out_rx) = mpsc::channel::<Frame>();
     *state.out_tx.lock().unwrap() = Some(out_tx.clone());
 
-    let mut write_stream = stream.try_clone().expect("clone tcp stream");
+    let session_closed = Arc::new(AtomicBool::new(false));
+    let write_stream = Arc::clone(&stream);
+    let writer_closed = Arc::clone(&session_closed);
     let writer_handle = thread::spawn(move || {
-        while let Ok(frame) = out_rx.recv() {
-            if write_stream.write_all(&frame.to_bytes()).is_err() {
+        let mut ping_seq: u64 = 1;
+        loop {
+            if writer_closed.load(Ordering::SeqCst) {
                 break;
+            }
+            match out_rx.recv_timeout(HEARTBEAT_INTERVAL) {
+                Ok(frame) => {
+                    if writer_closed.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let mut w = &*write_stream;
+                    if w.write_all(&frame.to_bytes()).is_err() {
+                        writer_closed.store(true, Ordering::SeqCst);
+                        let _ = write_stream.shutdown(Shutdown::Both);
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if writer_closed.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let ping = Frame::heartbeat_ping(ping_seq);
+                    ping_seq = ping_seq.wrapping_add(1);
+                    let mut w = &*write_stream;
+                    if w.write_all(&ping.to_bytes()).is_err() {
+                        writer_closed.store(true, Ordering::SeqCst);
+                        let _ = write_stream.shutdown(Shutdown::Both);
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
 
-    let mut acp = AcpBackend::start(cfg, out_tx.clone());
+    let first_agent = cfg.agent.clone();
+    let mut acp = AcpBackend::start_agent(cfg, &first_agent, out_tx.clone());
+    *state.agent.lock().unwrap() = first_agent;
+
+    // Drain any frames already buffered in `dec` from the handshake read.
+    while let Ok(Some(frame)) = dec.next_frame() {
+        dispatch_incoming_frame(frame, &mut acp, cfg, &state, &out_tx);
+    }
 
     let mut tmp = [0u8; 8192];
+    let mut last_rx = Instant::now();
+    let disconnect_reason: String;
     loop {
-        match stream.read(&mut tmp) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                if dec.push(&tmp[..n]).is_err() {
+        if session_closed.load(Ordering::SeqCst) {
+            disconnect_reason = String::from("writer closed");
+            break;
+        }
+        let mut r = &*stream;
+        match r.read(&mut tmp) {
+            Ok(0) => {
+                disconnect_reason = String::from("peer closed (EOF)");
+                break;
+            }
+            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+                if session_closed.load(Ordering::SeqCst)
+                    || state.session_gen.load(Ordering::SeqCst) != my_gen
+                {
+                    disconnect_reason = String::from("preempted");
                     break;
                 }
-                while let Ok(Some(frame)) = dec.next_frame() {
-                    match frame.kind {
-                        FrameKind::AcpJson => {
-                            if let Ok(s) = core::str::from_utf8(&frame.payload) {
-                                acp.send_acp_json(s);
-                            }
+                if last_rx.elapsed() >= SESSION_IDLE_TIMEOUT {
+                    disconnect_reason = String::from("heartbeat timeout (45s idle)");
+                    break;
+                }
+                continue;
+            }
+            Err(e) => {
+                disconnect_reason = format!("read error: {}", e);
+                break;
+            }
+            Ok(n) => {
+                last_rx = Instant::now();
+                if let Err(e) = dec.push(&tmp[..n]) {
+                    disconnect_reason = format!("buffer error: {:?}", e);
+                    break;
+                }
+                let mut decode_err = None;
+                loop {
+                    match dec.next_frame() {
+                        Ok(Some(frame)) => {
+                            dispatch_incoming_frame(frame, &mut acp, cfg, &state, &out_tx);
                         }
-                        FrameKind::RpcStreamChunk => {
-                            if let Some(pending) =
-                                state.pending_rpcs.lock().unwrap().get(&frame.stream_id)
-                            {
-                                pending.chunks.lock().unwrap().extend_from_slice(&frame.payload);
-                            }
-                        }
-                        FrameKind::RpcResponse => {
-                            let reply = String::from_utf8_lossy(&frame.payload).into_owned();
-                            if let Some(pending) =
-                                state.pending_rpcs.lock().unwrap().remove(&frame.stream_id)
-                            {
-                                let _ = pending.tx.send(reply);
-                            }
-                        }
-                        FrameKind::CapabilitySync => {
-                            if let Some(&b) = frame.payload.first() {
-                                if let Some(new_cap) = CapabilityMode::from_u8(b) {
-                                    *state.capability_mode.lock().unwrap() = new_cap;
-                                    eprintln!(
-                                        "tether-bridge: SexOS capability changed to {}",
-                                        new_cap.label()
-                                    );
-                                }
-                            }
-                        }
-                        FrameKind::KillSwitch => {
-                            let active = frame.payload.first().copied().unwrap_or(1) != 0;
-                            state.kill_switch_active.store(active, Ordering::SeqCst);
-                            eprintln!("tether-bridge: SexOS kill switch = {}", active);
-                            if active {
-                                let mut pending = state.pending_rpcs.lock().unwrap();
-                                for (_, p) in pending.drain() {
-                                    let _ = p.tx.send(rpc_err_json(
-                                        0,
-                                        "kill_switch",
-                                        "Aborted by SexOS Kill Switch",
-                                    ));
-                                }
-                            }
-                        }
-                        FrameKind::LogEvent => {
-                            let line = String::from_utf8_lossy(&frame.payload).into_owned();
-                            let mut logs = state.recent_logs.lock().unwrap();
-                            logs.push(line);
-                            if logs.len() > 2000 {
-                                let drain = logs.len() - 2000;
-                                logs.drain(..drain);
-                            }
-                        }
-                        FrameKind::Heartbeat => {
-                            let _ = out_tx.send(Frame::control(FrameKind::Heartbeat, frame.payload));
-                        }
-                        _ => {
-                            if (frame.flags & FLAG_ERROR) != 0 {
-                                eprintln!("tether-bridge: error frame on stream {}", frame.stream_id);
-                            }
+                        Ok(None) => break,
+                        Err(e) => {
+                            decode_err = Some(e);
+                            break;
                         }
                     }
+                }
+                if let Some(e) = decode_err {
+                    disconnect_reason = format!("decode error: {:?}", e);
+                    break;
                 }
             }
         }
     }
+
+    // Signal writer to exit and shut down socket before joining.
+    session_closed.store(true, Ordering::SeqCst);
+    let _ = stream.shutdown(Shutdown::Both);
 
     // Only clear shared state if no newer session has already preempted us.
     if state.session_gen.load(Ordering::SeqCst) == my_gen {
         state.connected.store(false, Ordering::SeqCst);
         *state.peer_addr.lock().unwrap() = None;
         *state.out_tx.lock().unwrap() = None;
+        *state.active_stream.lock().unwrap() = None;
     }
+
+    // CRITICAL: drop `acp` (kills child & closes its stdout reader's `out_tx` clone)
+    // and our own `out_tx` BEFORE joining `writer_handle` so `out_rx` disconnects
+    // immediately and `writer_handle` drops its `Arc<TcpStream>` with zero FD leaks.
+    drop(acp);
     drop(out_tx);
+    drop(stream);
     let _ = writer_handle.join();
-    eprintln!("tether-bridge: SexOS {} (gen={}) disconnected", peer, my_gen);
+    eprintln!(
+        "tether-bridge: SexOS {} (gen={}) disconnected ({})",
+        peer, my_gen, disconnect_reason
+    );
 }
 
 pub fn run_serve(cfg: BridgeConfig) -> Result<(), String> {
@@ -903,18 +1373,30 @@ pub fn start_test_bridge(pin: Option<String>) -> (String, String, Arc<BridgeStat
     let ctrl_addr = ctrl.local_addr().unwrap().to_string();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let listen_addr = listener.local_addr().unwrap().to_string();
-    let cfg = BridgeConfig {
+    let cfg = Arc::new(BridgeConfig {
         listen_addr: listen_addr.clone(),
         control_addr: ctrl_addr.clone(),
         pin,
         acp_cmd: Vec::new(),
         mock_acp: true,
-    };
+        agent: String::from("antigravity"),
+        claude_cmd: Vec::new(),
+        workdir: None,
+    });
     let st = Arc::clone(&state);
     thread::spawn(move || {
         let _keep_ctrl = ctrl;
-        if let Ok((stream, addr)) = listener.accept() {
-            handle_sexos_session(stream, addr.to_string(), &cfg, st);
+        for conn in listener.incoming() {
+            let Ok(stream) = conn else { break };
+            let peer = stream
+                .peer_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| String::from("test"));
+            let st_c = Arc::clone(&st);
+            let cfg_c = Arc::clone(&cfg);
+            thread::spawn(move || {
+                handle_sexos_session(stream, peer, &cfg_c, st_c);
+            });
         }
     });
     (listen_addr, ctrl_addr, state)
