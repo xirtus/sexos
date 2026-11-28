@@ -7,7 +7,7 @@ python3 - "$CIVIL_ROOT" "$CIVIL_TEMP" <<'PY'
 from pathlib import Path
 import re,sys
 root=Path(sys.argv[1]);out=Path(sys.argv[2]);source=(root/'servers/sexdisplay/src/main.rs').read_text();parts=[]
-for name in ['chrome_metrics','ui_label_at_scaled','civil_clock_caption','civil_clock_fg_at_scaled','clock_fg_at_scaled','module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
+for name in ['chrome_metrics','ui_label_at_scaled','civil_clock_caption','civil_clock_maya','civil_clock_fg_at_scaled','clock_fg_at_scaled','module_rect','ascii_glyph_index','civil_clock_date','civil_clock_lines','panel_caption_at','coverage_blend','civil_clock_fg_at','civil_clock_drawn','clock_fg_at','handle_civil_clock_update','clock_canon_apply_to_bar']:
     values=re.findall(r'^fn '+name+r'\b.*?^\}',source,re.M|re.S);assert len(values)==1,name;parts+=values
 for name in ['FONT','FONT_ASCII_5X7']:
     values=re.findall(r'^const '+name+r':.*?^\];',source,re.M|re.S);assert len(values)==1,name;parts+=values

@@ -16,7 +16,7 @@ fn all_targets_fit_and_do_not_overlap_at_required_native_scales(){
 fn normal_bar_has_nine_workspaces_and_narrow_bar_has_real_overview(){
  let mut normal=DEFAULT_SILK_BAR;assert!(reflow_chrome(&mut normal,1280,28,24));
  assert_eq!((normal.layout[0].x,normal.layout[0].y,normal.layout[0].w),(8,2,24));
- assert_eq!((normal.layout[13].x,normal.layout[13].w),(1128,144));
+ assert_eq!((normal.layout[13].x,normal.layout[13].w),(992,280));
  assert!(normal.layout[1..10].iter().all(|b|b.w==24));
  let mut narrow=DEFAULT_SILK_BAR;assert!(reflow_chrome(&mut narrow,1024,84,72));
  assert!(narrow.layout[1].action==Action::ToggleModule(Module::Workspaces(0)));

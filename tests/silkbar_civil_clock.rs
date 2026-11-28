@@ -124,7 +124,7 @@ fn text(line:&[u8])->&str{core::str::from_utf8(line).unwrap().trim_end()}
   let mut bar=DEFAULT_SILK_BAR;assert!(silkbar_model::reflow_chrome(&mut bar,width,28,24));
   bar.civil_enabled=true;receive(&mut bar.civil_clock,wire(state,if state==State::Snapshot{MIN+12345}else{0},1),0).unwrap();
   let text=civil_clock_caption(&bar.civil_clock);let(cx,cy,cw,ch)=module_rect(&bar,ModuleSlot::Clock);assert!(cx+cw<=width);
-  assert_eq!((cx,cy,cw,ch),(width-152,2,144,24));
+  assert_eq!((cx,cy,cw,ch),(width-288,2,280,24));
   for y in cy.saturating_sub(1)..cy+ch+1{for x in cx.saturating_sub(1)..cx+cw+1{
    let mut expected=None;
    if x>=cx+4&&x<cx+cw&&y>=cy+4&&y<cy+20 {

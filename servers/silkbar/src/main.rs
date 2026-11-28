@@ -593,9 +593,11 @@ pub extern "C" fn _start() -> ! {
             if due {
                 let mut observed = None;
                 let mut source_known = false;
-                if civil.stage(
+                if civil.stage_corrected(
                     || {let info=sex_pdx::clock_info(sex_pdx::clock_source::SLOT);source_known=info.is_ok_and(|i|i.consumer==sex_pdx::clock_source::STATUS_BAR&&i.source==sex_pdx::clock_source::CMOS_UTC);info},
                     || { let result=sex_pdx::clock_snapshot(sex_pdx::clock_source::SLOT);observed=Some(result);result },
+                    // The kernel's civil time (the CMOS plus the network-time step) when it is a real step away.
+                    |cmos| civil_clock::network_corrected(cmos, sex_pdx::civil_time_ms().ok().map(|ms| ms / 1000)),
                 ) {
                     let u=civil.pending().unwrap();
                     let (seconds,attempts)=observed.and_then(Result::ok).map_or((0,0),|s|(s.seconds,s.attempts));

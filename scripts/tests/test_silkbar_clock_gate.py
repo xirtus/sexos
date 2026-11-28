@@ -28,7 +28,7 @@ def fixture(state='Snapshot',width=1280,late_enqueue=False,seconds=T,profile=gat
 def draw_record(state,seconds,stale=False,width=1280,profile=gate.SLIM_PROFILE):
  if profile==gate.SLIM_PROFILE:
   metric=f'[display.chrome.metrics] scale=1 bar=28 title=26 inset=8 body_top=34 target=24 width={width} height={768 if width==1024 else 800} publication=1\n'
-  rect=f'x={width-152} y=2 w=144 h=24'
+  rect=f'x={width-gate.CLOCK_W_LONG_COUNT-8} y=2 w={gate.CLOCK_W_LONG_COUNT} h=24'
  else:metric='';rect=f'x={928 if width==1024 else 1090} y=18 w=80 h=22'
  return metric+f'[display.civil.draw] sequence=1 state={state} seconds={seconds} stale={int(stale)} pixels=written path=strip {rect}\n'
 
@@ -49,12 +49,13 @@ def image(c,state='Snapshot',width=1280,seconds=T,stale=False):
   import geist_cells
   if state=='Snapshot':
    date=datetime.datetime.fromtimestamp(seconds,datetime.timezone.utc)
-   text=f'{date.hour:02d}:{date.minute:02d} UTC | {date.day:02d} {ENGLISH[date.month-1]}  '
-  else:text={'Unknown':'UTC stale'if stale else'UTC unknown','Unavailable':'UTC unavailable','Rollback':'UTC blocked','Exhausted':'UTC ended'}[state].ljust(20)
-  alpha=geist_cells.ui_bitmap(geist_cells.ui_labels(),text,144,24,left=4,top=4)
+   text=f'{date.hour:02d}:{date.minute:02d} UTC | {date.day:02d} {ENGLISH[date.month-1]} {date.year:04d} | {gate.long_count(seconds)}'.ljust(48)
+  else:text={'Unknown':'UTC stale'if stale else'UTC unknown','Unavailable':'UTC unavailable','Rollback':'UTC blocked','Exhausted':'UTC ended'}[state].ljust(48)
+  cw=gate.CLOCK_W_LONG_COUNT;left=width-cw-8
+  alpha=geist_cells.ui_bitmap(geist_cells.ui_labels(),text,cw,24,left=4,top=4)
   for yy in range(24):
-   for xx in range(144):
-    a=alpha[yy*144+xx];at=((2+yy)*width+width-152+xx)*3
+   for xx in range(cw):
+    a=alpha[yy*cw+xx];at=((2+yy)*width+left+xx)*3
     raw[at:at+3]=bytes((255*a+bg*(255-a))//255 for bg in(24,38,56))
   return f'P6\n{width} {h}\n255\n'.encode()+raw
  x=928 if width==1024 else 1090;color=c['color'].to_bytes(3,'big')
@@ -108,7 +109,7 @@ class CivilClockOracle(unittest.TestCase):
  def setUpClass(cls):cls.c=gate.source_contract(ROOT)
  def test_whole_two_line_cells_at_both_supported_sizes(self):
   for width in(1024,1280):
-   r=gate.verify_pixels(fixture(width=width),image(self.c,width=width),self.c,(width,768 if width==1024 else 800),'Snapshot');self.assertTrue(r['ok'],r);self.assertEqual(r['checked_pixels'],3456)
+   r=gate.verify_pixels(fixture(width=width),image(self.c,width=width),self.c,(width,768 if width==1024 else 800),'Snapshot');self.assertTrue(r['ok'],r);self.assertEqual(r['checked_pixels'],gate.CLOCK_W_LONG_COUNT*24)
  def test_unknown_and_unavailable_remove_every_numeric_calendar_value(self):
   for state in('Unknown','Unavailable'):
    trace=fixture(state);r=gate.verify_pixels(trace,image(self.c,state),self.c,expected_state=state);self.assertTrue(r['ok'],r);self.assertFalse(gate.verify_pixels(trace,image(self.c),self.c)['ok'])
@@ -152,14 +153,12 @@ class CivilClockOracle(unittest.TestCase):
   for bad in(next_sample.replace('[display.civil.draw] sequence=2','[display.civil.draw] sequence=1'),next_sample.replace('state=Snapshot seconds='+str(T)+' stale=0 pixels=written','state=Unknown seconds=0 stale=1 pixels=written')):
    with self.assertRaises(AssertionError):gate.repaint_metrics(base+bad)
 
- def test_independent_utc_calendar_boundaries_and_english_months(self):
-  vectors=[((2020,1,1,0,0,0),'01 JAN 2020'),((2020,2,28,23,59,59),'28 FEB 2020'),((2020,2,29,0,0,0),'29 FEB 2020'),((2020,3,1,0,0,0),'01 MAR 2020'),((2024,2,29,12,34,56),'29 FEB 2024'),((2026,12,31,23,59,59),'31 DEC 2026'),((2027,1,1,0,0,0),'01 JAN 2027'),((2099,12,31,23,59,59),'31 DEC 2099')]
+ def test_independent_utc_calendar_boundaries_and_maya_long_count(self):
+  # Literal Long Counts from Python date arithmetic against 13.0.0.0.0 = 2012-12-21.
+  vectors=[((2020,1,1,0,0,0),'13.0.7.2.7'),((2024,2,29,12,34,56),'13.0.11.6.7'),((2026,11,28,23,59,59),'13.0.14.2.10'),((2026,12,31,23,59,59),'13.0.14.4.3'),((2099,12,31,23,59,59),'13.4.8.5.6')]
   for date,expected in vectors:
    seconds=int(datetime.datetime(*date,tzinfo=datetime.timezone.utc).timestamp());rows=gate.expected_clock_lines(self.c,'Snapshot',seconds)
-   self.assertTrue(rows[0].endswith(expected[:6]+'  '));self.assertTrue(gate.verify_pixels(fixture(seconds=seconds),image(self.c,seconds=seconds),self.c)['ok'])
-  for month,name in enumerate(ENGLISH,1):
-   seconds=int(datetime.datetime(2026,month,1,tzinfo=datetime.timezone.utc).timestamp())
-   self.assertEqual(gate.expected_clock_lines(self.c,'Snapshot',seconds)[0],f'00:00 UTC | 01 {name}  ')
+   self.assertEqual(rows[0].rstrip(),f'{date[3]:02d}:{date[4]:02d} UTC | {date[2]:02d} {ENGLISH[date[1]-1]} {date[0]:04d} | {expected}');self.assertTrue(gate.verify_pixels(fixture(seconds=seconds),image(self.c,seconds=seconds),self.c)['ok'])
  def test_out_of_source_range_cannot_be_rendered_as_a_snapshot(self):
   for seconds in(self.c['bounds']['MIN_SECONDS']-1,self.c['bounds']['MAX_SECONDS']+1,True):
    with self.assertRaises(AssertionError):gate.expected_clock_lines(self.c,'Snapshot',seconds)
@@ -173,7 +172,7 @@ class CivilClockOracle(unittest.TestCase):
   self.assertFalse(gate.verify_pixels(fixture(profile=gate.LEGACY_PROFILE),image(self.c),legacy)['ok'])
  def test_unknown_hybrid_duplicate_and_uncached_source_forms_fail_closed(self):
   display=(ROOT/'servers/sexdisplay/src/main.rs').read_text()
-  defects=[display.replace('b"Source error"','b"q35 1s fail"',1),display.replace('lines[1]=civil_clock_date(clock.seconds());','',1),display.replace('b"JAN"','b"JAX"',1),display.replace('text:&[u8;20]','text:&[u8;19]'),display.replace('let clock_lines=civil_clock_caption(&bar.civil_clock);','let clock_lines=[0;20];',1),display+gate._function(display,'civil_clock_lines')]
+  defects=[display.replace('b"Source error"','b"q35 1s fail"',1),display.replace('lines[1]=civil_clock_date(clock.seconds());','',1),display.replace('b"JAN"','b"JAX"',1),display.replace('text:&[u8;48]','text:&[u8;19]'),display.replace('let clock_lines=civil_clock_caption(&bar.civil_clock);','let clock_lines=[0;48];',1),display+gate._function(display,'civil_clock_lines')]
   for name in('civil_clock_fg_at_scaled','clock_fg_at_scaled','top_strip_pixel'):
    for call in('civil_clock_date(bar.civil_clock.seconds())','civil_clock_lines(&bar.civil_clock)'):
     defects.append(re.sub(r'(fn '+name+r'\b[^{]*\{)',lambda m:m[0]+'let _='+call+';',display,count=1))

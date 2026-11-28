@@ -331,7 +331,7 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         } else if m.kind == MenuKind::ClockPopover && i == 0 {
             let mut n = 0usize;
             if scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0 {
-                if let Some(g) = sex_time::SexTimestamp::from_unix(scene.bar.civil_clock.seconds() as i64, 0)
+                if let Some(g) = sex_time::SexTimestamp::from_unix(local_seconds(scene.bar.civil_clock.seconds()), 0)
                     .and_then(sex_time::Gregorian::from_timestamp)
                 {
                     let mname = sex_pdx::tray::MONTH_NAMES[(g.month.clamp(1, 12) - 1) as usize];
@@ -347,7 +347,27 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
                 put_bytes(b"SexOS System Clock", &mut dyn_buf, &mut n);
             }
             &dyn_buf[..n]
+        } else if m.kind == MenuKind::ClockPopover && i == 1 {
+            // The same day in SexTime's Maya calendar: Long Count and Calendar Round.
+            let mut n = 0usize;
+            let maya = if scene.bar.civil_enabled && scene.bar.civil_clock.seconds() != 0 {
+                sex_time::MayaDate::from_unix(local_seconds(scene.bar.civil_clock.seconds()))
+            } else { None };
+            match maya {
+                Some(d) => {
+                    n = d.write_long_count(&mut dyn_buf);
+                    put_bytes(b"  ", &mut dyn_buf, &mut n);
+                    n += d.write_calendar_round(&mut dyn_buf[n..]);
+                }
+                None => put_bytes(b"Maya Long Count", &mut dyn_buf, &mut n),
+            }
+            &dyn_buf[..n]
         } else if m.kind == MenuKind::ClockPopover && i == 2 {
+            let mut n = 0usize;
+            put_bytes(b"Timezone: ", &mut dyn_buf, &mut n);
+            put_bytes(sex_time::zone::zone(sex_pdx::clock_zone::zone()).name.as_bytes(), &mut dyn_buf, &mut n);
+            &dyn_buf[..n]
+        } else if m.kind == MenuKind::ClockPopover && i == 3 {
             let mut n = 0usize;
             put_bytes(b"Uptime: ", &mut dyn_buf, &mut n);
             let hrs = m.uptime_mins / 60;
@@ -389,4 +409,10 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
             body_text(fb, w, h, total, sc_bytes, sc_x, mid, c.subtext, sc, sc_w);
         }
     }
+}
+
+/// The civil UTC sample shifted into the person's zone (UTC by default).
+fn local_seconds(utc: u32) -> i64 {
+    let (offset, _) = sex_time::zone::zone(sex_pdx::clock_zone::zone()).offset_at(utc as i64);
+    utc as i64 + offset as i64
 }

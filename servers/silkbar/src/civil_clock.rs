@@ -12,6 +12,19 @@ pub struct Probe {
     ended: bool,
 }
 
+
+/// Below this the kernel's civil time and the CMOS reading only differ by tick
+/// drift between its once-a-minute re-reads; a network-time step is larger
+/// (the x17's CMOS ran 6 h off).
+pub const STEP_SECONDS: u64 = 120;
+
+/// The seconds to show for a CMOS reading `cmos`, given the kernel's civil time
+/// `civil` (the CMOS plus sexnet's network-time step): `civil` when it has been
+/// stepped well away from the CMOS, else the CMOS reading itself.
+pub fn network_corrected(cmos: u64, civil: Option<u64>) -> u64 {
+    match civil { Some(c) if c.abs_diff(cmos) >= STEP_SECONDS => c, _ => cmos }
+}
+
 impl Probe {
     pub const fn new() -> Self {
         Self { next: 1, pending: None, high_water: None, rollback: false, ended: false }
@@ -25,6 +38,19 @@ impl Probe {
         &mut self,
         info: impl FnOnce() -> Result<Info, u64>,
         read: impl FnOnce() -> Result<Snapshot, u64>,
+    ) -> bool {
+        self.stage_corrected(info, read, |seconds| seconds)
+    }
+
+    /// As [`Probe::stage`], publishing `correct(cmos seconds)`: the kernel's
+    /// civil time, which the time keeper (sexnet, by network time) may have
+    /// stepped away from a wrong hardware clock. Rollback still guards the
+    /// CMOS reading itself; a keeper's step back is a correction, not one.
+    pub fn stage_corrected(
+        &mut self,
+        info: impl FnOnce() -> Result<Info, u64>,
+        read: impl FnOnce() -> Result<Snapshot, u64>,
+        correct: impl FnOnce(u64) -> u64,
     ) -> bool {
         if self.pending.is_some() || self.ended { return false; }
         let mut update = Update { state: State::Unknown, seconds: 0, sequence: self.next };
@@ -44,8 +70,9 @@ impl Probe {
                         update.state = State::Rollback;
                     } else {
                         self.high_water = Some(seconds);
+                        let civil = correct(sample.seconds);
                         update.state = State::Snapshot;
-                        update.seconds = seconds;
+                        update.seconds = if (source::MIN_SECONDS..=source::MAX_SECONDS).contains(&civil) { civil as u32 } else { seconds };
                     }
                 }
             }
@@ -119,5 +146,31 @@ mod tests {
         let mut p=Probe::new();p.next=u32::MAX-1;p.stage(info,||sample(T));assert_eq!(p.pending().unwrap().sequence,u32::MAX-1);p.accepted();
         p.stage(forbidden_info,forbidden_read);let terminal=p.pending().unwrap();assert_eq!(terminal.sequence,u32::MAX);assert_eq!(terminal.state,State::Exhausted);assert_eq!(terminal.seconds,0);
         assert!(!p.stage(forbidden_info,forbidden_read));assert_eq!(p.pending(),Some(terminal));p.accepted();assert!(!p.stage(forbidden_info,forbidden_read));assert_eq!(p.pending(),None);
+    }
+
+    #[test]
+    fn network_time_corrects_the_published_seconds_but_not_the_rollback_guard() {
+        let mut p = Probe::new();
+        // The CMOS runs six hours ahead; the keeper's civil time is right.
+        assert!(p.stage_corrected(info, || sample(T + 21_600), |s| s - 21_600));
+        assert_eq!((p.pending().unwrap().state, p.pending().unwrap().seconds), (State::Snapshot, T as u32));
+        p.accepted();
+        assert!(p.stage_corrected(info, || sample(T + 21_601), |s| s - 21_600));
+        assert_eq!(p.pending().unwrap().seconds, T as u32 + 1);
+        p.accepted();
+        // A correction out of range falls back to the CMOS reading.
+        assert!(p.stage_corrected(info, || sample(T + 21_602), |_| 0));
+        assert_eq!(p.pending().unwrap().seconds, (T + 21_602) as u32);
+    }
+
+    #[test]
+    fn only_a_real_network_step_replaces_the_cmos_reading() {
+        // Tick drift between the kernel's re-reads: show the CMOS reading itself.
+        assert_eq!(network_corrected(T, Some(T - 1)), T);
+        assert_eq!(network_corrected(T, Some(T + STEP_SECONDS - 1)), T);
+        assert_eq!(network_corrected(T, None), T);
+        // A network-time step (the x17's CMOS six hours off) wins, either way.
+        assert_eq!(network_corrected(T + 21_600, Some(T)), T);
+        assert_eq!(network_corrected(T, Some(T + STEP_SECONDS)), T + STEP_SECONDS);
     }
 }
