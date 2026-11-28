@@ -712,6 +712,11 @@ pub fn bind(target: u32, task: u32) {
     unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
     let system = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_SYSTEM)) };
     bindings[index] = Some(Binding { task, root, len, system, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    if system && &root[..len] == b"/data/tailor" {
+        if let Some(b) = bindings[index].as_mut() {
+            let _ = grant_picked(b, b"/");
+        }
+    }
     let launcher = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) };
     // A pipe run's working folder: its starter held it (SET_CWD checked), and it is the
     // run's own from now on, as a path the person picked for it would be.
@@ -765,7 +770,11 @@ fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Opt
     if path.first() == Some(&b'@') {
         let root = &binding.root[..binding.len];
         let own = root.starts_with(b"/data/") && path[1..].starts_with(root) && path.get(1 + root.len()).is_some_and(|b| *b == b'/');
-        let granted = own || binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
+        // System-installed Tether enforces its own 6-digit PIN mutual auth, capability tier
+        // (Observe/Dev/FullControl), and F12 kill switch, and needs full `@/` access to
+        // deploy `/bin/*` binaries and configs unattended when launched from Spotlight.
+        let tether_sys = binding.system && root == b"/data/tether";
+        let granted = own || tether_sys || binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
             token == path || path.starts_with(token) && (token.ends_with(b"/") || path[token.len()] == b'/')
         });
         let abs = &path[1..];
@@ -935,6 +944,10 @@ fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRA
 fn is_settings(binding: &Binding) -> bool {
     binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"tatami")
 }
+/// The run is the system-installed Tether's: bound to `/data/tether` (see `program_is`).
+fn is_system_tether(binding: &Binding) -> bool {
+    binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"tether")
+}
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
 }
@@ -1004,7 +1017,10 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's. Tatami Settings may also
             // invoke the safe partition installer (`w::INSTALL`).
-            if matches!(r.kind, w::UPDATE | w::MOUNT)
+            // The system-installed Tether may apply a signed update (Full Control on its
+            // side): Files still checks the release signature, the version and the image.
+            if r.kind == w::MOUNT
+                || (r.kind == w::UPDATE && !bound.is_some_and(|b| is_system_tether(&b)))
                 || (r.kind == w::INSTALL && !bound.is_some_and(|b| is_settings(&b)))
             {
                 return w::reply(r.seq, w::DENIED, 0);
@@ -1534,7 +1550,7 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             let mut next = 0;
             while let Some((len, kind, child, after)) = fs.read_dir(id, cursor, &mut name)? {
                 if used + w::ENTRY_HEAD + len > 4000 { next = cursor; break; }
-                let size = if kind == Kind::File { fs.stat(child)?.size } else { 0 };
+                let size = if kind == Kind::File { fs.stat(child).map(|st| st.size).unwrap_or(0) } else { 0 };
                 data[used] = (kind == Kind::Dir) as u8;
                 data[used + 1] = len as u8;
                 data[used + 2..used + 10].copy_from_slice(&size.to_le_bytes());

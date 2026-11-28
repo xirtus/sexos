@@ -22,7 +22,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 20511d2ef2946babfeac294a053b920b07c0ed8bcb100a0dad303b9269821025  crates/sex-pdx/src/clock_source.rs
 
-dc1837a87dc9f8a6cd72e1ca8e5b539bbb705724af8065e29af8dc7cbfa5f2b8  crates/sex-pdx/src/crash_log.rs
+4d69a414fb8d0132b788372a724b3e29b029b6f99ebd9eff2219f803775b2e6e  crates/sex-pdx/src/crash_log.rs
 
 5e2f7daf24d0d791f70455abfca5d3e4161eb19f3a1736d2964a4dd6305291f7  crates/sex-pdx/src/denim.rs
 
@@ -152,7 +152,7 @@ df66047e0c1003533553fe4e898692d023d3f0908ce7ee70aa989d71e6c47cc1  kernel/src/cap
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 
-3c41a4f593b5f82ed3687b97c9e5a6ab6feea9c0c4055e84828035e8ede6c155  kernel/src/crash_log.rs
+415518cac7ef63046bc083c68e3763c12105c8e227c69cf4316f255c10fe83f2  kernel/src/crash_log.rs
 
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 

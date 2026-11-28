@@ -108,6 +108,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"proof",
     b"pwd",
     b"quil",
+    b"restart",
     b"rm",
     b"rmdoc",
     b"route",

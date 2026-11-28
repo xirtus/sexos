@@ -1101,6 +1101,27 @@ pub mod files {
             n
         })
     }
+    /// A signed system update (`sex_pdx::fs::UPDATE`): `paths` holds the index, signature
+    /// and, to apply it, image paths, separated by NUL. Returns Files' status (OK: newer
+    /// and checked or written, EXISTS: up to date, DENIED: refused) and its report in `out`.
+    /// Files answers Spindle and the system-installed Tether alone.
+    pub fn update(window: &mut Window, paths: &[u8], out: &mut [u8]) -> Result<(u8, usize), Error> {
+        const REPORT: usize = 4096;
+        let copy = |data: &[u8], out: &mut [u8]| -> usize {
+            let n = data.iter().take(REPORT).position(|b| *b == 0).unwrap_or(REPORT.min(data.len())).min(out.len());
+            out[..n].copy_from_slice(&data[..n]);
+            n
+        };
+        // The region is cleared first: a refusal carries its report but not its length.
+        match exchange_tries(Some(&mut *window), w::UPDATE, paths, 0, 0, 0, |r| { let n = r.len().min(REPORT); r[..n].fill(0) }, |_, data| copy(data, out)) {
+            Ok(n) => Ok((w::OK, n)),
+            Err(e) if e == w::EXISTS || e == w::DENIED => {
+                let region = region()?;
+                Ok((e, copy(&region[w::PATH_BYTES..], out)))
+            }
+            Err(e) => Err(e),
+        }
+    }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
         direct::read_at_held(Some(window), path, offset, out)

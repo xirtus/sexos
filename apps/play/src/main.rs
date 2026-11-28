@@ -356,11 +356,9 @@ fn say(window: &mut Window, why: &[u8]) {
     use sex_theme::candy_ui::{
         draw_candy_button, fill_rounded_rect, ButtonState, ButtonStyle, CandyPalette,
     };
-    let (w, h) = window.size();
-    if w < 160 || h < 120 {
-        window.show(why);
-        return;
-    }
+    let (raw_w, raw_h) = window.size();
+    let w = if raw_w < 160 { 960 } else { raw_w };
+    let h = if raw_h < 120 { 540 } else { raw_h };
     let msg = core::str::from_utf8(why).unwrap_or("Qupid");
     let buf = window.frame(w, h);
     let pal = CandyPalette::dark();

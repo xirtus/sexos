@@ -8,14 +8,20 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod about;
 mod candy_gui;
 mod facts;
 mod grants;
 mod model;
 mod setup;
+mod updates;
 
-use candy_gui::{Glyphs, GuiState, SidebarView, UiAction, SIDEBAR_ITEMS};
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use candy_gui::{Glyphs, GuiState, SidebarView, UiAction, UpdatesField, SIDEBAR_ITEMS};
 use model::{Change, Model};
 use sex_app::settings;
 use sex_app::{Event, Nav, Window};
@@ -107,6 +113,12 @@ fn load_info(window: &mut Window, m: &mut Model, gui: &mut GuiState, page: &str)
     let mut data = [0u8; 2048];
     let got = sex_app::files::facts(window, topic, &mut data);
     let data = match got { Ok(n) => &data[..n], Err(_) => &[][..] };
+    if topic == f::UPDATES {
+        gui.updates.local_version = updates::parse_local_version(data);
+        if !gui.updates.config_loaded {
+            load_dotfiles_config(window, gui);
+        }
+    }
     let mut text = [0u8; model::INFO_MAX];
     let mut n = if topic == f::ABOUT {
         let k = collect_kernel_facts();
@@ -131,6 +143,293 @@ fn load_info(window: &mut Window, m: &mut Model, gui: &mut GuiState, page: &str)
     let word = |k| facts::field(data, k).and_then(|v| core::str::from_utf8(v).ok()).unwrap_or("-");
     sex_pdx::serial_record!("[settings.facts] page={} status={} slot={} version={} filesystem={} health={} image={}", page, got.err().unwrap_or(0), word("slot"), word("version"), word("filesystem"), word("health"), word("image"));
     facts::hashing(data)
+}
+
+/// Bounded HTTP/HTTPS GET following up to `updates::MAX_REDIRECTS` redirects via `sex_app::net::request`.
+fn http_get_bounded(
+    window: &mut Window,
+    initial_url: &str,
+    bearer: Option<&str>,
+    max_bytes: usize,
+) -> Result<(u16, Vec<u8>), &'static str> {
+    let mut url = initial_url.to_string();
+    let auth_header: Option<String> = bearer
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("Bearer {}", t));
+
+    for hop in 0..=updates::MAX_REDIRECTS {
+        let send_auth = auth_header.is_some()
+            && (hop == 0 || url.starts_with("https://raw.githubusercontent.com/"));
+        let hdr_with_auth: [(&str, &str); 2];
+        let hdr_plain: [(&str, &str); 1] = [("Accept", "*/*")];
+        let headers: &[(&str, &str)] = if send_auth {
+            let auth = auth_header.as_deref().unwrap_or("");
+            hdr_with_auth = [("Accept", "*/*"), ("Authorization", auth)];
+            &hdr_with_auth
+        } else {
+            &hdr_plain
+        };
+        let req = sex_fetch::Request {
+            method: "GET",
+            url: &url,
+            headers,
+            body: &[],
+            trusted_origin: false,
+            referrer: None,
+        };
+        let resp = match sex_app::net::request(window, &req, None, max_bytes) {
+            Ok(r) => r,
+            Err(sex_app::net::Error::TooLarge) => return Err("response exceeds size limit"),
+            Err(sex_app::net::Error::NotAllowed) => return Err("network permission denied (+net)"),
+            Err(sex_app::net::Error::Offline) => return Err("offline (no network)"),
+            Err(sex_app::net::Error::Address) => return Err("invalid URL or host"),
+            Err(_) => return Err("network request failed"),
+        };
+        if resp.head.is_redirect() {
+            let loc = resp.head.get("location").unwrap_or("");
+            match sex_fetch::join(&url, loc) {
+                Some(next) => {
+                    url = next;
+                    continue;
+                }
+                None => return Err("invalid redirect URL"),
+            }
+        }
+        return Ok((resp.head.status, resp.body));
+    }
+    Err("too many redirects")
+}
+
+/// Loads Tatami's local dotfiles config from `/data/tatami/dotfiles.conf` (confined `dotfiles.conf` first).
+fn load_dotfiles_config(window: &mut Window, gui: &mut GuiState) {
+    let mut buf = [0u8; 512];
+    for path in updates::DOTFILES_CONF_PATHS {
+        if let Ok(n) = sex_app::files::read(window, path.as_bytes(), &mut buf) {
+            gui.updates.config = updates::DotfilesConfig::parse(&buf[..n]);
+            gui.updates.config_loaded = true;
+            sex_pdx::serial_record!(
+                "[settings.dotfiles.load] path={} repo={} branch={} has_token={} auto_sync={}",
+                path,
+                gui.updates.config.repo_str(),
+                gui.updates.config.branch_str(),
+                (gui.updates.config.token_len > 0) as u8,
+                gui.updates.config.auto_sync as u8
+            );
+            return;
+        }
+    }
+    gui.updates.config_loaded = true;
+}
+
+/// Saves Tatami's local dotfiles config to confined `dotfiles.conf` (`/data/tatami/dotfiles.conf`).
+fn save_dotfiles_config(window: &mut Window, gui: &mut GuiState, m: &mut Model) -> bool {
+    let mut buf = [0u8; 512];
+    let n = gui.updates.config.serialize(&mut buf);
+    for (idx, path) in updates::DOTFILES_CONF_PATHS.iter().enumerate() {
+        if idx == 2 {
+            let _ = sex_app::files::mkdir(window, b"/data");
+            let _ = sex_app::files::mkdir(window, b"/data/tatami");
+        }
+        if sex_app::files::write(window, path.as_bytes(), &buf[..n]).is_ok() {
+            let _ = sex_app::files::sync(window);
+            gui.updates.set_dotfiles_status(b"Saved config to /data/tatami/dotfiles.conf");
+            sex_pdx::serial_record!(
+                "[settings.dotfiles.save] path={} repo={} branch={} has_token={} auto_sync={}",
+                path,
+                gui.updates.config.repo_str(),
+                gui.updates.config.branch_str(),
+                (gui.updates.config.token_len > 0) as u8,
+                gui.updates.config.auto_sync as u8
+            );
+            m.say("Dotfiles configuration saved.");
+            return true;
+        }
+    }
+    gui.updates.set_dotfiles_status(b"Could not save dotfiles.conf (disk read-only?)");
+    m.say("Could not save dotfiles.conf.");
+    false
+}
+
+/// Fetches `sexos-update.txt` from the configured release feed URL and compares against local version.
+fn check_system_update(window: &mut Window, gui: &mut GuiState, m: &mut Model) {
+    let _ = load_info(window, m, gui, "updates");
+    let mut url_buf = [0u8; 256];
+    let Some(url_len) = updates::build_update_index_url(gui.updates.config.feed_url_str(), &mut url_buf) else {
+        gui.updates.update_result = updates::UpdateCheckResult::Error;
+        gui.updates.set_system_status(b"Invalid release feed URL (must start with https:// or http://).");
+        m.say("Invalid release feed URL.");
+        return;
+    };
+    let url = core::str::from_utf8(&url_buf[..url_len]).unwrap_or("");
+    gui.updates.set_system_status(b"Checking for SexOS updates...");
+    m.say("Checking for SexOS updates...");
+    show(window, m, gui);
+
+    match http_get_bounded(window, url, None, updates::UPDATE_INDEX_MAX_BYTES) {
+        Ok((200, body)) => {
+            if let Some(index) = updates::parse_update_index(&body) {
+                let local = gui.updates.local_version.unwrap_or(0);
+                let result = updates::compare_update(local, index);
+                gui.updates.update_result = result;
+                gui.updates.system_checked = true;
+                let mut banner = [0u8; 96];
+                let blen = updates::format_update_banner(result, &mut banner);
+                gui.updates.set_system_status(&banner[..blen]);
+                sex_pdx::serial_record!(
+                    "[settings.updates.check] local={} remote={} bytes={}",
+                    local,
+                    index.version,
+                    index.bytes
+                );
+                m.say(core::str::from_utf8(&banner[..blen]).unwrap_or("Update check complete."));
+            } else {
+                gui.updates.update_result = updates::UpdateCheckResult::Error;
+                gui.updates.set_system_status(b"Update check failed: invalid sexos-update.txt format.");
+                m.say("Invalid sexos-update.txt response.");
+            }
+        }
+        Ok((status, _)) => {
+            gui.updates.update_result = updates::UpdateCheckResult::Error;
+            let msg = format!("Update check failed: HTTP {}", status);
+            gui.updates.set_system_status(msg.as_bytes());
+            sex_pdx::serial_record!("[settings.updates.check] http_status={}", status);
+            m.say("Update check failed.");
+        }
+        Err(why) => {
+            gui.updates.update_result = updates::UpdateCheckResult::Error;
+            let msg = format!("Update check failed: {}", why);
+            gui.updates.set_system_status(msg.as_bytes());
+            sex_pdx::serial_record!("[settings.updates.check] error={}", why);
+            m.say("Update check failed.");
+        }
+    }
+}
+
+/// Launches Spindle (with network) to run the signed A/B system update, or guides the user cleanly.
+fn install_system_update(gui: &mut GuiState, m: &mut Model) {
+    let custom_feed = gui.updates.config.feed_url_len > 0
+        && gui.updates.config.feed_url_str() != updates::DEFAULT_FEED_URL;
+    match sex_app::launch::run(b"spindle", b"", true, 1) {
+        Ok(()) => {
+            if custom_feed {
+                let msg = format!("Spindle launched - run: update {}", gui.updates.config.feed_url_str());
+                gui.updates.set_system_status(msg.as_bytes());
+            } else {
+                gui.updates.set_system_status(b"Spindle launched! Run 'update' to install the new SexOS release.");
+            }
+            sex_pdx::serial_record!("[settings.updates.install] launched=spindle");
+            m.say("Spindle launched for SexOS update.");
+        }
+        Err(_) => {
+            if custom_feed {
+                let msg = format!("Open Spindle (Super+Enter) & run: update {}", gui.updates.config.feed_url_str());
+                gui.updates.set_system_status(msg.as_bytes());
+            } else {
+                gui.updates.set_system_status(b"Open Spindle (Super+Enter) and run: update");
+            }
+            sex_pdx::serial_record!("[settings.updates.install] launched=guide");
+            m.say("Open Spindle (Super+Enter) and run 'update'.");
+        }
+    }
+}
+
+/// Syncs known dotfiles from `https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<path>`.
+fn sync_dotfiles_now(window: &mut Window, gui: &mut GuiState, m: &mut Model) {
+    if !gui.updates.config.has_valid_repo() {
+        gui.updates.set_dotfiles_status(b"Enter a valid GitHub repo (owner/repo) first.");
+        m.say("Enter a valid owner/repo first.");
+        return;
+    }
+
+    let repo = gui.updates.config.repo_str().to_string();
+    let branch = gui.updates.config.branch_str().to_string();
+    let token = gui.updates.config.token_str().to_string();
+    let bearer = if token.is_empty() { None } else { Some(token.as_str()) };
+
+    gui.updates.set_dotfiles_status(b"Syncing dotfiles from GitHub...");
+    m.say("Syncing dotfiles...");
+    show(window, m, gui);
+
+    let mut synced = 0usize;
+    let mut missing = 0usize;
+    let mut write_errors = 0usize;
+
+    for target in updates::DOTFILES_TARGETS {
+        let mut url_buf = [0u8; 256];
+        let Some(url_len) = updates::build_raw_github_url(&repo, &branch, target.remote_path, &mut url_buf) else {
+            continue;
+        };
+        let url = core::str::from_utf8(&url_buf[..url_len]).unwrap_or("");
+        match http_get_bounded(window, url, bearer, updates::DOTFILE_MAX_BYTES) {
+            Ok((200, body)) => {
+                let mut wrote = false;
+                for (idx, path) in target.local_paths.iter().enumerate() {
+                    if idx == 1 {
+                        let _ = sex_app::files::mkdir(window, b"/data");
+                        if let Some(dir) = target.mkdir_dir {
+                            let _ = sex_app::files::mkdir(window, dir.as_bytes());
+                        }
+                    }
+                    if sex_app::files::write(window, path.as_bytes(), &body).is_ok() {
+                        let _ = sex_app::files::sync(window);
+                        wrote = true;
+                        break;
+                    }
+                }
+                if wrote {
+                    synced += 1;
+                } else {
+                    write_errors += 1;
+                }
+            }
+            Ok((404, _)) => {
+                missing += 1;
+            }
+            Ok((status @ (401 | 403), _)) => {
+                let msg = format!("Auth failed (HTTP {}) - check GitHub token.", status);
+                gui.updates.set_dotfiles_status(msg.as_bytes());
+                gui.updates.dotfiles_synced = false;
+                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} auth_error={}", repo, status);
+                m.say("Dotfiles auth failed (check token).");
+                return;
+            }
+            Ok((status, _)) => {
+                let msg = format!("Dotfiles sync failed: HTTP {}", status);
+                gui.updates.set_dotfiles_status(msg.as_bytes());
+                gui.updates.dotfiles_synced = false;
+                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} http_status={}", repo, status);
+                m.say("Dotfiles sync failed.");
+                return;
+            }
+            Err(why) => {
+                let msg = format!("Dotfiles sync failed: {}", why);
+                gui.updates.set_dotfiles_status(msg.as_bytes());
+                gui.updates.dotfiles_synced = false;
+                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} error={}", repo, why);
+                m.say("Dotfiles sync failed.");
+                return;
+            }
+        }
+    }
+
+    if write_errors > 0 && synced == 0 {
+        gui.updates.dotfiles_synced = false;
+        gui.updates.set_dotfiles_status(b"Fetched dotfiles but could not write to /data.");
+        m.say("Could not write synced dotfiles to /data.");
+    } else {
+        let mut msg_buf = [0u8; 96];
+        let mlen = updates::format_synced_status(synced, &repo, &mut msg_buf);
+        gui.updates.dotfiles_synced = synced > 0;
+        gui.updates.set_dotfiles_status(&msg_buf[..mlen]);
+        m.say(core::str::from_utf8(&msg_buf[..mlen]).unwrap_or("Dotfiles synced."));
+    }
+    sex_pdx::serial_record!(
+        "[settings.dotfiles.sync] repo={} synced={} missing={} write_errors={}",
+        repo,
+        synced,
+        missing,
+        write_errors
+    );
 }
 
 /// The About page's lines from the kernel's numbers (syscall 87); returns their length.
@@ -516,13 +815,16 @@ pub extern "C" fn _start() -> ! {
                         gui.hovered = hit;
                         gui.pressed = hit;
                         let Some(act) = hit else {
-                            if gui.search_focused || gui.search_selected {
+                            if gui.updates.focused_field.take().is_some() | (gui.search_focused || gui.search_selected) {
                                 gui.search_focused = false;
                                 gui.search_selected = false;
                                 show(&mut window, &m, gui);
                             }
                             continue;
                         };
+                        if !matches!(act, UiAction::FocusUpdatesField(_)) {
+                            gui.updates.focused_field = None;
+                        }
                         if !matches!(act, UiAction::FocusSearch | UiAction::ClearSearch) {
                             gui.search_focused = false;
                             gui.search_selected = false;
@@ -718,37 +1020,39 @@ pub extern "C" fn _start() -> ! {
                             UiAction::InstallExecute => {
                                 run_install_action(&mut window, gui, &mut m, true);
                             }
+                            UiAction::FocusUpdatesField(field) => {
+                                gui.updates.focused_field = Some(field);
+                                m.say(match field {
+                                    UpdatesField::FeedUrl => "Editing release feed URL (Enter to check, Esc to finish).",
+                                    UpdatesField::DotfilesRepo => "Editing dotfiles repo (owner/repo). Enter saves.",
+                                    UpdatesField::DotfilesBranch => "Editing dotfiles branch (default: main). Enter saves.",
+                                    UpdatesField::DotfilesToken => "Editing GitHub token (masked). Enter saves.",
+                                });
+                            }
                             UiAction::CheckSystemUpdate => {
-                                let _ = load_info(&mut window, &mut m, gui, "updates");
-                                gui.updates.system_checked = true;
-                                gui.updates.set_system_status(b"Checked xirtus/sexos A/B slot - run 'update' in Spindle to apply.");
-                                sex_pdx::serial_record!("[settings.updates.check] repo={}", candy_gui::SYSTEM_REPO);
-                                m.say("Checked xirtus/sexos A/B update status.");
+                                check_system_update(&mut window, gui, &mut m);
+                            }
+                            UiAction::InstallSystemUpdate => {
+                                install_system_update(gui, &mut m);
                             }
                             UiAction::RefreshUpdates => {
                                 let _ = load_info(&mut window, &mut m, gui, "updates");
                                 gui.updates.set_system_status(b"A/B slot status refreshed from Files.");
                                 m.say("Update status refreshed.");
                             }
-                            UiAction::SyncDotfiles => {
-                                gui.updates.dotfiles_synced = true;
-                                gui.updates.set_dotfiles_status(b"Synced config with xirtus/sexosdotfiles.");
-                                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} action=sync", candy_gui::DOTFILES_REPO);
-                                m.say("Private dotfiles sync queued (xirtus/sexosdotfiles).");
+                            UiAction::SaveDotfilesConfig => {
+                                save_dotfiles_config(&mut window, gui, &mut m);
                             }
-                            UiAction::PullDotfiles => {
-                                gui.updates.dotfiles_synced = true;
-                                gui.updates.set_dotfiles_status(b"Pulled latest dotfiles from xirtus/sexosdotfiles.");
-                                sex_pdx::serial_record!("[settings.dotfiles.sync] repo={} action=pull", candy_gui::DOTFILES_REPO);
-                                m.say("Pulled latest from xirtus/sexosdotfiles.");
+                            UiAction::SyncDotfiles => {
+                                sync_dotfiles_now(&mut window, gui, &mut m);
                             }
                             UiAction::ToggleDotfilesAutoSync => {
-                                gui.updates.dotfiles_auto_sync = !gui.updates.dotfiles_auto_sync;
-                                sex_pdx::serial_record!("[settings.dotfiles.autosync] enabled={}", gui.updates.dotfiles_auto_sync as u8);
-                                m.say(if gui.updates.dotfiles_auto_sync {
-                                    "Dotfiles auto-sync enabled."
+                                gui.updates.config.auto_sync = !gui.updates.config.auto_sync;
+                                sex_pdx::serial_record!("[settings.dotfiles.autosync] enabled={}", gui.updates.config.auto_sync as u8);
+                                m.say(if gui.updates.config.auto_sync {
+                                    "Dotfiles auto-sync enabled (click Save Config to persist)."
                                 } else {
-                                    "Dotfiles auto-sync disabled."
+                                    "Dotfiles auto-sync disabled (click Save Config to persist)."
                                 });
                             }
                             UiAction::WifiScan => {
@@ -821,6 +1125,36 @@ pub extern "C" fn _start() -> ! {
                         _ => {
                             if let Some(c) = sex_app::typed(key) {
                                 gui.wifi.type_char(c);
+                            }
+                        }
+                    }
+                    show(&mut window, &m, gui);
+                    continue;
+                }
+                // When an editable Updates / Dotfiles text input is focused, route typing directly to it.
+                if let Some(field) = gui.updates.focused_field {
+                    match key.code {
+                        ESC => {
+                            gui.updates.focused_field = None;
+                            m.say("Stopped editing field.");
+                        }
+                        TAB => {
+                            gui.updates.next_field();
+                        }
+                        BACKSPACE => {
+                            gui.updates.backspace();
+                        }
+                        ENTER => {
+                            gui.updates.focused_field = None;
+                            if field == UpdatesField::FeedUrl {
+                                check_system_update(&mut window, gui, &mut m);
+                            } else {
+                                save_dotfiles_config(&mut window, gui, &mut m);
+                            }
+                        }
+                        _ => {
+                            if let Some(c) = sex_app::typed(key) {
+                                gui.updates.type_char(c);
                             }
                         }
                     }

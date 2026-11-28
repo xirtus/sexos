@@ -22,6 +22,7 @@ extern crate std;
 
 pub mod align;
 pub mod crossfade;
+pub mod ducking;
 pub mod edges;
 pub mod export;
 pub mod handoff;
@@ -31,6 +32,7 @@ pub mod otio;
 pub mod rebase;
 pub mod restarts;
 pub mod render;
+pub mod review;
 pub mod skills;
 pub mod split_edit;
 pub mod suggest;

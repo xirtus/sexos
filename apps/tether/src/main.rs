@@ -25,12 +25,13 @@ use tether_proto::acp::{
     acp_initialize, acp_permission_reply, acp_session_cancel, acp_session_new, acp_session_prompt,
     parse_acp_incoming, AcpIncoming,
 };
-use tether_proto::auth::{compute_auth_tag, verify_auth_tag};
+use tether_proto::auth::{compute_auth_tag, fnv64_update, verify_auth_tag, FNV64_OFFSET};
 use tether_proto::frame::{
-    Frame, FrameDecoder, FrameKind, DEFAULT_PORT, MAGIC,
+    Frame, FrameDecoder, FrameKind, DEFAULT_PORT, HEARTBEAT_PING, MAGIC,
 };
 use tether_proto::rpc::{
-    json_escape, json_get_str, json_get_u64, rpc_err_json, rpc_ok_json, CapabilityMode, RpcMethod,
+    decode_base64, json_escape, json_get_bool, json_get_str, json_get_u64, rpc_err_json,
+    rpc_ok_json, CapabilityMode, RpcMethod,
 };
 use ui::{
     CenterTab, HitAction, LeftTab, PendingApproval, PendingWaveReview, SnapshotCard, TetherUi,
@@ -38,7 +39,40 @@ use ui::{
 };
 
 const TRAY_ID: u8 = 0;
+/// The agents the host bridge can run behind ACP (`tether/agent`): its own names, and
+/// what the toolbar shows. Claude and Antigravity both drive SexOS through the bridge's
+/// MCP tools, gated by this app's capability tier and kill switch.
+const AGENTS: [(&str, &str); 2] = [("antigravity", "Antigravity"), ("claude", "Claude")];
 const MAX_READ_BYTES: usize = 256 * 1024;
+const CONFIG_PATH: &[u8] = b"tether.cfg";
+/// Send a Ping every 10s so `sexnet`'s 30s smoltcp inactivity timeout never drops an idle link.
+const HEARTBEAT_INTERVAL_TICKS: u64 = 10_000;
+/// Tear down and reconnect if no frames arrive for 45s despite 10s pings.
+const HEARTBEAT_TIMEOUT_TICKS: u64 = 45_000;
+
+enum StreamUploadKind {
+    FsWrite {
+        sexfs_path: Vec<u8>,
+        display_path: String,
+        offset: u64,
+    },
+    Hotswap {
+        server: String,
+        pd: u32,
+        elf: Vec<u8>,
+    },
+}
+
+struct PendingUpload {
+    stream_id: u32,
+    rpc_id: u64,
+    expected_size: u64,
+    expected_fnv: Option<u64>,
+    received: u64,
+    fnv: u64,
+    failed: Option<String>,
+    kind: StreamUploadKind,
+}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -63,16 +97,21 @@ struct TetherApp {
     use_tls: bool,
     auto_reconnect: bool,
     last_reconnect_tick: u64,
+    last_ping_tick: u64,
+    last_rx_tick: u64,
     vault: Keeper,
     pin_knot: Option<Knot>,
     phase: ConnPhase,
     duplex: Option<net::Duplex>,
     decoder: FrameDecoder,
     rx_buf: Vec<u8>,
+    uploads: Vec<PendingUpload>,
     nonce: [u8; 32],
     capability: CapabilityMode,
     kill_switch: bool,
     agent_name: String,
+    /// Which of `AGENTS` the bridge runs.
+    agent: usize,
     session_id: String,
     next_acp_id: u64,
     left_tab: LeftTab,
@@ -102,16 +141,20 @@ impl TetherApp {
             use_tls: false,
             auto_reconnect,
             last_reconnect_tick: 0,
+            last_ping_tick: 0,
+            last_rx_tick: 0,
             vault,
             pin_knot,
             phase: ConnPhase::Disconnected,
             duplex: None,
             decoder: FrameDecoder::new(true),
             rx_buf: Vec::new(),
+            uploads: Vec::new(),
             nonce: [0u8; 32],
             capability: CapabilityMode::Observe,
             kill_switch: false,
             agent_name: String::from("Antigravity"),
+            agent: 0,
             session_id: String::new(),
             next_acp_id: 1,
             left_tab: LeftTab::Waves,
@@ -150,6 +193,16 @@ impl TetherApp {
         self.vault
             .with(self.owner, k, |secret| String::from_utf8_lossy(secret).into_owned())
             .unwrap_or_default()
+    }
+
+    fn save_config(&self, window: &mut Window) {
+        let pin = self.current_pin();
+        let data = format!(
+            "host={}\nport={}\npin={}\ncapability={}\nagent={}\n",
+            self.host, self.port, pin, self.capability as u8, AGENTS[self.agent].0
+        );
+        let _ = files::write(window, CONFIG_PATH, data.as_bytes());
+        let _ = files::sync(window);
     }
 
     fn push_chat(&mut self, line: impl Into<String>) {
@@ -222,8 +275,12 @@ impl TetherApp {
             d.close(window);
         }
         self.phase = ConnPhase::Disconnected;
+        self.decoder.clear();
+        self.rx_buf.clear();
+        self.uploads.clear();
         self.session_id.clear();
         self.approval = None;
+        self.last_reconnect_tick = sex_pdx::get_ticks();
         self.status_line = String::from("Disconnected.");
         self.update_tray();
     }
@@ -245,6 +302,7 @@ impl TetherApp {
         self.capability = self.capability.next();
         self.status_line = format!("Capability tier -> {}", self.capability.label());
         self.push_console(format!("Capability changed to {}", self.capability.label()));
+        self.save_config(window);
         if self.phase == ConnPhase::Live {
             self.send_frame(
                 window,
@@ -252,6 +310,26 @@ impl TetherApp {
             );
         }
         self.update_tray();
+    }
+
+    /// Asks the bridge for the chosen agent, then opens an ACP session with it.
+    fn start_agent(&mut self, window: &mut Window) {
+        let id = self.next_acp_id;
+        self.next_acp_id += 1;
+        self.send_acp(window, format!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"tether/agent\",\"params\":{{\"agent\":\"{}\"}}}}", id, AGENTS[self.agent].0));
+        self.agent_name = String::from(AGENTS[self.agent].1);
+        self.session_id.clear();
+        let id = self.next_acp_id;
+        self.next_acp_id += 1;
+        self.send_acp(window, acp_initialize(id, "SexOS Tether", "0.1.0"));
+    }
+
+    fn select_agent(&mut self, window: &mut Window, which: usize) {
+        self.agent = which % AGENTS.len();
+        self.status_line = format!("Agent -> {}", AGENTS[self.agent].1);
+        self.push_chat(format!("Switching to {}...", AGENTS[self.agent].1));
+        self.save_config(window);
+        if self.phase == ConnPhase::Live { self.start_agent(window); } else { self.agent_name = String::from(AGENTS[self.agent].1); }
     }
 
     fn toggle_kill_switch(&mut self, window: &mut Window) {
@@ -316,8 +394,12 @@ impl TetherApp {
                     loop {
                         match self.decoder.next_frame() {
                             Ok(Some(frame)) => {
+                                self.last_rx_tick = sex_pdx::get_ticks();
                                 self.handle_frame(window, frame);
                                 changed = true;
+                                if self.phase == ConnPhase::Disconnected {
+                                    return true;
+                                }
                             }
                             Ok(None) => break,
                             Err(e) => {
@@ -328,10 +410,22 @@ impl TetherApp {
                         }
                     }
                 }
+                if self.phase == ConnPhase::Live {
+                    let now = sex_pdx::get_ticks();
+                    if now.saturating_sub(self.last_rx_tick) >= HEARTBEAT_TIMEOUT_TICKS {
+                        self.push_console("Heartbeat timeout (45s idle); reconnecting.");
+                        self.disconnect(window);
+                        return true;
+                    }
+                    if now.saturating_sub(self.last_ping_tick) >= HEARTBEAT_INTERVAL_TICKS {
+                        self.last_ping_tick = now;
+                        self.send_frame(window, Frame::heartbeat_ping(now));
+                    }
+                }
                 changed || activity
             }
-            Err(_) => {
-                self.push_console("Connection closed by host.");
+            Err(e) => {
+                self.push_console(format!("Connection closed by host ({:?}).", e));
                 self.disconnect(window);
                 true
             }
@@ -366,13 +460,14 @@ impl TetherApp {
                         return;
                     }
                 }
+                let now = sex_pdx::get_ticks();
+                self.last_rx_tick = now;
+                self.last_ping_tick = now;
                 self.phase = ConnPhase::Live;
                 self.status_line = format!("Paired & live with {}:{}", self.host, self.port);
-                self.push_console("Authenticated! Initializing Antigravity ACP session...");
+                self.push_console(format!("Authenticated! Initializing {} ACP session...", AGENTS[self.agent].1));
                 self.update_tray();
-                let id = self.next_acp_id;
-                self.next_acp_id += 1;
-                self.send_acp(window, acp_initialize(id, "SexOS Tether", "0.1.0"));
+                self.start_agent(window);
             }
             FrameKind::AuthErr => {
                 let msg = String::from_utf8_lossy(&frame.payload).into_owned();
@@ -386,6 +481,15 @@ impl TetherApp {
             FrameKind::RpcRequest => {
                 let req = String::from_utf8_lossy(&frame.payload).into_owned();
                 self.handle_rpc(window, frame.stream_id, &req);
+            }
+            FrameKind::RpcStreamChunk => {
+                self.handle_rpc_stream_chunk(window, frame.stream_id, &frame.payload);
+            }
+            FrameKind::RpcStreamEnd => {
+                self.handle_rpc_stream_end(window, frame.stream_id);
+            }
+            FrameKind::Cancel => {
+                self.uploads.retain(|u| u.stream_id != frame.stream_id);
             }
             FrameKind::WaveEvent => {
                 let raw = String::from_utf8_lossy(&frame.payload).into_owned();
@@ -404,10 +508,126 @@ impl TetherApp {
                 let _ = self.create_snapshot(&label);
             }
             FrameKind::Heartbeat => {
-                self.send_frame(window, Frame::control(FrameKind::Heartbeat, frame.payload));
+                // Only reply to Ping; never echo Pong (prevents infinite ping-pong loop).
+                if frame.payload.first() == Some(&HEARTBEAT_PING) {
+                    self.send_frame(window, Frame::heartbeat_pong(&frame.payload));
+                }
             }
             _ => {}
         }
+    }
+
+    fn handle_rpc_stream_chunk(&mut self, window: &mut Window, stream_id: u32, payload: &[u8]) {
+        let Some(upload) = self.uploads.iter_mut().find(|u| u.stream_id == stream_id) else {
+            return;
+        };
+        if upload.failed.is_some() {
+            return;
+        }
+        upload.fnv = fnv64_update(upload.fnv, payload);
+        upload.received = upload.received.saturating_add(payload.len() as u64);
+        match &mut upload.kind {
+            StreamUploadKind::FsWrite {
+                sexfs_path,
+                display_path,
+                offset,
+            } => {
+                if !payload.is_empty() {
+                    match files::write_at(window, sexfs_path, *offset, payload) {
+                        Ok(n) => {
+                            *offset = offset.saturating_add(n as u64);
+                            if n != payload.len() {
+                                upload.failed = Some(format!(
+                                    "short write to {} ({}/{})",
+                                    display_path,
+                                    n,
+                                    payload.len()
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            upload.failed = Some(format!(
+                                "write_at({}, off={}) failed: {:?}",
+                                display_path, *offset, e
+                            ));
+                        }
+                    }
+                }
+            }
+            StreamUploadKind::Hotswap { elf, .. } => {
+                if elf.len().saturating_add(payload.len()) > sex_pdx::crash_log::HOTSWAP_MAX_BYTES {
+                    upload.failed = Some(String::from("hotswap ELF exceeds HOTSWAP_MAX_BYTES"));
+                } else {
+                    elf.extend_from_slice(payload);
+                }
+            }
+        }
+    }
+
+    fn handle_rpc_stream_end(&mut self, window: &mut Window, stream_id: u32) {
+        let Some(idx) = self.uploads.iter().position(|u| u.stream_id == stream_id) else {
+            return;
+        };
+        let upload = self.uploads.remove(idx);
+        let id = upload.rpc_id;
+
+        let reply = if let Some(err) = upload.failed {
+            rpc_err_json(id, "stream_failed", &err)
+        } else if upload.received != upload.expected_size {
+            rpc_err_json(
+                id,
+                "size_mismatch",
+                &format!(
+                    "Expected {} bytes, received {}",
+                    upload.expected_size, upload.received
+                ),
+            )
+        } else if upload
+            .expected_fnv
+            .is_some_and(|want| want != upload.fnv)
+        {
+            rpc_err_json(
+                id,
+                "checksum_mismatch",
+                &format!(
+                    "FNV64 mismatch: got {:016x}, want {:016x}",
+                    upload.fnv,
+                    upload.expected_fnv.unwrap_or(0)
+                ),
+            )
+        } else {
+            match upload.kind {
+                StreamUploadKind::FsWrite { display_path, .. } => {
+                    let _ = files::sync(window);
+                    self.push_console(format!(
+                        "Streamed {} bytes -> {} (fnv64={:016x})",
+                        upload.received, display_path, upload.fnv
+                    ));
+                    rpc_ok_json(
+                        id,
+                        &format!(
+                            "{{\"written\":{},\"fnv64\":\"{:016x}\"}}",
+                            upload.received, upload.fnv
+                        ),
+                    )
+                }
+                StreamUploadKind::Hotswap { server, pd, elf } => {
+                    let out = execute_hotswap(id, &server, pd, &elf);
+                    self.push_console(format!(
+                        "Hotswap '{}' (pd={}, {} bytes) finished",
+                        server,
+                        pd,
+                        elf.len()
+                    ));
+                    out
+                }
+            }
+        };
+
+        self.send_frame(
+            window,
+            Frame::new(stream_id, FrameKind::RpcResponse, 0, reply.into_bytes()),
+        );
     }
 
     fn handle_acp(&mut self, window: &mut Window, json: &str) {
@@ -523,6 +743,7 @@ impl TetherApp {
                 let names = [
                     "sexdisplay", "sexdrive", "silk-shell", "sexinput", "sexusb",
                     "sexbell", "sexfiles", "sexnet", "sexacpi", "denim", "cufflinks",
+                    "sexgpu-nv", "saddle", "sexuvc",
                 ];
                 let mut arr = String::from("[");
                 for (i, n) in names.iter().enumerate() {
@@ -595,11 +816,124 @@ impl TetherApp {
             }
             RpcMethod::FsWrite => {
                 let path = json_get_str(req_json, "path").unwrap_or_default();
-                let sp = sexfs_path(&path);
-                let content = json_get_str(req_json, "content").unwrap_or_default();
-                match files::write(window, &sp, content.as_bytes()) {
-                    Ok(()) => rpc_ok_json(id, &format!("{{\"written\":{}}}", content.len())),
-                    Err(e) => rpc_err_json(id, "fs_error", &format!("write({}) failed: {:?}", path, e)),
+                if path.is_empty() {
+                    rpc_err_json(id, "bad_args", "Missing path")
+                } else {
+                    let sp = sexfs_path(&path);
+                    if json_get_bool(req_json, "stream") == Some(true) {
+                        let expected_size = json_get_u64(req_json, "size").unwrap_or(0);
+                        let expected_fnv = json_get_str(req_json, "fnv64")
+                            .and_then(|h| u64::from_str_radix(h.trim(), 16).ok());
+                        match files::write(window, &sp, &[]) {
+                            Ok(()) => {
+                                self.uploads.retain(|u| u.stream_id != stream_id);
+                                self.uploads.push(PendingUpload {
+                                    stream_id,
+                                    rpc_id: id,
+                                    expected_size,
+                                    expected_fnv,
+                                    received: 0,
+                                    fnv: FNV64_OFFSET,
+                                    failed: None,
+                                    kind: StreamUploadKind::FsWrite {
+                                        sexfs_path: sp,
+                                        display_path: path,
+                                        offset: 0,
+                                    },
+                                });
+                                return;
+                            }
+                            Err(e) => rpc_err_json(
+                                id,
+                                "fs_error",
+                                &format!("create/truncate({}) failed: {:?}", path, e),
+                            ),
+                        }
+                    } else if let Some(b64) = json_get_str(req_json, "base64") {
+                        match decode_base64(&b64) {
+                            Ok(raw) => match files::write(window, &sp, &raw) {
+                                Ok(()) => {
+                                    let _ = files::sync(window);
+                                    rpc_ok_json(id, &format!("{{\"written\":{}}}", raw.len()))
+                                }
+                                Err(e) => rpc_err_json(
+                                    id,
+                                    "fs_error",
+                                    &format!("write({}) failed: {:?}", path, e),
+                                ),
+                            },
+                            Err(e) => rpc_err_json(id, "bad_base64", e),
+                        }
+                    } else {
+                        let content = json_get_str(req_json, "content").unwrap_or_default();
+                        match files::write(window, &sp, content.as_bytes()) {
+                            Ok(()) => {
+                                let _ = files::sync(window);
+                                rpc_ok_json(id, &format!("{{\"written\":{}}}", content.len()))
+                            }
+                            Err(e) => rpc_err_json(
+                                id,
+                                "fs_error",
+                                &format!("write({}) failed: {:?}", path, e),
+                            ),
+                        }
+                    }
+                }
+            }
+            RpcMethod::Hotswap => {
+                let server = json_get_str(req_json, "server").unwrap_or_default();
+                let pd_opt = sex_pdx::crash_log::server_pd_by_name(&server)
+                    .or_else(|| server.parse::<u32>().ok().filter(|&p| p > 0));
+                let Some(pd) = pd_opt else {
+                    let err = rpc_err_json(
+                        id,
+                        "unknown_server",
+                        &format!("Unknown server '{}'", server),
+                    );
+                    self.send_frame(
+                        window,
+                        Frame::new(stream_id, FrameKind::RpcResponse, 0, err.into_bytes()),
+                    );
+                    return;
+                };
+                if json_get_bool(req_json, "stream") == Some(true) {
+                    let expected_size = json_get_u64(req_json, "size").unwrap_or(0);
+                    let expected_fnv = json_get_str(req_json, "fnv64")
+                        .and_then(|h| u64::from_str_radix(h.trim(), 16).ok());
+                    if expected_size == 0
+                        || expected_size as usize > sex_pdx::crash_log::HOTSWAP_MAX_BYTES
+                    {
+                        rpc_err_json(id, "bad_elf", "ELF size out of bounds for OP_HOTSWAP")
+                    } else {
+                        let mut elf = Vec::new();
+                        if elf.try_reserve_exact(expected_size as usize).is_err() {
+                            rpc_err_json(id, "oom", "Out of memory allocating hotswap ELF buffer")
+                        } else {
+                            self.uploads.retain(|u| u.stream_id != stream_id);
+                            self.uploads.push(PendingUpload {
+                                stream_id,
+                                rpc_id: id,
+                                expected_size,
+                                expected_fnv,
+                                received: 0,
+                                fnv: FNV64_OFFSET,
+                                failed: None,
+                                kind: StreamUploadKind::Hotswap { server, pd, elf },
+                            });
+                            return;
+                        }
+                    }
+                } else {
+                    let elf_path = json_get_str(req_json, "elf_path").unwrap_or_default();
+                    if elf_path.is_empty() {
+                        rpc_err_json(id, "bad_args", "Missing elf_path")
+                    } else {
+                        let sp = sexfs_path(&elf_path);
+                        match read_file_bounded(window, &sp, sex_pdx::crash_log::HOTSWAP_MAX_BYTES) {
+                            Ok(elf) => execute_hotswap(id, &server, pd, &elf),
+                            Err(msg) => rpc_err_json(id, "fs_error", &msg),
+                        }
+                    }
                 }
             }
             RpcMethod::FsDelete => {
@@ -740,6 +1074,37 @@ impl TetherApp {
                 self.push_chat(format!("[rpc] Wave Review ready: {} (open Diff Review tab)", wave));
                 rpc_ok_json(id, "{\"queued_for_review\":true}")
             }
+            RpcMethod::OtaPush => {
+                // Files checks the release signature, the version and the image, then writes
+                // the slot that is not running and points the boot menu at it for one try.
+                let index = json_get_str(req_json, "index").unwrap_or_else(|| String::from("/sexos-update.txt"));
+                let sig = json_get_str(req_json, "sig").unwrap_or_else(|| String::from("/sexos-update.sig"));
+                let image = json_get_str(req_json, "image").unwrap_or_else(|| String::from("/sexos-boot.img"));
+                let apply = json_get_bool(req_json, "apply") != Some(false);
+                let mut paths = Vec::new();
+                paths.extend_from_slice(index.as_bytes());
+                paths.push(0);
+                paths.extend_from_slice(sig.as_bytes());
+                if apply {
+                    paths.push(0);
+                    paths.extend_from_slice(image.as_bytes());
+                }
+                self.push_console(format!("[ota] {} {}", if apply { "applying" } else { "checking" }, index));
+                let mut out = vec![0u8; 4096];
+                match files::update(window, &paths, &mut out) {
+                    Ok((status, n)) => {
+                        let report = String::from_utf8_lossy(&out[..n]).into_owned();
+                        self.push_console(format!("[ota] {}", report.trim()));
+                        let state = match status { sex_pdx::fs::OK => if apply { "written" } else { "available" }, sex_pdx::fs::EXISTS => "current", _ => "refused" };
+                        if status == sex_pdx::fs::DENIED {
+                            rpc_err_json(id, "ota_refused", report.trim())
+                        } else {
+                            rpc_ok_json(id, &format!("{{\"state\":\"{}\",\"report\":\"{}\"}}", state, json_escape(report.trim())))
+                        }
+                    }
+                    Err(e) => rpc_err_json(id, "fs_error", &format!("update failed: {:?}", e)),
+                }
+            }
             other => rpc_err_json(
                 id,
                 "not_yet_wired",
@@ -770,6 +1135,14 @@ impl TetherApp {
         self.input.clear();
         self.sync_input_mode();
 
+        if let Some(rest) = text.strip_prefix("/agent") {
+            let want = rest.trim();
+            match AGENTS.iter().position(|(k, n)| want.eq_ignore_ascii_case(k) || want.eq_ignore_ascii_case(n)) {
+                Some(i) => self.select_agent(window, i),
+                None => self.push_chat("Usage: /agent claude | /agent antigravity"),
+            }
+            return;
+        }
         if let Some(rest) = text.strip_prefix("/connect ") {
             let mut parts = rest.split_whitespace();
             if let Some(target) = parts.next() {
@@ -784,6 +1157,8 @@ impl TetherApp {
             if let Some(pin) = parts.next() {
                 self.set_pin(pin);
             }
+            self.auto_reconnect = !self.host.is_empty();
+            self.save_config(window);
             self.connect(window);
             return;
         }
@@ -831,6 +1206,7 @@ impl TetherApp {
                 }
             }
             HitAction::CycleCapability => self.cycle_capability(window),
+            HitAction::CycleAgent => self.select_agent(window, self.agent + 1),
             HitAction::ToggleKillSwitch => self.toggle_kill_switch(window),
             HitAction::LeftTab(t) => self.left_tab = t,
             HitAction::CenterTab(t) => self.center_tab = t,
@@ -892,6 +1268,7 @@ impl TetherApp {
             self.phase == ConnPhase::Live,
             &host_label,
             &self.agent_name,
+            AGENTS[self.agent].1,
             self.capability,
             self.kill_switch,
             self.left_tab,
@@ -928,23 +1305,134 @@ fn sexfs_path(path: &str) -> Vec<u8> {
     }
 }
 
-fn parse_args(raw: &[u8]) -> (String, u16, Option<String>, CapabilityMode) {
-    let text = core::str::from_utf8(raw).unwrap_or("").trim();
+fn read_file_bounded(window: &mut Window, sp: &[u8], max_bytes: usize) -> Result<Vec<u8>, String> {
+    let st = files::stat(window, sp).map_err(|e| format!("stat failed: {:?}", e))?;
+    if st.dir {
+        return Err(String::from("target path is a directory"));
+    }
+    let total = st.size as usize;
+    if total == 0 || total > max_bytes {
+        return Err(format!("file size {} out of bounds (1..={})", total, max_bytes));
+    }
+    let mut out = Vec::new();
+    if out.try_reserve_exact(total).is_err() {
+        return Err(format!("out of memory allocating {} bytes", total));
+    }
+    let mut chunk = vec![0u8; 32 * 1024];
+    let mut offset = 0u64;
+    while (offset as usize) < total {
+        let want = (total - offset as usize).min(chunk.len());
+        let n = files::read_at(window, sp, offset, &mut chunk[..want])
+            .map_err(|e| format!("read_at(off={}) failed: {:?}", offset, e))?;
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..n]);
+        offset += n as u64;
+    }
+    Ok(out)
+}
+
+fn execute_hotswap(id: u64, server: &str, pd: u32, elf: &[u8]) -> String {
+    if elf.len() < 4 || &elf[..4] != b"\x7fELF" {
+        return rpc_err_json(id, "bad_elf", "Payload does not start with ELF magic (\\x7fELF)");
+    }
+    match sex_pdx::crash_log::hotswap_server(pd, elf) {
+        Ok(entry) => rpc_ok_json(
+            id,
+            &format!(
+                "{{\"server\":\"{}\",\"pd\":{},\"entry\":\"{:#x}\",\"bytes\":{}}}",
+                json_escape(server),
+                pd,
+                entry,
+                elf.len()
+            ),
+        ),
+        Err(sex_pdx::crash_log::DENIED) => rpc_err_json(
+            id,
+            "kernel_denied",
+            &format!(
+                "OP_HOTSWAP denied by kernel for '{}' (pd={}); kernel/src/crash_log.rs:342 currently restricts OP_HOTSWAP to Spindle/Shell PDs",
+                server, pd
+            ),
+        ),
+        Err(code) => rpc_err_json(
+            id,
+            "hotswap_failed",
+            &format!("OP_HOTSWAP failed for '{}' (pd={}) with status {}", server, pd, code),
+        ),
+    }
+}
+
+/// The agent `tether.cfg` names (`agent=claude`), as an index into `AGENTS`.
+fn load_agent(window: &mut Window) -> usize {
+    let mut buf = [0u8; 1024];
+    let Ok(n) = files::read(window, CONFIG_PATH, &mut buf) else { return 0 };
+    core::str::from_utf8(&buf[..n]).unwrap_or("").lines()
+        .find_map(|l| l.trim().strip_prefix("agent=")).and_then(|v| AGENTS.iter().position(|(k, _)| *k == v.trim()))
+        .unwrap_or(0)
+}
+
+fn load_config(window: &mut Window) -> (String, u16, Option<String>, CapabilityMode) {
+    let mut buf = [0u8; 1024];
+    let Ok(n) = files::read(window, CONFIG_PATH, &mut buf) else {
+        return (String::new(), DEFAULT_PORT, None, CapabilityMode::Observe);
+    };
+    let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
     let mut host = String::new();
     let mut port = DEFAULT_PORT;
     let mut pin = None;
     let mut cap = CapabilityMode::Observe;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("host=") {
+            let v = v.trim();
+            if !v.is_empty() {
+                host = String::from(v);
+            }
+        } else if let Some(v) = line.strip_prefix("port=") {
+            if let Ok(p) = v.trim().parse::<u16>() {
+                if p > 0 {
+                    port = p;
+                }
+            }
+        } else if let Some(v) = line.strip_prefix("pin=") {
+            let v = v.trim();
+            if !v.is_empty() {
+                pin = Some(String::from(v));
+            }
+        } else if let Some(v) = line.strip_prefix("capability=") {
+            if let Ok(c) = v.trim().parse::<u8>() {
+                if let Some(mode) = CapabilityMode::from_u8(c) {
+                    cap = mode;
+                }
+            }
+        }
+    }
+    (host, port, pin, cap)
+}
+
+fn parse_args(raw: &[u8]) -> (String, u16, Option<String>, Option<CapabilityMode>) {
+    let text = core::str::from_utf8(raw).unwrap_or("").trim();
+    let mut host = String::new();
+    let mut port = DEFAULT_PORT;
+    let mut pin = None;
+    let mut cap = None;
     for tok in text.split_whitespace() {
         if tok.starts_with('@') || tok.starts_with('/') {
             // SexOS filesystem grant argument (e.g. `@/` or `/data`) — handled by sexfiles.
             continue;
         }
         if tok == "--dev" {
-            cap = CapabilityMode::Dev;
+            cap = Some(CapabilityMode::Dev);
             continue;
         }
         if tok == "--full" {
-            cap = CapabilityMode::FullControl;
+            cap = Some(CapabilityMode::FullControl);
+            continue;
+        }
+        if tok == "--observe" {
+            cap = Some(CapabilityMode::Observe);
             continue;
         }
         if host.is_empty() {
@@ -966,13 +1454,32 @@ pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Tether");
 
+    let (saved_host, saved_port, saved_pin, saved_cap) = load_config(&mut window);
     let mut args_buf = [0u8; sex_pdx::fs::ARGS_MAX];
-    let (host, port, pin, initial_cap) = parse_args(files::args(&mut window, &mut args_buf));
+    let (cli_host, cli_port, cli_pin, cli_cap) = parse_args(files::args(&mut window, &mut args_buf));
+
+    let has_cli_override = !cli_host.is_empty() || cli_pin.is_some() || cli_cap.is_some();
+    let host = if !cli_host.is_empty() { cli_host } else { saved_host };
+    let port = if !host.is_empty() && has_cli_override && cli_port != DEFAULT_PORT {
+        cli_port
+    } else if !has_cli_override {
+        saved_port
+    } else {
+        cli_port
+    };
+    let pin = cli_pin.or(saved_pin);
+    let initial_cap = cli_cap.unwrap_or(saved_cap);
 
     let owner = Owner(window.target);
     let mut app = TetherApp::new(owner, host, port, pin);
     app.capability = initial_cap;
-    app.push_chat("SexOS Tether v2 — Antigravity ACP Client & Remote Machine Control");
+    app.agent = load_agent(&mut window);
+    app.agent_name = String::from(AGENTS[app.agent].1);
+    if has_cli_override {
+        app.save_config(&mut window);
+    }
+    app.push_chat("SexOS Tether v2 — Antigravity / Claude ACP client & remote machine control");
+    app.push_chat("Agent: click the agent pill or type /agent claude | /agent antigravity");
     app.push_chat("On your Mac/host:  tether-bridge serve");
     app.push_chat("Here:              /connect <HOST_IP> <6_DIGIT_PIN>   (or click Host pill)");
     app.update_tray();

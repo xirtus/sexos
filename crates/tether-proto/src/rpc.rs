@@ -297,6 +297,72 @@ pub fn json_get_bool(json: &str, key: &str) -> Option<bool> {
     }
 }
 
+/// Default chunk size for streamed binary RPC payloads (`fs_write`, `hotswap`, `screenshot`).
+pub const STREAM_CHUNK_BYTES: usize = 32 * 1024;
+
+/// Decodes standard RFC 4648 Base64 (ignoring ASCII whitespace).
+pub fn decode_base64(input: &str) -> Result<Vec<u8>, &'static str> {
+    fn val(b: u8) -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let mut out = Vec::with_capacity((input.len() / 4) * 3);
+    let mut quad = [0u8; 4];
+    let mut qlen = 0usize;
+    let mut pad = 0usize;
+
+    for b in input.bytes() {
+        if b.is_ascii_whitespace() {
+            continue;
+        }
+        if b == b'=' {
+            if pad == 0 && qlen < 2 {
+                return Err("invalid base64 padding");
+            }
+            quad[qlen] = 0;
+            qlen += 1;
+            pad += 1;
+        } else {
+            if pad > 0 {
+                return Err("unexpected data after base64 padding");
+            }
+            let Some(v) = val(b) else {
+                return Err("invalid base64 character");
+            };
+            quad[qlen] = v;
+            qlen += 1;
+        }
+        if qlen == 4 {
+            let n = ((quad[0] as u32) << 18)
+                | ((quad[1] as u32) << 12)
+                | ((quad[2] as u32) << 6)
+                | (quad[3] as u32);
+            out.push((n >> 16) as u8);
+            if pad < 2 {
+                out.push((n >> 8) as u8);
+            }
+            if pad == 0 {
+                out.push(n as u8);
+            }
+            qlen = 0;
+            if pad > 0 {
+                break;
+            }
+        }
+    }
+    if qlen != 0 {
+        return Err("truncated base64 input");
+    }
+    Ok(out)
+}
+
 /// Builds a compact JSON RPC response payload.
 pub fn rpc_ok_json(id: u64, result_json: &str) -> String {
     format!("{{\"id\":{},\"ok\":true,\"result\":{}}}", id, result_json)

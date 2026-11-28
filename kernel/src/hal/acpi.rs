@@ -858,6 +858,7 @@ pub fn invoke(pd: &crate::capability::ProtectionDomain, slot: u64, op: u64, arg:
     let has = |right: u8| grant.rights & right != 0;
     match op {
         w::INFO => INFO.lock().encode(),
+        w::RESTART if has(w::RESTART_ONLY) && !has(w::REQUEST) => if begin(op, "spindle") { [w::OK, 0, 0, 0, 0] } else { [w::BUSY, 0, 0, 0, 0] },
         w::OFF | w::RESTART if has(w::REQUEST) => {
             let info = INFO.lock().flags;
             if op == w::OFF && info & w::CAN_OFF == 0 { return [w::UNAVAILABLE, 0, 0, 0, 0]; }

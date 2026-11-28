@@ -74,6 +74,10 @@ pub const LOG_TAIL_BYTES: usize = 64 * 1024;
 /// Spindle or Shell only. Replaces a captured restartable server's ELF in place and
 /// restarts it cleanly. Returns new entry point in rsi on `OK`.
 pub const OP_HOTSWAP: u64 = 8;
+/// One part of a hot-swap image, gathered by the kernel: rsi = target_pd, rdx = bytes,
+/// r10 = length, r8 = offset (0 starts a new image). `OP_HOTSWAP` with r10 = 0 swaps in
+/// what was gathered, so the caller never holds the whole image.
+pub const OP_HOTSWAP_PART: u64 = 9;
 /// Maximum ELF size accepted by `OP_HOTSWAP` (8 MiB, within a server's 16 MiB slot).
 pub const HOTSWAP_MAX_BYTES: usize = 8 * 1024 * 1024;
 
@@ -442,6 +446,24 @@ pub fn hotswap_server(pd: u32, elf: &[u8]) -> Result<u64, u64> {
             out("rcx") _, out("r11") _, out("r8") _, options(nostack));
     }
     if status == OK { Ok(entry) } else { Err(status) }
+}
+
+/// One part of a hot-swap image for `pd`, at byte `at` (0 starts a new image). The kernel
+/// gathers the parts; `hotswap_server(pd, &[])` then swaps the gathered image in.
+#[cfg(target_arch = "x86_64")]
+pub fn hotswap_part(pd: u32, at: usize, bytes: &[u8]) -> Result<(), u64> {
+    let status: u64;
+    unsafe {
+        core::arch::asm!("syscall",
+            inlateout("rax") SYSCALL => status,
+            inlateout("rdi") OP_HOTSWAP_PART => _,
+            inlateout("rsi") pd as u64 => _,
+            inlateout("rdx") bytes.as_ptr() as u64 => _,
+            inlateout("r10") bytes.len() as u64 => _,
+            inlateout("r8") at as u64 => _,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    if status == OK { Ok(()) } else { Err(status) }
 }
 
 #[cfg(test)]

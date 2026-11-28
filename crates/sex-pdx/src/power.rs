@@ -93,6 +93,9 @@ pub const SENSE: u8 = 4;
 pub const FIRMWARE: u8 = 8;
 /// May change CPU/thermal power profiles (`CTL_PROFILE`, `CTL_THERMAL_PROFILE`), never off/restart/sleep.
 pub const PROFILE: u8 = 16;
+/// May ask for a `RESTART` only (Files still flushes first): Spindle's `restart`, so an
+/// update applied over the tether can be tried without someone at the machine.
+pub const RESTART_ONLY: u8 = 32;
 
 /// The message the kernel sends Files (as an IPC call from pd 0) before power changes.
 /// arg0 is the op (`OFF` or `RESTART`). The ACPI service gets it too, and runs `\_PTS`.

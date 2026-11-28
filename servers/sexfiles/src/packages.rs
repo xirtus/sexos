@@ -25,7 +25,7 @@ use sexfs::{Error, Fs, Kind};
 
 type F = Fs<'static, Disk>;
 /// Programs Files gives more than their own folder (see `fs_service::program_is`).
-const RESERVED: [&str; 2] = ["tatami", "settings"];
+const RESERVED: [&str; 3] = ["tatami", "settings", "tether"];
 const CHUNK: usize = 64 * 1024;
 
 fn read_all(fs: &mut F, path: &[u8], max: usize) -> Result<Vec<u8>, Error> {

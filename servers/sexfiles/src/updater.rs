@@ -89,6 +89,36 @@ fn read_file(fs: &mut Fs<'static, crate::fs_service::Disk>, path: &[u8], max: us
     Ok(buf)
 }
 
+/// The installed system on the internal disk even when booted from live USB/ISO,
+/// using `st.current` from `LIMINE.CFG` so recovery `update` can upgrade the inactive slot
+/// (and migrate a legacy 16 KiB `LIMINE.CFG` to 64 KiB) without wiping the 97 GiB store.
+fn installed_for_update() -> Option<(RawDisk, System, update::Slot, State)> {
+    if let Some(found) = installed() {
+        return Some(found);
+    }
+    let layout = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0);
+    if layout & 0xFF != sex_pdx::BLOCK_LAYOUT_STORE { return None; }
+    let mut disk = RawDisk { sectors: layout >> 8 };
+    let sys = System::find(&mut disk).ok()?;
+    let menu = sys.read_menu(&mut disk).ok()?;
+    let st = State::parse(&menu).ok()?;
+    sex_pdx::serial_record!("[files.update.recovery] live-iso targeting installed slot={:?} version={}", st.current.other(), st.version);
+    Some((disk, sys, st.current, st))
+}
+
+/// Why an update failed, in the update's terms (the installer's words for the same
+/// errors talk about partitions to shrink, which an update never asks for).
+fn update_why(e: Error) -> &'static str {
+    match e {
+        Error::NoSpace => "There is no room for it: the image is larger than the system slot, the new boot menu is over 64 KiB, or the EFI system partition has no free run for the menu.",
+        Error::BadSignature => "The image is not the one the signed index describes (its checksum differs).",
+        Error::Io => "A disk error stopped the update, or the slot read back differently from the image.",
+        Error::NotFound => "The boot menu has no entry for the running system, or the image has no limine.cfg.",
+        Error::Unsupported => "The running system is not in either system slot.",
+        _ => why(e),
+    }
+}
+
 /// Checks an update, and with an image writes it. `paths` holds the index, signature and
 /// image file paths, separated by NUL; without the image it only says whether the index
 /// is good and newer. Writes a report into `out`; returns the reply status (OK: go on,
@@ -113,8 +143,8 @@ pub fn run(fs: &mut Fs<'static, crate::fs_service::Disk>, paths: &[u8], out: &mu
             return finish(w::DENIED, text, out);
         }
     };
-    let Some((mut disk, sys, slot, st)) = installed() else {
-        text.push_str("Not updated. Updates go to an installed SexOS; this one started from somewhere else (a USB stick or CD).\n");
+    let Some((mut disk, sys, slot, st)) = installed_for_update() else {
+        text.push_str("Not updated. No installed SexOS system was found on this disk.\n");
         return finish(w::DENIED, text, out);
     };
     if index.version <= st.version {
@@ -133,8 +163,18 @@ pub fn run(fs: &mut Fs<'static, crate::fs_service::Disk>, paths: &[u8], out: &mu
     }
     let image = fs.open(image_path)?;
     if image.kind == Kind::Dir { return Err(sexfs::Error::IsDir); }
+    // A download cut short is not a bad signature: say so, with how much arrived.
+    if image.size < index.bytes {
+        sex_pdx::serial_record!("[files.update.truncated] got={} want={} version={}", image.size, index.bytes, index.version);
+        text.push_str(&format!("Not updated. The image download is incomplete: {} of {} bytes arrived. Run update again; nothing was written.\n", image.size, index.bytes));
+        return finish(w::DENIED, text, out);
+    }
     sex_pdx::serial_record!("[files.update.plan] running={:?} target={:?} version={} from={} bytes={}", slot, slot.other(), index.version, st.version, index.bytes);
-    let mut progress = |s: &str| sex_pdx::serial_record!("[files.update.step] {}", s);
+    let mut last_step: &'static str = "starting";
+    let mut progress = |s: &str| {
+        sex_pdx::serial_record!("[files.update.step] {}", s);
+        last_step = match s { "checking the image" => "checking the image", "writing the other system slot" => "writing the other system slot", "reading the slot back" => "reading the slot back", "pointing the boot menu at it" => "pointing the boot menu at it", _ => "updating" };
+    };
     let booted = sys.slot(slot).1;
     let result = update::apply(&mut disk, &sys, booted, &index, &mut FileDev { fs, id: image.id, sectors: image.size / SECTOR as u64 }, &mut progress)
         .and_then(|s| if DiskFs::diskfs_block_sync() == 0 { Ok(s) } else { Err(Error::Io) });
@@ -145,8 +185,8 @@ pub fn run(fs: &mut Fs<'static, crate::fs_service::Disk>, paths: &[u8], out: &mu
             finish(w::OK, text, out)
         }
         Err(e) => {
-            sex_pdx::serial_record!("[files.update.failed] error={:?}", e);
-            text.push_str("Not updated. "); text.push_str(why(e));
+            sex_pdx::serial_record!("[files.update.failed] error={:?} step={}", e, last_step);
+            text.push_str(&format!("Not updated (while {}). ", last_step)); text.push_str(update_why(e));
             text.push_str(" The boot menu was not changed, so this system still starts.\n");
             finish(w::DENIED, text, out)
         }

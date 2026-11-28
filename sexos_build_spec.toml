@@ -126,7 +126,8 @@ crates = [
   "apps/cabaret/Cargo.toml",
   "apps/tailor/Cargo.toml",
   "apps/brootlite/Cargo.toml",
-  "apps/tether/Cargo.toml"
+  "apps/tether/Cargo.toml",
+  "apps/splicy/Cargo.toml"
 ]
 
 [[stage]]
@@ -1127,6 +1128,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/tether/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/tether"
 dest_artifact = "iso_root/programs/tether"
+
+# Splicy: transcript-driven NLE video editor on sex-app + sex-splice + FFmpeg.
+[[stage]]
+id = "build_splicy"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/splicy/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/splicy"
+dest_artifact = "iso_root/programs/splicy"
 
 [[stage]]
 id = "copy_limine_cfg"

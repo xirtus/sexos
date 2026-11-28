@@ -225,7 +225,11 @@ ACPI_AUX_COHORTS=(
  # x17 trackpad + battery/lid ref unwrap, _BIF fallback, 16th SSDT & _CST diagnostics + power::PROFILE (wait loop unchanged), 2026-11-26
  ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','58d75780cd168c6538c0388da110fbc966e13b7cd169b20a012070ee75821884'),
  # x17 WMI hotkeys (Brightness, GModeToggle, MicMute counter in Sensors; wait loop unchanged), 2026-11-27
- ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','19c24cbf7758b2a07386c8d4f4756c585cf2ba7e365e5aed65f64f5e3ec21363'))
+ ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','19c24cbf7758b2a07386c8d4f4756c585cf2ba7e365e5aed65f64f5e3ec21363'),
+ # power::RESTART_ONLY for Spindle's `restart` (wait loop unchanged), 2026-11-27
+ ('e502d577a5ac820e615725ba63c52ff498256aec12ae9a27e3606a31714e60f1','1e34e043d5df4cda6048d2214d4c874784e00be0f2d143eb979b24f97b6701f0'),
+ # noir x17 WMI hotkeys merged with power::RESTART_ONLY (wait loop unchanged), 2026-11-28
+ ('6ef80a67392cc86b28d57c7e2ed53c3484f5e53cc88599e522e55023d98b7b23','c9ad1784233989efcdcb7d5a84cc174d155850fda2659f1c4bd0bb35acbe2ec5'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
@@ -359,14 +363,14 @@ def _task_ordinals_ok(records):
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:be9e938c6bbdc5e952457d2f9f366404b6d1a3bb14d3990b036606bee9a83069',
  'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
- 'crates/sex-pdx/src/crash_log.rs': 'dc1837a87dc9f8a6cd72e1ca8e5b539bbb705724af8065e29af8dc7cbfa5f2b8',  # sexuvc PD 55 alias in server_pd_by_name (no observer change), 2026-11-27
+ 'crates/sex-pdx/src/crash_log.rs': '4d69a414fb8d0132b788372a724b3e29b029b6f99ebd9eff2219f803775b2e6e',  # OP_HOTSWAP_PART + hotswap_part (no observer change), 2026-11-27
  'crates/sex-pdx/src/web.rs': '404f9c07116a41ef3ac80c797ffea6d54e008ca038aaac79fa7b4e81c5ca91c4',  # web protocol words for H2/H3 (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '0b72ffacafdbfce18323734be07acdfa224927ef0d65baac1831f4928cea5dd8',  # self pointer at gs:[32], per-core FS/TSC_AUX caches and IRET snapshot (no observer change; Gemini #699), 2026-11-26
  'kernel/src/app_resources.rs': 'b1b1dfda0016755aa8d4c868e93daf13d5598d550082798a87998810a6c4eeed',  # program pages the file fills come unzeroed (no observer change; Gemini #696), 2026-11-26
  'kernel/src/service_restart.rs': '2bb687b9f0bd3da1e5dd4c33ef67ab28cbbc792d8a162b40673f49745043437a',  # live server hotswap (no observer change), 2026-11-26
- 'kernel/src/crash_log.rs': '3c41a4f593b5f82ed3687b97c9e5a6ab6feea9c0c4055e84828035e8ede6c155',  # OP_HOTSWAP syscall dispatch (no observer change), 2026-11-26
+ 'kernel/src/crash_log.rs': '415518cac7ef63046bc083c68e3763c12105c8e227c69cf4316f255c10fe83f2',  # OP_HOTSWAP_PART: kernel gathers the hot-swap image (no observer change), 2026-11-27
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 
