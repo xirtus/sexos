@@ -41,12 +41,12 @@ pub struct Config {
     pub accel_units: i32,
 }
 impl Config {
-    /// Defaults scaled to the pad: crossing its width slowly moves the pointer ~1100
-    /// pixels, a quick flick up to three times as far (700 with no acceleration felt
-    /// far slower than a mouse on the x17's 1920-wide screen).
+    /// Defaults scaled to the pad: crossing its width slowly moves the pointer ~2000
+    /// pixels (a whole 1920-wide screen, as on the x17), a quick flick up to three
+    /// times as far.
     pub fn for_extent(x_max: i32) -> Self {
         let w = x_max.max(64);
-        Self { pointer_q8: (1100 * 256 / w).max(1), scroll_step: (w / 40).max(1), tap_ms: 180, tap_slop: (w / 60).max(1), swipe_distance: w / 5, pinch_percent: 25, accel_units: (w / 40).max(1) }
+        Self { pointer_q8: (2000 * 256 / w).max(1), scroll_step: (w / 40).max(1), tap_ms: 180, tap_slop: (w / 60).max(1), swipe_distance: w / 5, pinch_percent: 25, accel_units: (w / 40).max(1) }
     }
 }
 
@@ -245,8 +245,8 @@ mod tests {
         let mut r = Recognizer::new(Config { accel_units: 0, ..Config::for_extent(3000) });
         let ev = run(&mut r, &[(0, frame(&[(1, 1000, 1000)], false)), (10, frame(&[(1, 1100, 1050)], false)), (20, frame(&[(1, 1200, 1100)], false)), (300, frame(&[], false))]);
         let (sx, sy) = ev.iter().fold((0, 0), |a, e| if let Event::Move(x, y) = e { (a.0 + x, a.1 + y) } else { a });
-        // 200 units at 1100 px per 3000 units: about 73 px, half that down.
-        assert!((71..=74).contains(&sx) && (35..=37).contains(&sy), "{} {}", sx, sy);
+        // 200 units at 2000 px per 3000 units: about 133 px, half that down.
+        assert!((130..=134).contains(&sx) && (64..=67).contains(&sy), "{} {}", sx, sy);
         assert!(!ev.iter().any(|e| matches!(e, Event::Button(..))), "a drag is not a tap: {:?}", ev);
     }
 
@@ -320,7 +320,7 @@ mod tests {
         let mut r = rec();
         let ev = run(&mut r, &[(0, frame(&[(1, 100, 100)], false)), (10, frame(&[(1, 200, 100)], false)), (20, frame(&[], false)),
                                (500, frame(&[(2, 2900, 1900)], false)), (510, frame(&[(2, 2900, 1900)], false))]);
-        assert!(ev.iter().all(|e| match e { Event::Move(x, y) => x.abs() < 100 && y.abs() < 100, _ => true }), "{:?}", ev);
+        assert!(ev.iter().all(|e| match e { Event::Move(x, y) => x.abs() < 200 && y.abs() < 200, _ => true }), "{:?}", ev);
     }
 
     #[test]
@@ -334,7 +334,7 @@ mod tests {
         };
         // The same 600 units: slowly (10 a frame) near the base speed, quickly (150) at least twice as far.
         let (slow, fast) = (total(10), total(150));
-        assert!((220..=320).contains(&slow), "{slow}");
+        assert!((400..=560).contains(&slow), "{slow}");
         assert!(fast >= slow * 2 && fast <= slow * 3 + 10, "{slow} {fast}");
     }
 
