@@ -1145,6 +1145,12 @@ id = "nvidia_firmware"
 action = "nvidia_firmware"
 artifacts = ["iso_root/firmware/nvidia-gsp.pack"]
 
+# Sound Open Firmware for Tiger Lake's audio DSP (Bell, built-in microphones).
+[[stage]]
+id = "sof_firmware"
+action = "sof_firmware"
+artifacts = ["iso_root/firmware/sof.pack"]
+
 [[stage]]
 id = "boot_image"
 action = "boot_image"
