@@ -101,6 +101,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Intel audio DSP (SOF) boot, IPC3 and DMIC graph on the host
       run: bash scripts/sof_host_gate.sh
+    - name: Intel audio DSP lease (sex_pdx::audio_dsp slots, regions, firmware names) on the host
+      run: cargo test --locked -p sex-pdx --test audio_dsp
     - name: Driver SDK (Harness), its edu template driver, fuzz hooks and the hardware list on the host
       run: bash scripts/driver_sdk_host_gate.sh
     - name: USB isochronous endpoints and UVC camera detection on the host
