@@ -8085,6 +8085,8 @@ version = "0.1.0"
 dependencies = [
  "linked_list_allocator",
  "sex-pdx",
+ "sex-sof",
+ "sha2 0.10.9",
  "virtio-drivers",
  "zerocopy 0.8.63",
 ]

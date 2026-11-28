@@ -679,6 +679,21 @@ impl Hda {
     /// True when there is an input to record from and a stream to record with.
     pub fn has_mic(&self) -> bool { self.mic_sd != 0 }
 
+    /// Whether a microphone is plugged into a jack that senses it (a headset), which
+    /// wins over built-in microphones on the audio DSP (`crate::dsp`).
+    pub fn jack_mic_plugged(&mut self) -> bool {
+        let mics = self.mics;
+        let codec = self.codec;
+        let mut plugged = false;
+        for m in mics[..self.mic_count].iter().flatten() {
+            if m.input.internal || !m.input.sense { continue; }
+            self.codec = m.codec;
+            if self.verb(m.pin, GET_PIN_SENSE, 0).is_some_and(|v| v & 1 << 31 != 0) { plugged = true; break; }
+        }
+        self.codec = codec;
+        plugged
+    }
+
     /// How many inputs can record (-1 without an input stream), for the boot log.
     pub fn mic_inputs(&self) -> i64 { if self.mic_sd == 0 { -1 } else { self.mic_count as i64 } }
 
