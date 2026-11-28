@@ -15,6 +15,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod zone;
+pub mod dreamspell;
 
 /// Seconds from the Unix epoch to the SexTime epoch.
 pub const UNIX_OFFSET: i64 = 1_356_048_000;
@@ -145,56 +146,43 @@ impl Gregorian {
     }
 }
 
-/// A Maya Long Count date for one UTC day.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LongCount {
-    pub baktun: u64,
-    pub katun: u8,
-    pub tun: u8,
-    pub winal: u8,
-    pub kin: u8,
+// The Maya counts are shared with the Dreamroot calendar app through the
+// `dreamroot-core` crate (github.com/xirtus/dreamroot), so the bar clock and
+// the app always agree; SexTime adds only the timestamp views below.
+pub use dreamroot_core::maya::{
+    Haab, LongCount, MayaDate, Tzolkin, BAKTUN_DAYS, HAAB_MONTHS, KATUN_DAYS, TUN_DAYS, TZOLKIN_NAMES, WINAL_DAYS,
+};
+
+/// Long Count days since 0.0.0.0.0 of the UTC day of `ts`; `None` before
+/// the Long Count origin.
+pub fn long_count_days(ts: SexTimestamp) -> Option<i64> {
+    let days = ts.utc_day().checked_add(EPOCH_LONG_COUNT_DAYS)?;
+    if days < 0 { None } else { Some(days) }
 }
 
-pub const BAKTUN_DAYS: i64 = 144_000;
-pub const KATUN_DAYS: i64 = 7_200;
-pub const TUN_DAYS: i64 = 360;
-pub const WINAL_DAYS: i64 = 20;
+/// The first second (00:00:00 UTC) of a Long Count day.
+pub fn long_count_timestamp(lc: LongCount) -> Option<SexTimestamp> {
+    let day = lc.days()?.checked_sub(EPOCH_LONG_COUNT_DAYS)?;
+    SexTimestamp::new(day.checked_mul(SECONDS_PER_DAY)?, 0)
+}
 
-impl LongCount {
-    /// Days since 0.0.0.0.0; None before the Long Count origin.
-    pub fn days_of(ts: SexTimestamp) -> Option<i64> {
-        let days = ts.utc_day().checked_add(EPOCH_LONG_COUNT_DAYS)?;
-        if days < 0 { None } else { Some(days) }
-    }
+/// A count that names whole civil days: the Long Count, the full Maya date
+/// and the Dreamspell kin, read from a SexTime timestamp. Give it local
+/// civil seconds for a local calendar.
+pub trait CivilDay: Sized {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self>;
+    /// Unix seconds (already shifted into the person's zone, if wanted).
+    fn from_unix(seconds: i64) -> Option<Self> { Self::from_timestamp(SexTimestamp::from_unix(seconds, 0)?) }
+}
 
-    pub fn from_days(days: i64) -> Option<Self> {
-        if days < 0 { return None; }
-        Some(Self {
-            baktun: (days / BAKTUN_DAYS) as u64,
-            katun: (days % BAKTUN_DAYS / KATUN_DAYS) as u8,
-            tun: (days % KATUN_DAYS / TUN_DAYS) as u8,
-            winal: (days % TUN_DAYS / WINAL_DAYS) as u8,
-            kin: (days % WINAL_DAYS) as u8,
-        })
-    }
-
-    pub fn from_timestamp(ts: SexTimestamp) -> Option<Self> {
-        Self::from_days(Self::days_of(ts)?)
-    }
-
-    /// Days since the origin, rejecting out-of-range places.
-    pub fn days(self) -> Option<i64> {
-        if self.katun >= 20 || self.tun >= 20 || self.winal >= 18 || self.kin >= 20 { return None; }
-        (i64::try_from(self.baktun).ok()?).checked_mul(BAKTUN_DAYS)?
-            .checked_add(self.katun as i64 * KATUN_DAYS + self.tun as i64 * TUN_DAYS
-                + self.winal as i64 * WINAL_DAYS + self.kin as i64)
-    }
-
-    /// The first second (00:00:00 UTC) of this Long Count day.
-    pub fn to_timestamp(self) -> Option<SexTimestamp> {
-        let day = self.days()?.checked_sub(EPOCH_LONG_COUNT_DAYS)?;
-        SexTimestamp::new(day.checked_mul(SECONDS_PER_DAY)?, 0)
-    }
+impl CivilDay for LongCount {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_days(long_count_days(ts)?) }
+}
+impl CivilDay for MayaDate {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_days(long_count_days(ts)?) }
+}
+impl CivilDay for dreamspell::Kin {
+    fn from_timestamp(ts: SexTimestamp) -> Option<Self> { Self::from_unix_day(ts.utc_day().checked_add(EPOCH_UNIX_DAYS)?) }
 }
 
 #[cfg(test)]
@@ -292,7 +280,7 @@ mod tests {
         // B'ak'tun is not wrapped modulo 13.
         assert_eq!(LongCount::from_days(14 * 144_000), Some(lc(14, 0, 0, 0, 0)));
         // GMT 584283: 0.0.0.0.0 is 11 August 3114 BCE (astronomical -3113).
-        let origin = lc(0, 0, 0, 0, 0).to_timestamp().unwrap();
+        let origin = long_count_timestamp(lc(0, 0, 0, 0, 0)).unwrap();
         assert_eq!(Gregorian::from_timestamp(origin), Some(g(-3113, 8, 11, 0, 0, 0)));
         let before = SexTimestamp::new(origin.seconds() - 1, 0).unwrap();
         assert!(LongCount::from_timestamp(before).is_none());
@@ -306,7 +294,30 @@ mod tests {
         for days in (0..3_000_000).step_by(997) {
             let date = LongCount::from_days(days).unwrap();
             assert_eq!(date.days(), Some(days));
-            assert_eq!(LongCount::from_timestamp(date.to_timestamp().unwrap()), Some(date));
+            assert_eq!(LongCount::from_timestamp(long_count_timestamp(date).unwrap()), Some(date));
         }
+    }
+
+    #[test]
+    fn calendar_round_anchors() {
+        // 0.0.0.0.0 = 4 Ajaw 8 Kumk'u; 13.0.0.0.0 (2012-12-21) = 4 Ajaw 3 K'ank'in.
+        let origin = MayaDate::from_days(0).unwrap();
+        assert_eq!((origin.tzolkin.number, origin.tzolkin.name(), origin.haab.day, origin.haab.month_name()), (4, "Ajaw", 8, "Kumk'u"));
+        let epoch = MayaDate::from_timestamp(SexTimestamp::EPOCH).unwrap();
+        let mut buf = [0u8; 48];
+        let n = epoch.write_full(&mut buf);
+        assert_eq!(&buf[..n], b"13.0.0.0.0 4 Ajaw 3 K'ank'in");
+        // 2026-11-28 UTC.
+        let day = MayaDate::from_unix(g(2026, 11, 28, 12, 0, 0).to_timestamp().unwrap().to_unix().unwrap()).unwrap();
+        let n = day.write_full(&mut buf);
+        assert_eq!(&buf[..n], b"13.0.14.2.10 11 Ok 3 Mak");
+        // The Calendar Round repeats every 18,980 days; Wayeb' has five days.
+        assert_eq!(MayaDate::from_days(18_980).unwrap().tzolkin, origin.tzolkin);
+        assert_eq!(MayaDate::from_days(18_980).unwrap().haab, origin.haab);
+        let wayeb = (0..365).map(Haab::from_days).filter(|h| h.month == 18).count();
+        assert_eq!(wayeb, 5);
+        let mut short = [0u8; 4];
+        assert_eq!(epoch.write_long_count(&mut short), 4);
+        assert_eq!(&short, b"13.0");
     }
 }

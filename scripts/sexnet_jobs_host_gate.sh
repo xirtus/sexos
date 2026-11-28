@@ -151,8 +151,10 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/entropy_client.rs" -o "$TEST_DIR/en
 "$TEST_DIR/entropy-client-tests"
 echo '[sexnet.entropy.host] PASS scope=actual_ABI_private_service_client_not_live_CPU_quality_or_authority'
 
-rustc --edition=2021 --crate-name sex_time --crate-type rlib "$ROOT_DIR/crates/sex-time/src/lib.rs" -o "$TEST_DIR/libsex_time.rlib"
-rustc --edition=2021 --extern sex_time="$TEST_DIR/libsex_time.rlib" --test "$ROOT_DIR/tests/certificate_time_client.rs" -o "$TEST_DIR/certificate-time-tests"
+source "$(dirname "${BASH_SOURCE[0]}")/dreamroot_core_rlib.sh"
+dreamroot_core_rlib "$TEST_DIR"
+rustc --edition=2021 --crate-name sex_time --crate-type rlib --extern dreamroot_core="$TEST_DIR/libdreamroot_core.rlib" "$ROOT_DIR/crates/sex-time/src/lib.rs" -o "$TEST_DIR/libsex_time.rlib"
+rustc --edition=2021 --extern sex_time="$TEST_DIR/libsex_time.rlib" -L dependency="$TEST_DIR" --test "$ROOT_DIR/tests/certificate_time_client.rs" -o "$TEST_DIR/certificate-time-tests"
 "$TEST_DIR/certificate-time-tests"
 echo '[sexnet.certificate.time.host] PASS scope=actual_UTC_ABI_source_decoder_broker_client_not_live_RTC_authenticity_or_TLS'
 bash "$ROOT_DIR/scripts/browser_calendar_host_gate.sh"

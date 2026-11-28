@@ -128,7 +128,7 @@ c550be6f2dd09f4828c43b255c35f161f21aa071aa58b3c5f7213f42a804e5ef  crates/sex-pdx
 
 4eb0760818ab583c350206630145fe90e88b1aec0fcbb9ee33c97b780578ad11  crates/silkbar-model/src/civil_clock.rs
 
-7ea46417de2f8266f23f687ae747d4af94686ff863f3c70bfc75698d4bd4ae28  crates/silkbar-model/src/lib.rs
+13e9e86a96f16c8a89efc1d264ff1c6e70e0261f3bc50a3b114b629924798052  crates/silkbar-model/src/lib.rs
 
 a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app_catalog_state.rs
 

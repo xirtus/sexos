@@ -142,7 +142,7 @@ pub struct Layout {
 }
 
 pub const CARD_W: usize = 240;
-pub const CLOCK_H: usize = 104;
+pub const CLOCK_H: usize = 124;
 pub const SYSTEM_H: usize = 64;
 pub const WEATHER_H: usize = 64;
 pub const GAP: usize = 12;

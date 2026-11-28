@@ -373,7 +373,7 @@ impl MenuState {
             MenuKind::WifiPopover => 4,
             MenuKind::VolumePopover => 3,
             MenuKind::BatteryPopover => 5,
-            MenuKind::ClockPopover => 4,
+            MenuKind::ClockPopover => 5,
             MenuKind::DesktopContext => 6,
             MenuKind::WindowContext => 13,
         }
@@ -461,9 +461,11 @@ impl MenuState {
 
             // Right-side Clock popover
             (MenuKind::ClockPopover, 0) => RowSpec::header("Date & Time"),
-            (MenuKind::ClockPopover, 1) => RowSpec::header("Timezone: UTC"),
-            (MenuKind::ClockPopover, 2) => RowSpec::header("Uptime"),
-            (MenuKind::ClockPopover, 3) => RowSpec::item("Open Month Calendar", MenuAction::OpenCalendar).sep(),
+            // Display fills rows 0-3 from the civil clock (Gregorian, Maya, zone, uptime).
+            (MenuKind::ClockPopover, 1) => RowSpec::header("Maya Long Count"),
+            (MenuKind::ClockPopover, 2) => RowSpec::header("Timezone: UTC"),
+            (MenuKind::ClockPopover, 3) => RowSpec::header("Uptime"),
+            (MenuKind::ClockPopover, 4) => RowSpec::item("Open Month Calendar", MenuAction::OpenCalendar).sep(),
 
             // Desktop background right-click context menu
             (MenuKind::DesktopContext, 0) => RowSpec::item("New Terminal", MenuAction::LaunchTerminal).key("Super+Ret"),

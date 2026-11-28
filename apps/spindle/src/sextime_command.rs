@@ -2,7 +2,7 @@
 //! `sextime <unix-seconds>`: a calendar calculator, not a clock. It converts
 //! only the number typed by the user, so it needs no clock source, route or
 //! capability, and its output claims nothing about the current time.
-use sex_time::{Gregorian, LongCount, SexTimestamp};
+use sex_time::{CivilDay, Gregorian, LongCount, SexTimestamp};
 
 pub const LINE_MAX: usize = 48;
 pub struct Lines {

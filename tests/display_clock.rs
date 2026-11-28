@@ -3,6 +3,7 @@
 #[path="../crates/silkbar-model/src/lib.rs"]mod silkbar_model;
 extern crate self as sex_pdx;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
+#[path="../crates/sex-pdx/src/clock_zone.rs"]pub mod clock_zone;
 use silkbar_model::{SilkBar,ModuleSlot,DEFAULT_THEME,Action};
 #[path="../servers/sexdisplay/src/glyphs.rs"]mod glyphs;
 include!(env!("DISPLAY_CLOCK_PRODUCTION"));
@@ -16,11 +17,11 @@ fn clock(state:silkbar_model::civil_clock::State,seconds:u32)->silkbar_model::ci
 }
 #[test]fn single_line_shows_same_admitted_utc_date_and_honest_unhealthy_state(){
  use silkbar_model::civil_clock::State;
- let c=clock(State::Snapshot,1794320670);assert_eq!(&civil_clock_caption(&c),b"14:24 UTC | 10 NOV  ");
+ let c=clock(State::Snapshot,1794320670);assert_eq!(core::str::from_utf8(&civil_clock_caption(&c)).unwrap().trim_end(),"14:24 UTC | 10 NOV 2026 | 13.0.14.1.12");
  for (state,text)in[(State::Unknown,"UTC unknown"),(State::Unavailable,"UTC unavailable"),(State::Rollback,"UTC blocked"),(State::Exhausted,"UTC ended")]{
   let c=clock(state,0);let caption=civil_clock_caption(&c);assert_eq!(core::str::from_utf8(&caption).unwrap().trim_end(),text);
  }
- let mut c=clock(State::Snapshot,1794320670);assert!(c.health(620));
+ let mut c=clock(State::Snapshot,1794320670);assert!(c.health(silkbar_model::civil_clock::HEALTH_TICKS));
  assert_eq!(core::str::from_utf8(&civil_clock_caption(&c)).unwrap().trim_end(),"UTC stale");
 }
 #[test]fn natural_13px_clock_has_room_for_widest_time_date_without_shrinking(){
@@ -29,9 +30,11 @@ fn clock(state:silkbar_model::civil_clock::State,seconds:u32)->silkbar_model::ci
  let advances:Vec<_>=g.iter().map(|v|f.advance(*v,size)).collect();
  let pairs:Vec<Vec<_>>=g.iter().map(|a|g.iter().map(|b|f.kerning(*a,*b,size)).collect()).collect();
  let width=|bytes:&[u8]|{let mut pen=0;for(i,&b)in bytes.iter().enumerate(){let k=(b-32)as usize;if i>0{pen+=pairs[(bytes[i-1]-32)as usize][k];}pen+=advances[k];}((pen+255)>>8)as usize};
- let mut max=0;for h in 0..24{for m in 0..60{for d in 1..=31{for month in["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]{max=max.max(width(format!("{h:02}:{m:02} UTC | {d:02} {month}").as_bytes()));}}}}
- assert_eq!(max,125);assert!(max<=136);
- for ui in 1..=3{for text in[b"00:00 UTC | 02 MAR".as_slice(),b"UTC unavailable",b"UTC blocked",b"UTC stale",b"99"]{assert!(glyphs::ui_width(text,ui).unwrap()<=136*ui as usize);}}
+ // Widest local time, zone and Long Count the bar can show: every digit place.
+ let room=silkbar_model::CLOCK_W_LONG_COUNT-8;
+ let mut max=0;for h in 0..24{for m in[0,11,44,59]{for zone in["UTC","AKST","+0330","NZDT"]{for lc in["13.19.19.17.19","13.0.0.0.0","14.10.10.10.10","13.8.8.8.8"]{max=max.max(width(format!("{h:02}:{m:02} {zone} | 28 NOV 2026 | {lc}").as_bytes()));}}}}
+ assert!(max<=room,"{max} > {room}");
+ for ui in 1..=3{for text in[b"00:00 +0330 | 28 NOV 2026 | 13.19.19.17.19".as_slice(),b"UTC unavailable",b"UTC blocked",b"UTC stale",b"99"]{assert!(glyphs::ui_width(text,ui).unwrap()<=room*ui as usize);}}
 }
 #[test]fn clock_and_bell_ink_stay_within_shared_target_and_have_visible_stems(){
  for (width,ui)in[(1024,1),(1280,1),(2560,2),(1024,3)]{

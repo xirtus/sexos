@@ -2,7 +2,7 @@
 //! Bounded civil views of one last query. Formatting grants no clock authority.
 use crate::clock_probe::View;
 use sex_pdx::desktop_style::{scale, ADVANCE, GLYPH_HEIGHT, INSET, LINE};
-use sex_time::{Gregorian, LongCount, SexTimestamp};
+use sex_time::{CivilDay, Gregorian, LongCount, SexTimestamp};
 
 pub struct Status { pub bytes: [u8; 24], pub len: usize }
 fn label(value: &[u8]) -> Status {
