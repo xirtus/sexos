@@ -22,8 +22,11 @@ pub mod gmbus;
 pub mod hotplug;
 pub mod plane;
 pub mod readout;
+pub mod refresh;
 pub mod regs;
 pub mod takeover;
+pub mod timing;
+pub mod watermarks;
 
 /// 32-bit register access to the display MMIO BAR (GTTMMADR, BAR 0).
 pub trait Mmio {

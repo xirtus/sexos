@@ -65,6 +65,38 @@ pub(crate) fn hang_limit(pd: u32) -> u64 {
         _ => 0,
     }
 }
+const FILES_PD: u32 = 11;
+/// Files, Display and Shell can be busy for a long time without coming back to their
+/// inbox (a big save, a slow frame under emulation), so holding a message is not enough
+/// to call them hung: `desk_verdict` also asks whether their own code has run. 60 s.
+pub(crate) fn desk_limit(pd: u32) -> u64 { if matches!(pd, FILES_PD | DISPLAY_PD | SHELL_PD) { 60_000 } else { 0 } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Desk { Fine, Slow, Hung }
+/// `took`: the tick it took the message it still holds; `ran`: the tick its code last made
+/// a syscall; `parked`: its task is blocked, with no wake pending and on no core.
+/// Hung only when all three say so: holding past the limit, no syscall for the whole
+/// limit, and parked now. A task that is computing (on a core or queued) is only Slow:
+/// it is reported, never ended. A task waiting for an answer is never holding (each
+/// receive, and the reply wait, marks the inbox visited).
+pub(crate) fn desk_verdict(limit: u64, now: u64, took: u64, ran: u64, parked: bool) -> Desk {
+    if limit == 0 || took == 0 || now.saturating_sub(took) <= limit { return Desk::Fine; }
+    if parked && now.saturating_sub(ran) > limit { Desk::Hung } else { Desk::Slow }
+}
+/// By desk service (Files, Display, Shell): the tick its code last made a syscall, one
+/// cache line each so the cores they run on never share it.
+#[repr(align(64))]
+struct Stamp(core::sync::atomic::AtomicU64);
+static RAN_AT: [Stamp; 3] = [const { Stamp(core::sync::atomic::AtomicU64::new(0)) }; 3];
+static SLOW_AT: [core::sync::atomic::AtomicU64; 3] = [const { core::sync::atomic::AtomicU64::new(0) }; 3];
+#[inline(always)]
+fn desk_index(pd: u32) -> Option<usize> { match pd { FILES_PD => Some(0), DISPLAY_PD => Some(1), SHELL_PD => Some(2), _ => None } }
+/// Syscall entry: a desk service's code ran. Written at most once a tick.
+#[inline(always)]
+pub fn ran(pd: u32) {
+    let Some(i) = desk_index(pd) else { return };
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    if RAN_AT[i].0.load(Ordering::Relaxed) != now { RAN_AT[i].0.store(now, Ordering::Relaxed); }
+}
 /// Services that answer every call they take, so every owed reply was really awaited.
 pub(crate) fn answers_every_call(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD) }
 /// Drivers whose devices get a function-level reset before they run again (Saddle too,
@@ -356,6 +388,22 @@ fn poll_one(index: usize) -> bool {
         else if queued.load(Ordering::Relaxed) == 0 { queued.store(now, Ordering::Relaxed); }
         let since = if HOLDING[s.pd as usize].load(Ordering::Relaxed) { at }
             else { match queued.load(Ordering::Relaxed) { 0 => now, q => q.max(at) } };
+        if let Some(i) = desk_index(s.pd).filter(|_| HOLDING[s.pd as usize].load(Ordering::Relaxed)) {
+            let parked = state.blocked && !state.pending && state.owner_core.is_none();
+            match desk_verdict(desk_limit(s.pd), now, at, RAN_AT[i].0.load(Ordering::Relaxed), parked) {
+                Desk::Fine => {}
+                Desk::Slow => if SLOW_AT[i].swap(at, Ordering::Relaxed) != at {
+                    crate::serial_println!("[service.slow] pd={} held_ticks={} queued={} parked={}", s.pd, now - at, unsafe { (*pd.message_ring).len() }, parked as u8);
+                },
+                Desk::Hung => if unsafe { (*main).state.exit() } {
+                    crate::scheduler::purge_handoff_for_task(main);
+                    crate::serial_println!("[service.hung] pd={} held_ticks={} queued={} desk=1", s.pd, now - at, unsafe { (*pd.message_ring).len() });
+                    crate::crash_log::fault(s.pd, 0xfd, unsafe { (*main).context.rip }, 0, now - at, "no answer (stuck)");
+                    crate::scheduler::unpark_thread(main);
+                    return true;
+                },
+            }
+        }
         if limit != 0 && at != 0 && now.saturating_sub(since) > limit && unsafe { (*main).state.exit() } {
             crate::scheduler::purge_handoff_for_task(main);
             crate::serial_println!("[service.hung] pd={} held_ticks={} queued={}", s.pd, now - since, unsafe { (*pd.message_ring).len() });

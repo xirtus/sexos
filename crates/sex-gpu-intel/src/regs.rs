@@ -23,6 +23,7 @@ pub const VSYNC: u32 = 0x14;
 pub const PIPESRC: u32 = 0x1c;
 /// DP data/link M/N values (readout only).
 pub const DATA_M1: u32 = 0x30;
+pub const DATA_N1: u32 = 0x34;
 pub const LINK_M1: u32 = 0x40;
 pub const LINK_N1: u32 = 0x44;
 pub const DDI_FUNC_CTL: u32 = 0x400;
@@ -157,6 +158,10 @@ pub const BLC_PWM_FREQ: u32 = 0xc8254;
 pub const BLC_PWM_DUTY: u32 = 0xc8258;
 pub const BLC_PWM_ENABLE: u32 = 1 << 31;
 pub const BLC_PWM_POLARITY: u32 = 1 << 29;
+
+// ---- Clocks ----
+/// CD clock control: bits 10:0 = (CDCLK - 1 MHz) / 0.5 MHz.
+pub const CDCLK_CTL: u32 = 0x46000;
 
 // ---- Global GTT ----
 /// The GGTT page table lives in the second half of the 16 MiB GTTMMADR BAR.

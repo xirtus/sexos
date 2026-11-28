@@ -383,6 +383,9 @@ fn service_restart_notifies_24_concurrent_callers_and_keeps_watchdog_scope() {
     }
     assert_eq!(service_restart::hang_limit(2), 45_000);
     assert_eq!(service_restart::hang_limit(13), 10_000);
+    // Desk services are watched for being stuck, not for holding a message.
+    for pd in [1u32, 3, 11] { assert_eq!(service_restart::desk_limit(pd), 60_000, "pd={pd} desk watch"); }
+    for pd in [2u32, 4, 5, 10, 13, 54] { assert_eq!(service_restart::desk_limit(pd), 0, "pd={pd} is not a desk service"); }
 
     // Register USB (PD 5) and 24 concurrent callers (PDs 100..124).
     let files = capability::ProtectionDomain::new(5, 50);
@@ -597,4 +600,23 @@ fn busy_not_ready_never_burns_restart_retry_budget() {
     );
     assert_eq!(res, Err(ReconnectError::Exhausted));
     assert_eq!(attempts, 3); // 1 initial + 2 epoch-advance restarts
+}
+
+#[test]
+fn desk_watch_ends_only_a_parked_service_whose_code_stopped_running() {
+    use service_restart::{desk_verdict, Desk};
+    const L: u64 = 60_000;
+    // Not holding long enough, or not watched: fine whatever else is true.
+    assert_eq!(desk_verdict(L, 70_000, 20_000, 0, true), Desk::Fine);
+    assert_eq!(desk_verdict(0, 900_000, 1, 0, true), Desk::Fine);
+    assert_eq!(desk_verdict(L, 900_000, 0, 0, true), Desk::Fine, "never took a message");
+    // Held past the limit but computing (on a core or queued): reported, never ended.
+    assert_eq!(desk_verdict(L, 200_000, 100_000, 100_000, false), Desk::Slow);
+    // Parked, but its code made a syscall within the limit (a sleep, a self-wait that
+    // timed out and went round again): reported, never ended.
+    assert_eq!(desk_verdict(L, 200_000, 100_000, 150_000, true), Desk::Slow);
+    // Parked with no syscall for the whole limit while holding: stuck.
+    assert_eq!(desk_verdict(L, 200_000, 100_000, 139_999, true), Desk::Hung);
+    assert_eq!(desk_verdict(L, 160_001, 100_000, 100_000, true), Desk::Hung);
+    assert_eq!(desk_verdict(L, 160_000, 100_000, 100_000, true), Desk::Fine, "exactly the limit is not past it");
 }

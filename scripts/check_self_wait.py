@@ -367,9 +367,9 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/web.rs': '404f9c07116a41ef3ac80c797ffea6d54e008ca038aaac79fa7b4e81c5ca91c4',  # web protocol words for H2/H3 (no observer change), 2026-11-25
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
- 'kernel/src/core_local.rs': '0b72ffacafdbfce18323734be07acdfa224927ef0d65baac1831f4928cea5dd8',  # self pointer at gs:[32], per-core FS/TSC_AUX caches and IRET snapshot (no observer change; Gemini #699), 2026-11-26
+ 'kernel/src/core_local.rs': 'aa4bb7fc95128105f7a7393a78dcf51f4417ac3293e1731b9fa005a28b43f4ad',  # active-view cache at gs:[56] (views::enter skips the CR3 read; no observer change), 2026-11-28
  'kernel/src/app_resources.rs': 'b1b1dfda0016755aa8d4c868e93daf13d5598d550082798a87998810a6c4eeed',  # program pages the file fills come unzeroed (no observer change; Gemini #696), 2026-11-26
- 'kernel/src/service_restart.rs': 'b85a1220a8a1ff1f7aa632991c9104f4db4cf7833d35016f61d0ca4123860531',  # kept pages survive a hot swap (no observer change), 2026-11-28
+ 'kernel/src/service_restart.rs': '9a9dadf92c1db404242b5aed6b4ccf1077e6e45181ae029f4adafcc17c01719e',  # desk watch + kept pages survive a hot swap (no observer change), 2026-11-28
  'kernel/src/crash_log.rs': '415518cac7ef63046bc083c68e3763c12105c8e227c69cf4316f255c10fe83f2',  # OP_HOTSWAP_PART: kernel gathers the hot-swap image (no observer change), 2026-11-27
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
