@@ -65,12 +65,12 @@ struct Mb {
     coeffs: [[i16; 16]; 25],
 }
 
-struct Quant { y_dc: i32, y_ac: i32, y2_dc: i32, y2_ac: i32, uv_dc: i32, uv_ac: i32 }
+struct Quant { y_ac: i32, y2_dc: i32, y2_ac: i32, uv_dc: i32, uv_ac: i32 }
 
 fn quant(q: usize) -> Quant {
     let q = q.min(127);
     Quant {
-        y_dc: DC_QUANT[q], y_ac: AC_QUANT[q], y2_dc: DC_QUANT[q] * 2, y2_ac: (AC_QUANT[q] * 155 / 100).max(8),
+        y_ac: AC_QUANT[q], y2_dc: DC_QUANT[q] * 2, y2_ac: (AC_QUANT[q] * 155 / 100).max(8),
         uv_dc: DC_QUANT[q].min(132), uv_ac: AC_QUANT[q],
     }
 }

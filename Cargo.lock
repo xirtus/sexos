@@ -7903,6 +7903,7 @@ dependencies = [
  "image-webp 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand_chacha",
  "rand_core 0.6.4",
+ "serde_json",
  "sex-dtls",
  "sex-ice",
  "sex-rtp",

@@ -16,3 +16,5 @@ rand_core = { version = "=0.6.4", default-features = false }
 
 [dev-dependencies]
 image-webp = "0.2.4"
+serde_json = "1.0.154"
+sex-ice = { path = "../sex-ice" }
