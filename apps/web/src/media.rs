@@ -366,6 +366,9 @@ impl Media {
         self.player.as_ref().map_or(true, |p| p.paused() || p.ended())
     }
 
+    /// Whether it plays sound through the program's ring now.
+    pub fn sounding(&self) -> bool { self.player.as_ref().is_some_and(|p| p.has_sound() && !p.paused() && !p.ended()) }
+
     /// Another element is about to play: give up the program's one sound ring, and
     /// pause if playing (only one element plays sound at a time).
     pub fn hush(&mut self) {

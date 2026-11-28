@@ -1,0 +1,10 @@
+[package]
+name = "sex-webaudio"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Web Audio for Kaleidoscope pages: the audio graph (nodes, params, analyser FFT) in fixed point, no_std"
+
+[dependencies]
+# MIT/Apache-2.0: float math for per-quantum work (coefficients, ramps); samples stay integer.
+libm = "0.2"

@@ -219,6 +219,7 @@ members = [
     "crates/sex-office",
     "crates/burlesque-core",
     "crates/sex-uvc",
+    "crates/sex-webaudio",
     "servers/sexuvc",
     "apps/flash",
     "apps/splicy",

@@ -18,6 +18,7 @@ mod download;
 mod webfont;
 mod media;
 mod capture;
+mod webaudio;
 mod mse;
 mod keys;
 mod profile;
@@ -330,6 +331,8 @@ struct Browser {
     extensions: extensions::Extensions,
     /// The camera and microphone pages asked for, and the question card.
     capture: capture::Capture,
+    /// The pages' Web Audio graphs, and the sound ring when they play.
+    webaudio: webaudio::WebAudio,
     /// Requests Shields blocked for the shown page (and its frames).
     blocked: u32,
     /// What the next request is for, when the code making it knows (see `send`).
@@ -1290,8 +1293,9 @@ impl Browser {
         doc.cookies = frame_ok.then(|| self.jar.clone());
         doc.storage = Some(self.storage.clone());
         doc.capture = Some(self.capture.shared.clone());
-        // The page before lets go of the camera and microphone.
-        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); }
+        doc.audio = Some(self.webaudio.hub.clone());
+        // The page before lets go of the camera and microphone, and its sound stops.
+        if self.in_frame.is_none() { let old = self.doc.get().owner(); self.capture.page_left(old); self.webaudio.hub.borrow_mut().page_left(old); }
         doc.wall = wall;
         doc.referrer = referrer;
         doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
@@ -1554,8 +1558,10 @@ impl Browser {
         self.sync_scroll();
         self.media_requests();
         let capture_next = self.capture_tick();
+        let audio_next = self.webaudio_tick();
         let media_next = self.media_tick();
-        let media_next = match (media_next, capture_next) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
+        let soonest = |a: Option<u64>, b: Option<u64>| match (a, b) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
+        let media_next = soonest(soonest(media_next, capture_next), audio_next);
         let (moved, pictures_next) = self.fonts.step_pictures(sex_pdx::get_ticks());
         if moved && !self.animating { self.draw(); }
         if moved && self.fonts.frames_shown <= 8 { sex_pdx::serial_record!("[web.picture.frames] n={}", self.fonts.frames_shown); }
@@ -1658,6 +1664,29 @@ impl Browser {
             }
         }
         if !changed.is_empty() || !answers.is_empty() { self.media_asked |= !answers.is_empty(); }
+        next
+    }
+
+    /// Runs the pages' Web Audio graphs and tells the shown page what ended.
+    #[inline(never)]
+    fn webaudio_tick(&mut self) -> Option<u64> {
+        let media = self.media.iter().any(|m| m.sounding());
+        let (next, want) = self.webaudio.tick(sex_pdx::get_ticks(), media);
+        if want {
+            // Web Audio has sound and no element plays: it takes the ring.
+            for m in self.media.iter_mut() { m.hush(); }
+            self.webaudio.take_ring();
+        }
+        let owner = self.doc.get().owner();
+        let events = self.webaudio.events(owner);
+        if !events.is_empty() {
+            if let Some(script) = self.doc.script() {
+                for e in &events {
+                    if let Err(sex_js::Error::Trapped(why)) = script.dispatch(e) { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
+                }
+                self.after_script(true);
+            }
+        }
         next
     }
 
@@ -1794,6 +1823,7 @@ impl Browser {
     /// Element `i` is about to play: every other one gives up the sound ring first,
     /// since a program has one.
     fn hush_media(&mut self, i: usize) {
+        self.webaudio.release();
         for (j, m) in self.media.iter_mut().enumerate() {
             if j != i { m.hush(); }
         }
@@ -2631,7 +2661,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), fetch_waiting: Vec::new(), fetch_going: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), last_selftest_failed: None, context_menu: None, show_bookmarks_bar: false, vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new(), capture: capture::Capture::empty(), webaudio: webaudio::WebAudio::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
@@ -2642,6 +2672,7 @@ pub extern "C" fn _start() -> ! {
     b.shields = shields::Shields::load(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
     b.capture = capture::Capture::new(&mut b.window, given.split_ascii_whitespace().any(|a| a == "--fake-media"), b.jarbox == profile::Jarbox::Private);
+    b.capture.mic_tap = Some(b.webaudio.hub.clone());
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
     b.start_backgrounds();

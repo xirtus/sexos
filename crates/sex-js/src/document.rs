@@ -101,6 +101,10 @@ pub struct Document {
     pub capture_asks: Vec<crate::capture::CaptureAsk>,
     /// The kinds (audio, video) the page's live tracks use, when that changed.
     pub capture_use: Option<(bool, bool)>,
+    /// The browser's Web Audio graphs, shared by its pages (see `sex_webaudio`).
+    pub audio: Option<alloc::rc::Rc<core::cell::RefCell<sex_webaudio::Hub>>>,
+    /// Lives as long as this page: its audio contexts go when it does.
+    pub audio_alive: alloc::rc::Rc<()>,
 }
 
 /// What a page asked of its WebSockets.
@@ -212,7 +216,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None, capture: None, capture_asks: Vec::new(), capture_use: None, ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new() }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None, capture: None, capture_asks: Vec::new(), capture_use: None, audio: None, audio_alive: alloc::rc::Rc::new(()), ext_key: String::new(), ext_outbox: Vec::new(), ext_tab: String::new() }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -360,6 +364,11 @@ impl Page for Document {
                 self.fetches.push(FetchAsk { id: self.next_fetch, url: String::from(text(0)), method, headers: String::from(text(2)), body: a.get(3).map(|b| b.to_vec()).unwrap_or_default(), credentials: text(4) == "1" });
                 return Some(format!("{}", self.next_fetch).into_bytes());
             }
+            op::AUDIO_DATA => {
+                let hub = self.audio.clone()?;
+                let r = hub.borrow_mut().call_bytes(self.resource_owner, a);
+                return r;
+            }
             op::MEDIA_APPEND => {
                 let n = self.element(Some(&text(0)))?;
                 if !matches!(self.dom.tag(n), Some("video" | "audio")) { return None; }
@@ -462,6 +471,11 @@ impl Page for Document {
                     "key" => store.borrow().key(&origin, key.parse().ok()?).map(String::from),
                     _ => None,
                 };
+            }
+            op::AUDIO => {
+                let hub = self.audio.clone()?;
+                let r = hub.borrow_mut().call(self.resource_owner, &self.audio_alive, a);
+                return r;
             }
             op::CAPTURE => {
                 let origin = self.page_url()?.origin();

@@ -28,7 +28,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, CAPTURE: 40, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, CAPTURE: 40, AUDIO: 41, AUDIO_DATA: 77, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -1360,6 +1360,8 @@
       const t = new MediaStreamTrack(this.kind, this.label, this._dev, this._settings);
       t._c = Object.assign({}, this._c); t._enabled = this._enabled; t._muted = this._muted;
       if (this.readyState === 'ended') { t.readyState = 'ended'; liveTracks.delete(t); }
+      // A Web Audio stream's track is not a device.
+      if (this._tap !== undefined) { t._tap = this._tap; liveTracks.delete(t); }
       return t;
     }
     getSettings() {
@@ -1492,6 +1494,474 @@
     if (name === undefined) return Promise.reject(new TypeError("Failed to execute 'query' on 'Permissions': required member name is undefined."));
     const state = name === 'camera' || name === 'microphone' ? (H(OP.CAPTURE, 'state', name) || 'prompt') : 'prompt';
     return Promise.resolve(new PermissionStatus(String(name), state));
+  }
+  // ---- Web Audio ----
+  // The graph runs in the browser (crates/sex-webaudio), not here: script builds it
+  // over OP.AUDIO and reads analysers, renders and decodes over OP.AUDIO_DATA. Node
+  // and context ids are the browser's.
+  const AH = (...a) => H(OP.AUDIO, ...a.map(String));
+  const AB = (...a) => H(OP.AUDIO_DATA | 0x10000, ...a.map(x => x instanceof ArrayBuffer ? x : String(x)));
+  const audioContexts = new Map();
+  const f32Bytes = a => { const f = a instanceof Float32Array ? a : Float32Array.from(a); return f.buffer.slice(f.byteOffset, f.byteOffset + f.byteLength); };
+  const finite = (v, what) => { v = +v; if (!Number.isFinite(v)) throw new TypeError(`Failed to set the '${what}' property: The provided float value is non-finite.`); return v; };
+  const notNegative = (v, what) => { v = finite(v, what); if (v < 0) throw new RangeError(`The ${what} provided (${v}) is less than the minimum bound (0).`); return v; };
+  class AudioParam {
+    constructor(node, index, def, min, max, rate) {
+      this._n = node; this._i = index; this._v = def; this._auto = false;
+      this.defaultValue = def; this.minValue = min; this.maxValue = max; this.automationRate = rate || 'a-rate';
+    }
+    _ask(verb, ...a) { this._auto = this._auto || verb !== 'value'; AH('param', this._n._ctx._id, this._n._id, this._i, verb, ...a); return this; }
+    get value() { if (this._auto) { const v = AH('get', this._n._ctx._id, this._n._id, this._i); if (v !== null) return +v; } return Math.fround(this._v); }
+    set value(v) { v = finite(v, 'value'); this._v = v; this._ask('value', v); }
+    setValueAtTime(v, t) { return this._ask('set', finite(v, 'value'), notNegative(t, 'startTime')); }
+    linearRampToValueAtTime(v, t) { return this._ask('linear', finite(v, 'value'), notNegative(t, 'endTime')); }
+    exponentialRampToValueAtTime(v, t) {
+      v = finite(v, 'value');
+      if (v === 0) throw new RangeError("Failed to execute 'exponentialRampToValueAtTime' on 'AudioParam': The float target value provided (0) should not be in the range (-1.40130e-45, 1.40130e-45).");
+      return this._ask('exp', v, notNegative(t, 'endTime'));
+    }
+    setTargetAtTime(v, t, c) { return this._ask('target', finite(v, 'target'), notNegative(t, 'startTime'), notNegative(c, 'timeConstant')); }
+    setValueCurveAtTime(values, t, d) {
+      const list = Array.from(values || [], Number);
+      if (list.length < 2) throw domError("Failed to execute 'setValueCurveAtTime' on 'AudioParam': The curve length provided (" + list.length + ') is less than the minimum bound (2).', 'InvalidStateError');
+      return this._ask('curve', '', notNegative(t, 'startTime'), list.join(','), notNegative(d, 'duration'));
+    }
+    cancelScheduledValues(t) { return this._ask('cancel', notNegative(t, 'cancelTime')); }
+    cancelAndHoldAtTime(t) { return this._ask('hold', notNegative(t, 'cancelTime')); }
+  }
+  const BIG = 3.4028234663852886e38;
+  class AudioNode extends EventTarget {
+    constructor(ctx, kind, opt, inputs, outputs, cc, cm, ci) {
+      super();
+      if (!(ctx instanceof BaseAudioContext)) throw new TypeError("Failed to construct 'AudioNode': parameter 1 is not of type 'BaseAudioContext'.");
+      this._ctx = ctx;
+      if (kind === null) this._id = 0;
+      else {
+        const r = AH('node', ctx._id, kind, opt === undefined ? '' : opt);
+        if (r === null) throw domError('The audio graph is full or this node is not supported', 'NotSupportedError');
+        const [id, tap] = r.split('\t'); this._id = +id; if (tap !== undefined) this._tap = +tap;
+      }
+      this.numberOfInputs = inputs; this.numberOfOutputs = outputs;
+      this._cc = cc; this._cm = cm; this._ci = ci;
+    }
+    get context() { return this._ctx; }
+    get channelCount() { return this._cc; }
+    set channelCount(v) {
+      v = v >>> 0;
+      if (AH('set', this._ctx._id, this._id, 'count', v) !== '1') throw domError(`The channel count provided (${v}) is outside the range [1, 32].`, 'NotSupportedError');
+      this._cc = v;
+    }
+    get channelCountMode() { return this._cm; }
+    set channelCountMode(v) { if (!['max', 'clamped-max', 'explicit'].includes(v)) return; AH('set', this._ctx._id, this._id, 'mode', v); this._cm = v; }
+    get channelInterpretation() { return this._ci; }
+    set channelInterpretation(v) { if (!['speakers', 'discrete'].includes(v)) return; AH('set', this._ctx._id, this._id, 'interp', v); this._ci = v; }
+    _opts(o) {
+      if (!o) return this;
+      if (o.channelCount !== undefined) this.channelCount = o.channelCount;
+      if (o.channelCountMode !== undefined) this.channelCountMode = o.channelCountMode;
+      if (o.channelInterpretation !== undefined) this.channelInterpretation = o.channelInterpretation;
+      return this;
+    }
+    connect(dest, output, input) {
+      output = output === undefined ? 0 : output >>> 0; input = input === undefined ? 0 : input >>> 0;
+      if (dest instanceof AudioParam) {
+        if (dest._n._ctx !== this._ctx) throw domError("Failed to execute 'connect' on 'AudioNode': cannot connect to an AudioParam belonging to a different audio context.", 'InvalidAccessError');
+        if (AH('connectparam', this._ctx._id, this._id, output, dest._n._id, dest._i) !== '1') throw domError(`Failed to execute 'connect' on 'AudioNode': output index (${output}) exceeds number of outputs (${this.numberOfOutputs}).`, 'IndexSizeError');
+        return undefined;
+      }
+      if (!(dest instanceof AudioNode)) throw new TypeError("Failed to execute 'connect' on 'AudioNode': Overload resolution failed.");
+      if (dest._ctx !== this._ctx) throw domError("Failed to execute 'connect' on 'AudioNode': cannot connect to an AudioNode belonging to a different audio context.", 'InvalidAccessError');
+      if (AH('connect', this._ctx._id, this._id, output, dest._id, input) !== '1') throw domError(`Failed to execute 'connect' on 'AudioNode': output index (${output}) or input index (${input}) is out of range.`, 'IndexSizeError');
+      return dest;
+    }
+    disconnect(a, b, c) {
+      const o = v => v === undefined ? '' : v >>> 0;
+      if (a === undefined) AH('disconnect', this._ctx._id, this._id, '', '', '', '');
+      else if (typeof a === 'number') AH('disconnect', this._ctx._id, this._id, o(a), '', '', '');
+      else if (a instanceof AudioParam) AH('disconnect', this._ctx._id, this._id, o(b), a._n._id, '', a._i);
+      else if (a instanceof AudioNode) AH('disconnect', this._ctx._id, this._id, o(b), a._id, o(c), '');
+      else throw new TypeError("Failed to execute 'disconnect' on 'AudioNode': Overload resolution failed.");
+    }
+  }
+  class AudioDestinationNode extends AudioNode {
+    constructor(ctx, channels) { super(ctx, null, '', 1, 0, channels, 'explicit', 'speakers'); this.maxChannelCount = channels; }
+  }
+  class AudioScheduledSourceNode extends AudioNode {
+    constructor(ctx, kind, opt) { super(ctx, kind, opt, 0, 1, 2, 'max', 'speakers'); this.onended = null; this._started = false; }
+    start(when, ...rest) {
+      if (this._started) throw domError("Failed to execute 'start' on 'AudioScheduledSourceNode': cannot call start more than once.", 'InvalidStateError');
+      when = when === undefined ? 0 : notNegative(when, 'when');
+      this._started = true; this._ctx._sources.set(this._id, this);
+      this._start(when, ...rest);
+    }
+    _start(when) { AH('start', this._ctx._id, this._id, when); }
+    stop(when) {
+      if (!this._started) throw domError("Failed to execute 'stop' on 'AudioScheduledSourceNode': cannot call stop without calling start first.", 'InvalidStateError');
+      AH('stop', this._ctx._id, this._id, when === undefined ? 0 : notNegative(when, 'when'));
+    }
+  }
+  class GainNode extends AudioNode {
+    constructor(ctx, o) { super(ctx, 'gain', '', 1, 1, 2, 'max', 'speakers'); this.gain = new AudioParam(this, 0, 1, -BIG, BIG); if (o && o.gain !== undefined) this.gain.value = o.gain; this._opts(o); }
+  }
+  const OSC_TYPES = ['sine', 'square', 'sawtooth', 'triangle'];
+  class OscillatorNode extends AudioScheduledSourceNode {
+    constructor(ctx, o) {
+      super(ctx, 'oscillator');
+      const nyq = ctx.sampleRate / 2;
+      this.frequency = new AudioParam(this, 0, 440, -nyq, nyq); this.detune = new AudioParam(this, 1, 0, -153600, 153600);
+      this._type = 'sine';
+      if (o) {
+        if (o.frequency !== undefined) this.frequency.value = o.frequency;
+        if (o.detune !== undefined) this.detune.value = o.detune;
+        if (o.periodicWave) this.setPeriodicWave(o.periodicWave); else if (o.type !== undefined) this.type = o.type;
+        this._opts(o);
+      }
+    }
+    get type() { return this._type; }
+    set type(v) {
+      if (v === 'custom') throw domError("Failed to set the 'type' property on 'OscillatorNode': 'type' cannot be set directly to 'custom'.  Use setPeriodicWave() to create a custom Oscillator type.", 'InvalidStateError');
+      if (!OSC_TYPES.includes(v)) return;
+      this._type = v; AH('set', this._ctx._id, this._id, 'type', v);
+    }
+    setPeriodicWave(w) {
+      if (!(w instanceof PeriodicWave)) throw new TypeError("Failed to execute 'setPeriodicWave' on 'OscillatorNode': parameter 1 is not of type 'PeriodicWave'.");
+      AB('wave', this._ctx._id, this._id, f32Bytes(w._real), f32Bytes(w._imag), w._normalize ? '1' : '0');
+      this._type = 'custom';
+    }
+  }
+  class PeriodicWave {
+    constructor(ctx, o) {
+      o = o || {};
+      const n = Math.max(o.real ? o.real.length : 0, o.imag ? o.imag.length : 0, 2);
+      if (o.real && o.imag && o.real.length !== o.imag.length) throw domError("Failed to construct 'PeriodicWave': length of real array and imag array must match.", 'IndexSizeError');
+      this._real = new Float32Array(n); this._imag = new Float32Array(n);
+      if (o.real) this._real.set(o.real); else if (!o.imag) this._imag[1] = 1;
+      if (o.imag) this._imag.set(o.imag);
+      this._normalize = !o.disableNormalization;
+    }
+  }
+  class AudioBuffer {
+    constructor(o) {
+      o = o || {};
+      const ch = o.numberOfChannels === undefined ? 1 : o.numberOfChannels >>> 0, len = o.length >>> 0, rate = +o.sampleRate;
+      if (ch < 1 || ch > 32) throw domError(`Failed to construct 'AudioBuffer': The number of channels provided (${ch}) is outside the range [1, 32].`, 'NotSupportedError');
+      if (len < 1) throw domError(`Failed to construct 'AudioBuffer': The number of frames provided (${len}) is less than or equal to the minimum bound (0).`, 'NotSupportedError');
+      if (!(rate >= 3000 && rate <= 768000)) throw domError(`Failed to construct 'AudioBuffer': The sample rate provided (${rate}) is outside the range [3000, 768000].`, 'NotSupportedError');
+      this.numberOfChannels = ch; this.length = len; this.sampleRate = rate;
+      this._ch = o._planes || Array.from({ length: ch }, () => new Float32Array(len));
+      this._ver = 0;
+    }
+    get duration() { return this.length / this.sampleRate; }
+    getChannelData(i) {
+      if (!(i >= 0 && i < this.numberOfChannels)) throw domError(`Failed to execute 'getChannelData' on 'AudioBuffer': channel index (${i}) exceeds number of channels (${this.numberOfChannels})`, 'IndexSizeError');
+      this._ver++; return this._ch[i | 0];
+    }
+    copyFromChannel(dest, ch, start) {
+      if (!(ch >= 0 && ch < this.numberOfChannels)) throw domError('channel index out of range', 'IndexSizeError');
+      start = start >>> 0; const src = this._ch[ch | 0];
+      if (start < src.length) dest.set(src.subarray(start, start + dest.length));
+    }
+    copyToChannel(src, ch, start) {
+      if (!(ch >= 0 && ch < this.numberOfChannels)) throw domError('channel index out of range', 'IndexSizeError');
+      start = start >>> 0; const dst = this._ch[ch | 0];
+      if (start < dst.length) dst.set(src.subarray(0, dst.length - start), start);
+      this._ver++;
+    }
+    _bytes() {
+      const all = new Float32Array(this.numberOfChannels * this.length);
+      for (let k = 0; k < this.numberOfChannels; k++) all.set(this._ch[k], k * this.length);
+      return all.buffer;
+    }
+  }
+  class AudioBufferSourceNode extends AudioScheduledSourceNode {
+    constructor(ctx, o) {
+      super(ctx, 'buffersource');
+      this.playbackRate = new AudioParam(this, 0, 1, -BIG, BIG, 'k-rate'); this.detune = new AudioParam(this, 1, 0, -BIG, BIG, 'k-rate');
+      this._buffer = null; this._sent = -1; this._loop = false; this._ls = 0; this._le = 0;
+      if (o) {
+        if (o.buffer !== undefined) this.buffer = o.buffer;
+        if (o.playbackRate !== undefined) this.playbackRate.value = o.playbackRate;
+        if (o.detune !== undefined) this.detune.value = o.detune;
+        if (o.loop !== undefined) this.loop = o.loop;
+        if (o.loopStart !== undefined) this.loopStart = o.loopStart;
+        if (o.loopEnd !== undefined) this.loopEnd = o.loopEnd;
+      }
+    }
+    get buffer() { return this._buffer; }
+    set buffer(b) {
+      if (b !== null && !(b instanceof AudioBuffer)) throw new TypeError("Failed to set the 'buffer' property on 'AudioBufferSourceNode': The provided value is not of type 'AudioBuffer'.");
+      this._buffer = b; this._sent = -1; this._send();
+    }
+    // The browser gets the buffer's samples when it is set and again if the page
+    // may have changed them since (getChannelData, copyToChannel).
+    _send() {
+      const b = this._buffer;
+      if (!b || this._sent === b._ver) return;
+      AB('buffer', this._ctx._id, this._id, b.numberOfChannels, b.sampleRate, b._bytes());
+      this._sent = b._ver;
+    }
+    get loop() { return this._loop; }
+    set loop(v) { this._loop = !!v; AH('set', this._ctx._id, this._id, 'loop', this._loop ? 1 : 0); }
+    get loopStart() { return this._ls; }
+    set loopStart(v) { this._ls = finite(v, 'loopStart'); AH('set', this._ctx._id, this._id, 'loopStart', this._ls); }
+    get loopEnd() { return this._le; }
+    set loopEnd(v) { this._le = finite(v, 'loopEnd'); AH('set', this._ctx._id, this._id, 'loopEnd', this._le); }
+    _start(when, offset, duration) {
+      this._send();
+      AH('start', this._ctx._id, this._id, when, offset === undefined ? 0 : notNegative(offset, 'offset'), duration === undefined ? '' : notNegative(duration, 'duration'));
+    }
+  }
+  class ConstantSourceNode extends AudioScheduledSourceNode {
+    constructor(ctx, o) { super(ctx, 'constant'); this.offset = new AudioParam(this, 0, 1, -BIG, BIG); if (o && o.offset !== undefined) this.offset.value = o.offset; }
+  }
+  const FILTER_TYPES = ['lowpass', 'highpass', 'bandpass', 'lowshelf', 'highshelf', 'peaking', 'notch', 'allpass'];
+  class BiquadFilterNode extends AudioNode {
+    constructor(ctx, o) {
+      super(ctx, 'biquad', '', 1, 1, 2, 'max', 'speakers');
+      this.frequency = new AudioParam(this, 0, 350, 0, ctx.sampleRate / 2); this.detune = new AudioParam(this, 1, 0, -153600, 153600);
+      this.Q = new AudioParam(this, 2, 1, -BIG, BIG); this.gain = new AudioParam(this, 3, 0, -BIG, 1541);
+      this._type = 'lowpass';
+      if (o) {
+        if (o.type !== undefined) this.type = o.type;
+        for (const k of ['frequency', 'detune', 'Q', 'gain']) if (o[k] !== undefined) this[k].value = o[k];
+        this._opts(o);
+      }
+    }
+    get type() { return this._type; }
+    set type(v) { if (!FILTER_TYPES.includes(v)) return; this._type = v; AH('set', this._ctx._id, this._id, 'type', v); }
+    getFrequencyResponse(hz, mag, phase) {
+      if (!(hz instanceof Float32Array) || !(mag instanceof Float32Array) || !(phase instanceof Float32Array)) throw new TypeError("Failed to execute 'getFrequencyResponse' on 'BiquadFilterNode': parameters must be Float32Arrays.");
+      if (mag.length < hz.length || phase.length < hz.length) throw domError('array lengths do not match', 'InvalidAccessError');
+      const r = AB('response', this._ctx._id, this._id, f32Bytes(hz));
+      if (!r) return;
+      const f = new Float32Array(r), n = hz.length;
+      mag.set(f.subarray(0, n)); phase.set(f.subarray(n, 2 * n));
+    }
+  }
+  class DelayNode extends AudioNode {
+    constructor(ctx, o) {
+      const max = o && o.maxDelayTime !== undefined ? +o.maxDelayTime : 1;
+      if (!(max > 0 && max < 180)) throw domError(`Failed to construct 'DelayNode': The max delay time provided (${max}) is outside the range (0, 180).`, 'NotSupportedError');
+      super(ctx, 'delay', max, 1, 1, 2, 'max', 'speakers');
+      this.delayTime = new AudioParam(this, 0, 0, 0, max);
+      if (o && o.delayTime !== undefined) this.delayTime.value = o.delayTime;
+      this._opts(o);
+    }
+  }
+  class StereoPannerNode extends AudioNode {
+    constructor(ctx, o) { super(ctx, 'panner', '', 1, 1, 2, 'clamped-max', 'speakers'); this.pan = new AudioParam(this, 0, 0, -1, 1); if (o && o.pan !== undefined) this.pan.value = o.pan; this._opts(o); }
+  }
+  class ChannelSplitterNode extends AudioNode {
+    constructor(ctx, o) {
+      const n = o && o.numberOfOutputs !== undefined ? o.numberOfOutputs >>> 0 : 6;
+      if (n < 1 || n > 32) throw domError(`Failed to construct 'ChannelSplitterNode': The number of outputs provided (${n}) is outside the range [1, 32].`, 'IndexSizeError');
+      super(ctx, 'splitter', n, 1, n, n, 'explicit', 'discrete');
+    }
+  }
+  class ChannelMergerNode extends AudioNode {
+    constructor(ctx, o) {
+      const n = o && o.numberOfInputs !== undefined ? o.numberOfInputs >>> 0 : 6;
+      if (n < 1 || n > 32) throw domError(`Failed to construct 'ChannelMergerNode': The number of inputs provided (${n}) is outside the range [1, 32].`, 'IndexSizeError');
+      super(ctx, 'merger', n, n, 1, 1, 'explicit', 'speakers');
+    }
+  }
+  class DynamicsCompressorNode extends AudioNode {
+    constructor(ctx, o) {
+      super(ctx, 'compressor', '', 1, 1, 2, 'clamped-max', 'speakers');
+      this.threshold = new AudioParam(this, 0, -24, -100, 0, 'k-rate'); this.knee = new AudioParam(this, 1, 30, 0, 40, 'k-rate');
+      this.ratio = new AudioParam(this, 2, 12, 1, 20, 'k-rate'); this.attack = new AudioParam(this, 3, 0.003, 0, 1, 'k-rate');
+      this.release = new AudioParam(this, 4, 0.25, 0, 1, 'k-rate');
+      if (o) for (const k of ['threshold', 'knee', 'ratio', 'attack', 'release']) if (o[k] !== undefined) this[k].value = o[k];
+    }
+    get reduction() { return +(AH('reduction', this._ctx._id, this._id) || 0); }
+  }
+  class AnalyserNode extends AudioNode {
+    constructor(ctx, o) {
+      super(ctx, 'analyser', '', 1, 1, 2, 'max', 'speakers');
+      this._fft = 2048; this._min = -100; this._max = -30; this._smooth = 0.8;
+      if (o) {
+        if (o.fftSize !== undefined) this.fftSize = o.fftSize;
+        if (o.maxDecibels !== undefined) this.maxDecibels = o.maxDecibels;
+        if (o.minDecibels !== undefined) this.minDecibels = o.minDecibels;
+        if (o.smoothingTimeConstant !== undefined) this.smoothingTimeConstant = o.smoothingTimeConstant;
+        this._opts(o);
+      }
+    }
+    get fftSize() { return this._fft; }
+    set fftSize(v) {
+      v = v >>> 0;
+      if (AH('set', this._ctx._id, this._id, 'fftSize', v) !== '1') throw domError(`Failed to set the 'fftSize' property on 'AnalyserNode': The value provided (${v}) is not a power of two, or is outside the range [32, 32768].`, 'IndexSizeError');
+      this._fft = v;
+    }
+    get frequencyBinCount() { return this._fft / 2; }
+    get minDecibels() { return this._min; }
+    set minDecibels(v) { v = finite(v, 'minDecibels'); if (AH('set', this._ctx._id, this._id, 'minDb', v) !== '1') throw domError(`Failed to set the 'minDecibels' property on 'AnalyserNode': The minDecibels provided (${v}) is greater than or equal to the maximum bound (${this._max}).`, 'IndexSizeError'); this._min = v; }
+    get maxDecibels() { return this._max; }
+    set maxDecibels(v) { v = finite(v, 'maxDecibels'); if (AH('set', this._ctx._id, this._id, 'maxDb', v) !== '1') throw domError(`Failed to set the 'maxDecibels' property on 'AnalyserNode': The maxDecibels provided (${v}) is less than or equal to the minimum bound (${this._min}).`, 'IndexSizeError'); this._max = v; }
+    get smoothingTimeConstant() { return this._smooth; }
+    set smoothingTimeConstant(v) { v = finite(v, 'smoothingTimeConstant'); if (AH('set', this._ctx._id, this._id, 'smoothing', v) !== '1') throw domError(`Failed to set the 'smoothingTimeConstant' property on 'AnalyserNode': The smoothing value provided (${v}) is outside the range [0, 1].`, 'IndexSizeError'); this._smooth = v; }
+    _read(kind, arr, T) {
+      if (!(arr instanceof T)) throw new TypeError(`Failed to execute on 'AnalyserNode': parameter 1 is not of type '${T.name}'.`);
+      const r = AB('analyser', this._ctx._id, this._id, kind);
+      if (!r) return;
+      const src = new T(r);
+      arr.set(src.length > arr.length ? src.subarray(0, arr.length) : src);
+    }
+    getByteFrequencyData(a) { this._read('bf', a, Uint8Array); }
+    getFloatFrequencyData(a) { this._read('ff', a, Float32Array); }
+    getByteTimeDomainData(a) { this._read('bt', a, Uint8Array); }
+    getFloatTimeDomainData(a) { this._read('ft', a, Float32Array); }
+  }
+  class MediaStreamAudioSourceNode extends AudioNode {
+    constructor(ctx, o) {
+      const st = o && o.mediaStream;
+      if (!(st instanceof MediaStream)) throw new TypeError("Failed to construct 'MediaStreamAudioSourceNode': required member mediaStream is undefined.");
+      const t = st.getAudioTracks()[0];
+      if (!t) throw domError("Failed to construct 'MediaStreamAudioSourceNode': MediaStream has no audio track", 'InvalidStateError');
+      // The microphone is tap 0; a MediaStreamAudioDestinationNode's track names its own.
+      super(ctx, 'streamsource', t._tap === undefined ? 0 : t._tap, 0, 1, 2, 'max', 'speakers');
+      this.mediaStream = st;
+    }
+  }
+  class MediaElementAudioSourceNode extends AudioNode {
+    constructor(ctx, o) {
+      const el = o && o.mediaElement;
+      if (!(el instanceof HTMLMediaElement)) throw new TypeError("Failed to construct 'MediaElementAudioSourceNode': required member mediaElement is undefined.");
+      if (el._audioSource) throw domError("Failed to construct 'MediaElementAudioSourceNode': HTMLMediaElement already connected previously to a different MediaElementSourceNode.", 'InvalidStateError');
+      super(ctx, 'elementsource', '', 0, 1, 2, 'max', 'speakers');
+      el._audioSource = this; this.mediaElement = el;
+    }
+  }
+  class MediaStreamAudioDestinationNode extends AudioNode {
+    constructor(ctx, o) {
+      super(ctx, 'streamdestination', '', 1, 0, 2, 'explicit', 'speakers');
+      const t = new MediaStreamTrack('audio', 'MediaStreamAudioDestinationNode', '', {});
+      // Not the microphone: the browser's capture does not count it. Recording and
+      // WebRTC read its sound from the browser's tap `_tap`.
+      liveTracks.delete(t); t._tap = this._tap;
+      this.stream = new MediaStream([t]);
+      this._opts(o);
+    }
+  }
+  class AudioListener {
+    constructor(ctx) {
+      const p = (i, v) => new AudioParam({ _ctx: ctx, _id: -1 }, i, v, -BIG, BIG);
+      this.positionX = p(0, 0); this.positionY = p(1, 0); this.positionZ = p(2, 0);
+      this.forwardX = p(3, 0); this.forwardY = p(4, 0); this.forwardZ = p(5, -1); this.upX = p(6, 0); this.upY = p(7, 1); this.upZ = p(8, 0);
+    }
+    setPosition() {} setOrientation() {}
+  }
+  class BaseAudioContext extends EventTarget {
+    constructor(spec) {
+      super();
+      if (new.target === BaseAudioContext) throw new TypeError('Illegal constructor');
+      const r = spec ? AH('new', '1', spec[0], spec[1], spec[2]) : AH('new', '0');
+      if (r === null) throw domError("Failed to construct 'AudioContext': The number of hardware contexts provided (64) is greater than or equal to the maximum bound (64).", 'NotSupportedError');
+      const [id, rate] = r.split('\t');
+      this._id = +id; this.sampleRate = +rate; this._sources = new Map();
+      this._state = spec ? 'suspended' : 'running';
+      this.onstatechange = null;
+      this.destination = new AudioDestinationNode(this, spec ? spec[0] : 2);
+      this.listener = new AudioListener(this);
+      audioContexts.set(this._id, this);
+    }
+    get currentTime() { return +(AH('time', this._id) || 0); }
+    get state() { return this._state; }
+    _setState(s) { if (s && s !== this._state) { this._state = s; this.dispatchEvent(new Event('statechange')); } }
+    createGain() { return new GainNode(this); }
+    createOscillator() { return new OscillatorNode(this); }
+    createBufferSource() { return new AudioBufferSourceNode(this); }
+    createConstantSource() { return new ConstantSourceNode(this); }
+    createBiquadFilter() { return new BiquadFilterNode(this); }
+    createDelay(max) { return new DelayNode(this, { maxDelayTime: max === undefined ? 1 : max }); }
+    createStereoPanner() { return new StereoPannerNode(this); }
+    createChannelSplitter(n) { return new ChannelSplitterNode(this, { numberOfOutputs: n === undefined ? 6 : n }); }
+    createChannelMerger(n) { return new ChannelMergerNode(this, { numberOfInputs: n === undefined ? 6 : n }); }
+    createDynamicsCompressor() { return new DynamicsCompressorNode(this); }
+    createAnalyser() { return new AnalyserNode(this); }
+    createPeriodicWave(real, imag, o) { return new PeriodicWave(this, Object.assign({ real, imag }, o || {})); }
+    createBuffer(ch, len, rate) { return new AudioBuffer({ numberOfChannels: ch, length: len, sampleRate: rate }); }
+    decodeAudioData(data, ok, fail) {
+      return new Promise((resolve, reject) => {
+        const no = (m, n) => { const e = domError(m, n); if (typeof fail === 'function') { try { fail(e); } catch (x) { report(x); } } reject(e); };
+        if (!(data instanceof ArrayBuffer)) return no("Failed to execute 'decodeAudioData' on 'BaseAudioContext': parameter 1 is not of type 'ArrayBuffer'.", 'TypeError');
+        // The bytes belong to the decoder now (the spec detaches them).
+        const bytes = data.slice(0);
+        setTimeout(() => {
+          const r = AB('decode', this.sampleRate, bytes);
+          if (!r || r.byteLength < 12) return no('Unable to decode audio data', 'EncodingError');
+          const head = new Uint32Array(r, 0, 3), ch = head[0], rate = head[1], len = head[2];
+          if (!len) return no('Unable to decode audio data', 'EncodingError');
+          const planes = [];
+          for (let k = 0; k < ch; k++) planes.push(new Float32Array(r.slice(12 + k * len * 4, 12 + (k + 1) * len * 4)));
+          const buf = new AudioBuffer({ numberOfChannels: ch, length: len, sampleRate: rate, _planes: planes });
+          if (typeof ok === 'function') { try { ok(buf); } catch (x) { report(x); } }
+          resolve(buf);
+        }, 0);
+      });
+    }
+    // The browser said source node `node` finished.
+    _ended(node) {
+      const n = this._sources.get(node);
+      if (!n) return;
+      this._sources.delete(node);
+      n.dispatchEvent(new Event('ended'));
+    }
+  }
+  class AudioContext extends BaseAudioContext {
+    constructor(o) {
+      super(null);
+      this.baseLatency = 0.005; this.outputLatency = 0.15; this.sinkId = ''; this.onsinkchange = null;
+      this._latencyHint = o && o.latencyHint || 'interactive';
+    }
+    _ask(verb) {
+      if (this._state === 'closed') return Promise.reject(domError(`Failed to execute '${verb}' on 'AudioContext': Cannot ${verb} a closed AudioContext.`, 'InvalidStateError'));
+      const s = AH('state', this._id, verb);
+      return new Promise(resolve => setTimeout(() => { this._setState(s); resolve(); }, 0));
+    }
+    resume() { return this._ask('resume'); }
+    suspend() { return this._ask('suspend'); }
+    close() { const p = this._ask('close'); audioContexts.delete(this._id); return p; }
+    getOutputTimestamp() { const t = this.currentTime; return { contextTime: Math.max(0, t - this.outputLatency), performanceTime: performance.now() - this.outputLatency * 1000 }; }
+    setSinkId(id) { this.sinkId = id; return Promise.resolve(); }
+    createMediaStreamSource(st) { return new MediaStreamAudioSourceNode(this, { mediaStream: st }); }
+    createMediaElementSource(el) { return new MediaElementAudioSourceNode(this, { mediaElement: el }); }
+    createMediaStreamDestination() { return new MediaStreamAudioDestinationNode(this); }
+  }
+  class OfflineAudioCompletionEvent extends Event {
+    constructor(type, init) { super(type, init); this.renderedBuffer = init && init.renderedBuffer || null; }
+  }
+  class OfflineAudioContext extends BaseAudioContext {
+    constructor(a, len, rate) {
+      const o = typeof a === 'object' && a !== null ? a : { numberOfChannels: a, length: len, sampleRate: rate };
+      const ch = o.numberOfChannels === undefined ? 1 : o.numberOfChannels >>> 0, n = o.length >>> 0, r = +o.sampleRate;
+      if (ch < 1 || ch > 32 || n < 1 || !(r >= 3000 && r <= 768000)) throw domError("Failed to construct 'OfflineAudioContext': invalid numberOfChannels, length or sampleRate.", 'NotSupportedError');
+      super([ch, n, r]);
+      this.length = n; this.oncomplete = null; this._rendering = false;
+    }
+    startRendering() {
+      if (this._rendering) return Promise.reject(domError("Failed to execute 'startRendering' on 'OfflineAudioContext': cannot call startRendering more than once", 'InvalidStateError'));
+      this._rendering = true;
+      return new Promise((resolve, reject) => setTimeout(() => {
+        this._setState('running');
+        const r = AB('render', this._id);
+        if (!r) { reject(domError('Rendering failed', 'InvalidStateError')); return; }
+        const ch = this.destination.channelCount, n = this.length, planes = [];
+        for (let k = 0; k < ch; k++) planes.push(new Float32Array(r.slice(k * n * 4, (k + 1) * n * 4)));
+        const buf = new AudioBuffer({ numberOfChannels: ch, length: n, sampleRate: this.sampleRate, _planes: planes });
+        for (const [id, node] of this._sources) { this._sources.delete(id); node.dispatchEvent(new Event('ended')); }
+        this._setState('closed');
+        this.dispatchEvent(new OfflineAudioCompletionEvent('complete', { renderedBuffer: buf }));
+        resolve(buf);
+      }, 0));
+    }
+    resume() { return Promise.reject(domError('cannot resume an offline context that has not started', 'InvalidStateError')); }
+    suspend() { return Promise.reject(domError('suspend is not supported here', 'NotSupportedError')); }
+  }
+  // 'audio\tended\tCTX\tNODE'
+  function audioEvent(f) {
+    const c = audioContexts.get(+f[2]);
+    if (c && f[1] === 'ended') c._ended(+f[3]);
   }
   function timeRanges(r) {
     const range = i => { if (!(i >= 0 && i < r.length)) throw domError('IndexSizeError'); return r[i]; };
@@ -4705,6 +5175,10 @@
     HTMLAnchorElement, HTMLImageElement, HTMLInputElement, HTMLButtonElement, HTMLCanvasElement, HTMLTemplateElement,
     HTMLMediaElement, HTMLVideoElement, HTMLAudioElement, Audio, MediaSource, SourceBuffer, SourceBufferList,
     MediaStream, MediaStreamTrack, MediaStreamTrackEvent, MediaDevices, MediaDeviceInfo, InputDeviceInfo, PermissionStatus,
+    BaseAudioContext, AudioContext, webkitAudioContext: AudioContext, OfflineAudioContext, OfflineAudioCompletionEvent, AudioNode, AudioParam,
+    AudioDestinationNode, AudioScheduledSourceNode, AudioBuffer, AudioBufferSourceNode, AudioListener, GainNode, OscillatorNode, PeriodicWave,
+    ConstantSourceNode, BiquadFilterNode, DelayNode, StereoPannerNode, ChannelSplitterNode, ChannelMergerNode, DynamicsCompressorNode,
+    AnalyserNode, MediaStreamAudioSourceNode, MediaElementAudioSourceNode, MediaStreamAudioDestinationNode,
     HTMLTextAreaElement, HTMLSelectElement, HTMLOptionElement, HTMLFormElement, HTMLLabelElement, FormData, InputEvent, SubmitEvent,
     Document, DocumentFragment, DOMTokenList, CanvasRenderingContext2D, CanvasGradient, CanvasPattern,
     WebGLRenderingContext, WebGL2RenderingContext, WebGLBuffer, WebGLTexture, WebGLProgram, WebGLShader, WebGLFramebuffer,
@@ -4880,6 +5354,7 @@
       case 'capture': captureAnswer(f); return 0;
       case 'capturegone': captureGone(f[1]); return 0;
       case 'capturemute': captureMute(f[1], f[2] === '1'); return 0;
+      case 'audio': audioEvent(f); return 0;
       case 'devicechange': mediaDevices.dispatchEvent(new Event('devicechange')); return 0;
       // An extension's message or event: `ext\tJSON` (extensions.js).
       case 'ext': return extEvent ? (extEvent(f.slice(1).join('\t')) || 0) : 0;

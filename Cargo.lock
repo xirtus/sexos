@@ -7664,6 +7664,7 @@ dependencies = [
  "sex-gl",
  "sex-html",
  "sex-image",
+ "sex-webaudio",
  "sha2 0.10.9",
  "wasmi",
 ]
@@ -8039,6 +8040,13 @@ dependencies = [
  "sex-html",
  "sex-image",
  "sex-js",
+]
+
+[[package]]
+name = "sex-webaudio"
+version = "0.1.0"
+dependencies = [
+ "libm",
 ]
 
 [[package]]
@@ -10915,6 +10923,7 @@ dependencies = [
  "sex-shields",
  "sex-uvc",
  "sex-web",
+ "sex-webaudio",
 ]
 
 [[package]]
