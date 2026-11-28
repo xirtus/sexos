@@ -112,6 +112,7 @@ pub const KEY_MUTE: u8 = 0x75;
 pub const KEY_TEXT: u8 = 0x7E;
 pub const KEY_VOLUME_DOWN: u8 = 0x76;
 pub const KEY_VOLUME_UP: u8 = 0x77;
+pub const KEY_MIC_MUTE: u8 = 0x79;
 
 /// Player keys: E0 22 / E0 24 / E0 19 / E0 10 on PS/2 (again sharing G, J, P and Q's
 /// byte). Shell routes each to the focused program when it plays sound, else to the

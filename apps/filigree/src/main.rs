@@ -6,9 +6,9 @@
 #[cfg(feature = "sexos")]
 mod program {
     extern crate alloc;
-    use filigree::Filigree;
+    use filigree::{noir_theme, Filigree};
     use weft::sexos::App;
-    use weft::{Response, Strings, Theme};
+    use weft::{Mode, Response, Strings};
 
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -17,7 +17,13 @@ mod program {
     }
 
     extern "C" fn main() -> ! {
-        let mut app = App::open("Filigree", Theme::light(), Strings::new("en"));
+        let mut app = App::open("Filigree", noir_theme(), Strings::new("en"));
+        if app.ui.theme().mode != Mode::HighContrast {
+            let mut t = noir_theme();
+            t.scale = app.ui.theme().scale;
+            t.density = app.ui.theme().density;
+            app.ui.set_theme(t);
+        }
         let mut filigree = Filigree::build(&mut app.ui);
         app.present();
         let (target, task) = (app.window.target, app.window.task);

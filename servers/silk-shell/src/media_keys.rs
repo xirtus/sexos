@@ -13,6 +13,8 @@
 
 /// Player key codes, as `sex_pdx::app_key` names them (literals so this file builds alone).
 pub const KEY_PLAY_PAUSE: u8 = 0x78;
+#[allow(dead_code)]
+pub const KEY_MIC_MUTE: u8 = 0x79;
 pub const KEY_STOP: u8 = 0x7A;
 pub const KEY_NEXT: u8 = 0x7C;
 pub const KEY_PREVIOUS: u8 = 0x7F;
@@ -29,6 +31,8 @@ pub const OSD_TICKS: u64 = 1_500;
 pub enum Ask {
     /// A volume or mute key: show the new state.
     Volume,
+    /// A microphone mute or gain key: show the new microphone state.
+    MicVolume,
     /// A player key with this code: deliver it to the program Bell names.
     Player(u8),
     /// The panel tray's state or slider: show the new state in the tray.
@@ -100,6 +104,32 @@ pub fn osd_text(state: u64, out: &mut [u8; 48]) -> usize {
     put(&d[i..], &mut n);
     put(b"%  ", &mut n);
     for k in 0..20u8 { put(if !muted && k < volume / 5 { b"|" } else { b"." }, &mut n); }
+    if !card { put(b"  no sound card", &mut n); }
+    n
+}
+
+/// The OSD line for the microphone state embedded in Bell's master `state` word:
+/// "Mic 85%  |||||||||||||||||..." or "Mic Muted  ....................".
+pub fn mic_osd_text(state: u64, out: &mut [u8; 48]) -> usize {
+    let atten = ((state >> 16) as u8).min(100);
+    let volume = 100 - atten;
+    let muted = state & 1 << 24 != 0;
+    let card = state & 1 << 9 != 0;
+    let mut n = 0;
+    let mut put = |b: &[u8], n: &mut usize| for &c in b { if *n < out.len() { out[*n] = c; *n += 1; } };
+    if muted {
+        put(b"Mic Muted  ", &mut n);
+        for _ in 0..20 { put(b".", &mut n); }
+    } else {
+        put(b"Mic ", &mut n);
+        let mut d = [0u8; 3];
+        let mut i = 3;
+        let mut v = volume;
+        loop { i -= 1; d[i] = b'0' + v % 10; v /= 10; if v == 0 { break; } }
+        put(&d[i..], &mut n);
+        put(b"%  ", &mut n);
+        for k in 0..20u8 { put(if k < volume / 5 { b"|" } else { b"." }, &mut n); }
+    }
     if !card { put(b"  no sound card", &mut n); }
     n
 }
@@ -194,6 +224,19 @@ mod tests {
         assert_eq!(text(TAG | 0 | 1 << 9), "Volume 0%  ....................");
         assert_eq!(text(TAG | 50 | 1 << 8 | 1 << 9), "Muted 50%  ....................");
         assert!(text(TAG | 50).ends_with("no sound card"));
+    }
+    #[test]
+    fn mic_osd_shows_gain_bars_and_mute() {
+        let mic_text = |state: u64| {
+            let mut out = [0u8; 48];
+            let n = mic_osd_text(state, &mut out);
+            std::string::String::from_utf8(out[..n].to_vec()).unwrap()
+        };
+        assert_eq!(mic_text(TAG | 100 | 1 << 9), "Mic 100%  ||||||||||||||||||||");
+        assert_eq!(mic_text(TAG | 100 | 1 << 9 | 15 << 16), "Mic 85%  |||||||||||||||||...");
+        assert_eq!(mic_text(TAG | 100 | 1 << 9 | 100 << 16), "Mic 0%  ....................");
+        assert_eq!(mic_text(TAG | 100 | 1 << 9 | 15 << 16 | 1 << 24), "Mic Muted  ....................");
+        assert!(mic_text(TAG | 100).ends_with("no sound card"));
     }
     #[test]
     fn answers_come_back_in_order() {

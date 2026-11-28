@@ -147,3 +147,13 @@ fn config_names_ssh_domains() {
     assert_eq!(c.ssh.len(), 2);
     assert_eq!(c.problems.len(), 2, "{:?}", c.problems);
 }
+
+#[test]
+fn config_defaults_to_noir_and_parses_opacity() {
+    let d = config::Config::default();
+    assert_eq!((d.theme.as_str(), d.font.as_str(), d.font_size, d.padding, d.opacity), ("noir", "geist-mono", 18, 4, 100));
+    let c = config::parse("background_opacity = 0.55\ntheme = nord\n");
+    assert_eq!((c.theme.as_str(), c.opacity, c.problems.len()), ("nord", 55, 0));
+    let bad = config::parse("opacity = 2.0\n");
+    assert_eq!(bad.problems.len(), 1);
+}

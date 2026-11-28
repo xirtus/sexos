@@ -123,7 +123,9 @@ dependencies = [
  "aftercare-core",
  "rand_chacha",
  "rand_core 0.6.4",
+ "sex-font",
  "sex-std",
+ "sex-theme",
  "sha2 0.10.9",
 ]
 
@@ -1381,7 +1383,9 @@ version = "0.1.0"
 dependencies = [
  "corset-core",
  "sex-app",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
  "sex-volumes",
  "sha2 0.10.9",
 ]
@@ -1865,7 +1869,9 @@ dependencies = [
  "drag-vmm",
  "sex-app",
  "sex-crossdress",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -2167,7 +2173,9 @@ version = "0.1.0"
 dependencies = [
  "drag-vmm",
  "sex-app",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -3992,6 +4000,7 @@ dependencies = [
  "sex-font",
  "sex-kdeconnect",
  "sex-std",
+ "sex-theme",
 ]
 
 [[package]]
@@ -4466,9 +4475,10 @@ name = "jot"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-pdx",
  "sex-textedit",
- "sex-vt",
+ "sex-theme",
  "spellbook",
 ]
 
@@ -5990,7 +6000,9 @@ name = "peek"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -7394,8 +7406,12 @@ dependencies = [
 name = "sex-app"
 version = "0.1.0"
 dependencies = [
+ "sex-config",
  "sex-fetch",
+ "sex-font",
  "sex-pdx",
+ "sex-spell",
+ "sex-textedit",
  "sex-theme",
  "talc",
  "zeroize",
@@ -7513,7 +7529,11 @@ dependencies = [
  "egui_extras",
  "image",
  "png 0.18.1",
+ "sex-config",
+ "sex-font",
+ "sex-spell",
  "sex-std",
+ "sex-theme",
 ]
 
 [[package]]
@@ -7895,7 +7915,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-sof"
+version = "0.1.0"
+
+[[package]]
 name = "sex-speech"
+version = "0.1.0"
+
+[[package]]
+name = "sex-spell"
 version = "0.1.0"
 
 [[package]]
@@ -7925,12 +7953,16 @@ dependencies = [
 [[package]]
 name = "sex-textedit"
 version = "0.1.0"
+dependencies = [
+ "sex-spell",
+]
 
 [[package]]
 name = "sex-theme"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "sex-font",
 ]
 
 [[package]]
@@ -8305,7 +8337,9 @@ name = "shuttle-app"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -9255,7 +9289,9 @@ name = "talk"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]

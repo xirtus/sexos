@@ -24,7 +24,30 @@ use filigree_core::{
 };
 use weft::menu::{Command, Menu};
 use weft::widget::{Column, Id, Layout, Rows, Tab, TextStyle};
-use weft::{ButtonStyle, Coach, CoachControls, CoachStep, Response, TabEvent, Ui};
+use weft::{ButtonStyle, Coach, CoachControls, CoachStep, Color, Response, TabEvent, Theme, Ui};
+
+/// macOS Noir obsidian + SexOS Rose theme for Filigree.
+pub fn noir_theme() -> Theme {
+    let mut t = Theme::dark().with_accent(Color::hex(0xF43F5E));
+    t.radius = 8.0;
+    t.palette.window = Color::hex(0x0D1017);
+    t.palette.surface = Color::hex(0x151924);
+    t.palette.field = Color::hex(0x0B0E14);
+    t.palette.control = Color::hex(0x1C2230);
+    t.palette.control_hover = Color::hex(0x252D40);
+    t.palette.control_pressed = Color::hex(0x2E384F);
+    t.palette.border = Color::hex(0x252C3D);
+    t.palette.text = Color::hex(0xF8FAFC);
+    t.palette.text_dim = Color::hex(0x94A3B8);
+    t.palette.text_disabled = Color::hex(0x64748B);
+    t.palette.accent = Color::hex(0xE11D48);
+    t.palette.on_accent = Color::hex(0xFFFFFF);
+    t.palette.selection = Color(0x55F4_3F5E);
+    t.palette.focus = Color::hex(0xF43F5E);
+    t.palette.danger = Color::hex(0xE11D48);
+    t.palette.on_danger = Color::hex(0xFFFFFF);
+    t
+}
 
 /// Default editable pangram shown in the Families & Waterfall tab.
 pub const DEFAULT_SAMPLE_TEXT: &str = "Pack my box with five dozen liquor jugs";

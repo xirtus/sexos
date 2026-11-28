@@ -157,21 +157,21 @@ fn draw(l: &Layout, words: &[Line; 7]) {
         card(cache, cw, r, s);
         text(cache, cw, words[0].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, 3, r.2 - 32 * s);
         let date_y = r.1 + 12 * s + super::glyphs::UI_H * 3 + 8 * s;
-        text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, date_y, desk().card_soft, ui, r.2 - 32 * s);
-        text(cache, cw, words[6].as_bytes(), r.0 + 16 * s, date_y + super::glyphs::UI_H * s + 4 * s, desk().card_soft, ui, r.2 - 32 * s);
+        body_text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, date_y, desk().card_soft, ui, r.2 - 32 * s);
+        body_text(cache, cw, words[6].as_bytes(), r.0 + 16 * s, date_y + super::glyphs::UI_H * s + 4 * s, desk().card_soft, ui, r.2 - 32 * s);
     }
     let line = super::glyphs::UI_H * s + 4 * s;
     if let Some(r) = l.weather {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
         text(cache, cw, words[4].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, ui, r.2 - 32 * s);
-        text(cache, cw, words[5].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, desk().card_soft, ui, r.2 - 32 * s);
+        body_text(cache, cw, words[5].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, desk().card_soft, ui, r.2 - 32 * s);
     }
     if let Some(r) = l.system {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
         text(cache, cw, words[2].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, ui, r.2 - 32 * s);
-        text(cache, cw, words[3].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, desk().card_ink, ui, r.2 - 32 * s);
+        body_text(cache, cw, words[3].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, desk().card_ink, ui, r.2 - 32 * s);
     }
 }
 
@@ -191,13 +191,21 @@ fn card(cache: &mut [u32], stride: usize, (x, y, w, h): (usize, usize, usize, us
     }
 }
 
-/// Text at (x0, y0) in the cache over the card, cut at `max_w`.
-fn text(cache: &mut [u32], stride: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
-    let width = super::glyphs::ui_width(t, scale).unwrap_or(0).min(max_w).min(stride.saturating_sub(x0));
+fn text_weight(cache: &mut [u32], stride: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize, body: bool) {
+    let width = if body {
+        super::glyphs::ui_body_width(t, scale)
+    } else {
+        super::glyphs::ui_width(t, scale)
+    }.unwrap_or(0).min(max_w).min(stride.saturating_sub(x0));
     let rows = cache.len() / stride;
     for y in y0..(y0 + super::glyphs::UI_H * scale as usize).min(rows) {
         for x in x0..x0 + width {
-            let Some(cov) = super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale) else { return };
+            let cov = if body {
+                super::glyphs::ui_body_coverage(t, (x - x0) as i32, y - y0, scale)
+            } else {
+                super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale)
+            };
+            let Some(cov) = cov else { return };
             if cov == 0 { continue; }
             let p = &mut cache[y * stride + x];
             let (a, under) = (*p >> 24, *p & 0x00FF_FFFF);
@@ -205,4 +213,13 @@ fn text(cache: &mut [u32], stride: usize, t: &[u8], x0: usize, y0: usize, ink: u
             *p = (alpha << 24) | super::coverage_blend(ink, under, cov) & 0x00FF_FFFF;
         }
     }
+}
+
+/// Text at (x0, y0) in the cache over the card, cut at `max_w`.
+fn text(cache: &mut [u32], stride: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
+    text_weight(cache, stride, t, x0, y0, ink, scale, max_w, false);
+}
+
+fn body_text(cache: &mut [u32], stride: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
+    text_weight(cache, stride, t, x0, y0, ink, scale, max_w, true);
 }

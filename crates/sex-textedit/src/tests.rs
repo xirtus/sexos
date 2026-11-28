@@ -343,3 +343,197 @@ fn edits_count_every_change() {
     d.move_to(Motion::End_, false);
     assert_eq!(d.edits(), e2);
 }
+
+// ---- RichEditor: shortcuts, mouse selection, spellcheck, ghost prediction, autocorrect, context menu ----
+
+use crate::editor::{ContextAction, Key, Modifiers, RichEditor, TextMode};
+
+fn type_str(ed: &mut RichEditor, s: &str) {
+    for c in s.chars() {
+        ed.handle_key(Key::Char(c), Modifiers::NONE, None);
+    }
+}
+
+#[test]
+fn rich_editor_supports_both_super_and_ctrl_shortcuts() {
+    for primary in [
+        Modifiers { super_cmd: true, ..Modifiers::NONE },
+        Modifiers { ctrl: true, ..Modifiers::NONE },
+    ] {
+        let mut ed = RichEditor::from_str("hello world", TextMode::Prose);
+        ed.handle_key(Key::Letter(b'a'), primary, None);
+        assert_eq!(ed.doc.selection(), Some((0, 11)));
+
+        let copy = ed.handle_key(Key::Letter(b'c'), primary, None);
+        assert_eq!(copy.copied.as_deref(), Some(&b"hello world"[..]));
+
+        let cut = ed.handle_key(Key::Letter(b'x'), primary, None);
+        assert_eq!(cut.cut.as_deref(), Some(&b"hello world"[..]));
+        assert_eq!(ed.text_str(), "");
+
+        ed.handle_key(Key::Letter(b'v'), primary, Some(b"noir ui"));
+        assert_eq!(ed.text_str(), "noir ui");
+
+        // Undo
+        assert!(ed.handle_key(Key::Letter(b'z'), primary, None).text_changed);
+        assert_eq!(ed.text_str(), "");
+
+        // Redo via Shift+Z
+        let shift_primary = Modifiers { shift: true, ..primary };
+        assert!(ed.handle_key(Key::Letter(b'z'), shift_primary, None).text_changed);
+        assert_eq!(ed.text_str(), "noir ui");
+
+        // Undo then Redo via Y
+        ed.handle_key(Key::Letter(b'z'), primary, None);
+        assert!(ed.handle_key(Key::Letter(b'y'), primary, None).text_changed);
+        assert_eq!(ed.text_str(), "noir ui");
+    }
+}
+
+#[test]
+fn rich_editor_navigation_alt_word_super_line_and_shift_select() {
+    let mut ed = RichEditor::from_str("first line\nalpha beta gamma", TextMode::Prose);
+    ed.doc.click_at(ed.text_str().len(), false);
+
+    let cmd = Modifiers { super_cmd: true, ..Modifiers::NONE };
+    let opt = Modifiers { alt: true, ..Modifiers::NONE };
+    let opt_shift = Modifiers { alt: true, shift: true, ..Modifiers::NONE };
+    let shift = Modifiers { shift: true, ..Modifiers::NONE };
+
+    // Cmd+Left jumps to line start
+    ed.handle_key(Key::Left, cmd, None);
+    assert_eq!(ed.doc.cursor, 11);
+
+    // Cmd+Right jumps to line end
+    ed.handle_key(Key::Right, cmd, None);
+    assert_eq!(ed.doc.cursor, 27);
+
+    // Opt+Left jumps by word; Opt+Shift+Left selects by word
+    ed.handle_key(Key::Left, opt, None);
+    assert_eq!(ed.doc.cursor, 22);
+    ed.handle_key(Key::Left, opt_shift, None);
+    assert_eq!(ed.doc.selected(), b"beta ");
+
+    // Shift+Home / Shift+Up extend selection
+    ed.doc.click_at(16, false);
+    ed.handle_key(Key::Up, shift, None);
+    assert!(ed.doc.selected().len() > 5);
+
+    // Opt+Backspace deletes previous word
+    ed.doc.click_at(ed.text_str().len(), false);
+    ed.handle_key(Key::Backspace, opt, None);
+    assert_eq!(ed.text_str(), "first line\nalpha beta ");
+
+    // Cmd+Backspace deletes to line start
+    ed.handle_key(Key::Backspace, cmd, None);
+    assert_eq!(ed.text_str(), "first line\n");
+}
+
+#[test]
+fn rich_editor_mouse_click_drag_double_triple_click_and_ctrl_click() {
+    let mut ed = RichEditor::from_str("one two three\nsecond line", TextMode::Prose);
+
+    // Double-click inside "two" selects "two"
+    ed.on_primary_click(5, 2, Modifiers::NONE, true);
+    assert_eq!(ed.doc.selected(), b"two");
+
+    // Drag while in word granularity extends by whole words ("two three")
+    ed.on_primary_drag(10);
+    assert_eq!(ed.doc.selected(), b"two three");
+
+    // Triple-click selects whole line without trailing newline
+    ed.on_primary_click(16, 3, Modifiers::NONE, true);
+    assert_eq!(ed.doc.selected(), b"second line");
+
+    // Click and drag selects exact range
+    ed.on_primary_click(0, 1, Modifiers::NONE, true);
+    ed.on_primary_drag(3);
+    assert_eq!(ed.doc.selected(), b"one");
+
+    // Shift+Click extends selection
+    ed.on_primary_click(7, 1, Modifiers { shift: true, ..Modifiers::NONE }, true);
+    assert_eq!(ed.doc.selected(), b"one two");
+}
+
+#[test]
+fn rich_editor_ghost_completion_accepts_on_tab_and_right_arrow() {
+    let mut ed = RichEditor::from_str("", TextMode::Prose);
+    type_str(&mut ed, "pref");
+    assert_eq!(ed.ghost_suffix(), Some("erences"));
+
+    // Tab accepts ghost completion
+    let res = ed.handle_key(Key::Tab, Modifiers::NONE, None);
+    assert!(res.handled && res.text_changed);
+    assert_eq!(ed.text_str(), "preferences");
+    assert_eq!(ed.ghost_suffix(), None);
+
+    // Right Arrow at end of word accepts ghost completion
+    type_str(&mut ed, " avail");
+    assert_eq!(ed.ghost_suffix(), Some("able"));
+    let res = ed.handle_key(Key::Right, Modifiers::NONE, None);
+    assert!(res.handled && res.text_changed);
+    assert_eq!(ed.text_str(), "preferences available");
+    assert_eq!(ed.ghost_suffix(), None);
+}
+
+#[test]
+fn rich_editor_space_autocorrect_and_single_backspace_revert() {
+    let mut ed = RichEditor::from_str("", TextMode::Prose);
+    type_str(&mut ed, "teh ");
+    assert_eq!(ed.text_str(), "the ");
+    assert_eq!(ed.autocorrect_underline(), Some((0, 3)));
+
+    // 1 Backspace immediately reverts to original typed letters ("teh ")
+    let res = ed.handle_key(Key::Backspace, Modifiers::NONE, None);
+    assert!(res.handled && res.text_changed);
+    assert_eq!(ed.text_str(), "teh ");
+    assert_eq!(ed.autocorrect_underline(), None);
+
+    // Second Backspace behaves normally (deletes trailing space)
+    ed.handle_key(Key::Backspace, Modifiers::NONE, None);
+    assert_eq!(ed.text_str(), "teh");
+
+    // Disabled automatically in Code mode
+    let mut code = RichEditor::from_str("", TextMode::Code);
+    type_str(&mut code, "teh ");
+    assert_eq!(code.text_str(), "teh ");
+    assert_eq!(code.autocorrect_underline(), None);
+    assert!(code.misspelled_spans().is_empty());
+}
+
+#[test]
+fn rich_editor_context_menu_right_click_and_ctrl_click_with_spell_actions() {
+    let mut ed = RichEditor::from_str("hello recieve world", TextMode::Prose);
+    assert_eq!(ed.misspelled_spans().len(), 1);
+
+    // Ctrl+Left-Click inside "recieve" selects target word & opens menu with top suggestion
+    let opened = ed.on_primary_click(8, 1, Modifiers { ctrl: true, ..Modifiers::NONE }, true);
+    assert!(opened);
+    assert_eq!(ed.doc.selected(), b"recieve");
+    let menu = ed.context_menu.as_ref().unwrap();
+    assert!(menu.misspelled);
+    assert!(menu.divider_after.is_some());
+    assert_eq!(menu.items[0].label, "receive");
+    assert!(menu.items[0].prominent);
+    assert!(menu.items.iter().any(|i| i.label == "Cut" && i.shortcut == "⌘X" && i.enabled));
+    assert!(menu.items.iter().any(|i| i.label == "Copy" && i.shortcut == "⌘C" && i.enabled));
+    assert!(menu.items.iter().any(|i| i.label == "Paste" && i.shortcut == "⌘V" && i.enabled));
+    assert!(menu.items.iter().any(|i| i.label == "Select All" && i.shortcut == "⌘A" && i.enabled));
+
+    let fix_action = menu.items[0].action.clone();
+    ed.execute_context_action(fix_action, None);
+    assert_eq!(ed.text_str(), "hello receive world");
+    assert!(ed.misspelled_spans().is_empty());
+
+    // Secondary right-click on another misspelling -> Learn Spelling clears squiggle
+    ed.set_text("hello zqxword");
+    assert_eq!(ed.misspelled_spans().len(), 1);
+    ed.on_secondary_click(8, false);
+    let learn = ed.context_menu.as_ref().unwrap().items.iter()
+        .find(|i| matches!(i.action, ContextAction::LearnWord(_)))
+        .unwrap()
+        .action
+        .clone();
+    ed.execute_context_action(learn, None);
+    assert!(ed.misspelled_spans().is_empty());
+}

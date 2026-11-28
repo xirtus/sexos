@@ -47,6 +47,14 @@ pub fn typing(key: Key, raw: u8) -> Key {
     key.typing(typed)
 }
 
+/// Character typed by `raw` under the active keyboard layout (US, European, Shift, AltGr).
+pub fn typed_char(raw: u8) -> Option<char> {
+    match keyboard().press(raw) {
+        sex_keymap::Typed::Char(c) => Some(c),
+        _ => None,
+    }
+}
+
 /// While the Pinyin layout is active, offers the press to the input method.
 /// `None`: not the method's, deliver the key as usual. `Some(changed)`: the
 /// method took it; each committed character went to `push` as a
