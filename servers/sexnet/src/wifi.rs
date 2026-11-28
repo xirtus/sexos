@@ -1103,11 +1103,10 @@ fn local_ipv4_word(wifi: Option<&Wifi>) -> u64 {
     if let Some(ip) = wifi.and_then(|w| w.dhcp_ip) {
         return ws::ip4_word(ip, true);
     }
-    let cfg = sex_pdx::device_network_config(sex_pdx::SLOT_NIC).ok()
-        .or_else(|| sex_pdx::device_network_config(sex_pdx::usb_net::SLOT).ok());
-    let link_up = wifi.is_some_and(|w| w.link_up()) || cfg.is_some();
-    let ip = cfg.map_or([0; 4], |c| c.local);
-    ws::ip4_word(ip, link_up)
+    // Wi-Fi status reports the Wi-Fi link only. The held NIC's BOOT settings are read
+    // once at start (main); asking again on every status request broke the one-query
+    // authority receipt the gates check.
+    ws::ip4_word([0; 4], wifi.is_some_and(|w| w.link_up()))
 }
 
 /// Answers a desktop request (`sex_pdx::wifi_status::OP`). Shell, SilkBar and Spindle
