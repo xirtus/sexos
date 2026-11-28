@@ -164,6 +164,15 @@ run_stage() {
         || echo "[nvidia.firmware] note: fetch incomplete; the pack is empty"
       python3 scripts/make_nvidia_firmware_pack.py --firmware target/nvidia-firmware --out iso_root/firmware/nvidia-gsp.pack
       ;;
+    sof_firmware)
+      # Intel-signed Sound Open Firmware for Tiger Lake's audio DSP (pinned sof-bin,
+      # SHA-256 checked) as one pack BOOT gives Bell beside a cAVS lease. An offline build
+      # packs nothing; Bell then reports the DSP firmware absent. Intel's licence goes in
+      # the pack beside the images it covers.
+      bash scripts/fetch_sof_firmware.sh target/sof-firmware \
+        || echo "[sof.firmware] note: fetch incomplete; the pack is empty"
+      python3 scripts/make_sof_firmware_pack.py --firmware target/sof-firmware --out iso_root/firmware/sof.pack
+      ;;
     boot_image)
       if [[ "${SEXOS_RECORDER:-0}" == "1" ]]; then
         # Never silently use decoder-only libraries for a capture profile.
