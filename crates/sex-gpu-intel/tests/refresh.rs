@@ -190,3 +190,39 @@ fn level_zero_that_cannot_fit_refuses() {
     let boot = Boot::read(&mut r, 0, slow.clock_khz, 1920);
     assert_eq!(refresh::plan(&mut r, 0, &slow, &fast, &boot), Err(Refusal::Watermarks));
 }
+
+#[test]
+fn combo_pll_table_round_trips_every_dp_rate() {
+    use sex_gpu_intel::dpll;
+    for refk in [19_200, 24_000, 38_400] {
+        for &rate in &dpll::DP_RATES {
+            let p = dpll::dp_params(refk, rate).unwrap();
+            let (c0, c1) = dpll::encode(refk, &p);
+            let got = dpll::port_clock_khz(refk, c0, c1);
+            assert!(got.abs_diff(rate) <= rate / 1000, "ref {refk} rate {rate} got {got}");
+        }
+    }
+    assert_eq!(dpll::dp_params(38_400, 123_000), None);
+}
+
+#[test]
+fn combo_pll_readout_and_enable_sequence() {
+    use sex_gpu_intel::dpll;
+    let mut r = Regs::default();
+    r.0.insert(dpll::DSSM, 2 << 29);
+    let (c0, c1) = dpll::encode(38_400, &dpll::dp_params(38_400, 540_000).unwrap());
+    // Firmware: DPLL0 locked at HBR2, routed to DDI A; DDI B gated.
+    r.0.insert(dpll::enable_reg(0), dpll::PLL_ENABLE | dpll::PLL_LOCK | dpll::PLL_POWER_ENABLE | dpll::PLL_POWER_STATE);
+    r.0.insert(dpll::cfgcr0(0), c0); r.0.insert(dpll::cfgcr1(0), c1);
+    r.0.insert(dpll::DPCLKA_CFGCR0, 1 << 11);
+    assert_eq!(dpll::port_pll(&mut r, 0), Some(0));
+    assert_eq!(dpll::port_pll(&mut r, 1), None);
+    assert!(dpll::port_link_khz(&mut r, 0).unwrap().abs_diff(540_000) < 540);
+    // Enabling DPLL1 for DDI B: power, dividers, enable; a fake that never
+    // reports power times out instead of hanging.
+    assert!(dpll::enable(&mut r, 1, c0, c1, 8).is_err());
+    r.0.insert(dpll::enable_reg(1), dpll::PLL_POWER_STATE | dpll::PLL_LOCK);
+    dpll::enable(&mut r, 1, c0, c1, 8).unwrap();
+    dpll::map_port(&mut r, 1, 1).unwrap();
+    assert_eq!(dpll::port_pll(&mut r, 1), Some(1));
+}

@@ -9,7 +9,7 @@
 //! register logic is `sex-gpu-intel`, host-tested against simulated registers.
 
 use sex_gpu_intel::regs::{self, PORTS};
-use sex_gpu_intel::{aux, backlight, hotplug, readout, refresh, timing, watermarks, Mmio};
+use sex_gpu_intel::{aux, backlight, dpll, hotplug, modeset, readout, refresh, timing, watermarks, Mmio};
 use sex_gpu_intel::timing::Timing;
 use sex_pdx::{display_frames as df, memory_region as m};
 
@@ -55,6 +55,15 @@ fn measure_refresh(bar: &mut Bar, p: u32) -> u32 {
     let (f1, t1) = (frame(bar), sex_pdx::get_ticks());
     let ms = t1.saturating_sub(t0);
     if ms == 0 { 0 } else { (f1.wrapping_sub(f0) as u64 * 1_000_000 / ms) as u32 }
+}
+
+/// Wait about `us` microseconds: whole milliseconds sleep on the timer,
+/// the rest spins on the time-stamp counter's 1 ms tick budget.
+fn delay_us(us: u32) {
+    if us >= 1000 { let _ = sex_pdx::sys_wait_self_ticks(us.div_ceil(1000) as u64); return; }
+    // Sub-millisecond: a bounded spin (training waits 100-400 µs).
+    let t0 = sex_pdx::get_ticks();
+    for i in 0..us.saturating_mul(400) { core::hint::spin_loop(); if i % 4096 == 0 && sex_pdx::get_ticks() > t0 + 1 { break; } }
 }
 
 /// Print the receipt. Returns false when no Intel display engine was leased.
@@ -336,16 +345,24 @@ impl Intel {
     /// The pipe, link and picture stay up; on any sign of trouble the boot
     /// M/N and watermarks come back. Returns the refresh now running.
     pub fn set_refresh(&mut self, mhz: u32) -> Result<u32, &'static str> {
-        let Some(mut rf) = self.refresh else { return Err("no_refresh_control") };
+        let Some(rf) = self.refresh else { return Err("no_refresh_control") };
         let panel = unsafe { &*core::ptr::addr_of!(PANEL) };
-        let same = panel.timings[..panel.count].iter().filter(|t| t.same_raster(&rf.running));
-        let target = if mhz == 0 { same.max_by_key(|t| t.clock_khz) } else { same.min_by_key(|t| t.refresh_mhz().abs_diff(mhz)) };
+        // Every mode at the panel's own resolution: same raster ones switch
+        // seamlessly, the others need a modeset (same size, so the desktop
+        // and its buffers stay as they are).
+        let same = panel.timings[..panel.count].iter().filter(|t| t.h[0] == rf.running.h[0] && t.v[0] == rf.running.v[0]);
+        let target = if mhz == 0 { same.max_by_key(|t| t.refresh_mhz()) } else { same.min_by_key(|t| t.refresh_mhz().abs_diff(mhz)) };
         let Some(target) = target.copied() else { return Err("no_mode") };
-        let p = self.chain.pipe;
-        if target == rf.running { return Ok(target.refresh_mhz()); }
+        if target == rf.running || target.refresh_mhz() == rf.running.refresh_mhz() { return Ok(target.refresh_mhz()); }
         // PSR1 may have the main link off while the panel self-refreshes; a
         // stream-rate change belongs with PSR's own exit, which stage 3 owns.
         if rf.psr { return self.refuse(&rf.running, &target, "psr_active"); }
+        if target.same_raster(&rf.running) { self.seamless(rf, target) } else { self.retime(rf, target) }
+    }
+
+    /// Same raster: new M/N (and deeper watermarks first when faster).
+    fn seamless(&mut self, mut rf: Refresh, target: Timing) -> Result<u32, &'static str> {
+        let p = self.chain.pipe;
         let plan = match refresh::plan(&mut self.bar, p, &rf.running, &target, &rf.boot) {
             Ok(plan) => plan,
             Err(e) => return self.refuse(&rf.running, &target, e.name()),
@@ -380,6 +397,122 @@ impl Intel {
         rf.running = target;
         self.refresh = Some(rf);
         Ok(target.refresh_mhz())
+    }
+
+    /// The link firmware trained on the panel's port: rate from its PLL,
+    /// lanes from the DDI buffer, which PLL.
+    fn boot_link(&mut self, port: u32) -> Option<(modeset::Link, u32)> {
+        let pll = dpll::port_pll(&mut self.bar, port)?;
+        let rate = dpll::port_link_khz(&mut self.bar, port)?;
+        let lanes = match (self.bar.read(regs::ddi_buf_ctl(port)) & modeset::BUF_PORT_WIDTH_MASK) >> 1 { 0 => 1, 1 => 2, _ => 4 };
+        // Snap to the standard rate the PLL is near (DCO rounding).
+        let rate = dpll::DP_RATES.iter().copied().find(|r| r.abs_diff(rate) * 200 < *r).unwrap_or(rate);
+        Some((modeset::Link { rate_khz: rate, lanes }, pll))
+    }
+
+    /// Different raster at the same size: a full modeset of the panel's
+    /// pipe, keeping panel power and Display's buffers. Checked by the sink's
+    /// own lane status, the measured refresh and the underrun bit; any
+    /// failure relights firmware's mode the same way.
+    fn retime(&mut self, mut rf: Refresh, target: Timing) -> Result<u32, &'static str> {
+        let p = self.chain.pipe;
+        let r = readout::read_pipe(&mut self.bar, p);
+        let Some(port) = r.port else { return self.refuse(&rf.running, &target, "no_port") };
+        let Some((boot_link, pll)) = self.boot_link(port) else { return self.refuse(&rf.running, &target, "boot_link_unknown") };
+        let mut caps = [0u8; 4];
+        if aux::dpcd_read(&mut self.bar, port, 0, &mut caps).is_err() { return self.refuse(&rf.running, &target, "dpcd"); }
+        let (max_rate, max_lanes) = (caps[1] as u32 * 27_000, (caps[2] & 0x1f).clamp(1, 4));
+        let (tps3, tps4) = (caps[2] & 0x40 != 0, caps[3] & 0x80 != 0);
+        // eDP 1.4 panels may list their rates instead (DPCD 0x010, 200 kHz units).
+        let mut rates = [0u32; 8];
+        let mut table = [0u8; 16];
+        let mut n = 0;
+        let edp_table = max_rate == 0 && aux::dpcd_read(&mut self.bar, port, 0x010, &mut table).is_ok();
+        if edp_table {
+            for c in table.chunks(2) { let v = u16::from_le_bytes([c[0], c[1]]) as u32 * 20; if v != 0 && n < 8 { rates[n] = v; n += 1; } }
+        } else {
+            for &rt in &dpll::DP_RATES { if rt <= max_rate && n < 8 && matches!(rt, 162_000 | 270_000 | 540_000 | 810_000) { rates[n] = rt; n += 1; } }
+        }
+        // Only rates the combo PLL table can make.
+        let mut k = 0;
+        for i in 0..n { if dpll::DP_RATES.contains(&rates[i]) { rates[k] = rates[i]; k += 1; } }
+        let n = k;
+        let link = match modeset::choose_link(target.clock_khz, modeset::BPP_8BPC, &rates[..n], max_lanes, boot_link.lanes) {
+            Some(l) => l,
+            None => return self.refuse(&rf.running, &target, "link_bandwidth"),
+        };
+        if target.clock_khz > 2 * refresh::cdclk_khz(&mut self.bar) { return self.refuse(&rf.running, &target, "cdclk"); }
+        let rate_index = if edp_table { rates[..n].iter().position(|&x| x == link.rate_khz).map(|i| i as u8) } else { None };
+        // Watermarks for the new rate from memory latency (pcode).
+        let Ok(lat) = sex_gpu_intel::pcode::wm_latency(&mut self.bar, TAKE_READS) else { return self.refuse(&rf.running, &target, "pcode") };
+        let sagv = sex_gpu_intel::pcode::sagv_block_us(&mut self.bar, TAKE_READS);
+        let w = self.width as u32;
+        let primary = watermarks::compute(&lat, sagv, target.clock_khz, target.h[3] as u32, w, 4, rf.boot.primary.ddb_blocks());
+        let cursor = watermarks::compute(&lat, sagv, target.clock_khz, target.h[3] as u32, 64, 4, rf.boot.cursor.ddb_blocks());
+        let (Some(primary), Some(cursor)) = (primary, cursor) else { return self.refuse(&rf.running, &target, "watermarks") };
+        let plan = modeset::Plan { pipe: p, port, pll, timing: target, link, edp: true, tps3, tps4, rate_index };
+        sex_pdx::serial_record!("[display.intel.modeset.plan] pipe={} port={} from_mhz={} to_mhz={} clock_khz={} link_khz={} lanes={} boot_link_khz={} boot_lanes={} tps3={} tps4={} rate_index={} wm_latency_us={:?} sagv_us={}",
+            (b'A' + p as u8) as char, regs::port_name(port), rf.running.refresh_mhz(), target.refresh_mhz(), target.clock_khz, link.rate_khz, link.lanes,
+            boot_link.rate_khz, boot_link.lanes, tps3 as u8, tps4 as u8, rate_index.map_or(-1, |i| i as i32), lat, sagv);
+        match self.relight(&plan, &primary, &cursor) {
+            Ok(measured) => {
+                sex_pdx::serial_record!("[display.intel.refresh] pipe={} from_mhz={} to_mhz={} measured_mhz={} modeset=1 ok=1", (b'A' + p as u8) as char, rf.running.refresh_mhz(), target.refresh_mhz(), measured);
+                rf.running = target;
+                self.refresh = Some(rf);
+                Ok(target.refresh_mhz())
+            }
+            Err(why) => {
+                sex_pdx::serial_record!("[display.intel.refresh] pipe={} from_mhz={} to_mhz={} modeset=1 ok=0 reason={}", (b'A' + p as u8) as char, rf.running.refresh_mhz(), target.refresh_mhz(), why);
+                let back = modeset::Plan { timing: rf.running, link: boot_link, rate_index: None, ..plan };
+                let back = if edp_table { modeset::Plan { rate_index: rates[..n].iter().position(|&x| x == boot_link.rate_khz).map(|i| i as u8), ..back } } else { back };
+                let restored = self.relight(&back, &rf.boot.primary.levels, &rf.boot.cursor.levels);
+                sex_pdx::serial_record!("[display.intel.refresh.revert] pipe={} back_mhz={} modeset=1 ok={} reason={}", (b'A' + p as u8) as char, rf.running.refresh_mhz(), restored.is_ok() as u8, restored.err().unwrap_or("none"));
+                Err(why)
+            }
+        }
+    }
+
+    /// Off, on with `plan`, our plane and cursor back, then check it.
+    fn relight(&mut self, plan: &modeset::Plan, primary: &[u32; 8], cursor: &[u32; 8]) -> Result<u32, &'static str> {
+        let p = plan.pipe;
+        let (imr, iir) = (DE_PIPE_ISR + p * 0x10 + 4, DE_PIPE_ISR + p * 0x10 + 8);
+        let mask = self.bar.read(imr);
+        modeset::disable(&mut self.bar, p, plan.port, Some(plan.pll), true, TAKE_READS).map_err(|_| "disable")?;
+        let bar = &mut self.bar;
+        let trained = modeset::enable(bar, plan, TAKE_READS, delay_us);
+        let trained = match trained { Ok(t) => t, Err(step) => return Err(step.name()) };
+        // Watermarks, then the primary plane on Display's front buffer (SURF
+        // last arms both), then the cursor where it was.
+        let mut wm = watermarks::read(&mut self.bar, p, watermarks::Which::Plane(1));
+        wm.levels = *primary;
+        watermarks::write(&mut self.bar, p, watermarks::Which::Plane(1), &wm);
+        let mut cw = watermarks::read(&mut self.bar, p, watermarks::Which::Cursor);
+        cw.levels = *cursor;
+        watermarks::write(&mut self.bar, p, watermarks::Which::Cursor, &cw);
+        let s = sex_gpu_intel::plane::Surface { ggtt: self.chain.buffers[self.chain.front], stride_bytes: self.chain.stride_bytes, width: self.chain.width, height: self.chain.height };
+        sex_gpu_intel::plane::set_primary(&mut self.bar, p, &s, 0, 0).map_err(|_| "plane")?;
+        if let Some(cur) = self.cursor { if cur.shown { let base = self.bar.read(regs::cursor(p, regs::CUR_BASE)); self.bar.write(regs::cursor(p, regs::CUR_BASE), base); } }
+        self.chain.pending = true;
+        self.bar.write(imr, mask & !PIPE_FIFO_UNDERRUN);
+        self.bar.write(iir, PIPE_FIFO_UNDERRUN);
+        let measured = measure_refresh(&mut self.bar, p);
+        let underrun = self.bar.read(iir) & PIPE_FIFO_UNDERRUN != 0;
+        self.bar.write(iir, PIPE_FIFO_UNDERRUN);
+        self.bar.write(imr, mask);
+        // The sink's own view: every lane locked and aligned.
+        let mut st = [0u8; 3];
+        let lanes_ok = aux::dpcd_read(&mut self.bar, plan.port, 0x202, &mut st).is_ok() && {
+            let n = plan.link.lanes as usize;
+            (0..n).all(|ln| (st[ln / 2] >> ((ln % 2) * 4)) & 7 == 7) && st[2] & 1 != 0
+        };
+        sex_pdx::serial_record!("[display.intel.modeset] pipe={} port={} link_khz={} lanes={} swing={} pre={} cr_tries={} eq_tries={} measured_mhz={} sink_locked={} underrun={}",
+            (b'A' + p as u8) as char, regs::port_name(plan.port), plan.link.rate_khz, plan.link.lanes, trained.levels[0].0, trained.levels[0].1,
+            trained.cr_tries, trained.eq_tries, measured, lanes_ok as u8, underrun as u8);
+        if !lanes_ok { return Err("sink_not_locked"); }
+        if underrun { return Err("fifo_underrun"); }
+        let want = plan.timing.refresh_mhz();
+        if measured.abs_diff(want) * 100 > want * 3 { return Err("refresh_mismatch"); }
+        Ok(measured)
     }
 
     fn refuse(&self, from: &Timing, to: &Timing, why: &'static str) -> Result<u32, &'static str> {
