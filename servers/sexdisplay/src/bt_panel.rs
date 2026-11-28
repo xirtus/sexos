@@ -37,15 +37,23 @@ fn fill(fb: *mut u32, w: usize, h: usize, total: usize, r: b::Rect, c: u32) {
     }
 }
 
-/// Text at (x0, y0) in `ink`, cut at `max_w`; returns its width.
-fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) -> usize {
-    let width = super::glyphs::ui_width(t, scale).unwrap_or(0).min(max_w);
+fn text_weight(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize, body: bool) -> usize {
+    let width = if body {
+        super::glyphs::ui_body_width(t, scale)
+    } else {
+        super::glyphs::ui_width(t, scale)
+    }.unwrap_or(0).min(max_w);
     let lh = super::glyphs::UI_H * scale as usize;
     for y in y0..(y0 + lh).min(h) {
         for x in x0..(x0 + width).min(w) {
             let at = y * w + x;
             if at >= total { return width; }
-            let Some(alpha) = super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale) else { break };
+            let cov = if body {
+                super::glyphs::ui_body_coverage(t, (x - x0) as i32, y - y0, scale)
+            } else {
+                super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale)
+            };
+            let Some(alpha) = cov else { break };
             if alpha == 0 { continue; }
             unsafe {
                 let p = fb.add(at);
@@ -54,6 +62,15 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
         }
     }
     width
+}
+
+/// Text at (x0, y0) in `ink`, cut at `max_w`; returns its width.
+fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) -> usize {
+    text_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, false)
+}
+
+fn body_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) -> usize {
+    text_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, true)
 }
 
 /// The panel's rectangle while it shows, for its frosted glass (`frost`).
@@ -85,10 +102,22 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         let (left, right) = lines.columns(i);
         let mid = r.1 + r.3.saturating_sub(line) / 2;
         let inset = 8 * s;
-        let right_w = super::glyphs::ui_width(right, scale).unwrap_or(0).min(r.2 / 2);
-        text(fb, w, h, total, left, r.0 + inset, mid, ink, scale, r.2.saturating_sub(2 * inset + right_w + 8 * s));
+        let right_w = if style == b::TITLE {
+            super::glyphs::ui_width(right, scale).unwrap_or(0).min(r.2 / 2)
+        } else {
+            super::glyphs::ui_body_width(right, scale).unwrap_or(0).min(r.2 / 2)
+        };
+        if style == b::DIM {
+            body_text(fb, w, h, total, left, r.0 + inset, mid, ink, scale, r.2.saturating_sub(2 * inset + right_w + 8 * s));
+        } else {
+            text(fb, w, h, total, left, r.0 + inset, mid, ink, scale, r.2.saturating_sub(2 * inset + right_w + 8 * s));
+        }
         if !right.is_empty() {
-            text(fb, w, h, total, right, r.0 + r.2 - inset - right_w, mid, if style == b::TITLE { desk().menu_ink } else { desk().menu_soft }, scale, right_w);
+            if style == b::TITLE {
+                text(fb, w, h, total, right, r.0 + r.2 - inset - right_w, mid, desk().menu_ink, scale, right_w);
+            } else {
+                body_text(fb, w, h, total, right, r.0 + r.2 - inset - right_w, mid, desk().menu_soft, scale, right_w);
+            }
         }
     }
     static mut DRAW_BUDGET: u32 = 16;

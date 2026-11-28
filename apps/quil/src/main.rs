@@ -28,9 +28,9 @@ use quil_core::project::{self, Entry, Fs, Query, Tree};
 use quil_core::vim::{self, VKey, Vim};
 use quil_core::workspace::{Tab, Tabs};
 use quil_core::fuzzy;
-use sex_app::{files, Event, Window};
+use sex_app::{clipboard, files, Event, Window};
 use sex_pdx::app_key::{us_char, Key};
-use sex_pdx::app_pointer::Kind as PKind;
+use sex_pdx::app_pointer::{Kind as PKind, CONTROL as PTR_CTRL, SHIFT as PTR_SHIFT};
 
 /// Files up to this size are read into memory when opened (so undo survives saving);
 /// bigger ones stay on disk and are read a block at a time.
@@ -206,10 +206,18 @@ struct App {
     mark: bool,
     quit_armed: bool,
     drag: bool,
+    drag_granularity: u8,
+    drag_anchor: Option<(usize, usize)>,
+    last_click_ticks: u64,
+    last_click_pos: (i32, i32),
+    click_streak: u8,
+    super_down: u8,
+    context_menu: Option<(i32, i32)>,
     p: Painter,
 }
 
-fn press(key: Key) -> Option<Press> {
+fn press(key: Key, super_held: bool) -> Option<Press> {
+    let primary = key.control || super_held;
     let named = match key.code {
         0x01 => Some(Named::Esc), 0x0E => Some(Named::Backspace), 0x0F => Some(Named::Tab), 0x1C => Some(Named::Enter),
         0x48 | 0x67 => Some(Named::Up), 0x50 | 0x6C => Some(Named::Down), 0x4B | 0x69 => Some(Named::Left), 0x4D | 0x6A => Some(Named::Right),
@@ -217,9 +225,9 @@ fn press(key: Key) -> Option<Press> {
         0x53 | 0x6F => Some(Named::Delete), 0x3B..=0x44 => Some(Named::F(key.code - 0x3A)), 0x57 => Some(Named::F(11)), 0x58 => Some(Named::F(12)),
         _ => None,
     };
-    if let Some(n) = named { return Some(Press { k: K::Named(n), ctrl: key.control, shift: key.shift }); }
-    if key.control {
-        // The letter the key is, whatever Ctrl does to its text.
+    if let Some(n) = named { return Some(Press { k: K::Named(n), ctrl: primary, shift: key.shift }); }
+    if primary {
+        // The letter the key is, whatever Ctrl/Super does to its text.
         let c = us_char(Key::new(key.code, false, false))? as char;
         let c = if key.shift { match c { '/' => '/', '-' => '_', c => c } } else { c };
         return Some(Press { k: K::Char(c), ctrl: true, shift: key.shift });
@@ -340,9 +348,29 @@ impl App {
             }
             Command::Undo => { self.tabs.list[i].ed.undo(); }
             Command::Redo => { self.tabs.list[i].ed.redo(); }
-            Command::Copy => { self.clipboard = self.tabs.list[i].ed.copy(); self.mark = false; }
-            Command::Cut => { self.clipboard = self.tabs.list[i].ed.cut(); self.mark = false; }
-            Command::Paste => { let (t, w) = self.clipboard.clone(); self.tabs.list[i].ed.paste(&t, w); }
+            Command::Copy => {
+                let (t, w) = self.tabs.list[i].ed.copy();
+                if let Ok(s) = core::str::from_utf8(&t) { let _ = clipboard::copy(window, s); }
+                self.clipboard = (t, w);
+                self.mark = false;
+            }
+            Command::Cut => {
+                let (t, w) = self.tabs.list[i].ed.cut();
+                if let Ok(s) = core::str::from_utf8(&t) { let _ = clipboard::copy(window, s); }
+                self.clipboard = (t, w);
+                self.mark = false;
+            }
+            Command::Paste => {
+                let clip_str = clipboard::paste(window).ok().filter(|s| !s.is_empty());
+                if let Some(s) = clip_str {
+                    let bytes = s.as_bytes();
+                    let same_as_local = self.clipboard.0.as_slice() == bytes;
+                    self.tabs.list[i].ed.paste(bytes, if same_as_local { self.clipboard.1 } else { false });
+                } else {
+                    let (t, w) = self.clipboard.clone();
+                    self.tabs.list[i].ed.paste(&t, w);
+                }
+            }
             Command::SelectAll => self.tabs.list[i].ed.select_all(),
             Command::Find => self.overlay = Overlay::Find { query: lossy(&self.find) },
             Command::FindNext | Command::FindPrev => self.find_step(c == Command::FindNext),
@@ -420,7 +448,17 @@ impl App {
     // ---- Keys ----
 
     fn key(&mut self, key: Key, window: &mut Window) {
-        let Some(p) = press(key) else { return };
+        if matches!(key.code, 0x5B | 0x5C) {
+            self.super_down |= if key.code == 0x5B { 1 } else { 2 };
+            return;
+        }
+        let super_held = self.super_down != 0;
+        let Some(p) = press(key, super_held) else { return };
+        if self.context_menu.is_some() && p.k == K::Named(Named::Esc) {
+            self.context_menu = None;
+            return;
+        }
+        self.context_menu = None;
         if !matches!(self.overlay, Overlay::None) { self.overlay_key(p, window); return; }
         if self.focus == Focus::Tree && !p.ctrl {
             match p.k {
@@ -471,17 +509,34 @@ impl App {
         let ed = &mut self.tab().ed;
         let extend = p.shift || mark;
         match p.k {
-            K::Char(c) if !p.ctrl => { let mut b = [0u8; 4]; ed.type_text(c.encode_utf8(&mut b).as_bytes()); }
+            K::Char(c) if !p.ctrl && !key.alt => { let mut b = [0u8; 4]; ed.type_text(c.encode_utf8(&mut b).as_bytes()); }
             K::Named(Named::Enter) => ed.type_text(b"\n"),
-            K::Named(Named::Backspace) => ed.backspace(),
-            K::Named(Named::Delete) => ed.delete_forward(),
+            K::Named(Named::Backspace) => {
+                if super_held { ed.delete_to_line_start(); }
+                else if key.alt || key.control { ed.delete_word_back(); }
+                else { ed.backspace(); }
+            }
+            K::Named(Named::Delete) => {
+                if key.alt || key.control { ed.delete_word_forward(); } else { ed.delete_forward(); }
+            }
             K::Named(Named::Tab) => if p.shift { ed.outdent_lines() } else { ed.tab() },
             K::Named(Named::Esc) => { ed.collapse(); self.mark = false; }
             K::Named(n) => {
-                let m = match (n, p.ctrl) {
-                    (Named::Left, false) => Motion::Left, (Named::Right, false) => Motion::Right, (Named::Left, true) => Motion::WordLeft, (Named::Right, true) => Motion::WordRight,
-                    (Named::Up, _) => Motion::Up, (Named::Down, _) => Motion::Down, (Named::Home, _) => Motion::Home, (Named::End, _) => Motion::End,
-                    (Named::PageUp, _) => Motion::PageUp(rows), (Named::PageDown, _) => Motion::PageDown(rows),
+                let m = match (n, super_held, key.alt || key.control) {
+                    (Named::Left, true, false) => Motion::LineStart,
+                    (Named::Right, true, false) => Motion::End,
+                    (Named::Up, true, _) => Motion::DocStart,
+                    (Named::Down, true, _) => Motion::DocEnd,
+                    (Named::Left, _, true) => Motion::WordLeft,
+                    (Named::Right, _, true) => Motion::WordRight,
+                    (Named::Left, false, false) => Motion::Left,
+                    (Named::Right, false, false) => Motion::Right,
+                    (Named::Up, false, _) => Motion::Up,
+                    (Named::Down, false, _) => Motion::Down,
+                    (Named::Home, _, _) => Motion::Home,
+                    (Named::End, _, _) => Motion::End,
+                    (Named::PageUp, _, _) => Motion::PageUp(rows),
+                    (Named::PageDown, _, _) => Motion::PageDown(rows),
                     _ => return,
                 };
                 ed.move_all(m, extend);
@@ -609,7 +664,35 @@ impl App {
 
     // ---- Pointer ----
 
-    fn pointer(&mut self, ptr: sex_pdx::app_pointer::Pointer) {
+    fn context_menu_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        let (mx, my) = self.context_menu?;
+        let mw = (20 * CELL_W) as i32;
+        let mh = (4 * CELL_H + 8) as i32;
+        let x = mx.min((self.p.w as i32 - mw - 4).max(2)).max(2);
+        let y = my.min((self.p.h as i32 - mh - 4).max(2)).max(2);
+        Some((x, y, mw, mh))
+    }
+
+    fn pointer(&mut self, ptr: sex_pdx::app_pointer::Pointer, window: &mut Window) {
+        if let Some((mx, my, mw, mh)) = self.context_menu_rect() {
+            if let PKind::Down { button: 0 } = ptr.kind {
+                let (px, py) = (ptr.x as i32, ptr.y as i32);
+                self.context_menu = None;
+                if px >= mx && px < mx + mw && py >= my + 4 && py < my + mh - 4 {
+                    let row = ((py - (my + 4)) / CELL_H as i32) as usize;
+                    match row {
+                        0 => self.run(Command::Cut, window),
+                        1 => self.run(Command::Copy, window),
+                        2 => self.run(Command::Paste, window),
+                        3 => self.run(Command::SelectAll, window),
+                        _ => {}
+                    }
+                }
+            } else if matches!(ptr.kind, PKind::Down { .. }) {
+                self.context_menu = None;
+            }
+            return;
+        }
         let (col, row) = ((ptr.x.max(0) as usize) / CELL_W, (ptr.y.max(0) as usize) / CELL_H);
         let tc = self.tree_cols();
         match ptr.kind {
@@ -619,9 +702,33 @@ impl App {
                 let t = self.tab();
                 t.scroll(-(steps as isize) * 3.min(rows));
             }
+            PKind::Down { button: 2 } => {
+                if row > 0 && col >= tc {
+                    self.focus = Focus::Editor;
+                    if let Some(at) = self.offset_at(col, row) {
+                        let ed = &mut self.tab().ed;
+                        let sel = ed.primary_sel();
+                        if sel.is_empty() || at < sel.start() || at > sel.end() {
+                            ed.select_word_at(at);
+                        }
+                    }
+                    self.context_menu = Some((ptr.x as i32, ptr.y as i32));
+                }
+            }
             PKind::Down { button: 0 } => {
+                if ptr.mods & PTR_CTRL != 0 && row > 0 && col >= tc {
+                    self.focus = Focus::Editor;
+                    if let Some(at) = self.offset_at(col, row) {
+                        let ed = &mut self.tab().ed;
+                        let sel = ed.primary_sel();
+                        if sel.is_empty() || at < sel.start() || at > sel.end() {
+                            ed.select_word_at(at);
+                        }
+                    }
+                    self.context_menu = Some((ptr.x as i32, ptr.y as i32));
+                    return;
+                }
                 if row == 0 {
-                    // The tab bar: which tab is under the pointer.
                     let mut x = tc;
                     for (i, t) in self.tabs.list.iter().enumerate() {
                         let w = t.name().len() + 4;
@@ -640,10 +747,63 @@ impl App {
                     return;
                 }
                 self.focus = Focus::Editor;
-                if let Some(at) = self.offset_at(col, row) { self.tab().ed.set_cursor(at); self.drag = true; }
+                let now = sex_pdx::get_ticks();
+                let (px, py) = (ptr.x as i32, ptr.y as i32);
+                if now.saturating_sub(self.last_click_ticks) <= 420
+                    && (px - self.last_click_pos.0).abs() <= 6
+                    && (py - self.last_click_pos.1).abs() <= 6
+                {
+                    self.click_streak = self.click_streak.saturating_add(1).min(3);
+                } else {
+                    self.click_streak = 1;
+                }
+                self.last_click_ticks = now;
+                self.last_click_pos = (px, py);
+
+                if let Some(at) = self.offset_at(col, row) {
+                    let streak = self.click_streak;
+                    let shift = ptr.mods & PTR_SHIFT != 0;
+                    let ed = &mut self.tab().ed;
+                    match streak {
+                        2 => {
+                            ed.select_word_at(at);
+                            let s = ed.primary_sel();
+                            self.drag_anchor = Some((s.start(), s.end()));
+                            self.drag_granularity = 1;
+                        }
+                        3.. => {
+                            ed.select_line_at(at);
+                            let s = ed.primary_sel();
+                            self.drag_anchor = Some((s.start(), s.end()));
+                            self.drag_granularity = 2;
+                        }
+                        _ => {
+                            if shift {
+                                let a = ed.primary_sel().anchor;
+                                ed.set_selection(a, at);
+                            } else {
+                                ed.set_cursor(at);
+                            }
+                            self.drag_anchor = None;
+                            self.drag_granularity = 0;
+                        }
+                    }
+                    self.drag = true;
+                }
             }
             PKind::Move if self.drag && ptr.buttons & 1 != 0 => {
-                if let Some(at) = self.offset_at(col, row) { let a = self.tab().ed.primary_sel().anchor; self.tab().ed.set_selection(a, at); }
+                if let Some(at) = self.offset_at(col, row) {
+                    let gran = self.drag_granularity;
+                    let anchor = self.drag_anchor;
+                    let ed = &mut self.tab().ed;
+                    if gran == 0 {
+                        let a = ed.primary_sel().anchor;
+                        ed.set_selection(a, at);
+                    } else if let Some((a0, b0)) = anchor {
+                        let (u0, u1) = if gran == 1 { ed.word_bounds_at(at) } else { ed.line_bounds_at(at) };
+                        if u0 < a0 { ed.set_selection(b0, u0); } else { ed.set_selection(a0, u1.max(b0)); }
+                    }
+                }
             }
             PKind::Up { .. } => self.drag = false,
             _ => {}
@@ -799,7 +959,24 @@ impl App {
         let rx = cols.saturating_sub(right.chars().count());
         if rx > n { self.p.text(rx, sy, cols - rx, &right, DIM, BAR); }
         self.draw_overlay(cols, rows);
+        self.draw_context_menu();
         window.show_pixels(w, h);
+    }
+
+    fn draw_context_menu(&mut self) {
+        let Some((mx, my, mw, mh)) = self.context_menu_rect() else { return };
+        let (x, y, w, h) = (mx as usize, my as usize, mw as usize, mh as usize);
+        self.p.rect(x.saturating_sub(1), y.saturating_sub(1), w + 2, h + 2, SELECTED);
+        self.p.rect(x, y, w, h, BAR);
+        let col0 = (x + CELL_W / 2) / CELL_W;
+        let entries = [("Cut           ⌘X", 0usize), ("Copy          ⌘C", 1), ("Paste         ⌘V", 2), ("Select All    ⌘A", 3)];
+        for (label, idx) in entries {
+            let ry = y + 4 + idx * CELL_H;
+            let row = ry / CELL_H;
+            if row * CELL_H + CELL_H <= self.p.h {
+                self.p.text(col0, row, 18, label, FG, BAR);
+            }
+        }
     }
 
     fn draw_overlay(&mut self, cols: usize, rows: usize) {
@@ -899,7 +1076,8 @@ extern "C" fn main() -> ! {
     let mut app = App {
         tabs: Tabs::default(), tree: Tree::new(b""), show_tree: false, focus: Focus::Editor, root: Vec::new(), keymap: Keymap::VsCode,
         keys: Keys::default(), vim: Vim::new(), overlay: Overlay::None, clipboard: (Vec::new(), false), status: String::from("Ctrl+Shift+P: all commands"),
-        numbers: true, find: Vec::new(), mark: false, quit_armed: false, drag: false, p,
+        numbers: true, find: Vec::new(), mark: false, quit_armed: false, drag: false,
+        drag_granularity: 0, drag_anchor: None, last_click_ticks: 0, last_click_pos: (0, 0), click_streak: 0, super_down: 0, context_menu: None, p,
     };
     // `quil @/path` opens a file or a folder; words like `vim` or `emacs` pick the keys.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
@@ -924,8 +1102,13 @@ extern "C" fn main() -> ! {
     loop {
         match window.next_within(100) {
             Some(Event::Close) => { sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task); window.close() }
-            Some(Event::Resize { .. }) | Some(Event::Drop { .. }) | Some(Event::DragEnded { .. } | Event::KeyUp(_)) => {}
-            Some(Event::Pointer(ptr)) => app.pointer(ptr),
+            Some(Event::Resize { .. }) | Some(Event::Drop { .. }) | Some(Event::DragEnded { .. }) => {}
+            Some(Event::KeyUp(k)) => {
+                if matches!(k.code, 0x5B | 0x5C) {
+                    app.super_down &= if k.code == 0x5B { !1 } else { !2 };
+                }
+            }
+            Some(Event::Pointer(ptr)) => app.pointer(ptr, &mut window),
             Some(Event::Key(key)) => {
                 // The palette's developer check is the one command that needs a size.
                 if let Overlay::Palette { query, .. } = &app.overlay {
@@ -951,4 +1134,4 @@ extern "C" fn main() -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
+pub extern "C" fn _start() -> ! { main() }

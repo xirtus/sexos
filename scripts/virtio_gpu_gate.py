@@ -81,7 +81,8 @@ def main():
   close=px(first,20,49)
   if not(close[0]>=close[1]+50 and close[0]>=close[2]+50):bad['close']=(close,'red close light')
   lips=px(first,19,14)
-  if not(lips[0]>lips[1]>lips[2] and lips[0]-lips[2]>=20):bad['launcher']=(lips,'rose-gold lips')
+  # Rose-gold (Candy) or Noir pink: red leads either way.
+  if not(lips[0]>max(lips[1],lips[2]) and lips[0]-min(lips[1],lips[2])>=20):bad['launcher']=(lips,'rose-gold lips')
   if bad:raise RuntimeError(f'desktop not on the GPU resource: {bad}')
   # Slow runners may still be settling input; keep moving for up to 60 s.
   changed=0;deadline=time.monotonic()+60;step=0

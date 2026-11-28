@@ -104,6 +104,9 @@ pub enum WmAction {
     Workspace(u8),
     /// Super+Shift+1..9: send the focused window there.
     MoveToWorkspace(u8),
+    /// Super+Shift+Right/Left: move focused/dragged window to adjacent Space and follow it.
+    MoveToNextWorkspace,
+    MoveToPrevWorkspace,
     /// Super+Ctrl+Right/Left and Super+Tab / Super+Shift+Tab.
     NextWorkspace,
     PrevWorkspace,
@@ -113,6 +116,8 @@ pub enum WmAction {
     Swap(Dir),
     /// Super+Q.
     Close,
+    /// Super+Ctrl+W: close window (honors per-app Background Parking policy).
+    CloseWindow,
     /// Super+F.
     Fullscreen,
     /// Super+Shift+V or Super+Shift+Space.
@@ -191,8 +196,16 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
             code::RIGHT | code::L => Some(WmAction::NextWorkspace),
             code::LEFT | code::H => Some(WmAction::PrevWorkspace),
             code::SPACE => Some(WmAction::KeyboardLayout),
+            code::W => Some(WmAction::CloseWindow),
             _ => None,
         };
+    }
+    if m.shift {
+        match key {
+            code::RIGHT => return Some(WmAction::MoveToNextWorkspace),
+            code::LEFT => return Some(WmAction::MoveToPrevWorkspace),
+            _ => {}
+        }
     }
     if let Some(d) = dir_of(key) {
         return Some(if m.shift { WmAction::Swap(d) } else { WmAction::Focus(d) });

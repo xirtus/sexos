@@ -6,7 +6,7 @@
 //! Gossip, etc.) shares the exact same smooth anti-aliased rounded Candy Lavender
 //! chrome as SilkBar and SexDisplay.
 
-use crate::{candy_lavender as cl, Mode};
+use crate::{noir as nr, Mode, NoirAccent};
 
 /// Strip alpha channel to `0x00RRGGBB` used by native pixel-buffer windows.
 #[inline]
@@ -72,84 +72,137 @@ pub struct CandyPalette {
 }
 
 impl CandyPalette {
-    /// Deep lavender-velvet Candy palette (default for dark native apps).
+    /// macOS Noir Obsidian Glass palette (default for dark native apps, SexOS Crimson accent).
     pub const fn dark() -> Self {
-        let accent = rgb(cl::ORCHID_ACCENT);
-        let glow = rgb(cl::ORCHID_GLOW);
-        let bar_top = rgb(cl::DARK_BAR_TOP);
-        let bar_bot = rgb(cl::DARK_BAR_BOTTOM);
-        let pill = rgb(cl::DARK_PILL_FILL);
-        let rim = rgb(cl::DARK_PILL_RIM);
-        let spec = rgb(cl::DARK_SPECULAR);
-        let hair = rgb(cl::DARK_HAIRLINE);
-        let danger = 0x00E5_486A;
+        Self::noir_tint(NoirAccent::Crimson)
+    }
+
+    /// Alias for [`Self::dark`]: deep layered macOS Noir Obsidian Glass.
+    pub const fn noir() -> Self {
+        Self::dark()
+    }
+
+    /// macOS Noir Obsidian Glass palette with one of the four curated [`NoirAccent`] tints.
+    pub const fn noir_tint(tint: NoirAccent) -> Self {
+        let accent = rgb(tint.fill());
+        let primary = rgb(tint.primary());
+        let glow = rgb(tint.glow());
+        let on_accent = rgb(tint.on_accent());
+        let bar_top = rgb(nr::DARK_BAR_TOP);
+        let bar_bot = rgb(nr::DARK_BAR_BOTTOM);
+        let pill = rgb(nr::DARK_PILL_FILL);
+        let rim = rgb(nr::DARK_RIM);
+        let spec = rgb(nr::DARK_SPECULAR);
+        let hair = rgb(nr::DARK_HAIRLINE);
+        let card = rgb(nr::DARK_SURFACE);
+        let danger = 0x00E1_1D48;
         Self {
             mode: Mode::Dark,
-            bg: 0x0015_1124,
-            panel: 0x001D_1730,
+            bg: rgb(nr::DARK_BASE),
+            panel: rgb(nr::DARK_PANEL),
             toolbar_top: bar_top,
             toolbar_bottom: bar_bot,
-            card: 0x0024_1C3B,
-            well: 0x0011_0D1D,
+            card,
+            well: rgb(nr::DARK_WELL),
             control: pill,
-            control_hover: mix_rgb(pill, glow, 44),
-            control_pressed: mix_rgb(pill, 0x000E_0A1A, 56),
+            control_hover: rgb(nr::DARK_HOVER),
+            control_pressed: mix_rgb(pill, rgb(nr::DARK_BASE), 72),
             accent,
-            accent_hover: mix_rgb(accent, 0x00FF_FFFF, 36),
-            accent_pressed: mix_rgb(accent, 0x0018_1028, 48),
+            accent_hover: mix_rgb(primary, 0x00FF_FFFF, 24),
+            accent_pressed: mix_rgb(accent, rgb(nr::DARK_BASE), 56),
             danger,
-            danger_hover: mix_rgb(danger, 0x00FF_FFFF, 34),
-            danger_pressed: mix_rgb(danger, 0x0018_0A10, 52),
-            selection: mix_rgb(0x0024_1C3B, accent, 68),
-            hairline: mix_rgb(bar_bot, hair, 88),
-            rim: mix_rgb(pill, rim, 96),
+            danger_hover: 0x00F4_3F5E,
+            danger_pressed: 0x009F_1239,
+            selection: mix_rgb(card, primary, 48),
+            hairline: hair,
+            rim,
             rim_accent: glow,
             specular: spec,
-            text: rgb(cl::DARK_TEXT),
-            text_dim: 0x00B8_ACC9,
-            text_disabled: 0x0074_698A,
-            text_on_accent: 0x0014_0D24,
+            text: rgb(nr::DARK_TEXT),
+            text_dim: rgb(nr::DARK_SUBTEXT),
+            text_disabled: rgb(nr::DARK_DISABLED),
+            text_on_accent: on_accent,
             mint: 0x0034_D399,
             honey: 0x00FB_BF24,
-            sky: 0x0060_A5FA,
+            sky: 0x0038_BDF8,
         }
     }
 
-    /// Airy pastel-lavender Candy palette for Light mode.
+    /// Returns a copy of `self` re-tinted with `tint` (preserving HighContrast accessibility).
+    pub const fn with_noir_accent(mut self, tint: NoirAccent) -> Self {
+        if matches!(self.mode, Mode::HighContrast) {
+            return self;
+        }
+        if matches!(self.mode, Mode::Dark) {
+            return Self::noir_tint(tint);
+        }
+        let accent = rgb(tint.fill());
+        let primary = rgb(tint.primary());
+        self.accent = accent;
+        self.accent_hover = mix_rgb(primary, 0x00FF_FFFF, 24);
+        self.accent_pressed = mix_rgb(accent, 0x0011_1318, 44);
+        self.rim_accent = primary;
+        self.selection = mix_rgb(self.card, primary, 38);
+        self.text_on_accent = rgb(tint.on_accent());
+        self
+    }
+
+    /// Returns a copy of `self` re-tinted to an arbitrary `0x00RRGGBB` accent color,
+    /// picking dark or light `text_on_accent` automatically for readable contrast.
+    pub const fn with_accent_rgb(mut self, color: u32) -> Self {
+        if matches!(self.mode, Mode::HighContrast) {
+            return self;
+        }
+        let accent = rgb(color);
+        let r = (accent >> 16) & 0xFF;
+        let g = (accent >> 8) & 0xFF;
+        let b = accent & 0xFF;
+        // Fast perceived brightness threshold aligned with WCAG 4.5:1 midpoint.
+        let luma = (r * 2126 + g * 7152 + b * 722) / 10_000;
+        self.accent = accent;
+        self.accent_hover = mix_rgb(accent, 0x00FF_FFFF, 32);
+        self.accent_pressed = mix_rgb(accent, 0x000B_0D12, 48);
+        self.rim_accent = mix_rgb(accent, self.specular, 72);
+        self.selection = mix_rgb(self.card, accent, if matches!(self.mode, Mode::Light) { 40 } else { 52 });
+        self.text_on_accent = if luma >= 145 { 0x000B_0D12 } else { 0x00FF_FFFF };
+        self
+    }
+
+    /// Airy frosted pearl palette for Light mode.
     pub const fn light() -> Self {
-        let accent = 0x007C_5CE6;
-        let bar_top = rgb(cl::LIGHT_BAR_TOP);
-        let bar_bot = rgb(cl::LIGHT_BAR_BOTTOM);
-        let pill = rgb(cl::LIGHT_PILL_FILL);
-        let rim = rgb(cl::LIGHT_PILL_RIM);
-        let spec = rgb(cl::LIGHT_SPECULAR);
-        let hair = rgb(cl::LIGHT_HAIRLINE);
+        let accent = 0x00E1_1D48;
+        let bar_top = rgb(nr::LIGHT_BAR_TOP);
+        let bar_bot = rgb(nr::LIGHT_BAR_BOTTOM);
+        let pill = rgb(nr::LIGHT_PILL_FILL);
+        let rim = rgb(nr::LIGHT_MENU_RIM);
+        let spec = rgb(nr::LIGHT_SPECULAR);
+        let hair = rgb(nr::LIGHT_MENU_DIVIDER);
         let danger = 0x00D6_336C;
         Self {
             mode: Mode::Light,
-            bg: 0x00F6_F2FF,
-            panel: 0x00ED_E5FF,
+            bg: 0x00F5_F6FA,
+            panel: 0x00ED_EFF5,
             toolbar_top: bar_top,
             toolbar_bottom: bar_bot,
-            card: 0x00FA_F7FF,
-            well: 0x00E6_DCFA,
+            card: 0x00FF_FFFF,
+            well: 0x00E6_E9F2,
             control: pill,
-            control_hover: mix_rgb(pill, accent, 24),
-            control_pressed: mix_rgb(pill, accent, 48),
+            control_hover: mix_rgb(pill, accent, 20),
+            control_pressed: mix_rgb(pill, accent, 42),
             accent,
-            accent_hover: mix_rgb(accent, 0x00FF_FFFF, 28),
-            accent_pressed: mix_rgb(accent, 0x001E_162E, 36),
+            accent_hover: 0x00F4_3F5E,
+            accent_pressed: 0x00BE_123C,
             danger,
             danger_hover: mix_rgb(danger, 0x00FF_FFFF, 28),
             danger_pressed: mix_rgb(danger, 0x001E_162E, 36),
-            selection: mix_rgb(0x00FA_F7FF, accent, 42),
-            hairline: mix_rgb(bar_bot, hair, 110),
-            rim: mix_rgb(pill, rim, 136),
+            selection: mix_rgb(0x00FF_FFFF, accent, 36),
+            hairline: hair,
+            rim,
             rim_accent: accent,
             specular: spec,
-            text: rgb(cl::LIGHT_TEXT),
-            text_dim: 0x0058_4B72,
-            text_disabled: 0x0094_89AA,
+            text: rgb(nr::LIGHT_TEXT),
+            text_dim: 0x0046_4E61,
+            text_disabled: 0x008C_94A8,
             text_on_accent: 0x00FF_FFFF,
             mint: 0x000F_9D6B,
             honey: 0x00C2_7803,
@@ -230,7 +283,7 @@ pub enum ButtonState {
 /// Computes `(coverage_u8, on_rim, on_top_edge)` for pixel `(px, py)` inside
 /// rounded rectangle `(x, y, w, h)` with corner radius `r`.
 #[inline]
-fn rounded_rect_sample(
+pub(crate) fn rounded_rect_sample(
     px: i32,
     py: i32,
     x: i32,
@@ -295,7 +348,7 @@ fn rounded_rect_sample(
 }
 
 #[inline]
-fn clip_rect(
+pub(crate) fn clip_rect(
     x: i32,
     y: i32,
     w: i32,
@@ -410,7 +463,7 @@ pub fn draw_candy_panel(
         pal.specular,
         pal.mode == Mode::HighContrast,
         if pal.mode == Mode::Light { 120 } else { 36 },
-        if pal.mode == Mode::Light { 110 } else { 64 },
+        if pal.mode == Mode::Light { 110 } else { 180 },
     );
 }
 
@@ -610,7 +663,7 @@ pub fn draw_candy_badge(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_candy_surface(
+pub(crate) fn draw_candy_surface(
     buf: &mut [u32],
     stride: usize,
     buf_h: usize,
@@ -813,6 +866,30 @@ mod tests {
         assert_eq!(buf[23 * 32 + 10], pal.hairline);
         // Middle row is smoothly interpolated between top and bottom.
         assert_ne!(buf[4 * 32 + 10], buf[18 * 32 + 10]);
+    }
+
+    #[test]
+    fn noir_accent_tints_meet_wcag_and_preserve_high_contrast() {
+        for tint in NoirAccent::ALL {
+            let p = CandyPalette::noir_tint(tint);
+            assert!(contrast(p.text, p.bg) >= 7.0, "{tint:?} text on bg");
+            assert!(contrast(p.text, p.card) >= 7.0, "{tint:?} text on card");
+            assert!(contrast(p.text_dim, p.card) >= 4.5, "{tint:?} dim on card");
+            assert!(contrast(p.text_on_accent, p.accent) >= 4.5, "{tint:?} on accent");
+            assert!(contrast(p.text, mix_rgb(p.control, p.accent, 64)) >= 4.5, "{tint:?} text on active button");
+
+            let re = CandyPalette::light().with_noir_accent(tint);
+            assert!(contrast(re.text_on_accent, re.accent) >= 4.5, "light {tint:?}");
+        }
+        let hc = CandyPalette::high_contrast();
+        assert_eq!(hc.with_noir_accent(NoirAccent::IceCyan), hc);
+        assert_eq!(hc.with_accent_rgb(0x0038_BDF8), hc);
+        let dark = CandyPalette::noir();
+        assert_eq!(dark.accent, 0x00E1_1D48);
+        assert_eq!(dark.bg, 0x000B_0D12);
+        assert_eq!(dark.card, 0x0013_161F);
+        assert_eq!(dark.control_hover, 0x0023_2938);
+        assert_eq!(dark.rim, 0x002A_3142);
     }
 
     #[test]

@@ -68,7 +68,10 @@ use Shape as S;
 
 pub static COMMANDS: &[Signature] = &[
     // Files and folders (through the host).
-    sig("ls", "[path or pattern]", "List a folder as a table: name, type, size, modified", "files", &[f("all", Some('a'), false, "include hidden entries (names starting with .)")], S::Atoms, K::Path, true),
+    sig("ls", "[path or pattern]", "List a folder as a table: name, type, size, modified", "files", &[f("all", Some('a'), false, "include hidden entries (names starting with .)"), f("long", Some('l'), false, "detailed colorized listing with permissions and icons")], S::Atoms, K::Path, true),
+    sig("ll", "[path]...", "Detailed colorized listing with permissions, glyphs, and human sizes", "files", &[f("all", Some('a'), false, "include hidden entries")], S::Atoms, K::Path, true),
+    sig("tree", "[path]", "Draw a box-drawing directory tree", "files", &[f("all", Some('a'), false, "include hidden entries"), f("level", Some('L'), true, "maximum directory depth")], S::Atoms, K::Path, true),
+    sig("bat", "<file>...", "Show files with line numbers, box headers, and syntax coloring", "files", &[], S::Atoms, K::Path, true),
     sig("cd", "[folder]", "Change the current folder", "files", &[], S::Atoms, K::Dir, false),
     sig("pwd", "", "The current folder", "files", &[], S::Atoms, K::None, true),
     sig("mkdir", "<folder>...", "Make folders", "files", &[], S::Atoms, K::Path, false),
@@ -80,6 +83,8 @@ pub static COMMANDS: &[Signature] = &[
     sig("open", "<file>", "Read a file; .json .toml .csv .tsv become structured, .txt becomes lines", "files", &[f("raw", Some('r'), false, "keep the contents as text or bytes")], S::Atoms, K::Path, true),
     // System.
     sig("sys", "", "Information about this machine", "system", &[], S::Atoms, K::None, true),
+    sig("fastfetch", "", "SexOS Noir system summary with sculpted emblem and color palette", "system", &[], S::Atoms, K::None, true),
+    sig("neofetch", "", "SexOS Noir system summary with sculpted emblem and color palette", "system", &[], S::Atoms, K::None, true),
     sig("ps", "", "Running programs", "system", &[], S::Atoms, K::None, true),
     sig("jobs", "", "Background jobs started with `&`", "system", &[], S::Atoms, K::None, true),
     sig("fg", "[job]", "Bring a background job to the front and wait for it", "system", &[], S::Atoms, K::None, false),

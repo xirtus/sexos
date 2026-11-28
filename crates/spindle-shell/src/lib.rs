@@ -87,6 +87,7 @@ pub mod ast;
 mod builtins;
 mod complete;
 pub mod engine;
+pub mod ergonomics;
 pub mod error;
 mod eval;
 pub mod formats;
@@ -97,8 +98,10 @@ pub mod mem_host;
 pub mod parser;
 pub mod path;
 pub mod render;
+pub mod shell_ui;
 pub mod signature;
 mod suggest;
+pub mod tui;
 pub mod units;
 pub mod value;
 pub mod width;
@@ -120,6 +123,16 @@ impl Engine {
         complete::complete(line, cursor, host, self.vars())
     }
 
+    /// Completions including aliases, interactive terminal commands, and theme names.
+    pub fn complete_with(&self, line: &str, cursor: usize, host: &dyn Host, extra_cmds: &[&str], theme_names: &[&str]) -> Vec<Completion> {
+        shell_ui::complete_with_extras(line, cursor, host, self, extra_cmds, theme_names)
+    }
+
     /// Styled byte ranges of `line` for colouring it while it is typed.
     pub fn highlight(&self, line: &str) -> Vec<(Range<usize>, Style)> { highlight::highlight(line) }
+
+    /// Host- and alias-aware syntax highlighting (`Unknown` rose underlined, existing `Path` underlined).
+    pub fn highlight_with(&self, line: &str, host: &dyn Host, extra_cmds: &[&str]) -> Vec<(Range<usize>, Style)> {
+        highlight::highlight_with(line, host, extra_cmds, self.aliases())
+    }
 }

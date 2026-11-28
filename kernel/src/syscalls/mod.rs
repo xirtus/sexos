@@ -218,6 +218,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
     // ends here, as a fault would end it.
     {
         let pd = crate::core_local::CoreLocal::get().current_pd();
+        crate::service_restart::ran(pd);
         if crate::service_restart::end_requested(pd) {
             regs.rdi = 0xfe;
             unsafe { crate::scheduler::finish_current_task(regs as *const _) }

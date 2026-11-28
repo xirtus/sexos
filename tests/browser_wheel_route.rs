@@ -190,6 +190,25 @@ unsafe fn refused(){browser_wheel_input(1,0);assert!(!APP_INPUT.pending());asser
  CLIPBOARD.poll(1,4,|_,_|broker::Admission::Accepted);assert!(CLIPBOARD.busy());assert!(!CLIPBOARD.outbox_pending());app_input_poll();assert!(!APP_INPUT.pending());assert_eq!(SENT.len(),1);
  }}
 
+#[test]fn full_queue_folds_a_same_direction_step_into_the_last_wheel_only(){
+ let _lock=LOCK.lock().unwrap();unsafe{
+ // Below capacity every step stays its own entry.
+ reset();LIVE=None;assert!(APP_INPUT.push_scroll(wheel(1)));assert!(APP_INPUT.push_scroll(wheel(1)));
+ assert_eq!(APP_INPUT.front(),Some(wheel(1)));APP_INPUT.pop();assert_eq!(APP_INPUT.front(),Some(wheel(1)));APP_INPUT.pop();assert!(!APP_INPUT.pending());
+ // Full: the same direction adds to the last entry; nothing else moves.
+ reset();LIVE=None;for _ in 0..app_input::CAPACITY{assert!(APP_INPUT.push(wheel(1)));}
+ browser_wheel_input(Scroll::new(2).unwrap().wire(),0);assert!(LOG[0].contains("accepted=1 capacity=32"));
+ for _ in 0..app_input::CAPACITY-1{assert_eq!(APP_INPUT.front(),Some(wheel(1)));APP_INPUT.pop();}
+ assert_eq!(APP_INPUT.front(),Some(wheel(3)));APP_INPUT.pop();assert!(!APP_INPUT.pending());
+ // Full: at the i8 limit the step is refused, never wrapped.
+ reset();for _ in 0..app_input::CAPACITY-1{assert!(APP_INPUT.push(wheel(1)));}assert!(APP_INPUT.push(wheel(127)));
+ assert!(!APP_INPUT.push_scroll(wheel(1)));
+ // Full: another window's last entry never takes the step.
+ reset();for _ in 0..app_input::CAPACITY-1{assert!(APP_INPUT.push(wheel(1)));}
+ let other=Item{destination:Participant::from_catalog(catalog_for(18,18,307)).unwrap(),input:Input::Scroll(Scroll::new(1).unwrap())};
+ assert!(APP_INPUT.push(other));assert!(!APP_INPUT.push_scroll(wheel(1)));
+ }}
+
 // New controls exercise the exact draft helpers, actual SDK CatalogInfo and
 // Participant, and actual FIFO/poll bodies. Held-query and scene callbacks are
 // host doubles. Rows 30/31 are metadata examples, not native BOOT authority.

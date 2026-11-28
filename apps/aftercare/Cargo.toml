@@ -18,6 +18,8 @@ sha2 = { version = "=0.10.9", default-features = false }
 
 [target.'cfg(target_os = "hermit")'.dependencies]
 sex-std = { path = "../../crates/sex-std" }
+sex-font = { path = "../../crates/sex-font" }
+sex-theme = { path = "../../crates/sex-theme" }
 
 [dev-dependencies]
 rand_chacha = { version = "=0.3.1", default-features = false }

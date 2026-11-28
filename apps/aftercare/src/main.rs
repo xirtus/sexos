@@ -22,6 +22,8 @@ mod rng;
 mod settings;
 mod store;
 #[cfg(target_os = "hermit")]
+mod noir;
+#[cfg(target_os = "hermit")]
 mod ui;
 
 fn main() {

@@ -48,6 +48,13 @@ impl Tables for Hw {
 fn hw() -> Hw { Hw(crate::HHDM_REQUEST.response().expect("VIEWS_NO_HHDM").offset) }
 fn cr3() -> u64 { let v: u64; unsafe { core::arch::asm!("mov {}, cr3", out(reg) v, options(nomem, nostack, preserves_flags)); } v }
 unsafe fn set_cr3(v: u64) { unsafe { core::arch::asm!("mov cr3, {}", in(reg) v, options(nostack, preserves_flags)); } }
+/// This core's `CoreLocal::active_view`: the view whose root CR3 now holds, or `u32::MAX`
+/// when unknown. Only `enter` sets it, right after its own CR3 check or write. Every
+/// other CR3 write keeps the root CR3 holds (`invalidate`, `hal::tlb_flush_local`, and
+/// the VMX host CR3, read from CR3 itself), and view roots are made once in `init` and
+/// never change, so a matching index means a matching root. A new CR3 writer that
+/// changes the root must store `u32::MAX` here.
+fn active() -> &'static core::sync::atomic::AtomicU32 { &crate::core_local::CoreLocal::get().active_view }
 fn tagged() -> bool {
     use x86_64::registers::control::{Cr4, Cr4Flags};
     PCID.load(Ordering::Relaxed) && Cr4::read().contains(Cr4Flags::PCID)
@@ -171,9 +178,12 @@ pub fn enter(view: usize) {
     let root = ROOT[view].load(Ordering::Acquire);
     if root == 0 { return; }
     x86_64::instructions::interrupts::without_interrupts(|| {
+        // Interrupts are off, so this core cannot change under the check.
+        let active = active();
+        if active.load(Ordering::Relaxed) == view as u32 { return; }
         let now = cr3();
         let pcid = PCID.load(Ordering::Relaxed);
-        if now == rules::cr3(root, view, pcid, true) { return; }
+        if now == rules::cr3(root, view, pcid, true) { active.store(view as u32, Ordering::Relaxed); return; }
         let core = crate::apic::local_id() as usize % CORES;
         if pcid && !tagged() {
             // Tags start now; this core's PCID 0 entries are the canonical tables'.
@@ -184,6 +194,7 @@ pub fn enter(view: usize) {
         }
         let stale = STALE[core].fetch_and(!(1 << view), Ordering::AcqRel) & (1 << view) != 0;
         unsafe { set_cr3(rules::cr3(root, view, pcid, stale)); }
+        active.store(view as u32, Ordering::Relaxed);
         if ENTERED[core].fetch_or(1 << view, Ordering::Relaxed) & (1 << view) == 0 {
             crate::serial_println!("[views.first] view={} core={}", view, core);
         }

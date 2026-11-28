@@ -48,6 +48,27 @@ impl Queue {
         }
         self.push(item)
     }
+    /// A wheel step for a full queue: when the last queued entry is a scroll for the same
+    /// window in the same direction, the step is added to it (up to the i8 limit), so a
+    /// stalled program loses no scroll distance. Below capacity every step stays its own
+    /// entry, as `push` does; opposite steps never merge, so nothing cancels out.
+    pub fn push_scroll(&mut self,item:Item)->bool {
+        if self.len==CAPACITY {
+            if let Input::Scroll(new)=item.input {
+                let last=(self.head+self.len-1)%CAPACITY;
+                if let Some(Item{destination,input:Input::Scroll(old)})=self.items[last] {
+                    let (a,b)=(old.vertical(),new.vertical());
+                    if destination==item.destination && (a>0)==(b>0) {
+                        if let Some(sum)=a.checked_add(b).and_then(sex_pdx::app_scroll::Scroll::new) {
+                            self.items[last]=Some(Item{destination,input:Input::Scroll(sum)});
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        self.push(item)
+    }
     pub fn pop(&mut self){
         if self.len==0{return;}
         unsafe{core::ptr::write_volatile(&mut self.items[self.head],None)};

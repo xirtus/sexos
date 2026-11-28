@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 
 use crate::ast::{Arg, Call, Expr, ExprKind, Op};
 use crate::error::{ShellError, Span};
+use crate::ergonomics;
 use crate::eval::{self, Ctx};
 use crate::formats;
 use crate::host::EntryKind;
@@ -20,7 +21,56 @@ use crate::value::{no_column, PathMember, Record, Value};
 pub(crate) fn run(ctx: &mut Ctx, call: &Call, input: Value) -> Result<Value, ShellError> {
     let a = Args { call };
     match call.name.as_str() {
-        "ls" => ls(ctx, &a, &input),
+        "ls" => {
+            if a.has("long") {
+                let target_vals = a.paths(ctx, &input, 0)?;
+                let targets: Vec<String> = target_vals.iter().map(|(s, _)| s.clone()).collect();
+                return ergonomics::render_ll(&targets, a.has("all"), ctx.host, ctx.color)
+                    .map(Value::String)
+                    .map_err(|(t, e)| {
+                        let span = target_vals.iter().find(|(p, _)| p == &t).map(|(_, sp)| *sp).unwrap_or(a.call.head_span);
+                        host_err("can't list", &t, span, e)
+                    });
+            }
+            ls(ctx, &a, &input)
+        }
+        "ll" => {
+            let target_vals = a.paths(ctx, &input, 0)?;
+            let targets: Vec<String> = target_vals.iter().map(|(s, _)| s.clone()).collect();
+            ergonomics::render_ll(&targets, true, ctx.host, ctx.color)
+                .map(Value::String)
+                .map_err(|(t, e)| {
+                    let span = target_vals.iter().find(|(p, _)| p == &t).map(|(_, sp)| *sp).unwrap_or(a.call.head_span);
+                    host_err("can't list", &t, span, e)
+                })
+        }
+        "tree" => {
+            let target = match a.optional(ctx, &input, 0)? {
+                Some((v, sp)) => (text_arg(&v, sp)?, sp),
+                None => (String::from("."), a.call.head_span),
+            };
+            let max_depth = match a.flag_value(ctx, &input, "level")? {
+                Some((v, sp)) => count(&v, sp)?.max(1),
+                None => 6,
+            };
+            ergonomics::render_tree(&target.0, max_depth, a.has("all"), ctx.host, ctx.color)
+                .map(Value::String)
+                .map_err(|e| host_err("can't list", &target.0, target.1, e))
+        }
+        "bat" => {
+            let paths = a.paths(ctx, &input, 1)?;
+            let names: Vec<String> = paths.iter().map(|(p, _)| p.clone()).collect();
+            ergonomics::render_bat(&names, ctx.host, ctx.cols, ctx.color)
+                .map(Value::String)
+                .map_err(|(idx, e)| host_err("can't open", &paths[idx].0, paths[idx].1, e))
+        }
+        "fastfetch" | "neofetch" => Ok(Value::String(ergonomics::render_fetch(
+            ctx.host,
+            ctx.theme,
+            ctx.font,
+            "spindle-shell (Fish + P10k)",
+            ctx.color,
+        ))),
         "cd" => cd(ctx, &a, &input),
         "pwd" => Ok(Value::String(ctx.host.cwd())),
         "mkdir" => {

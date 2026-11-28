@@ -41,7 +41,10 @@ mod bt_panel;
 mod decorations;
 mod decorations_glue;
 mod silkbar_menus_glue;
+mod wifi_popover_glue;
 mod spotlight_glue;
+mod meta_hub_glue;
+mod bg_apps_glue;
 mod tray_items;
 mod tray_items_glue;
 mod layouts;
@@ -62,6 +65,7 @@ mod weather_glue;
 mod layout_plugin;
 mod layout_plugin_glue;
 mod theme_glue;
+mod space_slide_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -5739,7 +5743,7 @@ unsafe fn desktop_state_poll() {
 /// again, panes come back, and programs get a resize so they draw again.
 unsafe fn lay_out_windows_again() -> u32 {
     let mut shown = 0u32;
-    for frame in FRAMES.iter().flatten().filter(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_FLAG_MINIMIZED == 0) {
+    for frame in FRAMES.iter().flatten().filter(|f| f.scene_id == ACTIVE_SCENE_IDX && f.flags & FRAME_HIDDEN_FLAGS == 0) {
         for tab in frame.tabs.iter().flatten() {
             let sid = tab.surface_id;
             let Some((x, y, w, h)) = get_surface_bounds(sid).filter(|_| surface_is_alive(sid)) else { continue };
@@ -7234,7 +7238,7 @@ unsafe fn mesh_is_visible_in_active_scene() -> bool {
         if let Some(frame) = f {
             if frame.frame_id == MESH_FRAME_ID
                 && frame.scene_id == ACTIVE_SCENE_IDX
-                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                && (frame.flags & FRAME_HIDDEN_FLAGS) == 0
             {
                 if let Some(sid) = active_surface_for_frame(MESH_FRAME_ID) {
                     if surface_is_alive(sid) {
@@ -8790,8 +8794,8 @@ unsafe fn tile_active_scene_frames() {
         if let Some(frame) = frame_slot {
             // Only tile frames in the active scene.
             if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
-            // Minimized frames are hidden via 0xEE — skip tiling.
-            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+            // Minimized or background-parked frames are hidden via 0xEE — skip tiling.
+            if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { continue; }
             // Zoomed frames occupy full content area via layout_maximize().
             // Tiling would overwrite the zoomed position.
             if (frame.flags & FRAME_FLAG_ZOOMED) != 0 { continue; }
@@ -9154,6 +9158,9 @@ const FRAME_FLAG_ZOOMED: u32 = 1 << 1;
 const FRAME_FLAG_TOP_BAR: u32 = 1 << 2;
 /// Moved by the person: tiling leaves it where it was put, until zoom tiles it again.
 const FRAME_FLAG_FLOATING: u32 = 1 << 3;
+/// Window closed to SilkBar background while its protection domain continues running.
+const FRAME_FLAG_PARKED: u32 = 1 << 5;
+const FRAME_HIDDEN_FLAGS: u32 = FRAME_FLAG_MINIMIZED | FRAME_FLAG_PARKED;
 
 // ── D2: Accessibility Node Model ──────────────────────────────────────────
 /// Maximum semantic nodes in V1 flat tree. 64 covers ~32 frames+tabs +
@@ -9303,7 +9310,7 @@ unsafe fn access_emit_frame_node(nodes: &mut [Option<AccessNode>; MAX_ACCESS_NOD
 
     let fid = frame.frame_id;
     let sid = active_surface_for_frame(fid).unwrap_or(0);
-    let minimized = (frame.flags & FRAME_FLAG_MINIMIZED) != 0;
+    let minimized = (frame.flags & FRAME_HIDDEN_FLAGS) != 0;
     let zoomed = (frame.flags & FRAME_FLAG_ZOOMED) != 0;
     let in_active_scene = frame.scene_id == ACTIVE_SCENE_IDX;
     let is_focused = sid != 0 && FOCUSED_SURFACE_ID == sid;
@@ -10609,8 +10616,10 @@ unsafe fn program_pointer_button(button:u8,pressed:bool){
     program_pointer_send(p,x,y,kind);
     if POINTER_BUTTONS&7==0 {POINTER_CAPTURE=0;}
 }
-/// Wheel steps over a program window that is not the built-in Browser.
+/// Wheel steps over a program window that is not the built-in Browser (or SilkBar Space pills).
 unsafe fn program_pointer_wheel(steps:i8)->bool{
+    if crate::meta_hub_glue::wheel(steps) { return true; }
+    if space_slide_glue::wheel_steps(steps) { return true; }
     match program_pointer_target(){
         Some((_,p,x,y,true)) => program_pointer_send(p,x,y,sex_pdx::app_pointer::Kind::Wheel{steps}),
         _ => false,
@@ -10624,7 +10633,7 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
         if program_pointer_wheel(scroll.vertical()){return}
         sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
     };
-    let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
+    let accepted=APP_INPUT.push_scroll(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
     sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
     app_input_poll();
 }
@@ -10659,7 +10668,7 @@ fn wm_work_area() -> wm::Rect {
 unsafe fn wm_visible_frames(out: &mut [(u32, u64, wm::Rect); MAX_FRAMES], tiled_only: bool) -> usize {
     let mut n = 0;
     for f in FRAMES.iter().flatten() {
-        if f.scene_id != ACTIVE_SCENE_IDX || f.flags & FRAME_FLAG_MINIMIZED != 0 { continue; }
+        if f.scene_id != ACTIVE_SCENE_IDX || f.flags & FRAME_HIDDEN_FLAGS != 0 { continue; }
         if tiled_only && f.flags & (FRAME_FLAG_FLOATING | FRAME_FLAG_ZOOMED) != 0 { continue; }
         let Some(tab) = &f.tabs[f.active_tab as usize] else { continue };
         let sid = tab.surface_id;
@@ -10713,27 +10722,45 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Launcher => toggle_command_palette(),
         A::Spotlight => spotlight_glue::toggle(),
         A::Terminal => toggle_spindle(),
-        A::Workspace(n) => { if n < WORKSPACE_COUNT { switch_scene(n); } n < WORKSPACE_COUNT }
+        A::Workspace(n) => {
+            if n < WORKSPACE_COUNT {
+                if matches!(INTERACTION, InteractionState::Dragging { .. }) {
+                    space_slide_glue::carry_drag_to_space(n)
+                } else {
+                    switch_scene(n);
+                    true
+                }
+            } else {
+                false
+            }
+        }
         A::MoveToWorkspace(n) => match selected_frame_id() {
             Some(fid) if n < WORKSPACE_COUNT => reparent_frame_to_scene(fid, n, "super_shift_digit"),
             _ => false,
         },
+        A::MoveToNextWorkspace => space_slide_glue::move_focused_step(1, true),
+        A::MoveToPrevWorkspace => space_slide_glue::move_focused_step(-1, true),
         A::NextWorkspace => atlas_cycle_scene(1, "super_next"),
         A::PrevWorkspace => atlas_cycle_scene(-1, "super_prev"),
-        A::Focus(dir) => match wm_neighbour(dir, false) {
-            Some((_, _, sid)) => try_set_focus(sid),
-            // Monocle: every window has the same place, so walk the order.
-            None if wm_tiling().layout == wm::Layout::Monocle => {
-                if matches!(dir, wm::Dir::Left | wm::Dir::Up) { focus_prev_frame(); } else { focus_next_frame(); }
-                true
+        A::Focus(dir) => if matches!(dir, wm::Dir::Right) && (*core::ptr::addr_of!(APP_MODIFIERS)).key(0).alt {
+            lock::lock()
+        } else {
+            match wm_neighbour(dir, false) {
+                Some((_, _, sid)) => try_set_focus(sid),
+                // Monocle: every window has the same place, so walk the order.
+                None if wm_tiling().layout == wm::Layout::Monocle => {
+                    if matches!(dir, wm::Dir::Left | wm::Dir::Up) { focus_prev_frame(); } else { focus_next_frame(); }
+                    true
+                }
+                None => false,
             }
-            None => false,
         },
         A::Swap(dir) => match wm_neighbour(dir, true) {
             Some((a, b, _)) if WM_ORDER.swap(a, b) => { layouts_glue::swapped(a, b); tile_active_scene_frames(); true }
             _ => false,
         },
-        A::Close => close_focused_tab_or_frame_safe(),
+        A::Close => bg_apps_glue::quit_focused_or_close(),
+        A::CloseWindow => FOCUSED_SURFACE_ID != 0 && is_closeable_surface(FOCUSED_SURFACE_ID) && bg_apps_glue::close_window(FOCUSED_SURFACE_ID),
         A::Fullscreen => toggle_zoom_focused_frame(),
         A::ToggleFloating => match selected_frame_id() {
             Some(fid) => {
@@ -10761,17 +10788,18 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         },
         A::Scratchpad => wm_scratchpad_toggle(),
         A::Overview => overview_toggle(),
-        A::ClipboardHistory => clipboard_history_step(),
+        A::ClipboardHistory => wifi_popover_glue::paste_from_clipboard() || clipboard_history_step(),
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::Animations => { let (look, on) = animations::cycle(); MOTION_ON = look == animations::Look::Full; motion_hint(0); if notify_panel(on) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
         A::FrameMeter => { let (_, notice) = animations::toggle_frame_meter(); motion_hint(0); if notify_panel(notice) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
         A::NightLight => desktop_look_step(0, 1),
-        A::Lock => lock::lock(),
+        A::Lock => if (*core::ptr::addr_of!(APP_MODIFIERS)).key(0).alt { bg_apps_glue::open_force_quit(); true } else { lock::lock() },
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
         A::Bluetooth => bt_panel::toggle(),
         A::Widgets => widgets_glue::toggle(),
-        A::Group | A::Ungroup | A::NextTab | A::PrevTab | A::ToggleDwindle => layouts_glue::action(action),
+        A::PrevTab => if layouts_glue::action(action) { true } else { silkbar_menus_glue::open_settings_from_ui() },
+        A::Group | A::Ungroup | A::NextTab | A::ToggleDwindle => layouts_glue::action(action),
         A::CycleWindowTint => cycle_focused_window_tint(),
         A::ToggleThemeMode => toggle_theme_mode(),
     };
@@ -10881,9 +10909,10 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
         desktop_keys::Action::SwitchEnd(keep)=>{switcher_end(keep);true}
         desktop_keys::Action::Volume(step)=>{volume_key(step);true}
+        desktop_keys::Action::MicVolume(step)=>{mic_volume_key(step);true}
         desktop_keys::Action::Close=>{
             let sid=FOCUSED_SURFACE_ID;
-            if sid!=0 && is_closeable_surface(sid){let _=close_surface_from_frame_light(sid);}
+            if sid!=0 && is_closeable_surface(sid){let _=bg_apps_glue::close_window(sid);}
             true
         }
         desktop_keys::Action::ToggleMaximize=>{
@@ -10935,16 +10964,23 @@ unsafe fn switcher_windows(ordered: &mut [u64; sex_pdx::window_switcher::MAX_ENT
 static mut OVERVIEW: sex_pdx::window_switcher::Session = sex_pdx::window_switcher::Session::new();
 unsafe fn overview_layout() -> Option<sex_pdx::window_switcher::Layout> {
     let count = OVERVIEW.state().count as usize;
-    sex_pdx::window_switcher::Layout::grid(desktop_width() as usize, desktop_height() as usize,
-        desktop_bar_height() as usize, count, sex_pdx::desktop_style::ui_scale())
+    let w = desktop_width() as usize;
+    let h = desktop_height() as usize;
+    let bar = desktop_bar_height() as usize;
+    let scale = sex_pdx::desktop_style::ui_scale();
+    let top = space_slide_glue::overview_top(w, h, bar, scale);
+    sex_pdx::window_switcher::Layout::grid(w, h, top, count, scale)
 }
 unsafe fn overview_toggle() -> bool {
     if OVERVIEW.is_open() { overview_close(false); return true; }
+    if space_slide_glue::is_mission_open() { space_slide_glue::close_mission_only(); return true; }
     if SWITCHER.is_open() { switcher_end(true); }
     if COMMAND_PALETTE_OPEN { toggle_command_palette(); }
     let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
     let count = switcher_windows(&mut ordered);
-    if !OVERVIEW.open_grid(&ordered[..count], FOCUSED_SURFACE_ID) { return false; }
+    if !OVERVIEW.open_grid(&ordered[..count], FOCUSED_SURFACE_ID) {
+        return space_slide_glue::open_empty_overview();
+    }
     switcher_send(OVERVIEW.state());
     sex_pdx::serial_record!("[shell.overview.open] windows={}", count);
     if let Some(l) = overview_layout() {
@@ -10953,6 +10989,7 @@ unsafe fn overview_toggle() -> bool {
             sex_pdx::serial_record!("[shell.overview.card] index={} sid={} x={} y={} w={} h={}", i, sid, x, y, w, h);
         }
     }
+    space_slide_glue::publish_overview_spaces();
     true
 }
 /// `keep`: go to the selected window; otherwise stay where focus was.
@@ -10960,10 +10997,12 @@ unsafe fn overview_close(keep: bool) {
     let Some(sid) = OVERVIEW.end(keep) else { return };
     if keep && sid != FOCUSED_SURFACE_ID { try_set_focus(sid); }
     switcher_send(sex_pdx::window_switcher::State::HIDDEN);
+    space_slide_glue::on_overview_closed();
     sex_pdx::serial_record!("[shell.overview.close] keep={} focus={}", keep as u8, FOCUSED_SURFACE_ID);
 }
 /// Keys while the overview is open; modifiers pass so their state stays true.
 unsafe fn overview_key(code: u8, value: u64) -> bool {
+    if space_slide_glue::overview_key(code, value) { return true; }
     if !OVERVIEW.is_open() || matches!(code, 0x1D | 0x2A | 0x36 | 0x38 | 0x5B | 0x5C | 0x61 | 0x64) { return false; }
     if value == 0 { return true; }
     let cols = overview_layout().map_or(1, |l| l.cols) as isize;
@@ -10980,6 +11019,7 @@ unsafe fn overview_key(code: u8, value: u64) -> bool {
     true
 }
 /// A click while the overview is open: a card goes there, anywhere else closes.
+#[allow(dead_code)]
 unsafe fn overview_click(px: i32, py: i32) {
     let hit = overview_layout().and_then(|l| if px < 0 || py < 0 { None } else { l.card_at(px as usize, py as usize) });
     match hit.and_then(|i| OVERVIEW.select(i)) {
@@ -11055,8 +11095,10 @@ unsafe fn screenshot_key(code: u8, value: u64) -> bool {
 }
 /// A button while the selection shows: true when the selection took it.
 unsafe fn screenshot_button(button: u8, pressed: bool) -> bool {
+    if bg_apps_glue::button(button, pressed) { return true; }
     // The window menu: a right click on a title bar opens it (slice S1).
     if decorations_glue::button(button, pressed) { return true; }
+    if meta_hub_glue::button(button, pressed) { return true; }
     // Desktop right-click context menu & open SilkBar menu dismissal.
     if silkbar_menus_glue::button(button, pressed) { return true; }
     if !SCREENSHOT.is_open() { return false; }
@@ -11135,6 +11177,15 @@ unsafe fn volume_key(step:i8) {
     if status==0{MEDIA_ASKS.push(media_keys::Ask::Volume);}
     sex_pdx::serial_record!("[shell.volume] step={} status={:#x}",step,status);
 }
+/// A microphone mute or gain key: Bell updates the mic state and answers with the
+/// master state word, shown in the panel OSD. `step` 0 toggles mic mute.
+unsafe fn mic_volume_key(step:i8) {
+    use sex_pdx::sound_mixer as mixer;
+    let (action,a)=if step==0{(mixer::MUTE_MIC,2)}else{(mixer::STEP_MIC,step as i64 as u64)};
+    let (status,_)=pdx_call(SLOT_BELL,mixer::OP_MIXER,action,a,0);
+    if status==0{MEDIA_ASKS.push(media_keys::Ask::MicVolume);}
+    sex_pdx::serial_record!("[shell.mic.volume] step={} status={:#x}",step,status);
+}
 /// Key repeat and Caps Lock as Ctrl from settings (repeat rate is per second).
 pub unsafe fn keyboard_settings(delay_ms:u64,rate:u64,caps_as_ctrl:bool){
     KEY_REPEAT.configure(delay_ms,if rate==0{0}else{1000/rate});
@@ -11148,7 +11199,7 @@ pub unsafe fn media_streaming_ask()->bool{
 }
 /// The volume from settings to Bell; false if Bell did not take the request.
 pub unsafe fn volume_restore(volume:u8)->bool{
-    if net_time_owed()||TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000){return false}
+    if net_time_owed()||wifi_popover_glue::answer_owed()||TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000){return false}
     let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_MASTER,volume.min(100) as u64,0);
     status==0&&MEDIA_ASKS.push(media_keys::Ask::Restore)
 }
@@ -11184,7 +11235,7 @@ pub unsafe fn tray_wake() -> Option<u64> {
     let now = sex_pdx::get_ticks();
     if let Some(t) = TRAY_WIFI_ASKED { return Some((t + 5_000).saturating_sub(now).clamp(1, 1_000)); }
     if TRAY_WIFI_DUE { return Some(TRAY_WIFI_RETRY.saturating_sub(now).clamp(1, 1_000)); }
-    [tray_items_glue::wake(), weather_glue::wake(), layout_plugin_glue::wake()].into_iter().flatten().min()
+    [tray_items_glue::wake(), weather_glue::wake(), layout_plugin_glue::wake(), wifi_popover_glue::wake(), space_slide_glue::wake()].into_iter().flatten().min()
 }
 /// A volume or mute click made while another answer was owed to Shell: sent once that
 /// answer is in. The kernel keeps one unread reply per domain, so a second answer
@@ -11193,7 +11244,7 @@ static mut TRAY_OWED_VOLUME: Option<u8> = None;
 static mut TRAY_OWED_MUTE: bool = false;
 /// Whether an answer from Bell or sexnet may still be on its way to Shell.
 unsafe fn tray_answer_owed() -> bool {
-    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) || net_time_owed()
+    MEDIA_ASKS.pending() || wifi_popover_glue::answer_owed() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) || net_time_owed()
 }
 /// sexnet still owes the answer to network time on/off (`config_watch`).
 pub static mut NET_TIME_ASKED: Option<u64> = None;
@@ -11211,10 +11262,11 @@ unsafe fn net_time_receive(msg: &sex_pdx::PdxMessage) -> bool {
 /// Sends a waiting volume or mute click once nothing else is owed.
 unsafe fn tray_send_owed() {
     if tray_answer_owed() { return; }
-    let (action, a) = if let Some(v) = TRAY_OWED_VOLUME.take() { (sex_pdx::sound_mixer::SET_MASTER, v as u64) }
-        else if core::mem::take(&mut TRAY_OWED_MUTE) { (sex_pdx::sound_mixer::MUTE_MASTER, 2) }
+    let (action, a, ask) = if let Some(v) = TRAY_OWED_VOLUME.take() { (sex_pdx::sound_mixer::SET_MASTER, v as u64, media_keys::Ask::Tray) }
+        else if core::mem::take(&mut TRAY_OWED_MUTE) { (sex_pdx::sound_mixer::MUTE_MASTER, 2, media_keys::Ask::Tray) }
+        else if let Some(mic_mute) = meta_hub_glue::take_owed_mic_mute() { (sex_pdx::sound_mixer::MUTE_MIC, mic_mute as u64, media_keys::Ask::MicVolume) }
         else { return };
-    if pdx_call(SLOT_BELL, sex_pdx::sound_mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+    if pdx_call(SLOT_BELL, sex_pdx::sound_mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(ask); }
     sex_pdx::serial_record!("[shell.tray.owed.sent] action={} arg={}", action, a);
 }
 /// sexnet's PD, which answers Wi-Fi state.
@@ -11238,7 +11290,7 @@ unsafe fn tray_refresh() {
 }
 unsafe fn tray_ask_wifi() {
     let now = sex_pdx::get_ticks();
-    if !TRAY_WIFI_DUE || now < TRAY_WIFI_RETRY || MEDIA_ASKS.pending() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
+    if !TRAY_WIFI_DUE || now < TRAY_WIFI_RETRY || MEDIA_ASKS.pending() || wifi_popover_glue::answer_owed() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
     TRAY_WIFI_DUE = false;
     let status = pdx_call(sex_pdx::SLOT_NET, sex_pdx::wifi_status::OP, sex_pdx::wifi_status::STATE, 0, 0).0;
     TRAY_WIFI_ASKED = (status == 0).then_some(now);
@@ -11271,6 +11323,7 @@ unsafe fn tray_volume(word: u64) {
     if TRAY_OWED_VOLUME.is_none() { TRAY.volume = mixer::state_volume(word).min(100); }
     if !TRAY_OWED_MUTE { TRAY.muted = mixer::state_muted(word); }
     TRAY.sound = true;
+    meta_hub_glue::sync_mixer_word(word);
     tray_publish();
     tray_send_owed();
     tray_ask_wifi();
@@ -11286,6 +11339,7 @@ unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
 /// Opens (or closes) a tray menu on its OS panel surface, closing the other one.
 unsafe fn tray_toggle(menu: sex_pdx::tray::Menu) {
     use sex_pdx::tray::{self, Menu};
+    silkbar_menus_glue::close("tray");
     let (w, bar, s) = (desktop_width() as usize, desktop_bar_height() as usize, sex_pdx::desktop_style::ui_scale() as usize);
     let rect = match menu {
         Menu::Quick => tray::Quick::new(w, bar, s).map(|q| q.panel),
@@ -11378,6 +11432,13 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
             // Kept in settings, so the volume lasts across restarts.
             config_watch::changed_here(sex_config::id::VOLUME,sex_pdx::sound_mixer::state_volume(word) as i32);
         }
+        Some(media_keys::Ask::MicVolume) if !media_keys::refused(word)=>{
+            meta_hub_glue::sync_mixer_word(word);
+            let mut text=[0u8;48];let n=media_keys::mic_osd_text(word,&mut text);
+            let shown=notify_panel(&text[..n]);
+            if shown{NOTIFY_NOTICE_UNTIL=sex_pdx::get_ticks()+media_keys::OSD_TICKS;}
+            sex_pdx::serial_record!("[shell.osd] text={} shown={}",core::str::from_utf8(&text[..n]).unwrap_or("?"),shown as u8);
+        }
         Some(media_keys::Ask::Player(code)) if !media_keys::refused(word)=>{
             let pd=media_keys::stream_pd(word);
             let to=APP_CUSTODY.iter().flatten().find(|e|e.target==pd&&!e.dead&&!e.retired).map(|e|e.surface).and_then(|sid|program_participant(sid));
@@ -11386,6 +11447,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
             sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
         }
         Some(ask@(media_keys::Ask::Master|media_keys::Ask::Row(_)))=>{
+            if matches!(ask, media_keys::Ask::Master) { meta_hub_glue::sync_mixer_word(word); }
             SOUND_PANEL.answer(ask,word);
             // The whole refresh is in: show it.
             if !MEDIA_ASKS.pending()&&SOUND_PANEL_NEXT.is_none()&&bell_frame_id().is_some(){bell_render_lane_text();}
@@ -11951,6 +12013,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         let old_focus = FOCUSED_SURFACE_ID;
         process_abs_tablet(arg0 as i32, arg1 as i32);
         program_pointer_motion();
+        space_slide_glue::on_pointer_move(POINTER_X, POINTER_Y);
+        meta_hub_glue::on_pointer_move(POINTER_X, POINTER_Y);
         if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
             let new_focus = FOCUSED_SURFACE_ID;
             let ok = (old_focus == new_focus) as u8;
@@ -12000,6 +12064,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         if drag_move_focused(dx, dy) {
             mutated = true;
         }
+        space_slide_glue::on_pointer_move(POINTER_X, POINTER_Y);
+        meta_hub_glue::on_pointer_move(POINTER_X, POINTER_Y);
         if resize_accumulate_delta(dx, dy) {
             mutated = true;
         }
@@ -12022,8 +12088,9 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             shell_interaction_contract_try_done();
         }
     } else if event_class == EV_BTN {
-        let button = arg0 as u8;
+        let raw_button = arg0 as u8;
         let pressed = arg1 != 0;
+        let button = bg_apps_glue::translate_button(raw_button, pressed);
         if pressed {
             POINTER_BUTTONS |= 1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0);
         } else {
@@ -12147,6 +12214,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                             DRAG_CAPTURE_MOVE_SEEN = false;
                         }
                         DRAG_PENDING_ACTIVE = false;
+                        let _ = space_slide_glue::overview_release(POINTER_X, POINTER_Y);
                         try_transition(InteractionState::Idle);
                     }
                     InteractionState::Dragging { surface_id, .. } => {
@@ -12225,6 +12293,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 input_negative_mark_done();
             }
         }
+    } else if event_class == EV_WHEEL {
+        browser_wheel_input(arg0, arg1);
     } else {
         // Unknown/unrecognized HID event class — safely ignored.
         // This is the primary negative-path guard: malformed/unknown opcodes
@@ -12890,7 +12960,7 @@ unsafe fn sync_lifecycle_scene_visibility() {
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             let in_active = frame.scene_id == ACTIVE_SCENE_IDX;
-            let minimized = (frame.flags & FRAME_FLAG_MINIMIZED) != 0;
+            let minimized = (frame.flags & FRAME_HIDDEN_FLAGS) != 0;
             for tab in frame.tabs.iter() {
                 if let Some(t) = tab {
                     let sid = t.surface_id;
@@ -12932,7 +13002,7 @@ unsafe fn sync_scene_visibility() {
                     let sid = t.surface_id;
                     // A group's background tabs stay hidden (slice S3).
                     let behind = layouts_glue::tab_hidden(frame.frame_id, ti);
-                    if surface_is_alive(sid) && in_active && frame.flags & FRAME_FLAG_MINIMIZED == 0 && !behind {
+                    if surface_is_alive(sid) && in_active && frame.flags & FRAME_HIDDEN_FLAGS == 0 && !behind {
                         // Re-activate surface on display.
                         let bounds = get_surface_bounds(sid);
                         if let Some((rx, ry, rw, rh)) = bounds {
@@ -12940,7 +13010,7 @@ unsafe fn sync_scene_visibility() {
                                 (ry as u64) << 32 | rx as u64,
                                 (rh as u64) << 32 | rw as u64);
                         }
-                    } else if surface_is_alive(sid) && (!in_active || frame.flags & FRAME_FLAG_MINIMIZED != 0 || behind) {
+                    } else if surface_is_alive(sid) && (!in_active || frame.flags & FRAME_HIDDEN_FLAGS != 0 || behind) {
                         // Hide surface on display.
                         pdx_call(SLOT_DISPLAY, 0xEE, sid, 0, 0);
                     }
@@ -13042,7 +13112,7 @@ unsafe fn scene_update_flags(scene_idx: u8) {
 
             has_frames = true;
 
-            if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+            if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 {
                 flags |= SCENE_FLAG_HAS_MINIMIZED;
             }
 
@@ -13151,8 +13221,8 @@ unsafe fn atlas_capture_snapshot() {
         for f in FRAMES.iter() {
             if let Some(frame) = f {
                 if frame.scene_id as usize != scene_idx { continue; }
-                // C1: Skip minimized frames — hidden via 0xEE, not visible in tiling.
-                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 {
+                // C1: Skip minimized or parked frames — hidden via 0xEE, not visible in tiling.
+                if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 {
                     serial_println!("[atlas.snapshot.skip] scene={} frame={} reason=minimized", scene_idx, frame.frame_id);
                     continue;
                 }
@@ -13825,6 +13895,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     let idx = scene_idx.min(WORKSPACE_COUNT - 1);
     if idx == ACTIVE_SCENE_IDX { return; }
     let prev = ACTIVE_SCENE_IDX;
+    space_slide_glue::before_switch_scene(prev, idx);
     motion_hint(if idx > prev { 1 } else { -1 });
     // Each workspace remembers the window that had focus there.
     WM_SCENE_FOCUS[(prev as usize).min(ATLAS_MAX_SCENES - 1)] = FOCUSED_SURFACE_ID;
@@ -13860,6 +13931,7 @@ unsafe fn switch_scene(scene_idx: u8) {
     if *b > 0 { *b -= 1; serial_println!("[shell.scene.shortcut.switch] from={} to={}", prev, ACTIVE_SCENE_IDX); }
     serial_println!("[scene.switch] from={} to={}", prev, idx);
     serial_println!("[shell.interact.scene.switch] from={} to={}", prev, idx);
+    meta_hub_glue::mark_dirty();
 }
 
 /// Advance to the next workspace (wraps around).
@@ -13943,7 +14015,7 @@ unsafe fn next_frame_in_scene(start_frame_id: u32, forward: bool) -> Option<u32>
         for f in FRAMES.iter() {
             if let Some(frame) = f {
                 if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
-                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { continue; }
                 if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
                     if !surface_is_alive(tab.surface_id) { continue; }
                     if is_tombstoned(tab.surface_id) { continue; }
@@ -13959,7 +14031,7 @@ unsafe fn next_frame_in_scene(start_frame_id: u32, forward: bool) -> Option<u32>
             for f in FRAMES.iter() {
                 if let Some(frame) = f {
                     if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
-                    if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                    if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { continue; }
                     if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
                         if !surface_is_alive(tab.surface_id) { continue; }
                         if is_tombstoned(tab.surface_id) { continue; }
@@ -13976,7 +14048,7 @@ unsafe fn next_frame_in_scene(start_frame_id: u32, forward: bool) -> Option<u32>
         for f in FRAMES.iter() {
             if let Some(frame) = f {
                 if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
-                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { continue; }
                 if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
                     if !surface_is_alive(tab.surface_id) { continue; }
                     if is_tombstoned(tab.surface_id) { continue; }
@@ -13992,7 +14064,7 @@ unsafe fn next_frame_in_scene(start_frame_id: u32, forward: bool) -> Option<u32>
             for f in FRAMES.iter() {
                 if let Some(frame) = f {
                     if frame.scene_id != ACTIVE_SCENE_IDX { continue; }
-                    if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { continue; }
+                    if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { continue; }
                     if let Some(tab) = &frame.tabs[frame.active_tab as usize] {
                         if !surface_is_alive(tab.surface_id) { continue; }
                         if is_tombstoned(tab.surface_id) { continue; }
@@ -14819,7 +14891,7 @@ unsafe fn open_mesh_in_active_scene() -> bool {
         if let Some(frame) = f {
             if frame.frame_id == MESH_FRAME_ID
                 && frame.scene_id == ACTIVE_SCENE_IDX
-                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                && (frame.flags & FRAME_HIDDEN_FLAGS) == 0
             {
                 serial_println!("[mesh.placeholder.reject.duplicate] frame={} scene={}", MESH_FRAME_ID, ACTIVE_SCENE_IDX);
                 // Focus existing Mesh instead.
@@ -14897,7 +14969,7 @@ unsafe fn focus_or_open_mesh() -> bool {
         if let Some(frame) = f {
             if frame.frame_id == MESH_FRAME_ID
                 && frame.scene_id == ACTIVE_SCENE_IDX
-                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                && (frame.flags & FRAME_HIDDEN_FLAGS) == 0
             {
                 if let Some(sid) = active_surface_for_frame(MESH_FRAME_ID) {
                     if try_set_focus(sid) {
@@ -14920,7 +14992,7 @@ unsafe fn toggle_mesh() -> bool {
         if let Some(frame) = f {
             if frame.frame_id == MESH_FRAME_ID
                 && frame.scene_id == ACTIVE_SCENE_IDX
-                && (frame.flags & FRAME_FLAG_MINIMIZED) == 0
+                && (frame.flags & FRAME_HIDDEN_FLAGS) == 0
             {
                 if minimize_frame(MESH_FRAME_ID) {
                     static mut MESH_TOGGLE_BUDGET: u32 = 4;
@@ -16970,7 +17042,7 @@ unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
     let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
     let theme = theme_glue::word();
     let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, theme).0 == 0;
-    if ok { DESKTOP_LOOK = next; }
+    if ok { DESKTOP_LOOK = next; meta_hub_glue::mark_dirty(); }
     theme_glue::sent(theme, ok);
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
@@ -17098,8 +17170,12 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     for &b in name.as_bytes().iter().chain(b": ").chain(text.summary()) {
         if n < line.len() { line[n] = b; n += 1; }
     }
-    notify_panel(&line[..n]);
-    NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    if meta_hub_glue::dnd_suppress_banner(text.urgency) {
+        sex_pdx::serial_record!("[shell.notify.dnd] id={} suppressed=1 urgency={}", text.id, text.urgency);
+    } else {
+        notify_panel(&line[..n]);
+        NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS;
+    }
     sex_pdx::serial_record!("[shell.notify.show] id={} sender={} app={} urgency={} summary={} body_len={} history={}",
         text.id, text.sender, name, text.urgency, core::str::from_utf8(text.summary()).unwrap_or("?"),
         text.body().len(), NOTIFY_TOTAL.min(NOTIFY_HISTORY));
@@ -17416,6 +17492,7 @@ unsafe fn toggle_command_palette() -> bool {
             opcode:0xEE, surface:SURFACE_ID_COMMAND_PALETTE, packed:0, control:0 });
         // If frame doesn't exist yet, just mark closed.
         sex_pdx::serial_record!("[command_palette.close]");
+        meta_hub_glue::sync_visibility();
         true
     } else {
         // Open palette — show the frame and render.
@@ -17480,6 +17557,7 @@ unsafe fn toggle_command_palette() -> bool {
             }
         }
         serial_println!("[command_palette.open]");
+        meta_hub_glue::sync_visibility();
         true
     }
 }
@@ -17874,7 +17952,7 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
-    unsafe{autofill_routes::bound(target,task); }
+    unsafe{autofill_routes::bound(target,task); bg_apps_glue::note_bound_target(target); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
     program_notify::bound(target);
@@ -18099,6 +18177,7 @@ unsafe fn program_start_own(name:[u64;2])->bool{
     use sex_pdx::program_store as store;
     if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||LAUNCH_ASKER.is_some()||RECORD_SPAWN_WANTED!=0||program_free_row().is_none(){return false}
     PROGRAM_READING=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,name[0],name[1],0).0==0;
+    if PROGRAM_READING { bg_apps_glue::note_own_launch(name); }
     PROGRAM_NETWORK=false;PROGRAM_LAUNCHER=None;PROGRAM_TICKET=0;PROGRAM_SCENE=None;
     PROGRAM_READING
 }
@@ -18285,6 +18364,7 @@ fn laptop_command(cmd: Command) -> bool {
 static mut LAPTOP_NEXT_POLL: u64 = 0;
 static mut LAPTOP_CLAIMED: bool = false;
 static mut LAPTOP_LID: Option<bool> = None;
+static mut LAPTOP_MIC_MUTE_EVENTS: Option<u8> = None;
 unsafe fn laptop_poll() {
     let now = sex_pdx::get_ticks();
     if now < LAPTOP_NEXT_POLL { return; }
@@ -18300,6 +18380,15 @@ unsafe fn laptop_poll() {
             if was != open { lid_changed(open); }
         }
         LAPTOP_LID = s.lid_open;
+    }
+    match LAPTOP_MIC_MUTE_EVENTS {
+        None => LAPTOP_MIC_MUTE_EVENTS = Some(s.mic_mute_events),
+        Some(prev) if prev != s.mic_mute_events => {
+            let delta = s.mic_mute_events.wrapping_sub(prev);
+            LAPTOP_MIC_MUTE_EVENTS = Some(s.mic_mute_events);
+            for _ in 0..delta.min(4) { mic_volume_key(0); }
+        }
+        Some(_) => {}
     }
     if s.button_pressed {
         if LAPTOP_SLEEPING { sleep_exit("power_button"); } else { power_button_dialog(); }
@@ -22140,6 +22229,18 @@ unsafe fn frame_is_minimized(frame_id: u32) -> bool {
     false
 }
 
+/// Returns true if the given frame is currently parked in the SilkBar background tray.
+pub(crate) unsafe fn frame_is_parked(frame_id: u32) -> bool {
+    for f in FRAMES.iter() {
+        if let Some(frame) = f {
+            if frame.frame_id == frame_id && (frame.flags & FRAME_FLAG_PARKED) != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Returns true if the given frame should receive pointer/keyboard input.
 /// Guards: must be in active scene, non-minimized, and have alive/non-tombstoned active tab.
 unsafe fn frame_accepts_input(frame_id: u32) -> bool {
@@ -22178,7 +22279,7 @@ unsafe fn frame_chrome_visible(frame_id: u32) -> bool {
         if let Some(frame) = f {
             if frame.frame_id == frame_id {
                 if frame.scene_id != ACTIVE_SCENE_IDX { return false; }
-                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { return false; }
+                if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { return false; }
                 break;
             }
         }
@@ -22485,6 +22586,114 @@ unsafe fn native_child_geometry(frame:u64,x:i32,y:i32,w:u32,h:u32) {
             ((child.h as u64)<<32)|child.w as u64);}
         sex_pdx::serial_record!("[shell.app.viewport] target={} sid={} x={} y={} w={} h={}",APP_CUSTODY.iter().flatten().find(|e|!e.dead&&!e.close_pending&&e.owns_surface(frame)).map_or(0,|e|e.target),child.sid,child.x,child.y,child.w,child.h);
     }
+}
+
+/// Hide a window frame from the active Desktop Space without ending its domain/task
+/// (`FRAME_FLAG_PARKED`), keeping background work alive and showing a SilkBar tray badge.
+pub(crate) unsafe fn park_frame_by_surface(surface_id: u64) -> bool {
+    let Some(frame_id) = frame_for_surface(surface_id) else {
+        return false;
+    };
+    if !surface_is_alive(surface_id) || !DESKTOP_RECORDING.before_hide(surface_id) {
+        return false;
+    }
+    let mut prev_scene = ACTIVE_SCENE_IDX;
+    let mut changed = false;
+    for f in FRAMES.iter_mut().flatten() {
+        if f.frame_id == frame_id {
+            if (f.flags & FRAME_FLAG_PARKED) != 0 {
+                return false;
+            }
+            prev_scene = f.scene_id;
+            f.flags |= FRAME_FLAG_PARKED;
+            changed = true;
+            break;
+        }
+    }
+    if !changed {
+        return false;
+    }
+    set_lifecycle_state(surface_id, LifecycleState::Minimized);
+    if matches!(INTERACTION, InteractionState::Dragging { surface_id: s, .. } | InteractionState::Resizing { surface_id: s, .. } if s == surface_id)
+        || matches!(INTERACTION, InteractionState::TabDragging { frame_id: f, .. } if f == frame_id)
+    {
+        try_transition(InteractionState::Idle);
+    }
+    pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, surface_id, 0, 0);
+    for child in desktop_content::children(surface_id, 0, 0, 0, 0).iter().flatten() {
+        pdx_call(SLOT_DISPLAY, OP_SURFACE_DEACTIVATE, child.sid, 0, 0);
+    }
+    if HOVERED_FRAME_ID == frame_id {
+        HOVERED_FRAME_ID = 0;
+        HOVER_KIND = HOVER_NONE;
+        HOVERED_FRAME_LIGHT = FRAME_LIGHT_NONE;
+    }
+    clear_drag_if_dead();
+    clear_focus_if_dead();
+    scene_update_flags(prev_scene);
+    tile_active_scene_frames();
+    snap_capture_layout();
+    true
+}
+
+/// Restores a parked background app window into the current active Desktop Space and focuses it.
+pub(crate) unsafe fn reopen_parked_surface(surface_id: u64) -> bool {
+    let Some(frame_id) = frame_for_surface(surface_id) else {
+        return false;
+    };
+    if !surface_is_alive(surface_id) {
+        return false;
+    }
+    if let Some(state) = lifecycle_state(surface_id) {
+        if matches!(state, LifecycleState::Tombstoned | LifecycleState::Destroyed | LifecycleState::Closing) {
+            return false;
+        }
+    }
+    for (index, frame) in app_catalog::document_views().map(|i| i.frame()).enumerate() {
+        if surface_id == frame {
+            DOCUMENT_VIEWS[index].refresh();
+        }
+    }
+    for (index, frame) in app_catalog::spindle_views().map(|i| i.frame()).enumerate() {
+        if surface_id == frame {
+            SPINDLE_VIEWS[index].refresh();
+        }
+    }
+    let mut old_scene = ACTIVE_SCENE_IDX;
+    let mut was_parked = false;
+    for f in FRAMES.iter_mut().flatten() {
+        if f.frame_id == frame_id {
+            was_parked = (f.flags & FRAME_FLAG_PARKED) != 0;
+            old_scene = f.scene_id;
+            f.flags &= !(FRAME_FLAG_PARKED | FRAME_FLAG_MINIMIZED);
+            f.scene_id = ACTIVE_SCENE_IDX;
+            break;
+        }
+    }
+    if !was_parked {
+        return false;
+    }
+    session_placed(surface_id, ACTIVE_SCENE_IDX);
+    set_lifecycle_state(surface_id, LifecycleState::Visible);
+    if frame_is_zoomed(frame_id) {
+        let (zx, zy, zw, zh) = layout_maximize();
+        pdx_call(SLOT_DISPLAY, 0xEC, surface_id, (zy as u64) << 32 | zx as u64, (zh as u64) << 32 | zw as u64);
+        update_local_geometry(surface_id, zx, zy, zw, zh);
+        program_resize_note(surface_id, zw, zh);
+    } else if let Some((rx, ry, rw, rh)) = get_surface_bounds(surface_id) {
+        pdx_call(SLOT_DISPLAY, 0xEC, surface_id, (ry as u64) << 32 | rx as u64, (rh as u64) << 32 | rw as u64);
+        native_child_geometry(surface_id, rx, ry, rw, rh);
+        program_resize_note(surface_id, rw, rh);
+    } else {
+        return false;
+    }
+    send_frame_tab_info(frame_id);
+    let _ = try_set_focus(surface_id);
+    scene_update_flags(old_scene);
+    scene_update_flags(ACTIVE_SCENE_IDX);
+    tile_active_scene_frames();
+    snap_capture_layout();
+    true
 }
 
 /// Update local shell geometry statics to match a 0xEC update sent to sexdisplay.
@@ -24713,6 +24922,9 @@ unsafe fn silk_drag_end_mark(surface_id: u64) {
 /// so keyboard focus changes during drag do not corrupt the target.
 unsafe fn drag_move_focused(dx: i32, dy: i32) -> bool {
     if let InteractionState::Dragging { surface_id, .. } = INTERACTION {
+        if dx != 0 || dy != 0 {
+            let _ = space_slide_glue::maybe_unsnap_on_drag_move(surface_id, POINTER_X, POINTER_Y);
+        }
         let move_result = move_surface_by(surface_id, dx, dy);
         let moved = move_result.is_some();
         if let Some((nx, ny, clamped)) = move_result {
@@ -24840,66 +25052,11 @@ unsafe fn clear_resize_if_dead() {
     }
 }
 
-/// Evaluate drag-to-snap at pointer release. Applies SnapLeft, SnapRight, or zoom
+/// Evaluate drag-to-snap at pointer release. Applies SnapLeft, SnapRight, corners, or zoom
 /// based on final pointer position. Uses existing 0xEC display path. Frame-only.
 /// Returns true if snap was applied (caller should set mutated).
 unsafe fn try_snap_on_drag_release(surface_id: u64, px: i32, py: i32) -> bool {
-    if !surface_is_alive(surface_id) || is_tombstoned(surface_id) {
-        serial_println!("[silk.snap.reject.dead] sid={} reason=dead", surface_id);
-        return false;
-    }
-    let frame_id = match frame_for_surface(surface_id) {
-        Some(fid) => fid,
-        None => {
-            serial_println!("[silk.snap.none] sid={} reason=no_frame x={} y={}", surface_id, px, py);
-            return false;
-        }
-    };
-    if frame_is_minimized(frame_id) {
-        serial_println!("[silk.snap.reject.dead] sid={} reason=minimized", surface_id);
-        return false;
-    }
-    // Top snap needs the pointer pushed up into the bar: a title bar dragged sideways
-    // stays in the top band and must not maximize its window.
-    let near_top   = py < desktop_bar_height().saturating_sub(SNAP_TOP_PX / 2).max(1);
-    let near_left  = px < SNAP_EDGE_PX;
-    let near_right = px >= desktop_width() - SNAP_EDGE_PX;
-    if near_top {
-        serial_println!("[silk.snap.hit.top] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
-        if !frame_is_zoomed(frame_id) && zoom_frame(frame_id) {
-            serial_println!("[silk.snap.apply] sid={} frame={} kind=top", surface_id, frame_id);
-            return true;
-        }
-        serial_println!("[silk.snap.none] sid={} reason=top_zoom_skip x={} y={}", surface_id, px, py);
-        return false;
-    }
-    if near_left {
-        serial_println!("[silk.snap.hit.left] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
-        let cw = desktop_width() as u32;
-        let ch = (desktop_height() - desktop_bar_height()) as u32;
-        let (nx, ny, nw, nh) = (0i32, desktop_bar_height(), cw / 2, ch);
-        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
-            (ny as u64) << 32 | nx as u64,
-            (nh as u64) << 32 | nw as u64);
-        update_local_geometry(surface_id, nx, ny, nw, nh);
-        serial_println!("[silk.snap.apply] sid={} frame={} kind=left x={} y={} w={} h={}", surface_id, frame_id, nx, ny, nw, nh);
-        return true;
-    }
-    if near_right {
-        serial_println!("[silk.snap.hit.right] sid={} frame={} x={} y={}", surface_id, frame_id, px, py);
-        let cw = desktop_width() as u32;
-        let ch = (desktop_height() - desktop_bar_height()) as u32;
-        let half_w = cw / 2;
-        let (nx, ny, nw, nh) = (half_w as i32, desktop_bar_height(), cw - half_w, ch);
-        pdx_call(SLOT_DISPLAY, 0xEC, surface_id,
-            (ny as u64) << 32 | nx as u64,
-            (nh as u64) << 32 | nw as u64);
-        update_local_geometry(surface_id, nx, ny, nw, nh);
-        serial_println!("[silk.snap.apply] sid={} frame={} kind=right x={} y={} w={} h={}", surface_id, frame_id, nx, ny, nw, nh);
-        return true;
-    }
-    serial_println!("[silk.snap.none] sid={} x={} y={}", surface_id, px, py);
-    false
+    space_slide_glue::on_drag_release(surface_id, px, py)
 }
 
 /// Compute new surface geometry from current bounds, edge, and pointer delta.
@@ -25120,8 +25277,9 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
 /// SilkBar intercept is handled separately by handle_silkbar_click().
 unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let focused = FOCUSED_SURFACE_ID;
+    let is_parked_sid = |sid: u64| frame_for_surface(sid).is_some_and(|fid| frame_is_parked(fid));
     // A group's background tab keeps its old bounds but is not on screen.
-    if point_in_surface(x, y, focused) && shaped(x, y, focused) && layouts_glue::behind(focused).is_none() {
+    if !is_parked_sid(focused) && point_in_surface(x, y, focused) && shaped(x, y, focused) && layouts_glue::behind(focused).is_none() {
         // Chrome check: rim/tab-strip takes priority over content area.
         if let Some(chrome_target) = hit_test_surface_chrome(x, y, focused) {
             if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
@@ -25150,7 +25308,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     }
     for entry in APP_CUSTODY.iter().flatten() {
         let sid=entry.shell_surface().unwrap_or(entry.surface);
-        if entry.dead || sid == focused || !point_in_surface(x,y,sid) || !shaped(x,y,sid) || layouts_glue::behind(sid).is_some() { continue; }
+        if entry.dead || sid == focused || is_parked_sid(sid) || !point_in_surface(x,y,sid) || !shaped(x,y,sid) || layouts_glue::behind(sid).is_some() { continue; }
         if let Some(fid) = frame_for_surface(sid) {
             if frame_accepts_input(fid) {
                 if let Some(chrome) = hit_test_surface_chrome(x,y,sid) { return chrome; }
@@ -25161,7 +25319,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
     for &sid in &z_order {
-        if sid == focused || layouts_glue::behind(sid).is_some() { continue; }
+        if sid == focused || is_parked_sid(sid) || layouts_glue::behind(sid).is_some() { continue; }
         if !surface_is_alive(sid) {
             serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
             continue;
@@ -25233,12 +25391,14 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
     if buttons_val&1!=0&&recording_stop_hit(px,py){return(HitTarget::None,true);}
-    // The overview takes every click while it is open.
-    if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
+    // The overview / Mission Control takes every click while it is open.
+    if space_slide_glue::overview_press(px, py) { return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
+    if buttons_val & 1 != 0 && meta_hub_glue::press(px, py) { return (HitTarget::None, true); }
     if spotlight_glue::press(px, py) { return (HitTarget::None, true); }
     if silkbar_menus_glue::press(px, py) { return (HitTarget::None, true); }
+    if bg_apps_glue::press(px, py) { return (HitTarget::None, true); }
     if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
     // Program tray items, their menus and notification cards (slice S2).
     if tray_items_glue::press(px, py) { return (HitTarget::None, true); }
@@ -25479,7 +25639,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                         if let Some(frame) = f {
                             if frame.frame_id == frame_id {
                                 if frame.scene_id != ACTIVE_SCENE_IDX { reject = true; reason = "inactive_scene"; break; }
-                                if (frame.flags & FRAME_FLAG_MINIMIZED) != 0 { reject = true; reason = "minimized"; break; }
+                                if (frame.flags & FRAME_HIDDEN_FLAGS) != 0 { reject = true; reason = "minimized"; break; }
                                 if let Some(sid) = active_surface_for_frame(frame_id) {
                                     if !surface_is_alive(sid) { reject = true; reason = "dead"; break; }
                                     if is_tombstoned(sid) { reject = true; reason = "tombstoned"; break; }
@@ -25505,7 +25665,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
                     // ── CLOSE action: destroy active surface ──
                     if let Some(surface_id) = active_surface_for_frame(frame_id) {
                         if is_closeable_surface(surface_id) {
-                            if close_surface_from_frame_light(surface_id) {
+                            if bg_apps_glue::close_window(surface_id) {
                                 unsafe {
                                     static mut FRAME_LIGHT_CLOSE_BUDGET: u32 = 8;
                                     let b = &mut FRAME_LIGHT_CLOSE_BUDGET;
@@ -25876,6 +26036,12 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
     if unsafe { silkbar_menus_glue::handle_top_bar_click(px, py) } {
         return true;
     }
+    if unsafe { bg_apps_glue::handle_top_bar_click(px, py) } {
+        return true;
+    }
+    if unsafe { space_slide_glue::handle_silkbar_click(px, py) } {
+        return true;
+    }
     let ux = px as usize;
     let uy = py as usize;
     let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
@@ -25890,6 +26056,7 @@ fn handle_silkbar_click(px: i32, py: i32) -> bool {
             unsafe {
                 let prev = ACTIVE_SCENE_IDX;
                 if prev != ws_idx as u8 {
+                    space_slide_glue::before_switch_scene(prev, ws_idx as u8);
                     motion_hint(if ws_idx as u8 > prev { 1 } else { -1 });
                     ACTIVE_SCENE_IDX = ws_idx as u8;
                     sync_scene_visibility();
@@ -26079,7 +26246,7 @@ fn snap_validate(snap: &SceneLayoutSnapshot) -> bool {
         if fs.tab_count as usize > MAX_TABS_PER_FRAME as usize { return false; }
         if fs.active_tab as usize >= fs.tab_count as usize { return false; }
         // Flags must not contain reserved bits (only MINIMIZED | ZOOMED | TOP_BAR).
-        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR | FRAME_FLAG_FLOATING | FRAME_FLAG_SCRATCH;
+        let known_flags = FRAME_FLAG_MINIMIZED | FRAME_FLAG_PARKED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR | FRAME_FLAG_FLOATING | FRAME_FLAG_SCRATCH;
         if fs.flags & !known_flags != 0 { return false; }
     }
     // Verify checksum.
@@ -26129,7 +26296,7 @@ unsafe fn snap_restore_layout() -> bool {
             tab_count: valid_count,
             tabs,
             scene_id: fs.scene_id.min(WORKSPACE_COUNT - 1),
-            flags: fs.flags & (FRAME_FLAG_MINIMIZED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR),
+            flags: fs.flags & (FRAME_FLAG_MINIMIZED | FRAME_FLAG_PARKED | FRAME_FLAG_ZOOMED | FRAME_FLAG_TOP_BAR),
             normal_x: cx,
             normal_y: cy,
             normal_w: cw,
@@ -26578,7 +26745,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); silkbar_menus_glue::poll(); spotlight_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
+        unsafe { decorations_glue::poll(); silkbar_menus_glue::poll(); bg_apps_glue::poll(); spotlight_glue::poll(); meta_hub_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); space_slide_glue::poll(); startup::poll(); boot_windows::poll(); }
         unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
@@ -27273,7 +27440,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); widgets_glue::display_restarted(); weather_glue::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); bg_apps_glue::display_restarted(); widgets_glue::display_restarted(); weather_glue::display_restarted(); unsafe { silkbar_menus_glue::display_restarted(); wifi_popover_glue::display_restarted(); meta_hub_glue::display_restarted(); } continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -27303,6 +27470,7 @@ pub extern "C" fn _start() -> ! {
             if voyeur::receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
+            if wifi_popover_glue::receive(&msg) { continue; }
             if tray_receive(&msg) { continue; }
             if net_time_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
@@ -27473,8 +27641,10 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                         } else if !left_held {
+                            let _ = meta_hub_glue::release(POINTER_X, POINTER_Y);
                             match INTERACTION {
                                 InteractionState::ClickPending => {
+                                    let _ = space_slide_glue::overview_release(POINTER_X, POINTER_Y);
                                     try_transition(InteractionState::Idle);
                                 }
                                 InteractionState::Dragging { surface_id, .. } => {
@@ -27517,6 +27687,8 @@ pub extern "C" fn _start() -> ! {
                         if drag_move_focused(dx as i32, dy as i32) {
                             mutated = true;
                         }
+                        space_slide_glue::on_pointer_move(POINTER_X, POINTER_Y);
+        meta_hub_glue::on_pointer_move(POINTER_X, POINTER_Y);
                         if resize_accumulate_delta(dx as i32, dy as i32) {
                             mutated = true;
                         }
@@ -28801,6 +28973,8 @@ pub extern "C" fn _start() -> ! {
                             }
                             process_abs_tablet(msg.arg0 as i32, msg.arg1 as i32);
                             program_pointer_motion();
+                            space_slide_glue::on_pointer_move(POINTER_X, POINTER_Y);
+        meta_hub_glue::on_pointer_move(POINTER_X, POINTER_Y);
                             if matches!(INTERACTION, InteractionState::ClickPending) && DRAG_PENDING_ACTIVE {
                                 let dx = POINTER_X - DRAG_PENDING_START_X;
                                 let dy = POINTER_Y - DRAG_PENDING_START_Y;
@@ -28994,6 +29168,8 @@ pub extern "C" fn _start() -> ! {
                             if drag_move_focused(dx, dy) {
                                 mutated = true;
                             }
+                            space_slide_glue::on_pointer_move(POINTER_X, POINTER_Y);
+        meta_hub_glue::on_pointer_move(POINTER_X, POINTER_Y);
                             if resize_accumulate_delta(dx, dy) {
                                 mutated = true;
                             }
@@ -29030,8 +29206,9 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                         } else if event_class == EV_BTN {
-                            let button = msg.arg0 as u8;
+                            let raw_button = msg.arg0 as u8;
                             let pressed = msg.arg1 != 0;
+                            let button = bg_apps_glue::translate_button(raw_button, pressed);
                             if pressed {
                                 POINTER_BUTTONS |= 1u8.checked_shl(button.saturating_sub(1) as u32).unwrap_or(0);
                             } else {
@@ -29085,6 +29262,7 @@ pub extern "C" fn _start() -> ! {
                                             serial_println!("[silk-shell.click.up] btn={} x={} y={}",
                                                 button, POINTER_X, POINTER_Y);
                                             DRAG_PENDING_ACTIVE = false;
+                                            let _ = space_slide_glue::overview_release(POINTER_X, POINTER_Y);
                                             try_transition(InteractionState::Idle);
                                         }
                                         InteractionState::Dragging { surface_id, .. } => {
@@ -29120,6 +29298,11 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+            sex_pdx::space_slide::OP_TOUCHPAD_GESTURE => {
+                unsafe {
+                    let _ = space_slide_glue::handle_gesture(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2);
+                }
+            }
             OP_SCENE_SETTINGS_CMD => {
                 // Scene Settings protocol command.
                 // Dispatch is synchronous, non-blocking, no reply wait.

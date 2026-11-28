@@ -7,13 +7,13 @@
 #[cfg(feature = "sexos")]
 mod program {
     extern crate alloc;
-    use cabaret::{sexos_runtime::SexosBroadcastRuntime, Cabaret};
+    use cabaret::{noir_theme, sexos_runtime::SexosBroadcastRuntime, Cabaret};
     use sex_pdx::app_key::DESKTOP_KEYS;
     use sex_pdx::desktop_recording::OP_STUDIO_WINDOW_FLAGS;
     use sex_pdx::{pdx_call_checked, SLOT_DISPLAY};
     use alloc::vec::Vec;
     use weft::sexos::App;
-    use weft::{Response, Strings, Theme};
+    use weft::{Mode, Response, Strings};
 
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -22,7 +22,13 @@ mod program {
     }
 
     extern "C" fn main() -> ! {
-        let mut app = App::open("Cabaret", Theme::dark(), Strings::new("en"));
+        let mut app = App::open("Cabaret", noir_theme(), Strings::new("en"));
+        if app.ui.theme().mode != Mode::HighContrast {
+            let mut t = noir_theme();
+            t.scale = app.ui.theme().scale;
+            t.density = app.ui.theme().density;
+            app.ui.set_theme(t);
+        }
         let _ = app.window.want_keys(DESKTOP_KEYS);
 
         let mut cabaret = Cabaret::build(&mut app.ui);
