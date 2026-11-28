@@ -7496,6 +7496,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-dtls"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "hmac 0.12.1",
+ "p256",
+ "rand_chacha",
+ "rand_core 0.6.4",
+ "sex-rtp",
+ "sex-srtp",
+ "sha2 0.10.9",
+ "subtle",
+]
+
+[[package]]
 name = "sex-ebook"
 version = "0.1.0"
 dependencies = [
@@ -7882,6 +7897,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-rtp"
+version = "0.1.0"
+
+[[package]]
 name = "sex-sdl"
 version = "0.1.0"
 dependencies = [
@@ -7916,6 +7935,17 @@ version = "0.1.0"
 [[package]]
 name = "sex-splice"
 version = "0.1.0"
+
+[[package]]
+name = "sex-srtp"
+version = "0.1.0"
+dependencies = [
+ "aes 0.8.4",
+ "aes-gcm",
+ "hmac 0.12.1",
+ "sha1 0.10.7",
+ "subtle",
+]
 
 [[package]]
 name = "sex-ssh"
