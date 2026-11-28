@@ -1,0 +1,8 @@
+[package]
+name = "sex-spell"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Zero-allocation #![no_std] spellcheck, typo suggestions, inline ghost-text prediction, and Space-bar autocorrect for SexOS"
+
+[dependencies]

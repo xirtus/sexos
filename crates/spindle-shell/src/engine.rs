@@ -8,8 +8,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::ast::{Block, Element, Statement};
+use crate::ast::{Arg, Block, Element, Statement};
 use crate::builtins;
+use crate::ergonomics;
 use crate::error::{ShellError, Span};
 use crate::eval::{self, Ctx};
 use crate::host::{Host, JobId};
@@ -82,11 +83,15 @@ struct Exec {
     last_value: Value,
 }
 
-/// Spindle's shell. Keeps variables between lines.
+/// Spindle's shell. Keeps variables and aliases between lines.
 pub struct Engine {
     vars: BTreeMap<String, Value>,
+    aliases: BTreeMap<String, String>,
     pending: Option<Box<Exec>>,
     last_exit: i32,
+    /// Active terminal visual theme & font metadata (for `fastfetch`).
+    pub theme_name: String,
+    pub font_name: String,
     /// ANSI colours in rendered output and errors.
     pub color: bool,
 }
@@ -97,14 +102,28 @@ impl Default for Engine {
 
 impl Engine {
     pub fn new() -> Engine {
-        Engine { vars: BTreeMap::new(), pending: None, last_exit: 0, color: true }
+        Engine {
+            vars: BTreeMap::new(),
+            aliases: ergonomics::default_aliases(),
+            pending: None,
+            last_exit: 0,
+            theme_name: String::from("noir"),
+            font_name: String::from("geist-mono"),
+            color: true,
+        }
     }
 
-    /// A variable set with `let`.
+    /// A variable set with `let` or `export`.
     pub fn var(&self, name: &str) -> Option<&Value> { self.vars.get(name) }
     pub fn set_var(&mut self, name: &str, value: Value) { self.vars.insert(name.to_string(), value); }
     pub fn var_names(&self) -> impl Iterator<Item = &str> { self.vars.keys().map(|k| k.as_str()) }
     pub(crate) fn vars(&self) -> &BTreeMap<String, Value> { &self.vars }
+    pub fn aliases(&self) -> &BTreeMap<String, String> { &self.aliases }
+    pub fn set_alias(&mut self, name: &str, target: &str) { self.aliases.insert(name.to_string(), target.to_string()); }
+    pub fn remove_alias(&mut self, name: &str) -> bool { self.aliases.remove(name).is_some() }
+    pub fn last_exit(&self) -> i32 { self.last_exit }
+    pub fn set_last_exit(&mut self, code: i32) { self.last_exit = code; }
+    pub fn expand_aliases(&self, line: &str) -> String { ergonomics::expand_aliases(line, &self.aliases) }
 
     /// Whether a line is waiting on [`Engine::resume`].
     pub fn is_waiting(&self) -> bool { self.pending.is_some() }
@@ -119,14 +138,16 @@ impl Engine {
     /// A line still waiting is dropped.
     pub fn run(&mut self, line: &str, host: &mut dyn Host, cols: usize) -> Step {
         self.pending = None;
-        let block = match parser::parse(line) {
+        let expanded = self.expand_aliases(line);
+        let block = match parser::parse(&expanded) {
             Ok(b) => b,
             Err(e) => {
-                let text = e.render(line, self.color);
-                return Step::Done(Output { text, value: Value::Nothing, error: Some(e), exit_code: self.last_exit });
+                self.last_exit = 1;
+                let text = e.render(&expanded, self.color);
+                return Step::Done(Output { text, value: Value::Nothing, error: Some(e), exit_code: 1 });
             }
         };
-        let exec = Exec { line: line.to_string(), block, stmt: 0, elem: 0, input: Value::Nothing, out: String::new(), cols, capture: false, last_value: Value::Nothing };
+        let exec = Exec { line: expanded, block, stmt: 0, elem: 0, input: Value::Nothing, out: String::new(), cols, capture: false, last_value: Value::Nothing };
         self.drive(Box::new(exec), host)
     }
 
@@ -186,9 +207,122 @@ impl Engine {
     }
 
     fn fail(&mut self, exec: Box<Exec>, err: ShellError) -> Step {
+        self.last_exit = 1;
         let mut text = exec.out;
         text.push_str(&err.render(&exec.line, self.color));
-        Step::Done(Output { text, value: Value::Nothing, error: Some(err), exit_code: self.last_exit })
+        Step::Done(Output { text, value: Value::Nothing, error: Some(err), exit_code: 1 })
+    }
+
+    fn run_session_cmd(&mut self, c: &crate::ast::Call, input: &Value, host: &mut dyn Host, cols: usize) -> Option<Result<Value, ShellError>> {
+        if c.forced_external || c.builtin.is_some() {
+            return None;
+        }
+        let name = c.name.as_str();
+        if !matches!(name, "alias" | "unalias" | "export" | "which") {
+            return None;
+        }
+        let mut raw_args: Vec<String> = Vec::new();
+        {
+            let mut ctx = Ctx {
+                vars: &self.vars,
+                host,
+                cols,
+                color: self.color,
+                theme: &self.theme_name,
+                font: &self.font_name,
+            };
+            for a in &c.args {
+                match a {
+                    Arg::Positional(e) => match eval::eval(&mut ctx, e, input, None) {
+                        Ok(Value::List(items)) => raw_args.extend(items.iter().map(|v| v.to_text())),
+                        Ok(v) => raw_args.push(v.to_text()),
+                        Err(e) => return Some(Err(e)),
+                    },
+                    Arg::Flag { name, .. } => raw_args.push(format!("--{}", name)),
+                }
+            }
+        }
+        match name {
+            "alias" => {
+                if raw_args.is_empty() {
+                    let mut text = String::new();
+                    for (k, v) in &self.aliases {
+                        if self.color {
+                            text.push_str(&format!("\x1b[1;38;2;52;211;153m{}\x1b[0m=\x1b[38;2;245;158;11m'{}'\x1b[0m\n", k, v));
+                        } else {
+                            text.push_str(&format!("{}='{}'\n", k, v));
+                        }
+                    }
+                    self.last_exit = 0;
+                    Some(Ok(Value::String(text)))
+                } else if let Some((k, v)) = split_kv_args(&raw_args) {
+                    if k.is_empty() {
+                        return Some(Err(ShellError::at("alias name can't be empty", c.span, "expected NAME=CMD")));
+                    }
+                    self.aliases.insert(k, v);
+                    self.last_exit = 0;
+                    Some(Ok(Value::Nothing))
+                } else {
+                    let key = &raw_args[0];
+                    if let Some(v) = self.aliases.get(key) {
+                        self.last_exit = 0;
+                        Some(Ok(Value::String(format!("{}='{}'", key, v))))
+                    } else {
+                        Some(Err(ShellError::at(format!("no alias named `{}`", key), c.span, "not defined")))
+                    }
+                }
+            }
+            "unalias" => {
+                if raw_args.is_empty() {
+                    return Some(Err(ShellError::at("`unalias` needs a name", c.head_span, "usage: unalias NAME")));
+                }
+                for key in &raw_args {
+                    self.aliases.remove(key.as_str());
+                }
+                self.last_exit = 0;
+                Some(Ok(Value::Nothing))
+            }
+            "export" => {
+                if raw_args.is_empty() {
+                    let mut text = String::new();
+                    for (k, v) in &self.vars {
+                        if self.color {
+                            text.push_str(&format!("\x1b[1;38;2;192;132;252m{}\x1b[0m={}\n", k, v.to_text()));
+                        } else {
+                            text.push_str(&format!("{}={}\n", k, v.to_text()));
+                        }
+                    }
+                    self.last_exit = 0;
+                    Some(Ok(Value::String(text)))
+                } else if let Some((k, v)) = split_kv_args(&raw_args) {
+                    if k.is_empty() {
+                        return Some(Err(ShellError::at("variable name can't be empty", c.span, "expected KEY=VALUE")));
+                    }
+                    self.vars.insert(k, Value::String(v));
+                    self.last_exit = 0;
+                    Some(Ok(Value::Nothing))
+                } else {
+                    Some(Err(ShellError::at("`export` expects KEY=VALUE", c.span, "for example `export EDITOR=bat`")))
+                }
+            }
+            "which" => {
+                if raw_args.is_empty() {
+                    return Some(Err(ShellError::at("`which` needs a command name", c.head_span, "usage: which CMD...")));
+                }
+                let mut text = String::new();
+                let mut missing = false;
+                for q in &raw_args {
+                    let line = ergonomics::resolve_which(q, host, &self.aliases, ergonomics::SHELL_EXTRA_CMDS);
+                    if line.ends_with("not found\n") {
+                        missing = true;
+                    }
+                    text.push_str(&line);
+                }
+                self.last_exit = if missing { 1 } else { 0 };
+                Some(Ok(Value::String(text)))
+            }
+            _ => None,
+        }
     }
 
     fn drive(&mut self, mut exec: Box<Exec>, host: &mut dyn Host) -> Step {
@@ -205,21 +339,28 @@ impl Engine {
                 let is_last = exec.elem + 1 == pipeline.elements.len();
                 let input = core::mem::replace(&mut exec.input, Value::Nothing);
                 let el = &pipeline.elements[exec.elem];
-                let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color };
                 let result = match el {
-                    Element::Expr(e) => eval::eval(&mut ctx, e, &input, None),
+                    Element::Expr(e) => {
+                        let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color, theme: &self.theme_name, font: &self.font_name };
+                        let r = eval::eval(&mut ctx, e, &input, None);
+                        if r.is_ok() { self.last_exit = 0; }
+                        r
+                    }
                     Element::Call(c) if c.builtin.is_some() && !c.forced_external && c.name == "fg" => {
-                        let id = match c.args.first() {
-                            Some(crate::ast::Arg::Positional(e)) => match eval::eval(&mut ctx, e, &input, None) {
-                                Ok(Value::Int(i)) if i >= 0 => Ok(i as JobId),
-                                Ok(Value::String(s)) if s.trim_start_matches('%').parse::<JobId>().is_ok() => Ok(s.trim_start_matches('%').parse().unwrap()),
-                                Ok(_) => Err(ShellError::at("expected a job number", e.span, "see `jobs`")),
-                                Err(e) => Err(e),
-                            },
-                            _ => match host.jobs().iter().rev().find(|j| j.state != crate::host::JobState::Done(0) && !matches!(j.state, crate::host::JobState::Done(_))) {
-                                Some(j) => Ok(j.id),
-                                None => Err(ShellError::at("there are no background jobs", c.head_span, "")),
-                            },
+                        let id = {
+                            let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color, theme: &self.theme_name, font: &self.font_name };
+                            match c.args.first() {
+                                Some(crate::ast::Arg::Positional(e)) => match eval::eval(&mut ctx, e, &input, None) {
+                                    Ok(Value::Int(i)) if i >= 0 => Ok(i as JobId),
+                                    Ok(Value::String(s)) if s.trim_start_matches('%').parse::<JobId>().is_ok() => Ok(s.trim_start_matches('%').parse().unwrap()),
+                                    Ok(_) => Err(ShellError::at("expected a job number", e.span, "see `jobs`")),
+                                    Err(e) => Err(e),
+                                },
+                                _ => match host.jobs().iter().rev().find(|j| j.state != crate::host::JobState::Done(0) && !matches!(j.state, crate::host::JobState::Done(_))) {
+                                    Some(j) => Ok(j.id),
+                                    None => Err(ShellError::at("there are no background jobs", c.head_span, "")),
+                                },
+                            }
                         };
                         let id = match id { Ok(id) => id, Err(e) => return self.fail(exec, e) };
                         if let Err(e) = host.job_foreground(id) {
@@ -232,46 +373,56 @@ impl Engine {
                         self.pending = Some(exec);
                         return Step::WaitJob { print, job: id, capture };
                     }
-                    Element::Call(c) if c.builtin.is_some() && !c.forced_external => builtins::run(&mut ctx, c, input),
+                    Element::Call(c) if c.builtin.is_some() && !c.forced_external => {
+                        let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color, theme: &self.theme_name, font: &self.font_name };
+                        let r = builtins::run(&mut ctx, c, input);
+                        if r.is_ok() { self.last_exit = 0; }
+                        r
+                    }
                     Element::Call(c) => {
-                        if !c.forced_external && !host.is_external(&c.name) {
-                            let err = unknown_command(&c.name, c.head_span, host);
-                            return self.fail(exec, err);
-                        }
-                        let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color };
-                        let mut args = Vec::new();
-                        for a in &c.args {
-                            match a {
-                                crate::ast::Arg::Positional(e) => match eval::eval(&mut ctx, e, &input, None) {
-                                    Ok(Value::List(items)) => args.extend(items.iter().map(|v| v.to_text())),
-                                    Ok(v) => args.push(v.to_text()),
-                                    Err(e) => return self.fail(exec, e),
-                                },
-                                crate::ast::Arg::Flag { name, .. } => args.push(format!("--{}", name)),
-                            }
-                        }
-                        let request = ExternalRequest {
-                            name: c.name.clone(),
-                            args,
-                            input: to_bytes(&input),
-                            cwd: host.cwd(),
-                            capture: !is_last || bind.is_some() || pipeline.redirect.is_some(),
-                            span: c.head_span,
-                        };
-                        if pipeline.background && is_last {
-                            match host.spawn_job(&request) {
-                                Ok(id) => {
-                                    job_started = Some((id, c.name.clone()));
-                                    Ok(Value::Int(id as i64))
-                                }
-                                Err(e) => Err(ShellError::at(format!("can't start `{}` in the background: {}", c.name, e), c.head_span, e)),
-                            }
+                        if let Some(res) = self.run_session_cmd(c, &input, host, exec.cols) {
+                            res
                         } else {
-                            exec.capture = request.capture;
-                            exec.elem += 1;
-                            let print = core::mem::take(&mut exec.out);
-                            self.pending = Some(exec);
-                            return Step::RunExternal { print, request };
+                            if !c.forced_external && !host.is_external(&c.name) {
+                                let err = unknown_command(&c.name, c.head_span, host);
+                                return self.fail(exec, err);
+                            }
+                            let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color, theme: &self.theme_name, font: &self.font_name };
+                            let mut args = Vec::new();
+                            for a in &c.args {
+                                match a {
+                                    crate::ast::Arg::Positional(e) => match eval::eval(&mut ctx, e, &input, None) {
+                                        Ok(Value::List(items)) => args.extend(items.iter().map(|v| v.to_text())),
+                                        Ok(v) => args.push(v.to_text()),
+                                        Err(e) => return self.fail(exec, e),
+                                    },
+                                    crate::ast::Arg::Flag { name, .. } => args.push(format!("--{}", name)),
+                                }
+                            }
+                            let request = ExternalRequest {
+                                name: c.name.clone(),
+                                args,
+                                input: to_bytes(&input),
+                                cwd: host.cwd(),
+                                capture: !is_last || bind.is_some() || pipeline.redirect.is_some(),
+                                span: c.head_span,
+                            };
+                            if pipeline.background && is_last {
+                                match host.spawn_job(&request) {
+                                    Ok(id) => {
+                                        self.last_exit = 0;
+                                        job_started = Some((id, c.name.clone()));
+                                        Ok(Value::Int(id as i64))
+                                    }
+                                    Err(e) => Err(ShellError::at(format!("can't start `{}` in the background: {}", c.name, e), c.head_span, e)),
+                                }
+                            } else {
+                                exec.capture = request.capture;
+                                exec.elem += 1;
+                                let print = core::mem::take(&mut exec.out);
+                                self.pending = Some(exec);
+                                return Step::RunExternal { print, request };
+                            }
                         }
                     }
                 };
@@ -292,7 +443,7 @@ impl Engine {
                 exec.out.push_str(&format!("[{}] {}\n", id, name));
                 exec.last_value = value;
             } else if let Some(r) = &pipeline.redirect {
-                let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color };
+                let mut ctx = Ctx { vars: &self.vars, host, cols: exec.cols, color: self.color, theme: &self.theme_name, font: &self.font_name };
                 let target = match eval::eval(&mut ctx, &r.path, &Value::Nothing, None) {
                     Ok(Value::String(s)) => s,
                     Ok(v @ (Value::Int(_) | Value::Float(_))) => v.to_text(),
@@ -319,6 +470,28 @@ impl Engine {
             exec.elem = 0;
         }
     }
+}
+
+fn split_kv_args(args: &[String]) -> Option<(String, String)> {
+    let first = args.first()?;
+    if let Some((k, v)) = first.split_once('=') {
+        let rest = args[1..].join(" ");
+        let val = if v.is_empty() {
+            rest
+        } else if rest.is_empty() {
+            String::from(v)
+        } else {
+            format!("{} {}", v, rest)
+        };
+        return Some((String::from(k.trim()), val));
+    }
+    if args.get(1).is_some_and(|s| s == "=") {
+        return Some((first.clone(), args[2..].join(" ")));
+    }
+    if args.len() >= 2 {
+        return Some((first.clone(), args[1..].join(" ")));
+    }
+    None
 }
 
 /// What a program reads when a value is piped into it: text as is, values as plain text.

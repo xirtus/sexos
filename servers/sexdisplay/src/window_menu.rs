@@ -76,19 +76,20 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     let s = scale as usize;
     let (x, y, pw, ph) = l.panel;
     use crate::frost;
-    use sex_theme::{candy_lavender as cl, Mode};
+    use sex_theme::{noir as nr, Mode};
+    let accent = crate::desk_theme::resolved_accent();
     let (menu_bg, menu_rim, menu_hover, menu_accent) = match desk().mode {
         Mode::Dark => (
-            cl::DARK_MENU_BG & 0x00FF_FFFF,
-            cl::DARK_MENU_RIM & 0x00FF_FFFF,
-            cl::DARK_MENU_HOVER & 0x00FF_FFFF,
-            cl::ORCHID_ACCENT & 0x00FF_FFFF,
+            nr::DARK_MENU_BG & 0x00FF_FFFF,
+            nr::DARK_MENU_RIM & 0x00FF_FFFF,
+            nr::DARK_MENU_HOVER & 0x00FF_FFFF,
+            accent,
         ),
         Mode::Light => (
-            cl::LIGHT_MENU_BG & 0x00FF_FFFF,
-            cl::LIGHT_MENU_RIM & 0x00FF_FFFF,
-            cl::LIGHT_MENU_HOVER & 0x00FF_FFFF,
-            cl::ORCHID_ACCENT & 0x00FF_FFFF,
+            nr::LIGHT_MENU_BG & 0x00FF_FFFF,
+            nr::LIGHT_MENU_RIM & 0x00FF_FFFF,
+            nr::LIGHT_MENU_HOVER & 0x00FF_FFFF,
+            accent,
         ),
         Mode::HighContrast => (desk().menu, desk().menu_rim, desk().menu_picked, desk().focus),
     };

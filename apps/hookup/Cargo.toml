@@ -11,4 +11,5 @@ path = "src/main.rs"
 [dependencies]
 sex-std = { path = "../../crates/sex-std" }
 sex-font = { path = "../../crates/sex-font" }
+sex-theme = { path = "../../crates/sex-theme" }
 sex-kdeconnect = { path = "../../crates/sex-kdeconnect", features = ["std"] }

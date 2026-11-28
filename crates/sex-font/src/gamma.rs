@@ -17,6 +17,9 @@ pub const DARK_CONTRAST: i32 = 160;
 /// Contrast for white ink: negative, because mixing in linear light already makes
 /// light strokes on a dark ground heavier, and this takes that back.
 pub const LIGHT_CONTRAST: i32 = -112;
+/// Apple CoreText-style subtle stem-preserving lift for light ink on macOS Noir
+/// dark backgrounds, in 1/256 (~7-9% positive coverage warmth instead of thinning).
+pub const NOIR_LIGHT_CONTRAST: i32 = 20;
 
 /// sRGB byte to linear light, 0..=4095.
 #[inline]
@@ -65,6 +68,26 @@ pub fn blend_with(fg: u32, bg: u32, coverage: u8, k: i32) -> u32 {
     (fg & 0xFF00_0000) | mix(16) | mix(8) | mix(0)
 }
 
+/// CoreText-style contrast boost for humanized UI text (`fg` over `bg`):
+/// dark ink on light backgrounds receives full `DARK_CONTRAST`; light ink on
+/// dark Noir backgrounds receives a gentle positive lift (`NOIR_LIGHT_CONTRAST..36`)
+/// instead of negative thinning so small stems keep warm, natural weight.
+pub fn contrast_for_humanized(fg: u32, bg: u32) -> i32 {
+    let lf = luminance(fg) as i32;
+    let lb = luminance(bg) as i32;
+    if lf <= lb {
+        DARK_CONTRAST - (DARK_CONTRAST - NOIR_LIGHT_CONTRAST) * lf / 4095
+    } else {
+        NOIR_LIGHT_CONTRAST + (4095 - lb) * 16 / 4095
+    }
+}
+
+/// `fg` ink over `bg` at `coverage` in linear light with Apple CoreText-style
+/// stem-preserving contrast (`contrast_for_humanized`).
+pub fn blend_humanized(fg: u32, bg: u32, coverage: u8) -> u32 {
+    blend_with(fg, bg, coverage, contrast_for_humanized(fg, bg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +114,16 @@ mod tests {
         let mut last = 0;
         for a in 0..=255u8 { let e = enhance(a, DARK_CONTRAST); assert!(e >= last); assert!(e >= a); last = e; }
         assert_eq!(enhance(255, DARK_CONTRAST), 255);
+    }
+
+    #[test]
+    fn noir_humanized_blend_preserves_light_stems_on_obsidian() {
+        let k = contrast_for_humanized(0xF1_F5F9, 0x0B_0D12);
+        assert!(k >= NOIR_LIGHT_CONTRAST && k > 0);
+        assert_eq!(blend_humanized(0xF1_F5F9, 0x0B_0D12, 0), 0x0B_0D12);
+        assert_eq!(blend_humanized(0xF1_F5F9, 0x0B_0D12, 255), 0xF1_F5F9);
+        let legacy = blend(0xF1_F5F9, 0x0B_0D12, 128) & 0xFF;
+        let noir = blend_humanized(0xF1_F5F9, 0x0B_0D12, 128) & 0xFF;
+        assert!(noir > legacy, "noir {noir} should preserve more midtone weight than legacy {legacy}");
     }
 }

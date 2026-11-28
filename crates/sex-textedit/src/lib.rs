@@ -6,6 +6,7 @@
 #![no_std]
 extern crate alloc;
 
+pub mod editor;
 pub mod encoding;
 pub mod find;
 pub mod markdown;
@@ -38,6 +39,7 @@ impl Doc {
         Doc { text, cursor: 0, anchor: None, undo: UndoTree::new(), saved_at: 0, want_col: None, edits: 0 }
     }
     pub fn text(&self) -> &[u8] { &self.text }
+    pub fn text_str(&self) -> &str { core::str::from_utf8(&self.text).unwrap_or("") }
     pub fn len(&self) -> usize { self.text.len() }
     pub fn is_empty(&self) -> bool { self.text.is_empty() }
     /// Changed since the last [`Doc::mark_saved`] (undoing back to it counts as unchanged).
@@ -79,6 +81,34 @@ impl Doc {
     pub fn selected(&self) -> &[u8] { self.selection().map_or(&[][..], |(a, b)| &self.text[a..b]) }
     pub fn select_all(&mut self) { self.anchor = Some(0); self.cursor = self.text.len(); }
     pub fn select(&mut self, from: usize, to: usize) { self.anchor = Some(from.min(self.text.len())); self.cursor = to.min(self.text.len()); }
+    pub fn word_bounds_at(&self, at: usize) -> (usize, usize) { word_bounds_in(&self.text, at) }
+    pub fn line_bounds_at(&self, at: usize) -> (usize, usize) {
+        let clamped = floor_char(&self.text, at.min(self.text.len()));
+        (self.line_start(clamped), self.line_end(clamped))
+    }
+    pub fn select_word_at(&mut self, at: usize) {
+        let (a, b) = self.word_bounds_at(at);
+        self.select(a, b);
+    }
+    pub fn select_line_at(&mut self, at: usize) {
+        let (a, b) = self.line_bounds_at(at);
+        self.select(a, b);
+    }
+    pub fn click_at(&mut self, at: usize, extend: bool) {
+        let pos = floor_char(&self.text, at.min(self.text.len()));
+        if extend {
+            self.anchor.get_or_insert(self.cursor);
+        } else {
+            self.anchor = None;
+        }
+        self.cursor = pos;
+        self.want_col = None;
+    }
+    pub fn drag_to(&mut self, at: usize) {
+        self.anchor.get_or_insert(self.cursor);
+        self.cursor = floor_char(&self.text, at.min(self.text.len()));
+        self.want_col = None;
+    }
 
     // ---- Moving ----
 
@@ -103,6 +133,8 @@ impl Doc {
                 if self.cursor == indent { start } else { indent }
             }
             Motion::End => self.line_end(self.cursor),
+            Motion::LineStart => self.line_start(self.cursor),
+            Motion::LineEnd => self.line_end(self.cursor),
             Motion::Up | Motion::PageUp(_) => {
                 let n = if let Motion::PageUp(n) = motion { n.max(1) } else { 1 };
                 let line = self.line_of(self.cursor);
@@ -161,6 +193,28 @@ impl Doc {
         self.replace(c, n, b"");
         self.cursor = c;
     }
+    pub fn delete_word_back(&mut self) {
+        if let Some((a, b)) = self.selection() { self.replace(a, b, b""); return; }
+        let w = word_left(&self.text, self.cursor);
+        if w < self.cursor { self.replace(w, self.cursor, b""); self.undo.seal(); }
+    }
+    pub fn delete_word_forward(&mut self) {
+        if let Some((a, b)) = self.selection() { self.replace(a, b, b""); return; }
+        let c = self.cursor;
+        let w = word_right(&self.text, c);
+        if w > c { self.replace(c, w, b""); self.cursor = c; self.undo.seal(); }
+    }
+    pub fn delete_to_line_start(&mut self) {
+        if let Some((a, b)) = self.selection() { self.replace(a, b, b""); return; }
+        let start = self.line_start(self.cursor);
+        if start < self.cursor { self.replace(start, self.cursor, b""); self.undo.seal(); }
+    }
+    pub fn delete_to_line_end(&mut self) {
+        if let Some((a, b)) = self.selection() { self.replace(a, b, b""); return; }
+        let c = self.cursor;
+        let end = self.line_end(c);
+        if end > c { self.replace(c, end, b""); self.cursor = c; self.undo.seal(); }
+    }
     /// Cut: the selection removed, its bytes returned.
     pub fn cut(&mut self) -> Vec<u8> {
         let Some((a, b)) = self.selection() else { return Vec::new() };
@@ -195,7 +249,7 @@ impl Doc {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Motion { Left, Right, WordLeft, WordRight, Up, Down, Home, End, PageUp(usize), PageDown(usize), Start, End_, To(usize) }
+pub enum Motion { Left, Right, WordLeft, WordRight, Up, Down, Home, End, LineStart, LineEnd, PageUp(usize), PageDown(usize), Start, End_, To(usize) }
 
 /// FNV-1a, for checksums and save markers.
 pub fn fnv(bytes: &[u8]) -> u64 { bytes.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3)) }
@@ -223,6 +277,34 @@ fn word_right(s: &[u8], mut at: usize) -> usize {
     while at < s.len() && !is_word(s[at]) { at += 1; }
     while at < s.len() && is_word(s[at]) { at += 1; }
     at
+}
+fn is_apostrophe_between_words(s: &[u8], idx: usize) -> bool {
+    idx > 0 && idx + 1 < s.len() && s[idx] == b'\'' && is_word(s[idx - 1]) && is_word(s[idx + 1])
+}
+fn word_bounds_in(s: &[u8], raw_at: usize) -> (usize, usize) {
+    if s.is_empty() { return (0, 0); }
+    let mut probe = floor_char(s, raw_at.min(s.len()));
+    if probe == s.len() { probe = prev_char(s, s.len()); }
+    if is_word(s[probe]) || is_apostrophe_between_words(s, probe) {
+        let mut start = probe;
+        while start > 0 {
+            let p = prev_char(s, start);
+            if is_word(s[p]) || is_apostrophe_between_words(s, p) { start = p; } else { break; }
+        }
+        let mut end = next_char(s, probe);
+        while end < s.len() {
+            if is_word(s[end]) || is_apostrophe_between_words(s, end) { end = next_char(s, end); } else { break; }
+        }
+        (start, end)
+    } else if s[probe] == b' ' || s[probe] == b'\t' {
+        let mut start = probe;
+        while start > 0 && matches!(s[start - 1], b' ' | b'\t') { start -= 1; }
+        let mut end = probe + 1;
+        while end < s.len() && matches!(s[end], b' ' | b'\t') { end += 1; }
+        (start, end)
+    } else {
+        (probe, next_char(s, probe))
+    }
 }
 
 #[cfg(test)]

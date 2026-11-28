@@ -33,7 +33,7 @@ fn look(slot: usize, s: &Status, side: usize) -> Look {
     let side = side.min(CAP);
     match slot {
         0 => {
-            let on = matches!(s.wifi, 0 | 10);
+            let on = matches!(s.wifi, 0 | 8 | 10);
             Look { icon: if on { "wifi" } else { "wifi-off" }, fill: 255, color: if on { FG } else { DIM }, side }
         }
         1 => {

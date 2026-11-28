@@ -30,7 +30,8 @@ unsafe fn screen() -> Option<Screen> {
     let s = m.scale().max(1) as usize;
     let chips = &bar.layout[ModuleSlot::Chip0 as usize];
     let left = bar.layout[1..1 + silkbar_model::WORKSPACE_COUNT].iter().filter(|b| b.w > 0).map(|b| b.x + b.w).max().unwrap_or(0) + 8 * s;
-    Some(Screen { width: w, height: h, bar: m.bar() as usize, scale: s, right: chips.x, left, y: chips.y, size: target, gap: 4 * s })
+    let right = crate::bg_apps_glue::tray_right_edge(chips.x, s);
+    Some(Screen { width: w, height: h, bar: m.bar() as usize, scale: s, right, left, y: chips.y, size: target, gap: 4 * s })
 }
 
 fn alive(pd: u32, task: u32) -> bool { crate::running_task(pd) == Some(task) }

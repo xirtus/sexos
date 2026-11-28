@@ -31,7 +31,7 @@ fn spindle_activation_info(_:bool)->Result<Activation,u64>{unsafe{Ok(Activation{
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 #[derive(Clone,Copy)]struct Tab{surface_id:u64}
 #[derive(Clone,Copy)]struct Frame{frame_id:u32,scene_id:u8,flags:u32,tabs:[Option<Tab>;1]}
-const FRAME_FLAG_MINIMIZED:u32=1;
+const FRAME_FLAG_MINIMIZED:u32=1;const FRAME_HIDDEN_FLAGS:u32=FRAME_FLAG_MINIMIZED;
 const ATLAS_MAX_SCENES:usize=5;
 #[derive(Clone,Copy,PartialEq,Eq)]enum LifecycleState{Visible,Hidden,Minimized,Closing,Tombstoned,Destroyed}
 static mut FRAMES:[Option<Frame>;6]=[None;6];

@@ -5,5 +5,9 @@ edition = "2021"
 license = "GPL-3.0-only"
 description = "SexOS theme tokens: the one source of colours and sizes for Weft and every other program"
 
+[features]
+font = ["dep:sex-font"]
+
 [dependencies]
 libm = "0.2"
+sex-font = { path = "../sex-font", optional = true }

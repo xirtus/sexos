@@ -40,7 +40,7 @@ const WEIGHTS: [u8; 6] = [100, 100, 60, 90, 60, 50];
 const PROGRAM_WEIGHT: u8 = 80;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Payload { None, Command(u8), Window(u64), Clip(u8), Emoji(u8), Setting(u8), Answer, Program { slot: u8, index: u8, key: u64 } }
+enum Payload { None, Command(u8), Window(u64), Clip(u8), Emoji(u8), Setting(u8), CatalogApp(u8), QuickControl(sex_pdx::meta_hub::QuickCommand), Answer, Program { slot: u8, index: u8, key: u64 } }
 
 #[derive(Clone, Copy)]
 struct Hit { title: [u8; TEXT], tlen: u8, provider: u8, kind: u8, action: u8, score: u32, payload: Payload, status: [u8; STATUS], slen: u8 }
@@ -172,10 +172,41 @@ unsafe fn merge() {
     let alen = abacus::evaluate(query).map_or(0, |v| v.format(&mut answer));
     let answer_str = core::str::from_utf8(&answer[..alen]).unwrap_or("");
     if alen != 0 { push!(rank::Candidate { hint: rank::HINT_CAP_BUILTIN, ..cand(ABACUS, Kind::Calculator, answer_str, "") }, Payload::Answer); }
+    let mut quick_title = [0u8; TEXT];
+    let quick_cmd = sex_pdx::meta_hub::parse_quick_command(query);
+    if let Some(qcmd) = quick_cmd {
+        let qlen = sex_pdx::meta_hub::format_quick_command(qcmd, &mut quick_title);
+        let qtitle = core::str::from_utf8(&quick_title[..qlen]).unwrap_or("Quick Control");
+        push!(
+            rank::Candidate {
+                hint: rank::HINT_CAP_BUILTIN,
+                ..cand(APPS, Kind::Setting, qtitle, sex_pdx::meta_hub::quick_command_keywords(qcmd))
+            },
+            Payload::QuickControl(qcmd)
+        );
+    }
     // Apps and actions: the stable command names, so frecency survives a
     // row's live title changing (Open/Focus/Restore).
     for (i, item) in COMMAND_LIST.iter().enumerate() {
         push!(cand(APPS, Kind::App, item.name, crate::command_words(item.command)), Payload::Command(i as u8));
+    }
+    // Canonical human alias -> Spotlight catalog app when an alias is typed.
+    let trimmed = query.trim();
+    let resolved = sex_pdx::spotlight::resolve_program_alias(trimmed);
+    if !trimmed.is_empty() && !resolved.eq_ignore_ascii_case(trimmed) {
+        if let Some(cat_idx) = sex_pdx::spotlight::CATALOG
+            .iter()
+            .position(|app| app.target.program_name() == Some(resolved))
+        {
+            let app = &sex_pdx::spotlight::CATALOG[cat_idx];
+            push!(
+                rank::Candidate {
+                    hint: rank::KEYWORD_EXACT as u16,
+                    ..cand(APPS, Kind::App, app.name, app.keywords)
+                },
+                Payload::CatalogApp(cat_idx as u8)
+            );
+        }
     }
     // Windows of this workspace, most recent first.
     let mut ordered = [0u64; sex_pdx::window_switcher::MAX_ENTRIES];
@@ -219,7 +250,7 @@ unsafe fn merge() {
             action: match payloads[r.index] {
                 Payload::Window(_) => Action::Focus as u8,
                 Payload::Answer | Payload::Emoji(_) | Payload::Clip(_) => Action::Copy as u8,
-                Payload::Command(_) => Action::Run as u8,
+                Payload::Command(_) | Payload::QuickControl(_) => Action::Run as u8,
                 Payload::Program { slot, index, .. } => st.programs[slot as usize].as_ref()
                     .and_then(|p| p.answer.records().get(index as usize)).map_or(Action::Open as u8, |r| r.action),
                 _ => Action::Open as u8,
@@ -269,6 +300,8 @@ pub unsafe fn rows<'a, const N: usize>(apps: &[launcher::Row<'a>], out: &mut [la
                 Payload::Answer => "ABACUS / ENTER SHOWS",
                 Payload::Window(_) => "WINDOW / ENTER FOCUSES",
                 Payload::Setting(_) => "SETTINGS PAGE",
+                Payload::CatalogApp(_) => "APP / ENTER OPENS",
+                Payload::QuickControl(_) => "CONTROL / ENTER APPLIES",
                 Payload::Clip(_) => "CLIPBOARD / ENTER RESTORES",
                 Payload::Emoji(_) => "EMOJI",
                 Payload::Program { .. } if hit.slen != 0 => hit.status(),
@@ -309,6 +342,18 @@ pub unsafe fn cycle() -> bool {
 
 pub enum Enter { NotShowing, Command(u8), Done }
 
+/// Starts a SexOS program from Voyeur with optional network grant.
+unsafe fn launch_program(name: &str, network: bool) -> bool {
+    let Some(packed) = sex_pdx::program_store::pack_name(name.as_bytes()) else {
+        return false;
+    };
+    let ok = crate::program_start_own(packed);
+    if ok && network {
+        crate::PROGRAM_NETWORK = true;
+    }
+    ok
+}
+
 /// Enter on the selected row. A command row goes back to the launcher's own
 /// checked activation path; the rest are carried out here.
 pub unsafe fn enter() -> Enter {
@@ -324,8 +369,39 @@ pub unsafe fn enter() -> Enter {
         Payload::Command(i) => return Enter::Command(i),
         Payload::Setting(i) => match setting_command(title) {
             Some(cmd) => return Enter::Command(cmd),
-            None => { put(b"No settings program yet for "); put(tables::SETTINGS[i as usize].name.as_bytes()); (true, "no_settings_program") }
+            None => {
+                let target = sex_pdx::spotlight::resolve_program_alias("settings");
+                let ok = launch_program(target, true);
+                if !ok {
+                    put(b"Could not start tatami for ");
+                    put(tables::SETTINGS[i as usize].name.as_bytes());
+                }
+                (ok, "tatami")
+            }
         },
+        Payload::CatalogApp(idx) => {
+            use sex_pdx::spotlight::{CATALOG, LaunchTarget, resolve_program_alias};
+            let target = CATALOG[idx as usize].target;
+            let ok = match target {
+                LaunchTarget::Browser => launch_program("kaleidoscope", true) || crate::open_browser_in_active_scene(),
+                LaunchTarget::Spindle => crate::open_spindle_in_active_scene(),
+                LaunchTarget::Quil => crate::open_quil_in_active_scene(),
+                LaunchTarget::PdGraph => crate::open_mesh_in_active_scene(),
+                LaunchTarget::Files => launch_program("loom", false) || crate::open_linen_in_active_scene(),
+                LaunchTarget::Settings => launch_program("tatami", true),
+                LaunchTarget::Audio => launch_program("qupid", true),
+                LaunchTarget::Program(name) => {
+                    let resolved = resolve_program_alias(name);
+                    launch_program(resolved, true) || (resolved == "moan-studio" && launch_program("moan", true))
+                }
+                LaunchTarget::QueryProgram(_) => false,
+            };
+            (ok, "catalog_app")
+        }
+        Payload::QuickControl(qcmd) => {
+            let ok = crate::meta_hub_glue::execute_quick_command(qcmd);
+            (ok, "quick_control")
+        }
         Payload::Window(sid) => (crate::try_set_focus(sid), "focus"),
         Payload::Clip(u8::MAX) => { put(b"Already on the clipboard"); (true, "current") }
         Payload::Clip(i) => {

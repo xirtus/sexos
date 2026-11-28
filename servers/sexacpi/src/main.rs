@@ -645,6 +645,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut next_read = 0u64;
     let mut last = w::Sensors::default();
+    let mut mic_mute_events = 0u8;
     loop {
         while let Some(msg) = sex_pdx::pdx_try_listen_raw(0) {
             if msg.type_id == w::OP_PREPARE && msg.caller_pd == 0 {
@@ -662,17 +663,32 @@ pub extern "C" fn _start() -> ! {
         for event in laptop::notifications(aml, &devices, &light, hotkeys.as_ref()) {
             match event {
                 laptop::Event::Brightness(up) => { light.step(aml, up, "key"); refresh = true; }
+                laptop::Event::GModeToggle => {
+                    if let Some(a) = awcc.as_mut() {
+                        let next = match a.last.profile.and_then(sex_laptop::awcc::kind) {
+                            Some(sex_laptop::awcc::Kind::GMode) => sex_laptop::awcc::Kind::Balanced,
+                            _ => sex_laptop::awcc::Kind::GMode,
+                        };
+                        a.set_kind(aml, next);
+                        refresh = true;
+                    }
+                }
+                laptop::Event::MicMute => {
+                    mic_mute_events = mic_mute_events.wrapping_add(1);
+                    refresh = true;
+                }
                 laptop::Event::Refresh => refresh = true,
                 laptop::Event::None => {}
             }
         }
         let now = sex_pdx::get_ticks();
         if refresh || now >= next_read {
-            let s = bounded(|| {
+            let mut s = bounded(|| {
                 light.refresh(aml);
                 if let Some(a) = awcc.as_mut() { a.refresh(aml); }
                 laptop::read(aml, &devices, &light, awcc.as_ref())
             });
+            s.mic_mute_events = mic_mute_events;
             // Notifications raised while reading (firmware often notifies from _BST) wait
             // for the next pass.
             if s != last {

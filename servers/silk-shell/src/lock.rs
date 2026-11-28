@@ -23,6 +23,8 @@ const BACKSPACE: u8 = 0x0E;
 const ESC: u8 = 0x01;
 const SHIFT_L: u8 = 0x2A;
 const SHIFT_R: u8 = 0x36;
+const CTRL_L: u8 = 0x1D;
+const CTRL_R: u8 = 0x61;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Asked { Nothing, State, Check }
@@ -34,6 +36,7 @@ struct Session {
     /// When the request in `asked` went out.
     asked_at: u64,
     shift: bool,
+    ctrl: bool,
     mode: u8,
     last_input: u64,
     /// (mode, lock word) Display last took; None until it took one.
@@ -42,7 +45,7 @@ struct Session {
 
 static mut SESSION: Session = Session {
     lock: Lock { locked: false, typed: 0, say: s::SAY_PROMPT },
-    typed: [0; p::MAX], asked: Asked::Nothing, asked_at: 0, shift: false, mode: s::NORMAL, last_input: 0, shown: None,
+    typed: [0; p::MAX], asked: Asked::Nothing, asked_at: 0, shift: false, ctrl: false, mode: s::NORMAL, last_input: 0, shown: None,
 };
 fn session() -> &'static mut Session { unsafe { &mut *core::ptr::addr_of_mut!(SESSION) } }
 
@@ -78,6 +81,8 @@ pub fn lock() -> bool {
     let se = session();
     if !se.lock.locked {
         se.lock = Lock { locked: true, typed: 0, say: s::SAY_PROMPT };
+        se.shift = false;
+        se.ctrl = false;
         wipe(se);
         // Ask whether a password is set, to say so on the lock surface.
         if se.asked == Asked::Nothing && files(sex_config::wire::request(p::STATE, 0), 0) { se.asked = Asked::State; se.asked_at = sex_pdx::get_ticks(); }
@@ -89,6 +94,8 @@ pub fn lock() -> bool {
 
 fn unlock(se: &mut Session) {
     se.lock = Lock { locked: false, typed: 0, say: s::SAY_PROMPT };
+    se.shift = false;
+    se.ctrl = false;
     wipe(se);
     se.last_input = sex_pdx::get_ticks();
     sex_pdx::serial_record!("[shell.lock] locked=0");
@@ -127,6 +134,38 @@ fn typed(code: u8, shift: bool) -> Option<u8> {
 }
 
 fn key(se: &mut Session, code: u8, value: u64) {
+    let code = if unsafe { crate::CAPS_AS_CTRL } && code == 0x3A { CTRL_L } else { code };
+    if matches!(code, CTRL_L | CTRL_R) {
+        se.ctrl = value != 0;
+        if value == 0 {
+            unsafe {
+                let _ = (*core::ptr::addr_of_mut!(crate::WM_CHORDS)).event(code, 0);
+                let _ = (*core::ptr::addr_of_mut!(crate::DESKTOP_KEYS)).event(code, 0);
+            }
+        }
+        return;
+    }
+    match code {
+        crate::desktop_keys::KEY_VOLUME_UP if matches!(value, 1 | 2) => {
+            unsafe {
+                if se.ctrl { crate::mic_volume_key(crate::desktop_keys::VOLUME_STEP); }
+                else { crate::volume_key(crate::desktop_keys::VOLUME_STEP); }
+            }
+            return;
+        }
+        crate::desktop_keys::KEY_VOLUME_DOWN if matches!(value, 1 | 2) => {
+            unsafe {
+                if se.ctrl { crate::mic_volume_key(-crate::desktop_keys::VOLUME_STEP); }
+                else { crate::volume_key(-crate::desktop_keys::VOLUME_STEP); }
+            }
+            return;
+        }
+        crate::desktop_keys::KEY_MUTE if value == 1 => { unsafe { crate::volume_key(0); } return; }
+        crate::desktop_keys::KEY_MIC_MUTE if value == 1 => { unsafe { crate::mic_volume_key(0); } return; }
+        crate::desktop_keys::KEY_VOLUME_UP | crate::desktop_keys::KEY_VOLUME_DOWN
+            | crate::desktop_keys::KEY_MUTE | crate::desktop_keys::KEY_MIC_MUTE => return,
+        _ => {}
+    }
     if matches!(code, SHIFT_L | SHIFT_R) { se.shift = value != 0; return; }
     // Desktop chords must see releases, or Super would stay held after unlocking.
     if value == 0 { unsafe { let _ = (*core::ptr::addr_of_mut!(crate::WM_CHORDS)).event(code, 0); } return; }

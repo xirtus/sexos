@@ -2,9 +2,18 @@
 //! SexOS keys and pointer events as egui input events.
 //!
 //! Shell sends a key's PS/2 set 1 code (or Input's normalized code for the extended
-//! keys), Shift and Ctrl as they were held, and what the person's keyboard layout typed.
-//! It sends presses only, so each press becomes a press and a release for egui.
+//! keys), Shift, Ctrl, Alt, and Super as they were held, and what the person's keyboard
+//! layout typed. It sends presses only (except modifiers tracked across press/release),
+//! so each non-modifier press becomes a press and a release for egui.
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Vec2};
+
+pub const CODE_SUPER_LEFT: u8 = 0x5B;
+pub const CODE_SUPER_RIGHT: u8 = 0x5C;
+
+/// Pointer modifier bits matching `sex_pdx::app_pointer`.
+pub const PTR_SHIFT: u8 = 1;
+pub const PTR_CONTROL: u8 = 2;
+pub const PTR_ALT: u8 = 4;
 
 /// The egui key for a SexOS key code, if egui names one.
 pub fn key(code: u8) -> Option<Key> {
@@ -14,7 +23,9 @@ pub fn key(code: u8) -> Option<Key> {
         (0x24, J), (0x25, K), (0x26, L), (0x32, M), (0x31, N), (0x18, O), (0x19, P), (0x10, Q), (0x13, R),
         (0x1F, S), (0x14, T), (0x16, U), (0x2F, V), (0x11, W), (0x2D, X), (0x15, Y), (0x2C, Z),
     ];
-    if let Some((_, k)) = LETTERS.iter().find(|(c, _)| *c == code) { return Some(*k); }
+    if let Some((_, k)) = LETTERS.iter().find(|(c, _)| *c == code) {
+        return Some(*k);
+    }
     Some(match code {
         0x02 => Num1, 0x03 => Num2, 0x04 => Num3, 0x05 => Num4, 0x06 => Num5,
         0x07 => Num6, 0x08 => Num7, 0x09 => Num8, 0x0A => Num9, 0x0B => Num0,
@@ -31,16 +42,53 @@ pub fn key(code: u8) -> Option<Key> {
 }
 
 pub fn modifiers(shift: bool, control: bool) -> Modifiers {
-    Modifiers { alt: false, ctrl: control, shift, mac_cmd: false, command: control }
+    modifiers_with(shift, control, false, false)
 }
 
-/// The events one key press becomes: the key pressed and released, the text it typed,
-/// and for Ctrl+C, Ctrl+X and Ctrl+V the clipboard events egui's text fields read.
+/// Builds egui `Modifiers` accepting BOTH `Super` (Cmd) and `Ctrl` as `command`.
+pub fn modifiers_with(shift: bool, control: bool, alt: bool, super_cmd: bool) -> Modifiers {
+    Modifiers {
+        alt,
+        ctrl: control,
+        shift,
+        mac_cmd: super_cmd,
+        command: control || super_cmd,
+    }
+}
+
+/// Builds egui `Modifiers` from `app_pointer::Pointer.mods` (`SHIFT|CONTROL|ALT`) + held Super.
+pub fn pointer_modifiers(mods_bits: u8, super_cmd: bool) -> Modifiers {
+    modifiers_with(
+        mods_bits & PTR_SHIFT != 0,
+        mods_bits & PTR_CONTROL != 0,
+        mods_bits & PTR_ALT != 0,
+        super_cmd,
+    )
+}
+
+/// Convenience wrapper matching the historical signature (`alt = false, super_cmd = false`).
 pub fn key_events(code: u8, shift: bool, control: bool, typed: Option<char>, clipboard: &str, out: &mut Vec<Event>) {
-    let m = modifiers(shift, control);
-    if out.last().map_or(true, |e| !matches!(e, Event::ModifiersChanged(x) if *x == m)) { out.push(Event::ModifiersChanged(m)); }
+    key_events_with(code, shift, control, false, false, typed, clipboard, out);
+}
+
+/// Converts a SexOS key press with full `Shift`, `Ctrl`, `Alt`, and `Super` modifiers into
+/// egui events, emitting clipboard events for BOTH `Ctrl` and `Super`.
+pub fn key_events_with(
+    code: u8,
+    shift: bool,
+    control: bool,
+    alt: bool,
+    super_cmd: bool,
+    typed: Option<char>,
+    clipboard: &str,
+    out: &mut Vec<Event>,
+) {
+    let m = modifiers_with(shift, control, alt, super_cmd);
+    if out.last().map_or(true, |e| !matches!(e, Event::ModifiersChanged(x) if *x == m)) {
+        out.push(Event::ModifiersChanged(m));
+    }
     let k = key(code);
-    if control {
+    if (control || super_cmd) && !alt {
         match k {
             Some(Key::C) => out.push(Event::Copy),
             Some(Key::X) => out.push(Event::Cut),
@@ -52,8 +100,10 @@ pub fn key_events(code: u8, shift: bool, control: bool, typed: Option<char>, cli
         out.push(Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m });
         out.push(Event::Key { key: k, physical_key: Some(k), pressed: false, repeat: false, modifiers: m });
     }
-    if !control {
-        if let Some(c) = typed.filter(|c| !c.is_control()) { out.push(Event::Text(c.into())); }
+    if !control && !super_cmd && !alt {
+        if let Some(c) = typed.filter(|c| !c.is_control()) {
+            out.push(Event::Text(c.into()));
+        }
     }
 }
 
@@ -63,15 +113,22 @@ pub enum PointerKind { Move, Down(u8), Up(u8), Wheel(i8), Leave }
 
 pub fn pointer_events(x: i16, y: i16, kind: PointerKind, ppp: f32, m: Modifiers, out: &mut Vec<Event>) {
     let pos = Pos2::new(x as f32 / ppp, y as f32 / ppp);
-    let button = |b: u8| match b { 1 => PointerButton::Middle, 2 => PointerButton::Secondary, _ => PointerButton::Primary };
+    let button = |b: u8| match b {
+        1 => PointerButton::Middle,
+        2 => PointerButton::Secondary,
+        _ => PointerButton::Primary,
+    };
     match kind {
         PointerKind::Move => out.push(Event::PointerMoved(pos)),
         PointerKind::Down(b) => {
+            out.push(Event::ModifiersChanged(m));
             out.push(Event::PointerMoved(pos));
             out.push(Event::PointerButton { pos, button: button(b), pressed: true, modifiers: m });
         }
-        PointerKind::Up(b) => out.push(Event::PointerButton { pos, button: button(b), pressed: false, modifiers: m }),
-        // Positive steps move toward the document's start: the content moves down.
+        PointerKind::Up(b) => {
+            out.push(Event::ModifiersChanged(m));
+            out.push(Event::PointerButton { pos, button: button(b), pressed: false, modifiers: m });
+        }
         PointerKind::Wheel(steps) => out.push(Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
             delta: Vec2::new(0.0, steps as f32),
@@ -86,6 +143,7 @@ pub fn pointer_events(x: i16, y: i16, kind: PointerKind, ppp: f32, m: Modifiers,
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn letters_digits_and_extended_keys_map() {
         assert_eq!(key(0x1E), Some(Key::A));
@@ -96,6 +154,7 @@ mod tests {
         assert_eq!(key(0x57), Some(Key::F11));
         assert_eq!(key(0x7E), None);
     }
+
     #[test]
     fn a_press_is_press_release_and_text() {
         let mut out = Vec::new();
@@ -104,18 +163,28 @@ mod tests {
         assert!(matches!(out[2], Event::Key { key: Key::A, pressed: false, .. }));
         assert_eq!(out[3], Event::Text("A".into()));
     }
+
     #[test]
-    fn ctrl_v_pastes_the_clipboard_and_types_nothing() {
-        let mut out = Vec::new();
-        key_events(0x2F, false, true, Some('v'), "hello", &mut out);
-        assert!(out.contains(&Event::Paste("hello".into())));
-        assert!(!out.iter().any(|e| matches!(e, Event::Text(_))));
+    fn ctrl_and_super_both_trigger_clipboard_and_suppress_text() {
+        for (ctrl, sup) in [(true, false), (false, true)] {
+            let mut out = Vec::new();
+            key_events_with(0x2F, false, ctrl, false, sup, Some('v'), "hello", &mut out);
+            assert!(out.contains(&Event::Paste("hello".into())));
+            assert!(!out.iter().any(|e| matches!(e, Event::Text(_))));
+
+            let mut out_c = Vec::new();
+            key_events_with(0x2E, false, ctrl, false, sup, Some('c'), "", &mut out_c);
+            assert!(out_c.contains(&Event::Copy));
+        }
     }
+
     #[test]
-    fn pointer_positions_are_points() {
+    fn pointer_positions_are_points_and_carry_modifiers() {
         let mut out = Vec::new();
-        pointer_events(200, 100, PointerKind::Down(0), 2.0, Modifiers::NONE, &mut out);
-        assert_eq!(out[0], Event::PointerMoved(Pos2::new(100.0, 50.0)));
-        assert!(matches!(out[1], Event::PointerButton { button: PointerButton::Primary, pressed: true, .. }));
+        let ctrl_mod = pointer_modifiers(PTR_CONTROL, false);
+        pointer_events(200, 100, PointerKind::Down(0), 2.0, ctrl_mod, &mut out);
+        assert_eq!(out[0], Event::ModifiersChanged(ctrl_mod));
+        assert_eq!(out[1], Event::PointerMoved(Pos2::new(100.0, 50.0)));
+        assert!(matches!(out[2], Event::PointerButton { button: PointerButton::Primary, pressed: true, modifiers, .. } if modifiers.ctrl));
     }
 }
