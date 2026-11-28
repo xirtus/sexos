@@ -103,6 +103,7 @@ mod display_delivery;
 mod sextime_command;
 mod volume_command;
 mod wifi_command;
+mod tui_commands;
 mod hw_command;
 mod tether_command;
 mod autoconf;
@@ -2384,6 +2385,18 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             true
         }
         // ── Linen search from Spindle audit ──────────────────────────────────
+        b"fastfetch" | b"neofetch" => {
+            tui_commands::run_fetch(|line| sb.push(line));
+            true
+        }
+        b"bars" => {
+            tui_commands::run_bars(|line| sb.push(line));
+            true
+        }
+        b"btop" => {
+            tui_commands::run_btop(|line| sb.push(line));
+            true
+        }
         b"linen-search" => {
             // OP_LINEN_SEARCH_OBJECTS = 0x47 — fire-and-forget search bridge
             if args.is_empty() {

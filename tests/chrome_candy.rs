@@ -229,21 +229,37 @@ fn candy_lavender_silkbar_gradient_and_pills() {
         assert_ne!(upper, lower, "mode={mode} should render a vertical gradient");
         assert_ne!(top_spec, upper, "mode={mode} should have a 1px specular top highlight");
         assert_ne!(bottom_line, lower, "mode={mode} should have an orchid bottom hairline");
-        // Lavender tint: blue channel strictly exceeds green channel (not flat grey).
+        // Light stays pastel-lavender tinted while Dark adopts cool macOS Noir obsidian (`#0B0D12..#13161F`).
+        let r = (upper >> 16) & 0xFF;
         let g = (upper >> 8) & 0xFF;
         let b = upper & 0xFF;
-        assert!(b > g + 15, "mode={mode} bar must be lavender-tinted, got 0x{upper:06X}");
+        if mode == MODE_LIGHT {
+            assert!(b > g + 15, "light bar must keep lavender glaze, got 0x{upper:06X}");
+        } else {
+            assert!(luma(upper) < 35.0 && b >= g && g >= r, "dark bar must be cool obsidian, got 0x{upper:06X}");
+        }
 
-        // Anti-aliased candy pill: corner pixel outside radius stays bg, interior changes.
+        // Anti-aliased Noir pill: corner pixel outside radius stays bg, interior changes.
         let bg = upper;
         let corner = candy_pill_pixel(10, 4, 10, 2, 80, 24, 1, mode, false, bg);
         let center = candy_pill_pixel(50, 14, 10, 2, 80, 24, 1, mode, false, bg);
         let glow_center = candy_pill_pixel(50, 14, 10, 2, 80, 24, 1, mode, true, bg);
         assert_eq!(corner, bg, "mode={mode} pill corner must be smoothly rounded");
-        assert_ne!(center, bg, "mode={mode} pill interior must render frosted lavender");
-        assert_ne!(glow_center, center, "mode={mode} accent_glow pill should add soft orchid tint");
+        assert_ne!(center, bg, "mode={mode} pill interior must render frosted glass");
+        assert_ne!(glow_center, center, "mode={mode} accent_glow pill should add soft accent tint");
     }
     // High contrast pill draws crisp white rim and leaves interior black.
     assert_eq!(candy_pill_pixel(50, 14, 10, 2, 80, 24, 1, MODE_HIGH_CONTRAST, false, 0), 0);
     assert_eq!(candy_pill_pixel(50, 4, 10, 2, 80, 24, 1, MODE_HIGH_CONTRAST, false, 0), 0x00FF_FFFF);
+
+    // All 4 selectable Noir Accent Tints produce distinct tinted SilkBar pills.
+    let bg = 0x000B_0D12;
+    let pills: Vec<u32> = (0..4)
+        .map(|i| candy_pill_pixel_tinted(50, 14, 10, 2, 80, 24, 1, MODE_DARK, true, noir_accent(i), bg))
+        .collect();
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            assert_ne!(pills[i], pills[j], "accent tint {i} and {j} must visually differ");
+        }
+    }
 }

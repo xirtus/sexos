@@ -200,6 +200,9 @@ pub fn usb_changed(caller: u32) {
         if present & (1 << disk) == 0 || unsafe { EJECTED } & (1 << disk) != 0 || crate::fs_disks::usb_busy(disk) { continue; }
         mount_usb(disk);
     }
+    if present != 0 {
+        crate::fs_service::maybe_seed_on_usb_mount();
+    }
 }
 /// The USB disks present now: (disk, sectors, write protected, vendor and product).
 pub(crate) fn usb_disks() -> Vec<(u64, u64, bool, String)> {
@@ -559,5 +562,93 @@ pub fn read_program(mut fs: Option<&mut Fs<'static, FsDisk>>, name: &[u8], image
         };
     }
     Ok(None)
+}
+
+/// One program discovered inside a mounted USB volume's `/programs/` folder.
+pub struct MediaProgram {
+    pub mount_idx: usize,
+    pub name: String,
+    pub size: u64,
+}
+
+const PRIORITY_PROGRAMS: &[&str] = &[
+    "tatami", "sexshop", "spindle", "loom", "kaleidoscope", "qupid",
+    "tailor", "tether", "brootlite", "flirt", "jot", "abacus",
+    "mesh", "date", "gaze", "vellum", "quil", "chastity",
+];
+
+fn valid_media_program_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    !b.is_empty()
+        && b.len() <= sex_pdx::program_store::NAME_BYTES
+        && b.iter().all(|&c| c.is_ascii_graphic() && c != b'/')
+}
+
+/// Lists all valid, non-empty regular files in `/programs` across mounted USB volumes,
+/// ordered with core desktop/system programs first and deduplicated by name.
+pub fn usb_programs() -> Vec<MediaProgram> {
+    let mut out: Vec<MediaProgram> = Vec::new();
+    let ms = mounts();
+    for (idx, m) in ms.iter_mut().enumerate() {
+        if !matches!(m.source, Source::Usb { .. }) {
+            continue;
+        }
+        let Ok(entries) = with(None, m, |v, d| v.list(d, b"/programs")) else {
+            continue;
+        };
+        for e in entries {
+            if e.kind != sv::Kind::File
+                || e.size == 0
+                || e.size > sex_pdx::program_store::IMAGE_BYTES as u64
+                || !valid_media_program_name(&e.name)
+            {
+                continue;
+            }
+            if out.iter().any(|p| p.name == e.name) {
+                continue;
+            }
+            out.push(MediaProgram { mount_idx: idx, name: e.name, size: e.size });
+        }
+    }
+    out.sort_by(|a, b| {
+        let pa = PRIORITY_PROGRAMS.iter().position(|&p| p == a.name).unwrap_or(usize::MAX);
+        let pb = PRIORITY_PROGRAMS.iter().position(|&p| p == b.name).unwrap_or(usize::MAX);
+        pa.cmp(&pb).then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
+/// Streams `/programs/<name>` from mounted USB volume `mount_idx` using caller-owned `chunk`.
+pub fn stream_usb_program(
+    mount_idx: usize,
+    name: &[u8],
+    chunk: &mut [u8],
+    mut on_chunk: impl FnMut(u64, &[u8]) -> Result<(), ()>,
+) -> Result<u64, ()> {
+    if chunk.is_empty() {
+        return Err(());
+    }
+    let mut path_buf = [0u8; 64];
+    let Some(inner) = program_inner_path(name, &mut path_buf) else { return Err(()); };
+    let m = mounts().get_mut(mount_idx).ok_or(())?;
+    if !matches!(m.source, Source::Usb { .. }) {
+        return Err(());
+    }
+    let st = with(None, m, |v, d| v.stat(d, inner)).map_err(|_| ())?;
+    if st.kind == sv::Kind::Dir || st.size == 0 {
+        return Err(());
+    }
+    let size = st.size;
+    let mut done = 0u64;
+    while done < size {
+        let want = ((size - done) as usize).min(chunk.len());
+        let got = with(None, m, |v, d| v.read(d, inner, done, &mut chunk[..want])).map_err(|_| ())?;
+        if got == 0 {
+            return Err(());
+        }
+        on_chunk(done, &chunk[..got])?;
+        done += got as u64;
+    }
+    Ok(done)
 }
 

@@ -33,6 +33,11 @@ use ttf_parser::{Face, OutlineBuilder};
 /// Geist Mono and Geist Sans by Vercel, SIL Open Font License 1.1 (assets/fonts/geist/OFL.txt).
 pub static GEIST_MONO: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Regular.ttf");
 pub static GEIST_SANS: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Regular.ttf");
+/// Medium (500) and SemiBold (600) faces for warm UI body text and crisp macOS-style UI chrome.
+pub static GEIST_SANS_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Medium.ttf");
+pub static GEIST_SANS_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-SemiBold.ttf");
+pub static GEIST_MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Medium.ttf");
+pub static GEIST_MONO_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-SemiBold.ttf");
 /// The bold and italic faces of both. A program pays only for the faces it names:
 /// the linker drops the rest.
 pub static GEIST_SANS_BOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Bold.ttf");
@@ -48,6 +53,63 @@ pub static JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/je
 pub static JETBRAINS_MONO_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Italic.ttf");
 pub static JETBRAINS_MONO_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-BoldItalic.ttf");
 
+/// Typographic weight of a face (`OS/2` weight class).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Weight {
+    #[default]
+    Regular,
+    Medium,
+    SemiBold,
+    Bold,
+}
+
+impl Weight {
+    /// Numeric OpenType weight class (400, 500, 600, 700).
+    pub const fn number(self) -> u16 {
+        match self {
+            Weight::Regular => 400,
+            Weight::Medium => 500,
+            Weight::SemiBold => 600,
+            Weight::Bold => 700,
+        }
+    }
+
+    /// Maps an OpenType `OS/2` weight class number to the nearest [`Weight`].
+    pub const fn from_number(weight: u16) -> Self {
+        match weight {
+            0..=449 => Weight::Regular,
+            450..=549 => Weight::Medium,
+            550..=649 => Weight::SemiBold,
+            650..=u16::MAX => Weight::Bold,
+        }
+    }
+
+    /// True only for full Bold (700), matching TrueType's `OS/2` bold flag.
+    pub const fn is_bold(self) -> bool {
+        matches!(self, Weight::Bold)
+    }
+
+    /// 0 regular, 1 medium, 2 semibold, 3 bold.
+    pub const fn index(self) -> usize {
+        match self {
+            Weight::Regular => 0,
+            Weight::Medium => 1,
+            Weight::SemiBold => 2,
+            Weight::Bold => 3,
+        }
+    }
+
+    /// Weight corresponding to a legacy [`Style`].
+    pub const fn from_style(style: Style) -> Self {
+        if style.bold { Weight::Bold } else { Weight::Regular }
+    }
+
+    /// Legacy [`Style`] representation (`SemiBold` and `Bold` map to `bold = false/true` respectively via `is_bold()`).
+    pub const fn to_style(self, italic: bool) -> Style {
+        Style { bold: self.is_bold(), italic }
+    }
+}
+
 /// Weight and slant of a face.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Style { pub bold: bool, pub italic: bool }
@@ -59,6 +121,12 @@ impl Style {
     pub const BOLD_ITALIC: Style = Style { bold: true, italic: true };
     /// 0 regular, 1 bold, 2 italic, 3 bold italic.
     pub fn index(self) -> usize { self.bold as usize | (self.italic as usize) << 1 }
+    /// Equivalent [`Weight`] for this legacy [`Style`].
+    pub const fn weight(self) -> Weight { Weight::from_style(self) }
+    /// Builds a legacy [`Style`] from [`Weight`] and `italic` (`SemiBold` and `Bold` set `bold = true`).
+    pub const fn from_weight(weight: Weight, italic: bool) -> Self {
+        Style { bold: matches!(weight, Weight::SemiBold | Weight::Bold), italic }
+    }
 }
 
 /// The Geist file for a face: Sans or Mono (`mono`) in `style`.
@@ -72,6 +140,24 @@ pub fn geist(mono: bool, style: Style) -> &'static [u8] {
         (true, true, false) => GEIST_MONO_BOLD,
         (true, false, true) => GEIST_MONO_ITALIC,
         (true, true, true) => GEIST_MONO_BOLD_ITALIC,
+    }
+}
+
+/// The Geist file for a face: Sans or Mono (`mono`) in [`Weight`] and `italic`.
+pub fn geist_weight(mono: bool, weight: Weight, italic: bool) -> &'static [u8] {
+    match (mono, weight, italic) {
+        (false, Weight::Regular, false) => GEIST_SANS,
+        (false, Weight::Medium, false) => GEIST_SANS_MEDIUM,
+        (false, Weight::SemiBold, false) => GEIST_SANS_SEMIBOLD,
+        (false, Weight::Bold, false) => GEIST_SANS_BOLD,
+        (false, Weight::Regular | Weight::Medium, true) => GEIST_SANS_ITALIC,
+        (false, Weight::SemiBold | Weight::Bold, true) => GEIST_SANS_BOLD_ITALIC,
+        (true, Weight::Regular, false) => GEIST_MONO,
+        (true, Weight::Medium, false) => GEIST_MONO_MEDIUM,
+        (true, Weight::SemiBold, false) => GEIST_MONO_SEMIBOLD,
+        (true, Weight::Bold, false) => GEIST_MONO_BOLD,
+        (true, Weight::Regular | Weight::Medium, true) => GEIST_MONO_ITALIC,
+        (true, Weight::SemiBold | Weight::Bold, true) => GEIST_MONO_BOLD_ITALIC,
     }
 }
 
@@ -90,6 +176,16 @@ impl Synthetic {
     /// What `style` asks of a font that is itself regular.
     pub fn for_style(style: Style) -> Synthetic {
         Synthetic { slant: if style.italic { 218 } else { 0 }, embolden: if style.bold { 32 } else { 0 } }
+    }
+    /// What `weight` and `italic` ask of a regular fallback font.
+    pub fn for_weight(weight: Weight, italic: bool) -> Synthetic {
+        let embolden = match weight {
+            Weight::Regular => 0,
+            Weight::Medium => 10,
+            Weight::SemiBold => 21,
+            Weight::Bold => 32,
+        };
+        Synthetic { slant: if italic { 218 } else { 0 }, embolden }
     }
 }
 
@@ -124,6 +220,10 @@ impl Render {
 pub const DARKEN_UNTIL: u32 = 32 * 64;
 /// The most darkening, in 1/256 pixel, reached at 8 px and below.
 pub const DARKEN_MAX: i32 = 88;
+/// Size threshold (1/64 pixel per em) for subtle CoreText-style UI stem darkening.
+pub const SUBTLE_DARKEN_UNTIL: u32 = 20 * 64;
+/// Maximum subtle stem darkening, in 1/256 pixel (~7% warmth around 12-16 px).
+pub const SUBTLE_DARKEN_MAX: i32 = 24;
 
 /// How much wider stems are drawn at `size`, in 1/256 pixel.
 pub fn darkening(size: u32) -> i32 {
@@ -131,6 +231,14 @@ pub fn darkening(size: u32) -> i32 {
     if size >= DARKEN_UNTIL { return 0; }
     let size = size.max(FROM);
     (DARKEN_MAX as i64 * (DARKEN_UNTIL - size) as i64 / (DARKEN_UNTIL - FROM) as i64) as i32
+}
+
+/// Subtle Apple CoreText-style stem widening for small UI / dark-mode text, in 1/256 pixel.
+pub fn subtle_darkening(size: u32) -> i32 {
+    const FROM: u32 = 8 * 64;
+    if size >= SUBTLE_DARKEN_UNTIL { return 0; }
+    let size = size.max(FROM);
+    (SUBTLE_DARKEN_MAX as i64 * (SUBTLE_DARKEN_UNTIL - size) as i64 / (SUBTLE_DARKEN_UNTIL - FROM) as i64) as i32
 }
 
 /// Light hinting's vertical map, in 1/256 pixel above the baseline: each zone
@@ -186,6 +294,10 @@ impl<'a> Font<'a> {
 
     /// What the face says of itself (OS/2 and head flags).
     pub fn style(&self) -> Style { Style { bold: self.face.is_bold(), italic: self.face.is_italic() || self.face.is_oblique() } }
+    /// Numeric `OS/2` weight class (e.g. 400 Regular, 500 Medium, 600 SemiBold, 700 Bold).
+    pub fn weight_number(&self) -> u16 { self.face.weight().to_number() }
+    /// Classified weight bucket from the face's `OS/2` weight class.
+    pub fn weight(&self) -> Weight { Weight::from_number(self.weight_number()) }
     pub fn ascender(&self, size: u32) -> i32 { self.fx(self.face.ascender() as i64, size) }
     pub fn descender(&self, size: u32) -> i32 { self.fx(self.face.descender() as i64, size) }
 
@@ -261,6 +373,28 @@ impl<'a> Font<'a> {
         // the larger coverage kept: every stem gains the darkening, the advance none.
         self.pass(glyph, size, x - dark / 2, baseline, w, h, acc, out, synth, vmap, false)
             && self.pass(glyph, size, x + dark - dark / 2, baseline, w, h, acc, out, synth, vmap, true)
+    }
+
+    /// Draws `glyph` with Apple CoreText-style light vertical hinting (below `hint_below`)
+    /// and subtle ~7% stem darkening at `<= 16–20 px` so Regular/Medium/SemiBold text
+    /// stays warm, crisp, and effortlessly readable on dark macOS Noir backgrounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_humanized(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8], synth: Synthetic, hint_below: u32) -> bool {
+        if out.len() < w * h || acc.len() < raster::scratch_len(w, h) { return false; }
+        let vmap = (size < hint_below).then(|| self.vmap(size)).flatten();
+        let baseline = if vmap.is_some() { div_round(baseline as i64, FX as i64) as i32 * FX } else { baseline };
+        let dark = subtle_darkening(size);
+        let ok = if dark == 0 {
+            self.pass(glyph, size, x, baseline, w, h, acc, out, synth, vmap, false)
+        } else {
+            self.pass(glyph, size, x - dark / 2, baseline, w, h, acc, out, synth, vmap, false)
+                && self.pass(glyph, size, x + dark - dark / 2, baseline, w, h, acc, out, synth, vmap, true)
+        };
+        if ok && size <= 16 * 64 {
+            let strength = if size <= 12 * 64 { 18 } else { 14 };
+            raster::stem_darken_coverage(w, h, out, strength);
+        }
+        ok
     }
 
     /// Light hinting's zones at `size`, or `None` when the font has no usable x-height.
@@ -366,8 +500,16 @@ pub fn cell_layout(font: &Font, w: usize, h: usize) -> (u32, i32, i32) {
 }
 
 /// One character of a monospaced grid: `w * h` coverage bytes, or `false` when the
-/// font lacks the scalar. The same function feeds Display and the pixel oracles.
+/// font lacks the scalar. Applies subtle stem darkening at small cell sizes (`<= 19 px`)
+/// for crisp Apple-terminal density while keeping Display and pixel oracles identical.
 pub fn draw_cell(font: &Font, scalar: u32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
+    let Some(glyph) = font.glyph(scalar) else { return false };
+    let (size, x, baseline) = cell_layout(font, w, h);
+    font.draw_humanized(glyph, size, x, baseline, w, h, acc, out, Synthetic::NONE, 0)
+}
+
+/// Bare-outline variant of [`draw_cell`] without subtle stem darkening.
+pub fn draw_cell_plain(font: &Font, scalar: u32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
     let Some(glyph) = font.glyph(scalar) else { return false };
     let (size, x, baseline) = cell_layout(font, w, h);
     font.draw(glyph, size, x, baseline, w, h, acc, out)

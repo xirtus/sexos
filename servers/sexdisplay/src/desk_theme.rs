@@ -5,9 +5,10 @@
 //! `OP_DESKTOP_LOOK` (`sex_pdx::desktop_look::theme`). Here they become the
 //! colours of the bar (`silkbar_model::Theme`), the window chrome, the menus
 //! and popups, and the desktop cards, from the same `sex_theme` tokens Weft
-//! and every program draw with. Dark keeps the desktop's long-standing navy
-//! look; light gives light panels with dark ink; high contrast is black and
-//! white with sex_theme's strong yellow. The accent marks what is active.
+//! and every program draw with. Dark uses macOS Noir obsidian glass surfaces
+//! (`#0B0D12` base, `#13161F` cards/menus, `#1B202C` elevated/hover, `#2A3142`
+//! specular rims); light gives light panels with dark ink; high contrast is
+//! black and white with sex_theme's strong yellow. The accent marks what is active.
 //!
 //! Colours here are XRGB (`0x00RRGGBB`), as Display writes them.
 use sex_theme::{mix, Mode};
@@ -72,22 +73,27 @@ pub fn desk(mode: Mode, accent: u32) -> Desk {
     let t = sex_theme::tokens(mode, accent);
     let a = x(t.accent);
     match mode {
-        // Today's desktop: the navy palette (`silkbar_model::DEFAULT_THEME`
-        // and the old menu/card constants), with the accent for what is active.
+        // macOS Noir Obsidian Glass surfaces (`#0B0D12` base, `#13161F` cards/menus,
+        // `#1B202C` hover/buttons, `#2A3142` specular rim) with active Noir accent.
         Mode::Dark => Desk {
             mode, accent,
             bar: Theme {
-                active: a, chip_fill: a,
+                panel_fill: 0x000B_0D12,
+                panel_glow: 0x002A_3142,
+                text: 0x00F1_F5F9,
+                muted: 0x0064_748B,
+                active: a,
+                chip_fill: a,
                 ..silkbar_model::DEFAULT_THEME
             },
-            focus: a, rim: 0x00B4_BEFE, title_bar: 0x001E_1E2E,
-            active_tab: blend(0x001E_1E2E, a, 0.45), inactive_tab: 0x0045_475A,
+            focus: a, rim: 0x002A_3142, title_bar: 0x0013_161F,
+            active_tab: blend(0x0013_161F, a, 0.42), inactive_tab: 0x000E_1118,
             band: sex_pdx::desktop_style::NATIVE_CANVAS,
-            menu: 0x0018_1825, menu_rim: 0x0045_475A, menu_picked: 0x0031_3244,
-            menu_ink: 0x00CD_D6F4, menu_title: 0x00FF_FFFF, menu_soft: 0x0093_99B2, menu_dim: 0x006C_7086, menu_field: 0x0011_111B, menu_button: 0x0031_3244,
-            menu_send: a, menu_on_send: x(t.on_accent), menu_close: 0x00F3_8BA8,
-            card: 0x0014_121A, card_rim: 0x0046_3E4C, card_ink: 0x00F4_EEF2, card_soft: 0x00C2_B6C0,
-            good: 0x00A6_E3A1, warn: 0x00F3_8BA8,
+            menu: 0x0013_161F, menu_rim: 0x002A_3142, menu_picked: 0x001B_202C,
+            menu_ink: 0x00F1_F5F9, menu_title: 0x00FF_FFFF, menu_soft: 0x0094_A3B8, menu_dim: 0x0064_748B, menu_field: 0x0008_0A0E, menu_button: 0x001B_202C,
+            menu_send: a, menu_on_send: x(t.on_accent), menu_close: 0x00FB_7185,
+            card: 0x0013_161F, card_rim: 0x002A_3142, card_ink: 0x00F1_F5F9, card_soft: 0x0094_A3B8,
+            good: 0x0034_D399, warn: 0x00FB_7185,
         },
         Mode::Light => Desk {
             mode, accent,
@@ -172,4 +178,44 @@ pub fn refresh() -> bool {
     if before == Some(sex_pdx::desktop_look::theme()) { return false; }
     sex_pdx::serial_record!("[display.theme] mode={} accent={:06x}", sex_pdx::desktop_look::theme_name(d.mode.setting() as u8), d.accent);
     true
+}
+
+static TINT_IDX: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Updates the active curated Noir accent tint index (`0..=3`, from `SilkBar.phase1.accent_tint_idx`).
+pub fn set_tint_idx(idx: u8) {
+    TINT_IDX.store(idx % 4, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Active curated [`sex_theme::NoirAccent`] from the SilkBar accent tint index.
+pub fn active_noir_accent() -> sex_theme::NoirAccent {
+    sex_theme::NoirAccent::from_index(TINT_IDX.load(core::sync::atomic::Ordering::Relaxed))
+}
+
+/// Resolved highlight/rim accent (`0x00RRGGBB`) honoring Settings custom accents and
+/// the four curated Noir Accent Tints when Settings uses the default accent.
+pub fn resolved_accent() -> u32 {
+    let d = current();
+    if d.mode == Mode::HighContrast {
+        return d.focus;
+    }
+    if d.accent == sex_theme::DEFAULT_ACCENT {
+        active_noir_accent().primary() & 0x00FF_FFFF
+    } else {
+        d.focus
+    }
+}
+
+/// Resolved solid button/pill fill + readable foreground ink `(fill, on_fill)` (`0x00RRGGBB`).
+pub fn resolved_fill_and_ink() -> (u32, u32) {
+    let d = current();
+    if d.mode == Mode::HighContrast {
+        return (d.menu_send, d.menu_on_send);
+    }
+    if d.accent == sex_theme::DEFAULT_ACCENT {
+        let tint = active_noir_accent();
+        (tint.fill() & 0x00FF_FFFF, tint.on_accent() & 0x00FF_FFFF)
+    } else {
+        (d.menu_send, d.menu_on_send)
+    }
 }

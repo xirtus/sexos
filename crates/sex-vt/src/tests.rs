@@ -338,3 +338,13 @@ fn replay_keeps_a_pending_wrap() {
         assert_eq!(again.row_text(1), "e");
     }
 }
+
+#[test]
+fn noir_theme_is_registered_and_dark() {
+    let noir = theme::Theme::named("noir").expect("noir theme registered");
+    assert_eq!(noir, theme::NOIR);
+    assert_eq!(noir.bg, 0x0A0B0F);
+    assert!(!noir.is_light());
+    assert!(theme::Theme::named("nord").is_some());
+    assert!(theme::Theme::named("mocha").is_some());
+}

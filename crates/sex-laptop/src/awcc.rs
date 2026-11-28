@@ -158,6 +158,8 @@ pub struct Inventory {
     pub sensor_count: usize,
     pub profiles: [u8; MAX_RESOURCES],
     pub profile_count: usize,
+    /// True when `PROFILE_GMODE` (`0xAB`) was reported in the firmware's resource table.
+    pub has_gmode: bool,
 }
 
 impl Inventory {
@@ -191,7 +193,8 @@ pub fn probe(fw: &mut impl Firmware) -> Option<Inventory> {
     let base = base + d.temps as usize + d.unknown as usize;
     for i in 0..d.profiles as usize {
         let Some(id) = id_at(fw, base + i) else { break };
-        if kind(id).is_none() || id == PROFILE_GMODE { continue; }
+        if id == PROFILE_GMODE { inv.has_gmode = true; continue; }
+        if kind(id).is_none() { continue; }
         inv.profiles[inv.profile_count] = id;
         inv.profile_count += 1;
     }
@@ -227,10 +230,10 @@ pub fn read(fw: &mut impl Firmware, inv: &Inventory) -> Reading {
     r
 }
 
-/// Activates a listed profile (or custom, for manual fan boost). Unlisted ids are refused
+/// Activates a listed profile (or custom/G-Mode when supported). Unlisted ids are refused
 /// without calling the firmware.
 pub fn activate(fw: &mut impl Firmware, inv: &Inventory, id: u8) -> bool {
-    if id != PROFILE_CUSTOM && !inv.profiles().contains(&id) { return false; }
+    if id != PROFILE_CUSTOM && !(id == PROFILE_GMODE && inv.has_gmode) && !inv.profiles().contains(&id) { return false; }
     call(fw, METHOD_THERMAL_CONTROL, args(OP_ACTIVATE_PROFILE, id, 0, 0)).is_some()
 }
 
@@ -327,6 +330,10 @@ mod tests {
         let before = fw.calls;
         assert!(!activate(&mut fw, &inv, PROFILE_USTT_COOL));
         assert_eq!(fw.calls, before);
+        // G-Mode is activatable when firmware lists it, even though omitted from profiles().
+        assert!(inv.has_gmode);
+        assert!(activate(&mut fw, &inv, PROFILE_GMODE));
+        assert_eq!(fw.profile, PROFILE_GMODE);
     }
 
     #[test]

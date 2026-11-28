@@ -6,7 +6,7 @@
 //! renders using the shared `Layout` so pointer hits match drawn pixels.
 
 use sex_pdx::silkbar_menus::{Layout, MenuKind, MenuState};
-use sex_theme::{candy_lavender as cl, Mode};
+use sex_theme::{noir as nr, Mode, NoirAccent};
 use crate::desk_theme::current as desk;
 
 const SHELL_PD: u32 = 3;
@@ -58,11 +58,17 @@ pub fn receive(caller: u32, w0: u64, w1: u64) -> bool {
 
 /// Currently open menu kind, if any (used to highlight the active top-bar trigger).
 pub fn active_kind() -> Option<MenuKind> {
+    if crate::wifi_popover::is_open() {
+        return Some(MenuKind::WifiPopover);
+    }
     unsafe { SHOWN.map(|m| m.kind) }
 }
 
 /// Panel rectangle for `frost::glass_panels`.
 pub fn glass_rect(w: usize, h: usize, scale: u32) -> Option<(usize, usize, usize, usize)> {
+    if let Some(r) = crate::wifi_popover::glass_rect(w, h, scale) {
+        return Some(r);
+    }
     let m = (unsafe { SHOWN })?;
     Layout::new(&m, w, h, scale).map(|l| l.panel)
 }
@@ -81,8 +87,15 @@ struct CandyMenuColors {
     btn_bg: u32,
 }
 
-fn colors() -> CandyMenuColors {
+fn colors(tint_idx: u8) -> CandyMenuColors {
     let d = desk();
+    let accent = if d.mode == Mode::HighContrast {
+        d.focus
+    } else if d.accent == sex_theme::DEFAULT_ACCENT {
+        NoirAccent::from_index(tint_idx).primary() & 0x00FF_FFFF
+    } else {
+        d.focus
+    };
     match d.mode {
         Mode::HighContrast => CandyMenuColors {
             bg: d.menu,
@@ -93,32 +106,32 @@ fn colors() -> CandyMenuColors {
             ink: d.menu_ink,
             subtext: d.menu_soft,
             danger: d.menu_close,
-            accent: d.focus,
+            accent,
             btn_bg: d.menu_button,
         },
         Mode::Dark => CandyMenuColors {
-            bg: cl::DARK_MENU_BG & 0x00FF_FFFF,
-            rim: cl::DARK_MENU_RIM & 0x00FF_FFFF,
-            specular: cl::DARK_SPECULAR & 0x00FF_FFFF,
-            hover: cl::DARK_MENU_HOVER & 0x00FF_FFFF,
-            divider: cl::DARK_MENU_DIVIDER & 0x00FF_FFFF,
-            ink: cl::DARK_TEXT & 0x00FF_FFFF,
-            subtext: cl::DARK_MENU_SUBTEXT & 0x00FF_FFFF,
-            danger: cl::DARK_MENU_DANGER & 0x00FF_FFFF,
-            accent: cl::ORCHID_ACCENT & 0x00FF_FFFF,
-            btn_bg: cl::DARK_PILL_FILL & 0x00FF_FFFF,
+            bg: nr::DARK_MENU_BG & 0x00FF_FFFF,
+            rim: nr::DARK_MENU_RIM & 0x00FF_FFFF,
+            specular: nr::DARK_SPECULAR & 0x00FF_FFFF,
+            hover: nr::DARK_MENU_HOVER & 0x00FF_FFFF,
+            divider: nr::DARK_MENU_DIVIDER & 0x00FF_FFFF,
+            ink: nr::DARK_TEXT & 0x00FF_FFFF,
+            subtext: nr::DARK_MENU_SUBTEXT & 0x00FF_FFFF,
+            danger: nr::DARK_MENU_DANGER & 0x00FF_FFFF,
+            accent,
+            btn_bg: nr::DARK_PILL_FILL & 0x00FF_FFFF,
         },
         Mode::Light => CandyMenuColors {
-            bg: cl::LIGHT_MENU_BG & 0x00FF_FFFF,
-            rim: cl::LIGHT_MENU_RIM & 0x00FF_FFFF,
-            specular: cl::LIGHT_SPECULAR & 0x00FF_FFFF,
-            hover: cl::LIGHT_MENU_HOVER & 0x00FF_FFFF,
-            divider: cl::LIGHT_MENU_DIVIDER & 0x00FF_FFFF,
-            ink: cl::LIGHT_TEXT & 0x00FF_FFFF,
-            subtext: cl::LIGHT_MENU_SUBTEXT & 0x00FF_FFFF,
-            danger: cl::LIGHT_MENU_DANGER & 0x00FF_FFFF,
-            accent: cl::ORCHID_ACCENT & 0x00FF_FFFF,
-            btn_bg: cl::LIGHT_PILL_FILL & 0x00FF_FFFF,
+            bg: nr::LIGHT_MENU_BG & 0x00FF_FFFF,
+            rim: nr::LIGHT_MENU_RIM & 0x00FF_FFFF,
+            specular: nr::LIGHT_SPECULAR & 0x00FF_FFFF,
+            hover: nr::LIGHT_MENU_HOVER & 0x00FF_FFFF,
+            divider: nr::LIGHT_MENU_DIVIDER & 0x00FF_FFFF,
+            ink: nr::LIGHT_TEXT & 0x00FF_FFFF,
+            subtext: nr::LIGHT_MENU_SUBTEXT & 0x00FF_FFFF,
+            danger: nr::LIGHT_MENU_DANGER & 0x00FF_FFFF,
+            accent,
+            btn_bg: nr::LIGHT_PILL_FILL & 0x00FF_FFFF,
         },
     }
 }
@@ -150,8 +163,12 @@ fn tint_glass(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, 
     }
 }
 
-fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
-    let width = super::glyphs::ui_width(t, scale).unwrap_or(0).min(max_w);
+fn text_with_weight(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize, body: bool) {
+    let width = if body {
+        super::glyphs::ui_body_width(t, scale)
+    } else {
+        super::glyphs::ui_width(t, scale)
+    }.unwrap_or(0).min(max_w);
     let lh = super::glyphs::UI_H * scale as usize;
     for y in y0..(y0 + lh).min(h) {
         for x in x0..(x0 + width).min(w) {
@@ -159,7 +176,12 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
             if at >= total {
                 return;
             }
-            let Some(alpha) = super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale) else { break };
+            let cov = if body {
+                super::glyphs::ui_body_coverage(t, (x - x0) as i32, y - y0, scale)
+            } else {
+                super::glyphs::ui_coverage(t, (x - x0) as i32, y - y0, scale)
+            };
+            let Some(alpha) = cov else { break };
             if alpha == 0 {
                 continue;
             }
@@ -169,6 +191,14 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
             }
         }
     }
+}
+
+fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
+    text_with_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, false);
+}
+
+fn body_text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0: usize, ink: u32, scale: u32, max_w: usize) {
+    text_with_weight(fb, w, h, total, t, x0, y0, ink, scale, max_w, true);
 }
 
 fn fmt_u32(mut v: u32, out: &mut [u8], pos: &mut usize) {
@@ -200,19 +230,22 @@ fn put_bytes(s: &[u8], out: &mut [u8], pos: &mut usize) {
 
 /// Renders the open SilkBar dropdown, status popover, or right-click context menu.
 pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usize, scene: &crate::scene::SceneSnapshot) {
+    if crate::wifi_popover::draw(fb, w, h, total, scale, bar) {
+        return;
+    }
     let Some(m) = (unsafe { SHOWN }) else { return };
     let Some(l) = Layout::new(&m, w, h, scale) else { return };
     let sc = l.scale;
     let s = sc as usize;
-    let c = colors();
+    let c = colors(scene.bar.phase1.accent_tint_idx);
     let inner = crate::frost::inside(l.panel, s);
 
-    // 1. Frosted glass backdrop + subtle Candy Lavender glaze + specular top highlight + orchid rim.
+    // 1. Frosted obsidian glass backdrop + specular top rim + dark rim.
     crate::frost::glass_or(fb, w, h, total, crate::frost::Panel::SilkBarMenu, inner, sc, bar, c.bg);
     if desk().mode != Mode::HighContrast {
-        tint_glass(fb, w, h, total, inner, c.bg, 72);
+        tint_glass(fb, w, h, total, inner, c.bg, if desk().mode == Mode::Dark { 92 } else { 72 });
         // Subtle 1px top specular sheen inside the rim.
-        tint_glass(fb, w, h, total, (inner.0, inner.1, inner.2, s), c.specular, 75);
+        tint_glass(fb, w, h, total, (inner.0, inner.1, inner.2, s), c.specular, if desk().mode == Mode::Dark { 36 } else { 75 });
     }
     crate::frost::rim(fb, w, h, total, l.panel, s, c.rim);
 
@@ -337,7 +370,7 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
 
         let sc_bytes = row.shortcut.as_bytes();
         let sc_w = if !sc_bytes.is_empty() {
-            super::glyphs::ui_width(sc_bytes, sc).unwrap_or(0)
+            super::glyphs::ui_body_width(sc_bytes, sc).unwrap_or(0)
         } else {
             0
         };
@@ -346,10 +379,14 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         } else {
             r.2.saturating_sub(2 * inset)
         };
-        text(fb, w, h, total, label_bytes, r.0 + inset, mid, ink, sc, label_max_w);
+        if row.header {
+            body_text(fb, w, h, total, label_bytes, r.0 + inset, mid, ink, sc, label_max_w);
+        } else {
+            text(fb, w, h, total, label_bytes, r.0 + inset, mid, ink, sc, label_max_w);
+        }
         if sc_w > 0 && r.2 > sc_w + 2 * inset {
             let sc_x = r.0 + r.2 - inset - sc_w;
-            text(fb, w, h, total, sc_bytes, sc_x, mid, c.subtext, sc, sc_w);
+            body_text(fb, w, h, total, sc_bytes, sc_x, mid, c.subtext, sc, sc_w);
         }
     }
 }

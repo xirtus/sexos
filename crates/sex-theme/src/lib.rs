@@ -24,6 +24,92 @@ impl Mode {
 /// SexOS pink, the default accent (`appearance.accent`).
 pub const DEFAULT_ACCENT: u32 = 0xD6336C;
 
+/// Four curated macOS Noir accent tints (`0..=3`), mapped to `accent_tint_idx`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum NoirAccent {
+    /// SexOS Crimson / Rose (`#F43F5E` / `#E11D48`) — Default Noir signature accent.
+    #[default]
+    Crimson = 0,
+    /// Graphite / Silver (`#94A3B8` / `#CBD5E1`) — Pure monochrome pro Noir.
+    Graphite = 1,
+    /// Noir Lavender (`#A78BFA`) — Refined obsidian-lavender.
+    Lavender = 2,
+    /// Ice Cyan (`#38BDF8`) — Crisp studio accent.
+    IceCyan = 3,
+}
+
+impl NoirAccent {
+    /// All four curated Noir accent tints in `accent_tint_idx` order.
+    pub const ALL: [NoirAccent; 4] = [
+        NoirAccent::Crimson,
+        NoirAccent::Graphite,
+        NoirAccent::Lavender,
+        NoirAccent::IceCyan,
+    ];
+
+    /// Maps an `accent_tint_idx` (wrapping cleanly across 0..=3) to [`NoirAccent`].
+    pub const fn from_index(idx: u8) -> Self {
+        match idx % 4 {
+            0 => NoirAccent::Crimson,
+            1 => NoirAccent::Graphite,
+            2 => NoirAccent::Lavender,
+            _ => NoirAccent::IceCyan,
+        }
+    }
+
+    pub const fn index(self) -> u8 {
+        self as u8
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            NoirAccent::Crimson => "SexOS Crimson",
+            NoirAccent::Graphite => "Graphite",
+            NoirAccent::Lavender => "Noir Lavender",
+            NoirAccent::IceCyan => "Ice Cyan",
+        }
+    }
+
+    /// Primary vibrant highlight / rim / indicator accent (`0xAARRGGBB`).
+    pub const fn primary(self) -> u32 {
+        match self {
+            NoirAccent::Crimson => solid(0xF4_3F5E),
+            NoirAccent::Graphite => solid(0x94_A3B8),
+            NoirAccent::Lavender => solid(0xA7_8BFA),
+            NoirAccent::IceCyan => solid(0x38_BDF8),
+        }
+    }
+
+    /// Solid button / pill fill accent (`0xAARRGGBB`) guaranteed WCAG-readable with [`Self::on_accent`].
+    pub const fn fill(self) -> u32 {
+        match self {
+            NoirAccent::Crimson => solid(0xE1_1D48),
+            NoirAccent::Graphite => solid(0x94_A3B8),
+            NoirAccent::Lavender => solid(0xA7_8BFA),
+            NoirAccent::IceCyan => solid(0x38_BDF8),
+        }
+    }
+
+    /// Luminous specular / hover accent (`0xAARRGGBB`).
+    pub const fn glow(self) -> u32 {
+        match self {
+            NoirAccent::Crimson => solid(0xFB_7185),
+            NoirAccent::Graphite => solid(0xCB_D5E1),
+            NoirAccent::Lavender => solid(0xC4_B5FD),
+            NoirAccent::IceCyan => solid(0x7D_D3FC),
+        }
+    }
+
+    /// High-contrast text ink drawn on top of [`Self::fill`] (`0xAARRGGBB`).
+    pub const fn on_accent(self) -> u32 {
+        match self {
+            NoirAccent::Crimson => solid(0xFF_FFFF),
+            NoirAccent::Graphite | NoirAccent::Lavender | NoirAccent::IceCyan => solid(0x0B_0D12),
+        }
+    }
+}
+
 /// Every colour and size a program's interface uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tokens {
@@ -102,17 +188,17 @@ pub fn tokens(mode: Mode, accent: u32) -> Tokens {
             radius: 0, radius_large: 0, font_size: 0, spacing: 0,
         },
         Mode::Dark => {
-            // A brighter accent reads better on dark grounds.
+            // macOS Noir Obsidian surfaces; a slightly brighter accent reads crisply on dark glass.
             let a = mix(accent, white, 0.12);
             Tokens {
                 mode,
-                window: solid(0x1C1A20), surface: solid(0x26232B), field: solid(0x141217),
-                control: solid(0x35313B), control_hover: solid(0x413C48), control_pressed: solid(0x4C4654),
-                border: solid(0x45404C),
-                text: solid(0xF1EEF4), text_dim: solid(0xB3ADB9), text_disabled: solid(0x6E6875),
+                window: solid(0x0B_0D12), surface: solid(0x13_161F), field: solid(0x08_0A0E),
+                control: solid(0x1B_202C), control_hover: solid(0x23_2938), control_pressed: solid(0x2D_3546),
+                border: solid(0x2A_3142),
+                text: solid(0xF1_F5F9), text_dim: solid(0x94_A3B8), text_disabled: solid(0x64_748B),
                 accent: a, on_accent: on(a), selection: alpha(a, 0x55), focus: a,
-                danger: solid(0xEF5350), on_danger: black,
-                shadow: alpha(black, 0x70), scrim: alpha(black, 0x80),
+                danger: solid(0xFB_7185), on_danger: solid(0x0B_0D12),
+                shadow: alpha(black, 0x80), scrim: alpha(black, 0x90),
                 radius: 0, radius_large: 0, font_size: 0, spacing: 0,
             }
         }
@@ -133,22 +219,34 @@ pub fn tokens(mode: Mode, accent: u32) -> Tokens {
 /// The tokens the two appearance settings describe.
 pub fn from_settings(theme: i32, accent: i32) -> Tokens { tokens(Mode::from_setting(theme), accent as u32 & 0xFF_FFFF) }
 
-/// Candy & Lavender SilkBar palette tokens (`0xAARRGGBB`).
-/// Shared reference palette for SilkBar's frosted lavender gradient,
-/// anti-aliased candy pills, specular highlight, and orchid hairlines.
-pub mod candy_lavender {
+/// macOS Noir Obsidian Glass palette tokens (`0xAARRGGBB`).
+/// Deep layered obsidian materials (`#0B0D12` base, `#13161F` elevated, `#1B202C`
+/// hover/inputs, `#2A3142` 1px top specular rim highlights) paired with the four
+/// selectable [`NoirAccent`] tints.
+pub mod noir {
     use super::solid;
 
-    /// Dark mode: deep-plum / lavender-velvet top -> lavender-lilac sheen bottom.
-    pub const DARK_BAR_TOP: u32 = solid(0x21_1635);
-    pub const DARK_BAR_BOTTOM: u32 = solid(0x31_224C);
-    pub const DARK_SPECULAR: u32 = solid(0xEC_DFFF);
-    pub const DARK_HAIRLINE: u32 = solid(0xB8_8CFF);
-    pub const DARK_PILL_FILL: u32 = solid(0x3D_2B5E);
-    pub const DARK_PILL_RIM: u32 = solid(0xC9_A8FF);
-    pub const DARK_TEXT: u32 = solid(0xF6_F0FF);
+    /// Core obsidian dark materials.
+    pub const DARK_BASE: u32 = solid(0x0B_0D12);
+    pub const DARK_PANEL: u32 = solid(0x10_131B);
+    pub const DARK_SURFACE: u32 = solid(0x13_161F);
+    pub const DARK_ELEVATED: u32 = solid(0x1B_202C);
+    pub const DARK_HOVER: u32 = solid(0x23_2938);
+    pub const DARK_WELL: u32 = solid(0x08_0A0E);
+    pub const DARK_RIM: u32 = solid(0x2A_3142);
+    pub const DARK_HAIRLINE: u32 = solid(0x22_2836);
+    pub const DARK_SPECULAR: u32 = solid(0xE2_E8F0);
+    pub const DARK_TEXT: u32 = solid(0xF1_F5F9);
+    pub const DARK_SUBTEXT: u32 = solid(0x94_A3B8);
+    pub const DARK_DISABLED: u32 = solid(0x64_748B);
+    pub const DARK_DANGER: u32 = solid(0xFB_7185);
 
-    /// Light mode: airy pastel-lavender top -> soft orchid-lilac sheen bottom.
+    /// SilkBar obsidian glass tokens (dark & light).
+    pub const DARK_BAR_TOP: u32 = DARK_BASE;
+    pub const DARK_BAR_BOTTOM: u32 = DARK_SURFACE;
+    pub const DARK_PILL_FILL: u32 = DARK_ELEVATED;
+    pub const DARK_PILL_RIM: u32 = DARK_RIM;
+
     pub const LIGHT_BAR_TOP: u32 = solid(0xF1_E8FF);
     pub const LIGHT_BAR_BOTTOM: u32 = solid(0xE4_D6FC);
     pub const LIGHT_SPECULAR: u32 = solid(0xFD_FAFF);
@@ -157,40 +255,91 @@ pub mod candy_lavender {
     pub const LIGHT_PILL_RIM: u32 = solid(0xB8_9CF8);
     pub const LIGHT_TEXT: u32 = solid(0x1E_162E);
 
-    /// Signature candy orchid accent & glow.
-    pub const ORCHID_ACCENT: u32 = solid(0xA7_8BFA);
-    pub const ORCHID_GLOW: u32 = solid(0xD8_B4FE);
+    /// Default signature Noir accent (SexOS Crimson / Rose).
+    pub const NOIR_ACCENT: u32 = solid(0xF4_3F5E);
+    pub const NOIR_ACCENT_FILL: u32 = solid(0xE1_1D48);
+    pub const NOIR_ACCENT_GLOW: u32 = solid(0xFB_7185);
 
-    /// Dark mode frosted candy-lavender dropdowns & popovers.
-    pub const DARK_MENU_BG: u32 = solid(0x1E_1530);
-    pub const DARK_MENU_RIM: u32 = solid(0x9E_7CE8);
-    pub const DARK_MENU_HOVER: u32 = solid(0x3B_2860);
-    pub const DARK_MENU_DIVIDER: u32 = solid(0x47_336B);
-    pub const DARK_MENU_SUBTEXT: u32 = solid(0xC6_B6E8);
-    pub const DARK_MENU_DANGER: u32 = solid(0xFF_8FA8);
+    /// Frosted obsidian dropdowns & popovers.
+    pub const DARK_MENU_BG: u32 = DARK_SURFACE;
+    pub const DARK_MENU_RIM: u32 = DARK_RIM;
+    pub const DARK_MENU_HOVER: u32 = DARK_ELEVATED;
+    pub const DARK_MENU_DIVIDER: u32 = DARK_HAIRLINE;
+    pub const DARK_MENU_SUBTEXT: u32 = DARK_SUBTEXT;
+    pub const DARK_MENU_DANGER: u32 = DARK_DANGER;
 
-    /// Light mode frosted candy-lavender dropdowns & popovers.
-    pub const LIGHT_MENU_BG: u32 = solid(0xF6_F0FF);
-    pub const LIGHT_MENU_RIM: u32 = solid(0xA7_8BFA);
-    pub const LIGHT_MENU_HOVER: u32 = solid(0xE4_D5FF);
-    pub const LIGHT_MENU_DIVIDER: u32 = solid(0xD5_C2FA);
-    pub const LIGHT_MENU_SUBTEXT: u32 = solid(0x52_4272);
+    pub const LIGHT_MENU_BG: u32 = solid(0xF6_F6FA);
+    pub const LIGHT_MENU_RIM: u32 = solid(0xC4_C9D6);
+    pub const LIGHT_MENU_HOVER: u32 = solid(0xE8_EBF2);
+    pub const LIGHT_MENU_DIVIDER: u32 = solid(0xDD_E1EC);
+    pub const LIGHT_MENU_SUBTEXT: u32 = solid(0x46_4E61);
     pub const LIGHT_MENU_DANGER: u32 = solid(0xC2_185B);
 
-    /// Frosted Candy Lavender Spotlight Launcher tokens (dark & light).
-    pub const DARK_SPOTLIGHT_INPUT: u32 = solid(0x14_0D22);
-    pub const DARK_SPOTLIGHT_TILE: u32 = solid(0x28_1C42);
-    pub const DARK_SPOTLIGHT_SELECTED: u32 = solid(0x45_2F74);
-    pub const DARK_SPOTLIGHT_PILL: u32 = solid(0x2B_1F45);
-    pub const LIGHT_SPOTLIGHT_INPUT: u32 = solid(0xFF_FDFF);
-    pub const LIGHT_SPOTLIGHT_TILE: u32 = solid(0xEC_E2FF);
-    pub const LIGHT_SPOTLIGHT_SELECTED: u32 = solid(0xDB_C5FF);
-    pub const LIGHT_SPOTLIGHT_PILL: u32 = solid(0xEB_E0FF);
-    pub const ORCHID_PILL_ACTIVE: u32 = solid(0x6D_45D6);
-    pub const ON_ORCHID_ACTIVE: u32 = solid(0xFF_FFFF);
+    /// Frosted Spotlight Launcher tokens (dark & light).
+    pub const DARK_SPOTLIGHT_INPUT: u32 = DARK_BASE;
+    pub const DARK_SPOTLIGHT_TILE: u32 = DARK_SURFACE;
+    pub const DARK_SPOTLIGHT_SELECTED: u32 = DARK_HOVER;
+    pub const DARK_SPOTLIGHT_PILL: u32 = DARK_ELEVATED;
+    pub const LIGHT_SPOTLIGHT_INPUT: u32 = solid(0xFF_FFFF);
+    pub const LIGHT_SPOTLIGHT_TILE: u32 = solid(0xEF_F1F6);
+    pub const LIGHT_SPOTLIGHT_SELECTED: u32 = solid(0xE2_E6F0);
+    pub const LIGHT_SPOTLIGHT_PILL: u32 = solid(0xEB_EEF5);
+    pub const PILL_ACTIVE_CRIMSON: u32 = NOIR_ACCENT_FILL;
+    pub const ON_PILL_ACTIVE: u32 = solid(0xFF_FFFF);
+}
+
+/// Legacy Candy & Lavender namespace updated around macOS Noir Obsidian dark
+/// surfaces so existing callers automatically inherit the unified Noir look.
+pub mod candy_lavender {
+    use super::noir;
+
+    pub const DARK_BAR_TOP: u32 = noir::DARK_BAR_TOP;
+    pub const DARK_BAR_BOTTOM: u32 = noir::DARK_BAR_BOTTOM;
+    pub const DARK_SPECULAR: u32 = noir::DARK_SPECULAR;
+    pub const DARK_HAIRLINE: u32 = noir::DARK_HAIRLINE;
+    pub const DARK_PILL_FILL: u32 = noir::DARK_PILL_FILL;
+    pub const DARK_PILL_RIM: u32 = noir::DARK_PILL_RIM;
+    pub const DARK_TEXT: u32 = noir::DARK_TEXT;
+
+    pub const LIGHT_BAR_TOP: u32 = noir::LIGHT_BAR_TOP;
+    pub const LIGHT_BAR_BOTTOM: u32 = noir::LIGHT_BAR_BOTTOM;
+    pub const LIGHT_SPECULAR: u32 = noir::LIGHT_SPECULAR;
+    pub const LIGHT_HAIRLINE: u32 = noir::LIGHT_HAIRLINE;
+    pub const LIGHT_PILL_FILL: u32 = noir::LIGHT_PILL_FILL;
+    pub const LIGHT_PILL_RIM: u32 = noir::LIGHT_PILL_RIM;
+    pub const LIGHT_TEXT: u32 = noir::LIGHT_TEXT;
+
+    pub const ORCHID_ACCENT: u32 = noir::NOIR_ACCENT;
+    pub const ORCHID_GLOW: u32 = noir::NOIR_ACCENT_GLOW;
+
+    pub const DARK_MENU_BG: u32 = noir::DARK_MENU_BG;
+    pub const DARK_MENU_RIM: u32 = noir::DARK_MENU_RIM;
+    pub const DARK_MENU_HOVER: u32 = noir::DARK_MENU_HOVER;
+    pub const DARK_MENU_DIVIDER: u32 = noir::DARK_MENU_DIVIDER;
+    pub const DARK_MENU_SUBTEXT: u32 = noir::DARK_MENU_SUBTEXT;
+    pub const DARK_MENU_DANGER: u32 = noir::DARK_MENU_DANGER;
+
+    pub const LIGHT_MENU_BG: u32 = noir::LIGHT_MENU_BG;
+    pub const LIGHT_MENU_RIM: u32 = noir::LIGHT_MENU_RIM;
+    pub const LIGHT_MENU_HOVER: u32 = noir::LIGHT_MENU_HOVER;
+    pub const LIGHT_MENU_DIVIDER: u32 = noir::LIGHT_MENU_DIVIDER;
+    pub const LIGHT_MENU_SUBTEXT: u32 = noir::LIGHT_MENU_SUBTEXT;
+    pub const LIGHT_MENU_DANGER: u32 = noir::LIGHT_MENU_DANGER;
+
+    pub const DARK_SPOTLIGHT_INPUT: u32 = noir::DARK_SPOTLIGHT_INPUT;
+    pub const DARK_SPOTLIGHT_TILE: u32 = noir::DARK_SPOTLIGHT_TILE;
+    pub const DARK_SPOTLIGHT_SELECTED: u32 = noir::DARK_SPOTLIGHT_SELECTED;
+    pub const DARK_SPOTLIGHT_PILL: u32 = noir::DARK_SPOTLIGHT_PILL;
+    pub const LIGHT_SPOTLIGHT_INPUT: u32 = noir::LIGHT_SPOTLIGHT_INPUT;
+    pub const LIGHT_SPOTLIGHT_TILE: u32 = noir::LIGHT_SPOTLIGHT_TILE;
+    pub const LIGHT_SPOTLIGHT_SELECTED: u32 = noir::LIGHT_SPOTLIGHT_SELECTED;
+    pub const LIGHT_SPOTLIGHT_PILL: u32 = noir::LIGHT_SPOTLIGHT_PILL;
+    pub const ORCHID_PILL_ACTIVE: u32 = noir::PILL_ACTIVE_CRIMSON;
+    pub const ON_ORCHID_ACTIVE: u32 = noir::ON_PILL_ACTIVE;
 }
 
 pub mod candy_ui;
+pub mod noir_ui;
 
 #[cfg(test)]
 mod tests {
@@ -236,5 +385,22 @@ mod tests {
         assert!(contrast(LIGHT_TEXT, LIGHT_SPOTLIGHT_TILE) >= 7.0);
         assert!(contrast(LIGHT_TEXT, LIGHT_SPOTLIGHT_SELECTED) >= 7.0);
         assert!(contrast(ON_ORCHID_ACTIVE, ORCHID_PILL_ACTIVE) >= 4.5);
+    }
+
+    #[test]
+    fn noir_tokens_and_accents_meet_wcag() {
+        use noir::*;
+        for tint in NoirAccent::ALL {
+            assert!(contrast(tint.on_accent(), tint.fill()) >= 4.5, "{tint:?}");
+            assert!(contrast(tint.primary(), DARK_BASE) >= 4.5, "{tint:?} primary on base");
+            assert!(contrast(tint.primary(), DARK_SURFACE) >= 4.5, "{tint:?} primary on surface");
+        }
+        assert_eq!(NoirAccent::from_index(0), NoirAccent::Crimson);
+        assert_eq!(NoirAccent::from_index(1), NoirAccent::Graphite);
+        assert_eq!(NoirAccent::from_index(2), NoirAccent::Lavender);
+        assert_eq!(NoirAccent::from_index(3), NoirAccent::IceCyan);
+        assert_eq!(NoirAccent::from_index(4), NoirAccent::Crimson);
+        assert!(contrast(DARK_TEXT, DARK_BASE) >= 7.0);
+        assert!(contrast(DARK_SUBTEXT, DARK_SURFACE) >= 7.0);
     }
 }

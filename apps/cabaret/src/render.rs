@@ -61,12 +61,12 @@ pub fn fb_to_weft_argb(fb: &FrameBuffer) -> Vec<u32> {
 /// Resizes/pads an arbitrary `0xAARRGGBB` pixel slice into exact `(dst_w, dst_h)` words.
 pub fn argb_fit(src: &[u32], src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> Vec<u32> {
     if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 || src.is_empty() {
-        return vec![0xFF0E_1014; dst_w * dst_h];
+        return vec![0xFF0D_1017; dst_w * dst_h];
     }
     if src_w == dst_w && src_h == dst_h && src.len() >= src_w * src_h {
         return src[..src_w * src_h].to_vec();
     }
-    let mut out = vec![0xFF0E_1014; dst_w * dst_h];
+    let mut out = vec![0xFF0D_1017; dst_w * dst_h];
     for y in 0..dst_h {
         let sy = (y * src_h) / dst_h;
         for x in 0..dst_w {

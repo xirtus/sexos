@@ -80,7 +80,7 @@ unsafe fn act(frame: u32, action: Action, via: &str) {
     // Any action but Close is on the window the person is working with.
     if action != Action::Close && crate::FOCUSED_SURFACE_ID != sid { let _ = crate::try_set_focus(sid); }
     let ok = match action {
-        Action::Close => crate::is_closeable_surface(sid) && crate::close_surface_from_frame_light(sid),
+        Action::Close => crate::is_closeable_surface(sid) && crate::bg_apps_glue::close_window(sid),
         Action::Minimise => crate::minimize_frame(frame),
         Action::ToggleMaximise => crate::toggle_zoom_frame(frame),
         // The same toggle as Super+Shift+V.
@@ -134,6 +134,14 @@ pub unsafe fn press(x: i32, y: i32) -> bool {
             true
         }
         TitleHit::Title => {
+            if crate::APP_MODIFIERS.key(0).control {
+                if let Some(sid) = crate::active_surface_for_frame(frame) {
+                    if crate::FOCUSED_SURFACE_ID != sid { let _ = crate::try_set_focus(sid); }
+                }
+                (*core::ptr::addr_of_mut!(DOUBLE)).reset();
+                crate::silkbar_menus_glue::open_window_context(x, y);
+                return true;
+            }
             let slop = crate::chrome_metrics().px(decorations::DOUBLE_CLICK_SLOP as u32) as i32;
             if (*core::ptr::addr_of_mut!(DOUBLE)).press(frame, sex_pdx::get_ticks(), x, y, slop) {
                 act(frame, Action::ToggleMaximise, "double_click");
@@ -146,7 +154,8 @@ pub unsafe fn press(x: i32, y: i32) -> bool {
 }
 
 /// Every pointer button, before programs see it. A right press on a title
-/// bar opens the window menu; while the menu shows, programs get no button.
+/// bar opens the window menu (or Space/Tile context menu when Ctrl is held);
+/// while the menu shows, programs get no button.
 pub unsafe fn button(button: u8, pressed: bool) -> bool {
     let open = (*core::ptr::addr_of!(MENU)).is_open();
     if button == 2 && pressed {
@@ -154,7 +163,11 @@ pub unsafe fn button(button: u8, pressed: bool) -> bool {
         let (x, y) = (crate::POINTER_X, crate::POINTER_Y);
         let Some((frame, sid, _)) = title_at(x, y) else { return false };
         if crate::FOCUSED_SURFACE_ID != sid { let _ = crate::try_set_focus(sid); }
-        menu_open(frame, sid, x, y);
+        if crate::APP_MODIFIERS.key(0).control {
+            crate::silkbar_menus_glue::open_window_context(x, y);
+        } else {
+            menu_open(frame, sid, x, y);
+        }
         return true;
     }
     open
@@ -168,7 +181,7 @@ pub unsafe fn poll() {
     }
     let menus = &mut *core::ptr::addr_of_mut!(MENU);
     if let Some(frame) = menus.frame() {
-        let alive = crate::active_surface_for_frame(frame).map_or(false, |sid| crate::surface_is_alive(sid)) && crate::frame_accepts_input(frame);
+        let alive = crate::active_surface_for_frame(frame).map_or(false, |sid| crate::surface_is_alive(sid)) && crate::frame_accepts_input(frame) && !crate::frame_is_parked(frame);
         if !alive { menu_close("window_gone"); }
         else {
             let (w, h) = (crate::desktop_width().max(0) as usize, crate::desktop_height().max(0) as usize);
