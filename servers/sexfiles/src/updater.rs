@@ -158,7 +158,7 @@ pub fn run(fs: &mut Fs<'static, crate::fs_service::Disk>, paths: &[u8], out: &mu
     }
     if image_path.is_empty() {
         sex_pdx::serial_record!("[files.update.available] version={} from={} bytes={}", index.version, st.version, index.bytes);
-        text.push_str(&format!("Version {} is available (this is version {}): {} MiB to download.\n", index.version, st.version, index.bytes >> 20));
+        text.push_str(&format!("Version {} is available (the boot menu records version {} as accepted): {} MiB to download.\n", index.version, st.version, index.bytes >> 20));
         return finish(w::OK, text, out);
     }
     let image = fs.open(image_path)?;
