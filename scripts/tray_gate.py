@@ -90,19 +90,21 @@ def main():
         # sexnet answers next (one reply at a time): Wi-Fi state, or none in QEMU.
         wait(r'\[shell.tray\] menu=0 offset=0 .* wifi=(?!255)\d+ ', 0, 30)
         time.sleep(1.5)
-        # Icons: the three chips left of the bell (1280 wide, scale 1: x 1024..1096).
+        # Icons: the three chips left of the bell. 1280 wide, scale 1: the clock box
+        # is 280 (Long Count) at x 992..1272, the bell 964..988, the chips 888..960
+        # (silkbar-model reflow_chrome).
         w, h, px = shot('bar')
         # The icons take the desktop theme's ink (S6a): light on a dark bar, dark
         # on a light one. Count pixels well apart from their row's bar colour.
         fg = 0
         for y in range(0, 28):
-            row = [bytes(px[(y * w + x) * 3:(y * w + x) * 3 + 3]) for x in range(1024, 1096)]
+            row = [bytes(px[(y * w + x) * 3:(y * w + x) * 3 + 3]) for x in range(888, 960)]
             bar = max(set(row), key=row.count)
             fg += sum(1 for c in row if max(abs(a - b) for a, b in zip(c, bar)) > 0x60)
         if fg < 40: raise RuntimeError('tray icons look missing (%d ink pixels)' % fg)
 
         # Volume icon: quick settings open on the status panel surface.
-        start = len(text()); click(1060, 13)
+        start = len(text()); click(924, 13)
         wait(r'\[shell.status.open.ok\]', start)
         geo = wait(r'\[shell.panel.geometry\] surface=147 x=(\d+) y=(\d+) w=(\d+) h=(\d+)', start)
         x0, y0, pw, ph = map(int, geo.groups())
@@ -142,15 +144,18 @@ def main():
         time.sleep(1.5); shot('calendar')
         cg = wait(r'\[shell.panel.geometry\] surface=148 x=(\d+) y=(\d+) w=(\d+) h=(\d+)', start)
         cx, cy, cw, ch = map(int, cg.groups())
-        # Next month (the > button at the header's right), then back twice.
-        start = len(text()); click(cx + cw - 12 - 16, cy + 12 + 16)
+        # Next month (the > button at the header's right), then back twice. The
+        # header sits under the oracle band (sex_pdx::tray::Calendar: pad 12,
+        # ORACLE_H = 5 * 26 + 6 + 3 * 17 = 187, pad 12, then the 32-high header).
+        hy = cy + 12 + 187 + 12 + 16
+        start = len(text()); click(cx + cw - 12 - 16, hy)
         nxt = wait(r'\[display.tray\] menu=2 offset=1 ', start)
         ny, nm = (year + month // 12, month % 12 + 1)
         n = wait(r'\[display.tray.calendar\] year=%d month=%d first=(\d) days=(\d+) today=0' % (ny, nm), start)
         if (int(n[1]), int(n[2])) != calendar.monthrange(ny, nm): raise RuntimeError('next month grid wrong')
-        start = len(text()); click(cx + 12 + 16, cy + 12 + 16)
+        start = len(text()); click(cx + 12 + 16, hy)
         wait(r'\[display.tray\] menu=2 offset=0 ', start)
-        start = len(text()); click(cx + 12 + 16, cy + 12 + 16)
+        start = len(text()); click(cx + 12 + 16, hy)
         wait(r'\[display.tray\] menu=2 offset=-1 ', start)
         # Escape closes.
         start = len(text()); keys(('esc', True), ('esc', False))
