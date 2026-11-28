@@ -955,8 +955,11 @@ impl<'a, D: Device> Fs<'a, D> {
             let (kind, _, _) = f.inode(id)?;
             if kind == Kind::Dir && !f.dir_is_empty(id)? { return Err(Error::NotEmpty); }
             f.drop_entry(dir, off)?;
-            f.drop_blocks(id, 0)?;
-            f.remove(Key { id, kind: K_INODE, off: 0 })
+            // The name is gone now. A file a cut-short write left with keys missing still
+            // goes: what is missing was never there to free (the x17's 32 MiB
+            // `/old-boot.img` stat-ed fine but every `rm` said "not found").
+            match f.drop_blocks(id, 0) { Ok(()) | Err(Error::NotFound) => {} Err(e) => return Err(e) }
+            match f.remove(Key { id, kind: K_INODE, off: 0 }) { Ok(()) | Err(Error::NotFound) => Ok(()), Err(e) => Err(e) }
         })
     }
     /// Atomic at the next commit. A file already at `to` is replaced.
