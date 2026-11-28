@@ -6,6 +6,7 @@ pub struct Pool {
     ledger: Ledger,
     ready: bool,
     recovering: bool,
+    loaded: bool,
 }
 impl Pool {
     pub const fn new() -> Self {
@@ -13,6 +14,7 @@ impl Pool {
             ledger: Ledger::quarantine_all(),
             ready: false,
             recovering: true,
+            loaded: false,
         }
     }
     pub fn initialize(
@@ -23,6 +25,7 @@ impl Pool {
         programs: &[u32],
     ) {
         self.ledger = journal.load(epoch, kept);
+        self.loaded = true;
         if self.ledger.subjects().count() > 2
             || self.ledger.subjects().any(|s| !programs.contains(&s.pd))
         {
@@ -39,6 +42,11 @@ impl Pool {
     }
     pub fn normal(&self) -> bool {
         self.ready && !self.recovering
+    }
+    /// The journal did not survive (a lost or damaged kept page): every row is denied
+    /// and no helper can be reserved until the next boot.
+    pub fn lost(&self) -> bool {
+        self.loaded && self.ledger.all_denied()
     }
     pub fn recovering(&self) -> bool {
         self.ready && self.recovering
@@ -124,6 +132,19 @@ mod native {
     }
     pub fn normal() -> bool {
         unsafe { (&*core::ptr::addr_of!(POOL)).normal() }
+    }
+    pub fn lost() -> bool {
+        unsafe { (&*core::ptr::addr_of!(POOL)).lost() }
+    }
+    /// With the journal lost, a row that has never run this boot was never a helper:
+    /// it may still take an ordinary program, so one lost page cannot fence every
+    /// window. Rows that ran stay denied, as the journal would have it.
+    pub fn fresh_when_lost(target: u32) -> bool {
+        lost() && c::by_target(target)
+                .filter(|r| r.app == c::App::Program)
+                .and_then(|r| r.activation_slot)
+                .and_then(|slot| a::activation(slot, false).ok())
+                .is_some_and(|edge| edge.state == a::ACTIVATION_READY)
     }
     pub fn reserve(target: u32) -> Option<(Subject, usize, u64, u64)> {
         let row = c::by_target(target).filter(|r| r.app == c::App::Program)?;

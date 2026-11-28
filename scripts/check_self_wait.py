@@ -365,7 +365,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '0b72ffacafdbfce18323734be07acdfa224927ef0d65baac1831f4928cea5dd8',  # self pointer at gs:[32], per-core FS/TSC_AUX caches and IRET snapshot (no observer change; Gemini #699), 2026-11-26
  'kernel/src/app_resources.rs': 'b1b1dfda0016755aa8d4c868e93daf13d5598d550082798a87998810a6c4eeed',  # program pages the file fills come unzeroed (no observer change; Gemini #696), 2026-11-26
- 'kernel/src/service_restart.rs': '2bb687b9f0bd3da1e5dd4c33ef67ab28cbbc792d8a162b40673f49745043437a',  # live server hotswap (no observer change), 2026-11-26
+ 'kernel/src/service_restart.rs': 'ad8cdc31c439d10651be54fd45523b2649ca2a4148dedb6660e145d4e4ed187f',  # kept pages survive a hot swap (no observer change), 2026-11-28
  'kernel/src/crash_log.rs': '415518cac7ef63046bc083c68e3763c12105c8e227c69cf4316f255c10fe83f2',  # OP_HOTSWAP_PART: kernel gathers the hot-swap image (no observer change), 2026-11-27
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 

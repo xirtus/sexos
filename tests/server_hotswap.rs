@@ -310,4 +310,26 @@ fn hotswap_rejects_bad_magic_non_restartable_and_wrpkru_then_swaps_cleanly() {
     let data_frame = unsafe { core::ptr::read_volatile(data_leaf as *const u64) } & 0x000f_ffff_ffff_f000;
     let patched = unsafe { core::ptr::read_unaligned((data_frame + 8) as *const u64) };
     assert_eq!(patched, base + 0x100);
+
+    // The swapped-in run keeps its data page (a ledger, a session) and writes to it.
+    assert!(service_restart::keep(10, base + 0x1000, 1));
+    unsafe { core::ptr::write_unaligned((data_frame + 16) as *mut u64, 0x5e55_1011) };
+    // A second swap: the new image's page starts fresh, then its own keep call takes
+    // what the old run kept. Without that, every journal fails closed after a swap.
+    service_restart::replace_image(10, &good).expect("second swap staged");
+    assert!(service_restart::end_requested(10));
+    unsafe { assert!((*main).state.exit()); }
+    assert!(service_restart::poll());
+    interrupts::TICKS.fetch_add(200, Ordering::Relaxed);
+    let _ = service_restart::poll();
+    assert_eq!(service_restart::restarts_of(10), 2);
+    let leaf = boot_memory::existing_leaf_address(base + 0x1000).expect("data page mapped again");
+    let frame = unsafe { core::ptr::read_volatile(leaf as *const u64) } & 0x000f_ffff_ffff_f000;
+    assert_ne!(frame, data_frame, "the new image has its own frame");
+    assert_eq!(unsafe { core::ptr::read_unaligned((frame + 16) as *const u64) }, 0);
+    assert!(service_restart::keep(10, base + 0x1000, 1));
+    assert_eq!(unsafe { core::ptr::read_unaligned((frame + 16) as *const u64) }, 0x5e55_1011);
+    // Keeping it again (an ordinary restart) changes nothing.
+    assert!(service_restart::keep(10, base + 0x1000, 1));
+    assert_eq!(unsafe { core::ptr::read_unaligned((frame + 16) as *const u64) }, 0x5e55_1011);
 }
