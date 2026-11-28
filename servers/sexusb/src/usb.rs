@@ -430,6 +430,8 @@ impl Usb {
                     if addr & 0x80 != 0 && attr & 3 == 3 && (iclass == 3 || hub) && n < MAX_INTR {
                         picks[n] = Some(Pick { iface, sub: isub, proto: iproto, ep: addr & 0xf, mps, interval, report_len, hub });
                         n += 1;
+                    } else if addr & 0x80 != 0 && attr & 3 == 3 && iclass == 3 {
+                        log!("[sexusb.hid.skip] slot={} iface={} sub={} proto={} reason=max_intr", self.dev[i].slot, iface, isub, iproto);
                     }
                 }
                 _ => {}
@@ -603,7 +605,7 @@ impl Usb {
             if role == Role::Pointer { self.stats.pointers += 1; }
         }
         self.dev[i].intr[k].role = role;
-        if role == Role::None { self.dev[i].intr[k].active = false; return; }
+        if role == Role::None { self.log_unbound(i, iface, sub, proto, report_len); self.dev[i].intr[k].active = false; return; }
         self.stats.hid += 1;
         let l = self.dev[i].intr[k].layout;
         log!("[sexusb.hid.bind.summary] keyboard_ep={} pointer_role={} slot={} iface={} report_id={} wheel={} ep_dci={}",
@@ -611,6 +613,25 @@ impl Usb {
             match role { Role::Pointer if l.absolute => "tablet", Role::Pointer => "mouse", Role::Media => "media", _ => "none" },
             self.dev[i].slot, iface, l.report_id, l.wheel.present() as u8, self.dev[i].intr[k].dci);
         self.arm(i, k, IN_FLIGHT);
+    }
+
+    /// A HID interface nothing here understood (no pointer, keys or media buttons):
+    /// its report descriptor, so a keyboard's hotkey interface can be read from the log.
+    fn log_unbound(&mut self, i: usize, iface: u8, sub: u8, proto: u8, report_len: u16) {
+        let buf = self.dev[i].mem.unwrap().buf;
+        let len = report_len.clamp(1, 4096);
+        let got = self.get(i, 0x81, 6, 0x2200, iface as u16, buf.0, len).unwrap_or(0) as usize;
+        let desc = unsafe { core::slice::from_raw_parts(buf.1 as *const u8, got.min(len as usize)) };
+        let (vendor, product, slot) = (self.dev[i].vendor, self.dev[i].product, self.dev[i].slot);
+        log!("[sexusb.hid.unbound] slot={} vendor={:#06x} product={:#06x} iface={} sub={} proto={} descriptor_bytes={}", slot, vendor, product, iface, sub, proto, got);
+        for (n, chunk) in desc[..desc.len().min(512)].chunks(48).enumerate() {
+            let mut hex = [0u8; 96];
+            for (j, b) in chunk.iter().enumerate() {
+                const H: &[u8; 16] = b"0123456789abcdef";
+                hex[j * 2] = H[(b >> 4) as usize]; hex[j * 2 + 1] = H[(b & 15) as usize];
+            }
+            log!("[sexusb.hid.desc] slot={} iface={} at={} {}", slot, iface, n * 48, core::str::from_utf8(&hex[..chunk.len() * 2]).unwrap_or(""));
+        }
     }
 
     /// Queue `n` interrupt-IN TRBs, each with the report buffer of its ring position.

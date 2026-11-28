@@ -81,6 +81,87 @@ impl PciDevice {
         crate::pci_bar_bounds::decode_bar0(low, high, mask_low, mask_high)
     }
 
+    /// Boot discovery only. Gives an unassigned 64-bit memory BAR (base 0, as the
+    /// Alienware x17's firmware leaves its touchpad's Serial IO controller) an address:
+    /// naturally aligned, at least 1 MiB above the end of every 64-bit window that
+    /// firmware already placed above 4 GiB on this bus (function BARs, bridge prefetch windows),
+    /// below 2^39 (Tiger Lake's physical address width). Linux would take the host
+    /// bridge's `_CRS` window, which only the ACPI service can read; firmware packs its
+    /// own assignments at the low end of that window, so the space above them is free.
+    /// Returns the new base, or None when the BAR is not an empty 64-bit memory BAR.
+    pub fn assign_boot_bar64(&self, index: u8) -> Option<u64> {
+        assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),
+            crate::ipc::BootPhase::RegistryBuild as u8, "PCI_ASSIGN_AFTER_GENESIS");
+        if index > 4 { return None; }
+        let at = 0x10 + index * 4;
+        let low = self.read_u32(at);
+        if low & 1 != 0 || (low >> 1) & 3 != 2 || low & !15 != 0 || self.read_u32(at + 4) != 0 { return None; }
+        let command = self.read_u32(0x04) & 0xffff;
+        self.write_u32(0x04, command & !7);
+        self.write_u32(at, u32::MAX);
+        self.write_u32(at + 4, u32::MAX);
+        let mask = ((self.read_u32(at + 4) as u64) << 32) | (self.read_u32(at) & !15) as u64;
+        let length = (!mask).wrapping_add(1);
+        if length < 16 || !length.is_power_of_two() || length > (1 << 30) {
+            self.write_u32(at, low); self.write_u32(at + 4, 0); self.write_u32(0x04, command);
+            return None;
+        }
+        let mut top = 0u64;
+        // Only this bus is walked: whatever sits behind a bridge lies inside that
+        // bridge's window, so nothing behind one is probed.
+        for (b, d, f, _) in present_functions().into_iter().filter(|p| p.0 == self.bus) {
+            let header = (unsafe { pci_config_read(b, d, f, 0x0c) } >> 16) as u8 & 0x7f;
+            let bars = match header { 0 => 6u8, _ => 0 };
+            let mut i = 0u8;
+            while i < bars {
+                let lo = unsafe { pci_config_read(b, d, f, 0x10 + i * 4) };
+                let wide = lo & 1 == 0 && (lo >> 1) & 3 == 2 && i + 1 < bars;
+                if wide && (b, d, f, i) != (self.bus, self.dev, self.func, index) {
+                    let base = (lo & !15) as u64 | (unsafe { pci_config_read(b, d, f, 0x14 + i * 4) } as u64) << 32;
+                    if base >= 1 << 32 {
+                        // Size it the way `probe_boot_bar` does: no decode while probing.
+                        let cmd = unsafe { pci_config_read(b, d, f, 0x04) } & 0xffff;
+                        unsafe {
+                            pci_config_write(b, d, f, 0x04, cmd & !7);
+                            pci_config_write(b, d, f, 0x10 + i * 4, u32::MAX);
+                            pci_config_write(b, d, f, 0x14 + i * 4, u32::MAX);
+                        }
+                        let m = ((unsafe { pci_config_read(b, d, f, 0x14 + i * 4) } as u64) << 32)
+                            | (unsafe { pci_config_read(b, d, f, 0x10 + i * 4) } & !15) as u64;
+                        unsafe {
+                            pci_config_write(b, d, f, 0x10 + i * 4, lo);
+                            pci_config_write(b, d, f, 0x14 + i * 4, (base >> 32) as u32);
+                            pci_config_write(b, d, f, 0x04, cmd);
+                        }
+                        top = top.max(base.saturating_add((!m).wrapping_add(1)));
+                    }
+                }
+                i += if wide { 2 } else { 1 };
+            }
+            if header == 1 {
+                // Prefetchable window: base/limit at 0x24, upper words at 0x28/0x2c.
+                let pl = unsafe { pci_config_read(b, d, f, 0x24) };
+                if pl & 0xf == 1 {
+                    let limit = (((unsafe { pci_config_read(b, d, f, 0x2c) } as u64) << 32) | ((pl >> 16) as u64 & 0xfff0) << 16) | 0xf_ffff;
+                    let base = ((unsafe { pci_config_read(b, d, f, 0x28) } as u64) << 32) | ((pl as u64 & 0xfff0) << 16);
+                    if base >= 1 << 32 && limit > base { top = top.max(limit + 1); }
+                }
+            }
+        }
+        let align = length.max(1 << 20);
+        let base = (top.max(1 << 32) + (1 << 20) + align - 1) & !(align - 1);
+        if top == 0 || base + length > 1 << 39 {
+            self.write_u32(at, low); self.write_u32(at + 4, 0); self.write_u32(0x04, command);
+            serial_println!("[pci.bar.assign.skip] {:02x}:{:02x}.{} bar={} length={:#x} top={:#x}", self.bus, self.dev, self.func, index, length, top);
+            return None;
+        }
+        self.write_u32(at, (base as u32 & !15) | (low & 15));
+        self.write_u32(at + 4, (base >> 32) as u32);
+        self.write_u32(0x04, command);
+        serial_println!("[pci.bar.assign] {:02x}:{:02x}.{} bar={} base={:#x} length={:#x} top={:#x}", self.bus, self.dev, self.func, index, base, length, top);
+        Some(base)
+    }
+
     /// Like `probe_boot_bar`, but a BAR shorter than a page is accepted too.
     pub fn probe_boot_bar_any(&self, index: u8) -> Option<(u64, u64)> {
         if let Some(found) = self.probe_boot_bar(index) { return Some(found); }

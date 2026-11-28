@@ -120,7 +120,19 @@ fn counts(aml: &Aml, controller: &AmlName, khz: u32) -> Option<(u16, u16, u16)> 
 
 /// One touchpad's description, or why there is none.
 pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
-    let crs = eval(aml, dev, "_CRS", Vec::new()).ok_or("no_crs")?;
+    let crs = match crate::eval_result(aml, dev, "_CRS", Vec::new()) {
+        Ok(Some(o)) => o,
+        Ok(None) => return Err("no_crs"),
+        Err(e) => {
+            serial_println!("[sexacpi.touchpad.crs.err] path={} err={:?}", dev, e);
+            dump_methods(aml, dev);
+            // Power the pad and its controller anyway: Input's fallback scan finds the pad
+            // on the bus without `_CRS`, but only if firmware has switched it on.
+            if let Ok(parent) = dev.parent() { power_on(aml, &parent); }
+            power_on(aml, dev);
+            return Err("crs_failed");
+        }
+    };
     let Object::Buffer(bytes) = &*crs else { return Err("crs_not_buffer") };
     let (mut bus, mut gpio, mut apic) = (None, None, None);
     resources::parse(bytes, |r| match r {
@@ -175,4 +187,43 @@ pub fn send(pending: &mut Vec<Found>) -> bool {
         pending.remove(0);
     }
     true
+}
+
+/// When a touchpad's `_CRS` fails: its AML and that of every method it names (one
+/// level, at most 6 KiB), so the failing opcode can be found from the log alone.
+fn dump_methods(aml: &Aml, dev: &AmlName) {
+    let mut seen: Vec<AmlName> = Vec::new();
+    let mut queue: Vec<AmlName> = Vec::new();
+    if let Some(n) = name("_CRS").and_then(|n| n.resolve(dev).ok()) { queue.push(n); }
+    let mut budget = 6144usize;
+    let mut level = 0;
+    while !queue.is_empty() && level < 2 {
+        let mut next = Vec::new();
+        for path in core::mem::take(&mut queue) {
+            if seen.contains(&path) { continue; }
+            seen.push(path.clone());
+            let Ok(obj) = aml.namespace.lock().get(path.clone()) else { continue };
+            let Object::Method { code, flags } = &*obj else { continue };
+            let take = code.len().min(budget);
+            budget -= take;
+            serial_println!("[sexacpi.aml.method] path={} flags={:#x} bytes={}", path, flags.0, code.len());
+            for (i, chunk) in code[..take].chunks(48).enumerate() {
+                let mut hex = alloc::string::String::new();
+                for b in chunk { let _ = core::fmt::Write::write_fmt(&mut hex, format_args!("{b:02x}")); }
+                serial_println!("[sexacpi.aml.hex] path={} at={:#x} {}", path, i * 48, hex);
+            }
+            for w in code.windows(4) {
+                let ok = (w[0].is_ascii_uppercase() || w[0] == b'_') && w[1..].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'_');
+                if !ok { continue; }
+                let Ok(text) = core::str::from_utf8(w) else { continue };
+                let Some(n) = name(text) else { continue };
+                if let Ok((full, o)) = aml.namespace.lock().search(&n, dev) {
+                    if matches!(*o, Object::Method { .. }) && !seen.contains(&full) && !next.contains(&full) { next.push(full); }
+                }
+            }
+            if budget == 0 { return; }
+        }
+        queue = next;
+        level += 1;
+    }
 }
