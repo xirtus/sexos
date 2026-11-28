@@ -307,6 +307,11 @@ impl Capture {
                     let (w, h) = (FAKE_W as usize, FAKE_H as usize);
                     c.decoded.resize(w * h, 0);
                     if sex_uvc::pixel::yuy2_to_argb(&raw, w, h, &mut c.decoded).is_ok() {
+                        // The bars repeat every 16 frames, which can alias with whatever rate
+                        // the machine reaches: scroll the whole picture sideways too, so any two
+                        // frames differ.
+                        let off = (c.fake_frame as usize * 7) % w;
+                        for row in c.decoded.chunks_exact_mut(w) { row.rotate_left(off); }
                         // A counter box, so a test sees the picture move.
                         let x0 = (c.fake_frame as usize * 4) % (w - 32);
                         for y in 8..40 { for x in x0..x0 + 32 { c.decoded[y * w + x] = 0xFFFF_FFFF; } }
