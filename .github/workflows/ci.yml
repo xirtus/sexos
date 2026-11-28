@@ -103,6 +103,8 @@ jobs:
       run: bash scripts/driver_sdk_host_gate.sh
     - name: USB isochronous endpoints and UVC camera detection on the host
       run: bash scripts/usb_isoch_host_gate.sh
+    - name: WebRTC DTLS-SRTP, SRTP, RTP/RTCP, payload formats, jitter buffer and bandwidth estimate on the host
+      run: bash scripts/rtc_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
     - name: Deadline scheduling class (earliest first, share of each window) on the host

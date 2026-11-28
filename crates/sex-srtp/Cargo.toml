@@ -1,0 +1,14 @@
+[package]
+name = "sex-srtp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "SRTP and SRTCP (RFC 3711, RFC 7714) for SexOS WebRTC: AES-CM/HMAC-SHA1 and AES-GCM, no I/O"
+
+[dependencies]
+# RustCrypto, MIT/Apache-2.0, no_std, software backends like sex-crypt.
+aes = { version = "=0.8.4", default-features = false }
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes"] }
+hmac = { version = "=0.12.1", default-features = false }
+sha1 = { version = "=0.10.7", default-features = false, features = ["force-soft"] }
+subtle = { version = "=2.6.1", default-features = false }
