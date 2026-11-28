@@ -34,7 +34,7 @@ struct Page { frame: u64, pristine: u64 }
 /// moves them to `carried`, and the new image's own keep calls, in the same order, take
 /// their contents: a swap is a restart, so a session or ledger survives it as it would one.
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize, kept: [u64; KEPT], carried: [u64; KEPT] }
-const KEPT: usize = 8;
+const KEPT: usize = 32;
 // Net, Files, Input, Bell, Display, Shell, Denim, Saddle, Drive, USB, ACPI, Cufflinks, GPU.
 const SERVICES: usize = 13;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0, kept: [0; KEPT], carried: [0; KEPT] }) }; SERVICES];
@@ -155,7 +155,8 @@ pub fn keep(pd: u32, va: u64, pages: u64) -> bool {
         s.pages[i].pristine = 0;
         let frame = s.pages[i].frame;
         if s.kept.contains(&frame) { continue; }
-        let Some(n) = s.kept.iter().position(|&f| f == 0) else { return false };
+        // Past KEPT pages the page is still kept for crash restarts, just not carried by a swap.
+        let Some(n) = s.kept.iter().position(|&f| f == 0) else { continue };
         s.kept[n] = frame;
         // The run before a hot swap kept a page here: its contents come with it.
         if s.carried[n] != 0 { crate::boot_memory::copy_frame(s.carried[n], frame); s.carried[n] = 0; }
