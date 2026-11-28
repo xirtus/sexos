@@ -93,7 +93,7 @@ def main():
   assert ok[1]=='Screen|monitor' and ok[4]=='0',ok[0]
   assert int(ok[2])*rh==int(ok[3])*rw or abs(int(ok[2])/int(ok[3])-rw/rh)<.02,('keeps the screen shape',ok[0])
   wait(r'\[web.console\] level=0 share playing \d+ \d+',s,60)
-  rect=wait(r'\[web.console\] level=0 share rect (-?\d+) (-?\d+) (\d+) (\d+)',s,60);vx,vy,vw,vh=map(int,rect[1:5])
+  rect=wait(r'\[web.console\] level=0 share rect (-?\d+) (-?\d+) (\d+) (\d+)',s,60);vx,vy,vw,vh=map(int,rect.group(1,2,3,4))
   frames=int(wait(r'\[web.console\] level=0 share frames (\d+)',s,30)[1]);assert frames>=1,('shared frames',frames)
   time.sleep(1);img=shot('share-live')
   # Display rings the shared screen in red and shows its stop pill.
